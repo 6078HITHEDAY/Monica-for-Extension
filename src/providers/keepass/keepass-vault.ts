@@ -1,6 +1,7 @@
 import * as kdbxweb from "kdbxweb";
 import { readProjectCredential } from '../../core/project-credentials';
 import { readKeePassCustomIcon } from "./keepass-custom-icon";
+import { hydrateKeePassSteam } from './keepass-steam';
 import type { LoginItem, ProviderReference, ProviderSourceRecord, VaultItem } from "../../core/model";
 import type { MonicaItemBase } from "../monica-item-data";
 import { buildKeePassCredentialCandidates, keePassInvalidCredentialMessage } from "./keepass-credentials";
@@ -165,6 +166,7 @@ export function readKeePassEntries(
       hasRecycleBinMeta
     });
     if (decoded.item) {
+      if (decoded.item.kind === 'login') hydrateKeePassSteam(decoded.item, context.entry);
       if (decoded.item.kind === "login" || decoded.item.kind === "totp") Object.assign(decoded.item, readKeePassCustomIcon(database, context.entry));
       items.push(decoded.item);
     }

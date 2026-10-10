@@ -88,8 +88,13 @@ export function findBoundTotpItem(login: LoginItem, items: readonly VaultItem[])
 
 export function parametersFromItem(item: LoginItem | TotpItem) {
   if (item.kind === "login") return parseTotpParameters(item.totpSecret || "");
+  const steam = item.otpType === 'STEAM'
+    ? item.steamSharedSecretBase64
+      ? { secret: item.steamSharedSecretBase64, secretEncoding: 'base64' as const }
+      : parseTotpParameters(/^(steam|otpauth):\/\//i.test(item.secret) ? item.secret : `steam://${item.secret}`)
+    : undefined;
   return {
-    secret: item.steamSharedSecretBase64 || item.secret,
+    secret: steam?.secret || item.secret,
     algorithm: item.algorithm,
     digits: item.digits,
     period: item.period,
@@ -99,7 +104,7 @@ export function parametersFromItem(item: LoginItem | TotpItem) {
     pinLength: item.pinLength,
     issuer: item.issuer,
     accountName: item.accountName,
-    secretEncoding: item.otpType === "STEAM" && item.steamSharedSecretBase64 ? "base64" as const : "base32" as const
+    secretEncoding: steam?.secretEncoding || 'base32' as const
   };
 }
 

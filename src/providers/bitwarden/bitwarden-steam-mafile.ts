@@ -2,23 +2,8 @@ import type { LoginItem } from "../../core/model";
 import { decodeBase32 } from "../../core/totp";
 import { bytesToBase64 } from "../../security/encoding";
 
-export const STEAM_MAFILE_MARKER_FIELD = "Monica.Type";
-export const STEAM_MAFILE_MARKER_VALUE = "steam_mafile_v1";
-export const STEAM_MAFILE_MAX_BYTES = 1024 * 1024;
-
-export function isSteamMaFileLogin(item: LoginItem): boolean {
-  if (item.loginType?.trim().toLocaleUpperCase() === "STEAM_MAFILE") return true;
-  return item.customFields.some((field) => {
-    const name = field.name.trim().toLocaleLowerCase();
-    const value = field.value.trim().toLocaleLowerCase();
-    return (name === STEAM_MAFILE_MARKER_FIELD.toLocaleLowerCase() && value === STEAM_MAFILE_MARKER_VALUE)
-      || ((name === "steam_type" || name === "steam_type_marker" || name === "monica_steam_type") && value.includes("steam_mafile"));
-  });
-}
-
-export function isSteamMaFileName(fileName: string): boolean {
-  return fileName.trim().toLocaleLowerCase().endsWith(".mafile");
-}
+export { STEAM_MAFILE_MARKER_FIELD, STEAM_MAFILE_MARKER_VALUE, STEAM_MAFILE_MAX_BYTES,
+  isSteamMaFileLogin, isSteamMaFileName } from '../../core/steam-mafile-contract';
 
 export async function parseSteamMaFile(rawJson: string, fileName = ""): Promise<Partial<LoginItem>> {
   const root = parseObject(rawJson);

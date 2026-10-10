@@ -231,7 +231,7 @@ export function readKeePassLoginFields(fields: KeePassEntryFields): KeePassLogin
  */
 function resolveLoginType(input: { monicaLoginType: string; wifiJson: string; ssid: string; ssoProvider: string; title: string }): { loginType: NonNullable<LoginItem["loginType"]>; wifiMetadata?: string } {
   const declared = input.monicaLoginType.toUpperCase();
-  if (declared === "GPG_KEY" || declared === "API_KEY") return { loginType: declared, wifiMetadata: undefined };
+  if (declared === "GPG_KEY" || declared === "API_KEY" || declared === 'STEAM_MAFILE') return { loginType: declared, wifiMetadata: undefined };
   if (declared === "WIFI" && input.wifiJson) return { loginType: "WIFI" as const, wifiMetadata: input.wifiJson };
   if (declared === "WIFI") return { loginType: "WIFI" as const, wifiMetadata: wifiJsonFor(input.ssid || input.title) };
   if (input.ssid) return { loginType: "WIFI" as const, wifiMetadata: wifiJsonFor(input.ssid) };
