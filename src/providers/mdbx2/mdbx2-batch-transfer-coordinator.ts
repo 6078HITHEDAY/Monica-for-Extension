@@ -719,6 +719,11 @@ export class Mdbx2BatchTransferCoordinator {
           row.blockedReason = '此 Bitwarden 登录项与其他密码、Passkey 或验证码共用远端记录，不能单独跨库移动；可使用复制保留来源。';
         }
       }
+      if (!row.blockedReason && input.action === 'move' && source && !['local', 'mdbx2'].includes(source.kind)) {
+        // ProviderAdapter.remove alone has no durable cross-vault receipt;
+        // KeePass only mutates memory and Bitwarden deletion may lose its reply.
+        row.blockedReason = '此来源的跨库移动尚未接入持久恢复，暂不能安全删除原记录；请使用复制保留来源。';
+      }
       if (!row.blockedReason && item.kind === 'passkey') {
         const key = await inspectPasskeyKey(item.privateKeyPkcs8, item.algorithm);
         if (key !== 'usable') row.blockedReason = '此 Passkey 的私钥不可导出或不可用，请保留原设备记录。';

@@ -32,6 +32,8 @@ import { ProviderAttachmentUploadStore } from "../providers/attachments/attachme
 import { BitwardenClient } from "../providers/bitwarden/bitwarden-client";
 import type { BitwardenSessionConfig } from "../providers/bitwarden/bitwarden-client";
 import { BitwardenAttachmentDownloadService } from "../providers/bitwarden/bitwarden-attachments";
+import { BitwardenTransferAttachmentSource } from '../providers/bitwarden/bitwarden-transfer-attachments';
+import { bitwardenProjectCipherId } from '../core/bitwarden-project-removal-local';
 import { BitwardenAttachmentMutationService } from "../providers/bitwarden/bitwarden-attachment-mutations";
 import { resolveBitwardenOrganizationKeys } from "../providers/bitwarden/bitwarden-organization";
 import type { BitwardenSymmetricKey } from "../providers/bitwarden/bitwarden-crypto";
@@ -220,7 +222,10 @@ const keePassDurableSync = new KeePassDurableSyncCoordinator(
 const mdbx2TransferAttachmentService = new Mdbx2TransferAttachmentService(
   mdbx2NativeClient,
   keePassProvider,
-  (providerId) => service.getProviderSourceRecords(providerId)
+  {
+    list: (account, item) => bitwardenTransferAttachmentSource.list(account, item),
+    read: (account, item, attachment) => bitwardenTransferAttachmentSource.read(account, item, attachment)
+  }
 );
 const mdbx2BatchTransferCoordinator = new Mdbx2BatchTransferCoordinator(
   service,
@@ -238,6 +243,8 @@ const bitwardenFolders = new BitwardenFolderService(bitwardenClient);
 const bitwardenCollections = new BitwardenCollectionService(bitwardenClient);
 const bitwardenSends = new BitwardenSendService(bitwardenClient);
 const bitwardenAttachmentDownloads = new BitwardenAttachmentDownloadService();
+const bitwardenTransferAttachmentSource = new BitwardenTransferAttachmentSource(bitwardenAttachmentDownloads,
+  loadBitwardenTransferAttachmentContext, persistBitwardenSession);
 const bitwardenAttachmentMutations = new BitwardenAttachmentMutationService();
 const bitwardenSendUploads = new ProviderAttachmentUploadStore();
 const bitwardenSendUploadInputs = new Map<string, { providerId: string; input: Omit<BitwardenSendFileInput, "bytes"> }>();
@@ -4083,7 +4090,7 @@ async function acknowledgeBitwardenCipherProjection(
   const patchedItems = state.items.map((candidate) => {
     const reference = candidate.providerRefs.find((entry) => entry.providerId === account.id);
     if (!reference) return candidate;
-    const cipherId = reference.remoteId?.split("#fido2:")[0] || "";
+    const cipherId = bitwardenProjectCipherId(reference.remoteId || '');
     const raw = rawByCipherId.get(cipherId);
     if (!raw) return candidate;
     if (candidate.id === requiredItemId) requiredFound = true;
@@ -4163,6 +4170,23 @@ async function loadBitwardenAttachmentContext(account: ProviderAccount, item: Va
   }
 }
 
+async function loadBitwardenTransferAttachmentContext(account: ProviderAccount, item: VaultItem): Promise<BitwardenAttachmentContext> {
+  const current = await service.getProvider(account.id);
+  if (!current?.enabled || !sameProviderBinding(current, account)) throw new Error('Bitwarden 传输来源连接已变化。');
+  // Personal attachments need one Cipher, not a full vault download per file.
+  const detail = await bitwardenClient.getCipherDetails(readBitwardenSession(current), bitwardenCipherIdForItem(account.id, item));
+  if (!detail.payload) throw new Error('Bitwarden 来源项目不存在或已删除。');
+  if (!bitwardenStringValue(detail.payload, 'OrganizationId', 'organizationId')) {
+    return { providerId: account.id, itemId: item.id, session: detail.session, rawCipher: detail.payload, organizationKeys: new Map() };
+  }
+  const synced = await bitwardenClient.sync(detail.session);
+  const vaultKey = bitwardenClient.vaultKey(synced.session);
+  try {
+    const organizations = await resolveBitwardenOrganizationKeys(synced.payload, vaultKey);
+    return { providerId: account.id, itemId: item.id, session: synced.session, rawCipher: detail.payload, organizationKeys: organizations.keys };
+  } finally { clearBitwardenSymmetricKey(vaultKey); }
+}
+
 function readBitwardenSession(account: ProviderAccount): BitwardenSessionConfig {
   const config = account.config as Partial<BitwardenSessionConfig>;
   const required = [config.vaultUrl, config.apiUrl, config.identityUrl, config.email, config.deviceId, config.accessToken, config.vaultKeyEnc, config.vaultKeyMac];
@@ -4174,7 +4198,7 @@ function readBitwardenSession(account: ProviderAccount): BitwardenSessionConfig 
 
 function bitwardenCipherIdForItem(providerId: string, item: VaultItem): string {
   const reference = item.providerRefs.find((candidate) => candidate.providerId === providerId);
-  const remoteId = reference?.remoteId?.split("#fido2:")[0] || "";
+  const remoteId = bitwardenProjectCipherId(reference?.remoteId || '');
   if (!remoteId) throw new ProviderAttachmentError("attachment-target-not-synced", "该项目尚未写入 Bitwarden，完成项目同步后才能管理附件。");
   return remoteId;
 }
@@ -4204,7 +4228,7 @@ async function acknowledgeBitwardenAttachmentMutation(
   let matchedTarget = false;
   const patchedItems = state.items.map((candidate) => {
     const reference = candidate.providerRefs.find((entry) => entry.providerId === account.id);
-    if (!reference || reference.remoteId?.split("#fido2:")[0] !== cipherId) return candidate;
+    if (!reference || bitwardenProjectCipherId(reference.remoteId || '') !== cipherId) return candidate;
     if (candidate.id === item.id) matchedTarget = true;
     const updatedReference = {
       ...reference,

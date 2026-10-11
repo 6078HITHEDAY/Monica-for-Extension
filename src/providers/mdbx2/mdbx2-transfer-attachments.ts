@@ -1,6 +1,6 @@
-import { parseLosslessJson } from "../../core/lossless-json";
 import type { Mdbx2MoveAttachmentProof } from "../../core/mdbx2-move-journal";
-import type { ProviderAccount, ProviderSourceRecord, VaultItem } from "../../core/model";
+import type { ProviderAccount, VaultItem } from "../../core/model";
+import type { TransferAttachmentSource } from '../attachments/transfer-attachment-source';
 import { base64ToBytes } from "../../security/encoding";
 import {
   MDBX2_MAX_BINARY_CHUNK_BYTES
@@ -22,7 +22,7 @@ export class Mdbx2TransferAttachmentService implements Mdbx2BatchTransferAttachm
   constructor(
     private readonly nativeClient: Mdbx2BatchTransferNativeClient,
     private readonly keepassProvider: Pick<KeePassProvider, "listAttachments" | "readAttachment">,
-    private readonly sourceRecords?: (providerId: string) => Promise<ProviderSourceRecord[]>
+    private readonly bitwardenSource?: TransferAttachmentSource
   ) {}
 
   async listSourceAttachments(account: ProviderAccount, item: VaultItem): Promise<readonly Mdbx2TransferAttachmentDescriptor[]> {
@@ -56,14 +56,8 @@ export class Mdbx2TransferAttachmentService implements Mdbx2BatchTransferAttachm
       return attachments;
     }
     if (account.kind === "bitwarden") {
-      const records = this.sourceRecords ? await this.sourceRecords(account.id) : [];
-      const reference = item.providerRefs.find((candidate) => candidate.providerId === account.id);
-      const record = records.find((candidate) => candidate.remoteId === reference?.remoteId);
-      const attachments = record ? parseBitwardenAttachments(record.payload) : [];
-      if (attachments.length) {
-        throw new Error("Bitwarden 附件当前没有安全读取接口，来源项目已保留。");
-      }
-      return [];
+      if (!this.bitwardenSource) throw new Error('Bitwarden 附件读取能力尚未接入，来源项目已保留。');
+      return this.bitwardenSource.list(account, item);
     }
     if (item.imagePaths?.length) throw new Error("来源图片附件当前没有安全读取接口，来源项目已保留。");
     return [];
@@ -84,23 +78,26 @@ export class Mdbx2TransferAttachmentService implements Mdbx2BatchTransferAttachm
     const objectId = targetReference?.remoteId;
     if (targetAccount.kind !== "mdbx2" || !collectionId || !objectId) throw new Error("目标 MDBX2 项目缺少附件写入标识。");
     let copied = 0;
+    const proofs: Mdbx2MoveAttachmentProof[] = [];
     for (const attachment of sourceAttachments) {
       const bytes = await this.readSourceAttachment(account, sourceItem, attachment);
-      const digest = await sha256Hex(bytes);
-      if (bytes.byteLength !== attachment.sizeBytes) throw new Error(`附件「${attachment.fileName}」大小校验失败。`);
-      const attachmentId = await mdbx2TransferUuid(operationId, `attachment:${attachment.attachmentId}`);
-      const uploadOperationId = await mdbx2TransferUuid(operationId, `attachment-operation:${attachment.attachmentId}`);
-      await this.uploadTargetAttachment(
-        vaultHandleOf(targetAccount),
-        { ...attachment, attachmentId, sizeBytes: bytes.byteLength },
-        collectionId,
-        objectId,
-        uploadOperationId,
-        digest,
-        bytes
-      );
-      copied += 1;
+      try {
+        const digest = await sha256Hex(bytes);
+        const attachmentId = await mdbx2TransferUuid(operationId, `attachment:${attachment.attachmentId}`);
+        const uploadOperationId = await mdbx2TransferUuid(operationId, `attachment-operation:${attachment.attachmentId}`);
+        await this.uploadTargetAttachment(
+          vaultHandleOf(targetAccount), { ...attachment, attachmentId, sizeBytes: bytes.byteLength },
+          collectionId, objectId, uploadOperationId, digest, bytes
+        );
+        proofs.push({ itemId: targetItem.id, attachmentId, fileName: attachment.fileName,
+          mediaType: attachment.mediaType, sizeBytes: bytes.length, sha256: digest });
+        copied += 1;
+      } finally { bytes.fill(0); }
     }
+    // A successful upload response alone does not prove a complete copy.
+    await this.verifyMoveAttachmentProofs(targetAccount, targetItem, proofs);
+    if (JSON.stringify(await this.listSourceAttachments(account, sourceItem)) !== JSON.stringify(sourceAttachments))
+      throw new Error('传输期间来源附件清单已变化，请重新预览；来源项目已保留。');
     return copied;
   }
 
@@ -110,9 +107,11 @@ export class Mdbx2TransferAttachmentService implements Mdbx2BatchTransferAttachm
     const proofs: Mdbx2MoveAttachmentProof[] = [];
     for (const attachment of source) {
       const bytes = await this.readSourceAttachment(account, sourceItem, attachment);
-      proofs.push({ itemId: targetItem.id,
-        attachmentId: account.id === targetAccount.id ? attachment.attachmentId : await mdbx2TransferUuid(operationId, `attachment:${attachment.attachmentId}`),
-        fileName: attachment.fileName, mediaType: attachment.mediaType, sizeBytes: attachment.sizeBytes, sha256: await sha256Hex(bytes) });
+      try {
+        proofs.push({ itemId: targetItem.id,
+          attachmentId: account.id === targetAccount.id ? attachment.attachmentId : await mdbx2TransferUuid(operationId, `attachment:${attachment.attachmentId}`),
+          fileName: attachment.fileName, mediaType: attachment.mediaType, sizeBytes: bytes.length, sha256: await sha256Hex(bytes) });
+      } finally { bytes.fill(0); }
     }
     await this.verifyMoveAttachmentProofs(targetAccount, targetItem, proofs);
     return proofs;
@@ -129,7 +128,9 @@ export class Mdbx2TransferAttachmentService implements Mdbx2BatchTransferAttachm
       if (!attachment || attachment.fileName !== proof.fileName || attachment.sizeBytes !== proof.sizeBytes
         || (attachment.mediaType || "") !== (proof.mediaType || "")) throw new Error("移动附件校验失败，来源项目已保留。");
       const bytes = await this.readSourceAttachment(targetAccount, targetItem, attachment);
-      if (await sha256Hex(bytes) !== proof.sha256) throw new Error("移动附件校验失败，来源项目已保留。");
+      try {
+        if (await sha256Hex(bytes) !== proof.sha256) throw new Error("移动附件校验失败，来源项目已保留。");
+      } finally { bytes.fill(0); }
     }
   }
 
@@ -138,47 +139,62 @@ export class Mdbx2TransferAttachmentService implements Mdbx2BatchTransferAttachm
     item: VaultItem,
     attachment: Mdbx2TransferAttachmentDescriptor
   ): Promise<Uint8Array> {
+    if (account.kind === 'bitwarden') {
+      if (!this.bitwardenSource) throw new Error('Bitwarden 附件读取能力尚未接入，来源项目已保留。');
+      // Bitwarden catalog sizes are encrypted lengths, sometimes unknown (0).
+      // Only the authenticated download establishes the plaintext size.
+      const bytes = await this.bitwardenSource.read(account, item, attachment);
+      if (bytes.length > MAX_ATTACHMENT_BYTES) { bytes.fill(0); throw new Error('附件明文超过 64 MiB 传输上限。'); }
+      return bytes;
+    }
     if (!Number.isSafeInteger(attachment.sizeBytes) || attachment.sizeBytes < 0 || attachment.sizeBytes > MAX_ATTACHMENT_BYTES) {
       throw new Error(`附件「${attachment.fileName}」大小超过 64 MiB 上限。`);
     }
     const bytes = new Uint8Array(attachment.sizeBytes);
     let offset = 0;
-    if (account.kind === "keepass") {
-      while (offset < bytes.length || (offset === 0 && bytes.length === 0)) {
-        const chunk = this.keepassProvider.readAttachment(account, item, attachment.attachmentId, offset, PROVIDER_ATTACHMENT_CHUNK_BYTES);
-        if (chunk.offset !== offset || chunk.nextOffset < offset || chunk.nextOffset > bytes.length) throw new Error("KeePass 附件读取边界无效。");
-        bytes.set(chunk.bytes, offset);
-        offset = chunk.nextOffset;
-        if (chunk.eof) break;
-        if (!chunk.bytes.length) throw new Error("KeePass 附件读取没有前进。");
-      }
-      if (offset !== bytes.length) throw new Error(`KeePass 附件「${attachment.fileName}」读取不完整。`);
-      return bytes;
-    }
-    if (account.kind === "mdbx2") {
-      const reference = item.providerRefs.find((candidate) => candidate.providerId === account.id);
-      const read = await this.nativeClient.beginAttachmentRead(vaultHandleOf(account), attachment.attachmentId);
-      try {
-        if (read.attachmentId !== attachment.attachmentId || read.sizeBytes !== attachment.sizeBytes || read.fileName !== attachment.fileName) throw new Error("MDBX2 附件读取目标不一致。");
+    try {
+      if (account.kind === "keepass") {
         while (offset < bytes.length || (offset === 0 && bytes.length === 0)) {
-          const chunk = await this.nativeClient.readAttachmentChunk(read.readHandle, offset, Math.min(read.maxChunkBytes, MDBX2_MAX_BINARY_CHUNK_BYTES));
-          if (chunk.readHandle !== read.readHandle || chunk.attachmentId !== attachment.attachmentId
-            || chunk.sizeBytes !== attachment.sizeBytes || chunk.fileName !== attachment.fileName) throw new Error("MDBX2 附件读取目标不一致。");
-          if (chunk.offset !== offset || chunk.nextOffset < offset || chunk.nextOffset > bytes.length) throw new Error("MDBX2 附件读取边界无效。");
-          const data = base64ToBytes(chunk.dataBase64);
-          if (data.length !== chunk.nextOffset - offset) throw new Error("MDBX2 附件分块长度无效。");
-          bytes.set(data, offset);
-          offset = chunk.nextOffset;
-          if (chunk.eof) break;
-          if (!data.length) throw new Error("MDBX2 附件读取没有前进。");
+          const chunk = this.keepassProvider.readAttachment(account, item, attachment.attachmentId, offset, PROVIDER_ATTACHMENT_CHUNK_BYTES);
+          try {
+            if (chunk.attachment.attachmentId !== attachment.attachmentId || chunk.attachment.fileName !== attachment.fileName
+              || chunk.attachment.sizeBytes !== bytes.length || chunk.offset !== offset || chunk.nextOffset !== offset + chunk.bytes.length
+              || chunk.nextOffset > bytes.length || chunk.eof !== (chunk.nextOffset === bytes.length)) throw new Error("KeePass 附件读取边界无效。");
+            bytes.set(chunk.bytes, offset); offset = chunk.nextOffset;
+            if (chunk.eof) break;
+            if (!chunk.bytes.length) throw new Error("KeePass 附件读取没有前进。");
+          } finally { chunk.bytes.fill(0); }
         }
-      } finally {
-        await this.nativeClient.releaseAttachmentRead(read.readHandle).catch(() => undefined);
+        if (offset !== bytes.length) throw new Error(`KeePass 附件「${attachment.fileName}」读取不完整。`);
+        return bytes;
       }
-      if (!reference?.remoteId || offset !== bytes.length) throw new Error(`MDBX2 附件「${attachment.fileName}」读取不完整。`);
-      return bytes;
-    }
-    throw new Error("当前来源密码源不支持附件读取。");
+      if (account.kind === "mdbx2") {
+        const reference = item.providerRefs.find((candidate) => candidate.providerId === account.id);
+        const read = await this.nativeClient.beginAttachmentRead(vaultHandleOf(account), attachment.attachmentId);
+        try {
+          if (read.attachmentId !== attachment.attachmentId || read.sizeBytes !== attachment.sizeBytes || read.fileName !== attachment.fileName) throw new Error("MDBX2 附件读取目标不一致。");
+          if (!Number.isSafeInteger(read.maxChunkBytes) || read.maxChunkBytes < 1) throw new Error('MDBX2 附件读取分块大小无效。');
+          while (offset < bytes.length || (offset === 0 && bytes.length === 0)) {
+            const chunk = await this.nativeClient.readAttachmentChunk(read.readHandle, offset, Math.min(read.maxChunkBytes, MDBX2_MAX_BINARY_CHUNK_BYTES));
+            if (chunk.readHandle !== read.readHandle || chunk.attachmentId !== attachment.attachmentId
+              || chunk.sizeBytes !== attachment.sizeBytes || chunk.fileName !== attachment.fileName) throw new Error("MDBX2 附件读取目标不一致。");
+            if (chunk.offset !== offset || chunk.nextOffset < offset || chunk.nextOffset > bytes.length) throw new Error("MDBX2 附件读取边界无效。");
+            const data = base64ToBytes(chunk.dataBase64);
+            try {
+              if (data.length !== chunk.nextOffset - offset || chunk.eof !== (chunk.nextOffset === bytes.length)) throw new Error("MDBX2 附件分块长度无效。");
+              bytes.set(data, offset); offset = chunk.nextOffset;
+              if (chunk.eof) break;
+              if (!data.length) throw new Error("MDBX2 附件读取没有前进。");
+            } finally { data.fill(0); }
+          }
+        } finally {
+          await this.nativeClient.releaseAttachmentRead(read.readHandle).catch(() => undefined);
+        }
+        if (!reference?.remoteId || offset !== bytes.length) throw new Error(`MDBX2 附件「${attachment.fileName}」读取不完整。`);
+        return bytes;
+      }
+      throw new Error("当前来源密码源不支持附件读取。");
+    } catch (error) { bytes.fill(0); throw error; }
   }
 
   private async uploadTargetAttachment(
@@ -201,19 +217,26 @@ export class Mdbx2TransferAttachmentService implements Mdbx2BatchTransferAttachm
       sizeBytes: bytes.byteLength,
       sha256: digest
     }));
-    let transferId = begin.transferId;
+    const transferId = begin.transferId;
     let offset = begin.nextOffset;
     try {
+      if (!transferId || begin.operationId !== operationId || begin.attachmentId !== attachment.attachmentId
+        || !Number.isSafeInteger(offset) || offset < 0 || offset > bytes.length
+        || !Number.isSafeInteger(begin.maxChunkBytes) || begin.maxChunkBytes < 1)
+        throw new Error('MDBX2 附件上传会话身份或边界无效。');
       while (offset < bytes.length) {
         const end = Math.min(bytes.length, offset + Math.min(begin.maxChunkBytes, MDBX2_MAX_BINARY_CHUNK_BYTES));
         const chunk = bytes.slice(offset, end);
-        const result = await retry(() => this.nativeClient.sendAttachmentUploadChunk(transferId, offset, chunk));
-        if (result.nextOffset < end || (!result.repeated && result.acceptedBytes !== chunk.length)) throw new Error("MDBX2 附件上传分块响应无效。");
-        offset = result.nextOffset;
+        try {
+          const result = await retry(() => this.nativeClient.sendAttachmentUploadChunk(transferId, offset, chunk));
+          if (result.transferId !== transferId || result.nextOffset !== end || (!result.repeated && result.acceptedBytes !== chunk.length)) throw new Error("MDBX2 附件上传分块响应无效。");
+          offset = result.nextOffset;
+        } finally { chunk.fill(0); }
       }
       const finished = await retry(() => this.nativeClient.finishAttachmentUpload(transferId));
       if (
-        finished.attachment.attachmentId !== attachment.attachmentId
+        finished.transferId !== transferId || !finished.commitId
+          || finished.attachment.attachmentId !== attachment.attachmentId
           || finished.attachment.fileName !== attachment.fileName
           || finished.attachment.sizeBytes !== bytes.byteLength
       ) throw new Error(`目标附件「${attachment.fileName}」校验失败。`);
@@ -230,23 +253,6 @@ function vaultHandleOf(account: ProviderAccount): string {
   const value = typeof account.config.vaultHandle === "string" ? account.config.vaultHandle : "";
   if (!value) throw new Error("MDBX2 附件密码源缺少本机工作副本句柄。");
   return value;
-}
-
-function parseBitwardenAttachments(payload: string): Mdbx2TransferAttachmentDescriptor[] {
-  try {
-    const raw = parseLosslessJson(payload) as Record<string, unknown>;
-    const attachments = raw.Attachments ?? raw.attachments;
-    if (!Array.isArray(attachments)) return [];
-    return attachments.flatMap((value, index) => {
-      if (!value || typeof value !== "object") return [];
-      const entry = value as Record<string, unknown>;
-      const fileName = typeof (entry.FileName ?? entry.fileName) === "string" ? String(entry.FileName ?? entry.fileName) : `attachment-${index + 1}`;
-      const size = Number(entry.Size ?? entry.size ?? 0);
-      return [{ attachmentId: String(entry.Id ?? entry.id ?? index), fileName, sizeBytes: Number.isSafeInteger(size) && size >= 0 ? size : 0 }];
-    });
-  } catch {
-    return [];
-  }
 }
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {

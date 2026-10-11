@@ -209,6 +209,23 @@ const noAttachments: Mdbx2BatchTransferAttachmentBridge = {
 };
 
 describe("MDBX2 batch transfer coordinator", () => {
+  it.each(['bitwarden', 'keepass', 'monica-webdav'] as const)('retains %s sources until cross-vault deletion has durable recovery', async kind => {
+    const { service, target } = await setupVault();
+    const account: ProviderAccount = { ...target, id: `source-${kind}`, kind, config: {} };
+    await service.upsertProvider(account);
+    const source = { ...createLoginItem({ title: 'Durable source required' }), providerRefs: [{ providerId: account.id, remoteId: 'remote-item' }] };
+    await service.applyProviderSync(account.id, [source]);
+    const native = new FakeNative();
+    const coordinator = new Mdbx2BatchTransferCoordinator(service, new EmptyRegistry(), new Mdbx2Provider(native), native, noAttachments);
+    const request = { itemIds: [source.id], targetProviderId: target.id, preserveCategories: false };
+    const result = await coordinator.execute({ ...request, action: 'move', confirmed: true });
+    expect(result.items[0]).toMatchObject({ status: 'blocked', retryable: false });
+    expect(result.items[0].error).toContain('持久恢复');
+    expect(native.batches).toEqual([]);
+    expect(native.deleted).toEqual([]);
+    expect(await service.getItem(source.id)).toEqual(source);
+    expect((await coordinator.plan({ ...request, action: 'copy' })).transferableCount).toBe(1);
+  });
   it('blocks shared Bitwarden record moves before writes while permitting copies', async () => {
     const { service, target } = await setupVault();
     const source: ProviderAccount = { ...target, id: 'bw-shared', kind: 'bitwarden', config: {} };

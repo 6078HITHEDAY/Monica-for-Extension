@@ -41,6 +41,8 @@ export interface BitwardenAttachmentVaultContext {
   session: BitwardenSessionConfig;
   rawCipher: Record<string, unknown>;
   organizationKeys?: ReadonlyMap<string, BitwardenSymmetricKey>;
+  /** Transfers must not replace an unreadable encrypted name with UI fallback text. */
+  requireReadableFileName?: boolean;
 }
 
 export interface BitwardenAttachmentDownloadInput extends BitwardenAttachmentVaultContext {
@@ -146,7 +148,7 @@ export class BitwardenAttachmentDownloadService {
     try {
       const summaries: ProviderAttachmentSummary[] = [];
       for (const attachment of attachments) {
-        summaries.push(await attachmentSummary(attachment, cipherKey));
+        summaries.push(await attachmentSummary(attachment, cipherKey, input.requireReadableFileName));
       }
       return paginateProviderAttachments(summaries, page);
     } finally {
@@ -170,7 +172,7 @@ export class BitwardenAttachmentDownloadService {
       cipherKey = await this.resolveCipherKey(input);
       const download = await this.client.attachmentDownloadInfo(input.session, cipherId, input.attachmentId, input.signal);
       const reconciled = reconcileDownloadInfo(rawAttachment, download.info, input.attachmentId, this.maximumCiphertextBytes());
-      const fileName = await decryptAttachmentFileName(reconciled.encryptedFileName, cipherKey);
+      const fileName = await decryptAttachmentFileName(reconciled.encryptedFileName, cipherKey, input.requireReadableFileName);
       attachmentKey = reconciled.key
         ? await decryptBitwardenSymmetricKey(reconciled.key, cipherKey)
         : cloneKey(cipherKey);
@@ -635,11 +637,11 @@ function parseRawAttachments(rawCipher: Record<string, unknown>, maximumCipherte
   });
 }
 
-async function attachmentSummary(attachment: RawAttachment, cipherKey: BitwardenSymmetricKey): Promise<ProviderAttachmentSummary> {
+async function attachmentSummary(attachment: RawAttachment, cipherKey: BitwardenSymmetricKey, requireReadableFileName = false): Promise<ProviderAttachmentSummary> {
   return {
     attachmentId: attachment.id,
     providerKind: "bitwarden",
-    fileName: await decryptAttachmentFileName(attachment.encryptedFileName, cipherKey),
+    fileName: await decryptAttachmentFileName(attachment.encryptedFileName, cipherKey, requireReadableFileName),
     sizeBytes: attachment.declaredCiphertextBytes,
     protected: true
   };
@@ -675,12 +677,14 @@ function reconcileDownloadInfo(
   };
 }
 
-async function decryptAttachmentFileName(value: string | undefined, key: BitwardenSymmetricKey): Promise<string> {
+async function decryptAttachmentFileName(value: string | undefined, key: BitwardenSymmetricKey, requireReadableFileName = false): Promise<string> {
   if (!value) throw attachmentError("bitwarden-attachment-metadata-invalid", "Bitwarden 附件缺少加密文件名。");
   let fileName: string;
   try {
     fileName = await decryptBitwardenString(value, key);
   } catch {
+    if (requireReadableFileName && BITWARDEN_CIPHER_STRING_PATTERN.test(value))
+      throw attachmentError('bitwarden-attachment-name-unreadable', 'Bitwarden 附件文件名无法解密，不能完整复制；来源文件已保留。');
     // Older Monica/Bitwarden records can contain plaintext attachment names. A value that
     // still has CipherString syntax must never be exposed when its key is unavailable or
     // invalid, but the attachment body remains useful for content-validated Steam recovery.
