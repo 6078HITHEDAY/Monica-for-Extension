@@ -38,6 +38,10 @@ M3eFormFieldElement.elementStyles = [...M3eFormFieldElement.elementStyles, css`
     :host([variant="filled"]:state(--disabled)) .base::before { border-color: GrayText; }
     :host([variant="filled"]:focus-within) .base::before { border-color: Highlight; }
   }
+  /* Grouped settings own their state layer and keyboard focus at row level.
+   * Do not draw a second capsule around the selected value and label. */
+  :host([data-settings-select]:not(:state(--invalid))) .base::before,
+  :host([data-settings-select]) .base::after { display: none; }
 `];
 
 // M3E's documented form-field composition uses native input/textarea controls.
@@ -75,8 +79,21 @@ function containSelectEscape(event: KeyboardEvent) {
   event.stopPropagation();
   event.preventDefault();
 }
+// Chromium may retain :focus-visible when a mouse clicks an already keyboard-
+// focused select. Record that handoff without blurring or changing selection.
+function settingsPointerFocus(event: Event) {
+  (event.currentTarget as HTMLElement).setAttribute('data-pointer-focus', '');
+}
+function settingsKeyboardFocus(event: Event) {
+  (event.currentTarget as HTMLElement).removeAttribute('data-pointer-focus');
+}
 function connectField(field: HTMLElement) {
   associateLabel(field);
+  if (field.hasAttribute('data-settings-select')) {
+    field.addEventListener('pointerdown', settingsPointerFocus, true);
+    field.addEventListener('keydown', settingsKeyboardFocus, true);
+    field.addEventListener('focusout', settingsKeyboardFocus);
+  }
   field.querySelector("m3e-select")?.addEventListener("keydown", rememberSelectEscape as EventListener, true);
   field.querySelector("m3e-select")?.addEventListener("keydown", containSelectEscape as EventListener);
   // Vue updates an existing text node when a translation or source name
@@ -105,6 +122,9 @@ const fieldLabel: ObjectDirective<HTMLElement> = {
   mounted: connectField,
   updated: connectField,
   beforeUnmount: field => {
+    field.removeEventListener('pointerdown', settingsPointerFocus, true);
+    field.removeEventListener('keydown', settingsKeyboardFocus, true);
+    field.removeEventListener('focusout', settingsKeyboardFocus);
     field.querySelector("m3e-select")?.removeEventListener("keydown", rememberSelectEscape as EventListener, true);
     field.querySelector("m3e-select")?.removeEventListener("keydown", containSelectEscape as EventListener);
   }

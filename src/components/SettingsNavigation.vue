@@ -69,6 +69,15 @@ watch(() => props.modelValue, async (page, previous) => {
 .settings-entry-list :deep(.settings-control > :last-child) { min-width: 0; width: 100%; }
 .settings-entry-list :deep(.settings-control-icon) { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; background: var(--md-sys-color-primary-container); color: var(--md-sys-color-on-primary-container); }
 .settings-entry-list :deep(.settings-control m3e-form-field) { --m3e-form-field-container-color: transparent; }
+.settings-entry-list :deep(.settings-control:has([data-settings-select]):hover),
+.settings-entry-list :deep(.settings-control:has([data-settings-select] [aria-expanded="true"])) { background: var(--md-sys-color-surface-container-high); }
+/* One keyboard indicator follows the grouped row's corners, never an inner
+   pill. Scope the reset to the select so menu options keep their own focus. */
+.settings-entry-list :deep(.settings-control [data-settings-select] :is(m3e-select, select)) { --m3e-focus-ring-visibility: hidden; outline: none; }
+.settings-entry-list :deep(.settings-control:has([data-settings-select]:not([data-pointer-focus]) :focus-visible)) { outline: 2px solid var(--md-sys-color-primary); outline-offset: -2px; }
+@media (forced-colors: active) {
+  .settings-entry-list :deep(.settings-control:has([data-settings-select]:not([data-pointer-focus]) :focus-visible)) { outline-color: Highlight; }
+}
 .settings-nav-entry:hover { background: var(--md-sys-color-surface-container-high); }
 .settings-nav-entry:active { background: var(--md-sys-color-secondary-container); }
 .settings-nav-entry:focus-visible { outline: 3px solid var(--md-sys-color-primary); outline-offset: 2px; }

@@ -4,6 +4,7 @@
 
 ## 中文
 
+- 去掉设置页语言和显示模式下拉框的内层聚焦包边；鼠标悬停及展开菜单只轻微提亮整行，键盘定位保留单层整行提示，并适配系统高对比度。
 - 整理设置页：语言、显示模式、自动同步和表单旁自动填充可在首页直接操作；按通用、同步与填充、密码库与安全分组，二级入口由十个缩减为四个。合并 Windows Hello 与保护方式、备份与迁移，移除重复的显示模式及独立安全说明入口。收紧分组间距与留白，语言/显示模式行由约 108px 缩至 72px，保留大字号下的完整文本和操作空间；补齐编辑内容页遗漏的多语言词条。
 - 加固设备密钥隔离：将旧存储中的设备密钥迁移至扩展专属 IndexedDB，网页内容脚本不能读取；迁移成功提交后才清理旧副本，保留原密钥与密码库数据，重试不会用旧副本覆盖已迁移密钥。迁移后的设备密钥模式不能直接降级到旧构建，建议保留密码保护的备份。
 - 修复诊断脱敏遗漏带引号的密码、多词口令及提供方 token／密钥字段的问题；无效的已解密 JSON 不再把原文片段带入错误消息。缩短密码库明文字节缓冲区的存活时间。
@@ -19,6 +20,7 @@
 
 ## English
 
+- Removed the nested focus outline from language and display-mode settings. Hovering or opening a menu subtly highlights the row; keyboard navigation keeps a single row-level indicator, including system high-contrast mode.
 - Reorganized settings into General, Sync and autofill, and Vault and security. Language, display mode and the sync/autofill switches work directly on the home page; secondary destinations are reduced from ten to four. Combined Windows Hello with protection settings, and backups with migration. Removed duplicate display-mode controls and the separate security explanation page. Reduced spacing and empty field hints, bringing standard language/display rows from about 108px to 72px while preserving enlarged-text usability. Completed missing editor translations.
 - Isolated device keys in extension-origin IndexedDB, inaccessible to content scripts. Legacy keys migrate unchanged; old copies are removed only after commit, and retries never replace an already migrated key with a legacy copy. Direct downgrade of a migrated device-key profile to an older build is unsupported; retain a password-protected backup.
 - Fixed diagnostic redaction of quoted passwords, multiword passphrases and provider token/key fields. Invalid decrypted JSON no longer includes source fragments in errors. Reduced the lifetime of plaintext vault byte buffers.

@@ -5,6 +5,9 @@ const doc = {...base, title: 'Monica · 直接设置与分组', frames: [], grou
   brief: '通用、同步与填充、密码库与安全三组连续M3E行；24px外圆角、4px相邻圆角、4px间隔、横向16px纵向8px内边距；普通字号主要行约72px，组间20px，语言与模式不预留空提示行。语言和显示模式直接选择，同步和自动填充直接开关；仅配色、排除项、解锁与保护、备份与迁移进入二级页。Hello与保护方式合并，备份与迁移合并，安全说明回到对应功能附近。沿用Monica青绿与系统字体，桌面/窄屏保持单列信息顺序。'};
 const text = label => ({kind: 'text', label, variant: 'filled', icon: null, radius: 0, textStyle: 'titleSmall', fill: 'surface'});
 const row = (label, supporting, icon, extra={}) => ({kind:'listItem',label,supporting,icon,...extra});
+// The row owns hover/keyboard feedback; the native UI removes the Canvas
+// select's default underline as well as the previous nested focus outline.
+doc.brief += ' 下拉设置不再嵌套亮色胶囊包边；鼠标悬停及菜单展开时整行轻微提亮，选择结束移开鼠标后恢复。Tab定位仅在整行外缘显示单层焦点，菜单选项保留键盘提示，高对比度使用系统Highlight。';
 const select = (label, values, selected=0) => ({kind:'select',label,tabs:values.map(label=>({label,icon:null})),selected});
 function frame(id, title, sections) {
   const x=doc.frames.length*430; let y=12;

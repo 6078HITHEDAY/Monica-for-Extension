@@ -40,6 +40,44 @@ test('common settings act directly while grouped configuration pages retain focu
     await expect(home).toBeVisible();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
     await page.mouse.move(0, 0);
+    const mode = home.getByRole('combobox', {name: '显示模式', exact: true});
+    const language = home.getByRole('combobox', {name: '界面语言', exact: true});
+    const modeRow = home.locator('.settings-control').filter({has: page.getByRole('combobox', {name: '显示模式', exact: true})});
+    const fieldChrome = () => home.locator('[data-settings-select]').evaluateAll(fields => fields.map(field => {
+      const base = field.shadowRoot!.querySelector('.base')!;
+      return {border: getComputedStyle(base, '::before').display, layer: getComputedStyle(base, '::after').display};
+    }));
+    await expect.poll(fieldChrome).toEqual([{border: 'none', layer: 'none'}, {border: 'none', layer: 'none'}]);
+    // A mouse selection must not leave either an inner capsule or a row outline.
+    await expect(modeRow).toHaveCSS('outline-style', 'none');
+    await expect(mode).toBeFocused();
+    await language.click();
+    await page.keyboard.press('Escape');
+    await expect(language).toHaveAttribute('aria-expanded', 'false');
+    await page.keyboard.press('Tab');
+    await expect(mode).toBeFocused();
+    await expect(modeRow).toHaveCSS('outline-style', 'solid');
+    await expect(modeRow).toHaveCSS('outline-width', '2px');
+    await expect(mode).toHaveCSS('outline-style', 'none');
+    await expect(mode.locator(':scope > m3e-focus-ring .outline')).toHaveCSS('visibility', 'hidden');
+    await home.screenshot({path: info.outputPath('settings-keyboard-focus.png')});
+    await page.keyboard.press('Enter');
+    await expect(mode).toHaveAttribute('aria-expanded', 'true');
+    const panel = page.locator(`[id="${await mode.getAttribute('aria-controls')}"]`);
+    await expect(panel.getByRole('option', {name: '深色', exact: true})).toBeVisible();
+    await page.keyboard.press('Home');
+    await page.keyboard.press('Enter');
+    await expect(mode).toHaveJSProperty('value', 'auto');
+    await expect(panel).toHaveCount(0);
+    await expect(mode).toBeFocused();
+    await page.emulateMedia({forcedColors: 'active'});
+    await expect(modeRow).toHaveCSS('outline-style', 'solid');
+    await expect(modeRow).toHaveCSS('outline-width', '2px');
+    await home.screenshot({path: info.outputPath('settings-high-contrast-focus.png')});
+    await page.emulateMedia({forcedColors: 'none'});
+    await chooseOption(mode, 'dark');
+    await page.mouse.move(0, 0);
+    await expect(modeRow).toHaveCSS('outline-style', 'none');
     const groups = await home.locator('.settings-entry-list').evaluateAll(groups => groups.map(group => {
       const first=getComputedStyle(group.firstElementChild!), last=getComputedStyle(group.lastElementChild!);
       return [first.borderTopLeftRadius, last.borderBottomRightRadius, first.padding, last.padding, first.backgroundColor === last.backgroundColor];
