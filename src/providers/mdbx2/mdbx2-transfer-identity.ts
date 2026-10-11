@@ -24,8 +24,10 @@ export async function mdbx2TransferUuid(operationId: string, name: string): Prom
 /** Canonical SHA-256 scope accepted by `object.batch`. */
 export async function mdbx2TransferOperationScope(value: unknown): Promise<string> {
   const encoded = new TextEncoder().encode(stableJson(value));
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", encoded));
-  return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  try {
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", encoded));
+    return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  } finally { encoded.fill(0); }
 }
 
 function stableJson(value: unknown, ancestors = new Set<object>()): string {

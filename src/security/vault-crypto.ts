@@ -111,6 +111,9 @@ export async function encryptVaultState(state: VaultState, key: CryptoKey, kdf: 
   const plaintext = new TextEncoder().encode(JSON.stringify(state));
   let encrypted: ArrayBuffer;
   try {
+    // The reader enforces this same limit, including the 16-byte GCM tag.
+    // Refuse an oversized write before replacing a still-readable envelope.
+    if (plaintext.byteLength + 16 > MAX_VAULT_CIPHERTEXT_BYTES) throw new Error('密码库超过 64 MiB 加密存储上限，原始密码库已保留。');
     encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv: iv as BufferSource, additionalData: AAD as BufferSource, tagLength: 128 }, key, plaintext);
   } finally { plaintext.fill(0); }
   return {

@@ -48,6 +48,17 @@ describe("vault key derivation", () => {
 });
 
 describe("vault envelope round-trip", () => {
+  it('refuses an oversized UTF-8 vault before encryption so it cannot replace a readable envelope', async () => {
+    const { key, kdf } = await createDeviceVaultKey();
+    const state = createEmptyVaultState();
+    // Character counts alone would miss this limit: each character occupies three bytes.
+    const oversized = { ...state, futurePayload: '密'.repeat(Math.ceil(64 * 1024 * 1024 / 3)) };
+    const spy = vi.spyOn(crypto.subtle, 'encrypt');
+    try {
+      await expect(encryptVaultState(oversized, key, kdf)).rejects.toThrow('64 MiB');
+      expect(spy).not.toHaveBeenCalled();
+    } finally { spy.mockRestore(); }
+  });
   it.each([false, true])('clears the encoded vault plaintext even when encryption fails (%s)', async fail => {
     const { key, kdf } = await createDeviceVaultKey();
     const state = createEmptyVaultState('2026-10-10T00:00:00.000Z');

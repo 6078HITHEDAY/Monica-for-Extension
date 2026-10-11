@@ -4,6 +4,7 @@
 
 ## 中文
 
+- 修复加密密码库写入容量与读取上限不一致的问题：超过 64 MiB 时在覆盖原库之前停止保存，避免下次无法解锁；传输内容摘要的临时明文字节也会及时清理。新增本地库整组传输的后台保存事务，项目、附件与恢复回执一起提交，重试不会覆盖后续修改或复活已删除的副本；本地目标选择和附件界面仍在接入，暂不作为已完成的可见功能。
 - Bitwarden 项目复制到 MDBX 时可携带 Steam maFile 等附件，Passkey／验证码投影会读取其所属远端记录的附件；校验加密完整性和真实文件大小，复制后回读目标并核对 SHA-256，中断后可重试且不重复复制。个人附件按项目读取，避免每个文件都下载整库。修正附件传输失败时的临时明文清理；尚未具备持久删除恢复的 KeePass、Bitwarden 和旧 WebDAV 来源暂仅允许复制，移动在预览阶段说明原因并保留来源。
 - Passkey 和 Steam 页面新增批量传输入口，可直接复制或移动到 MDBX；候选项目沿用当前搜索、数据库和文件夹范围，包含分页之外的匹配结果。修复多个 MDBX 来源使用相同文件夹 ID 时路径混淆的问题；目录不可读的来源单独列出原因，保留分类时不再静默丢弃缺失的父目录。共享 Bitwarden 远端记录的项目暂不允许单独跨库移动，复制仍保留来源。
 - 去掉设置页语言和显示模式下拉框的内层聚焦包边；鼠标悬停及展开菜单只轻微提亮整行，键盘定位保留单层整行提示，并适配系统高对比度。
@@ -22,6 +23,7 @@
 
 ## English
 
+- Matched encrypted-vault writes to the reader's 64 MiB limit: oversized writes now stop before replacing the readable vault. Temporary plaintext used for transfer fingerprints is cleared. Added a background transaction for local transfers that commits related items, attachments and a replay receipt together; retries preserve subsequent edits/deletions. Local destination selection and attachment UI integration remain unfinished, so this is not yet a completed user-facing transfer feature.
 - Bitwarden-to-MDBX copies now include Steam maFiles and other attachments, including parent-Cipher files for Passkey and OTP projections. Authenticated downloads establish actual file sizes; destination readback verifies SHA-256, and interrupted copies can be retried without duplication. Personal attachments fetch the relevant Cipher instead of downloading the entire vault for each file. Temporary plaintext is cleared on transfer failures. KeePass, Bitwarden and legacy WebDAV sources currently allow copying only; moves remain blocked in the preview until durable source-deletion recovery is integrated.
 - Added a batch-transfer entry on Passkey and Steam pages for copying or moving to MDBX. Candidates retain the current search, database and folder scope, including matches beyond the current page. Fixed mixed folder paths when multiple MDBX sources use the same collection ID. Unreadable source folders are reported individually; preserving categories no longer silently drops missing ancestors. Items sharing a Bitwarden remote record cannot be moved individually across databases yet; copies retain the source.
 - Removed the nested focus outline from language and display-mode settings. Hovering or opening a menu subtly highlights the row; keyboard navigation keeps a single row-level indicator, including system high-contrast mode.

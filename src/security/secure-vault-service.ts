@@ -13,6 +13,7 @@ import { assertKeePassRestoreProject, keePassRestoreProject, readKeePassProjectR
 import { mdbx2PasswordHistoryTransferBlockReason } from '../providers/mdbx2/mdbx2-batch-transfer';
 import { providerSourceRecordsFor, replaceProviderSourceRecords, validProviderMutationReceipt } from "../core/migrations";
 import { sourceRecordsBudgetError } from "../core/source-records";
+import { applyLocalTransferBatch, prepareLocalTransferBatch, type LocalTransferBatch, type LocalTransferRequest, type LocalTransferResource } from '../core/local-transfer';
 import { mergeBitwardenProjectRestoration, type BitwardenProjectRestorationReadback, type BitwardenProjectPreparationReadback } from '../providers/bitwarden/bitwarden-project-removal-restoration';
 import { adoptBitwardenPreparationCopies } from '../providers/bitwarden/bitwarden-preparation-recovery';
 import type { BitwardenPasskeyPreservationPlan } from '../providers/bitwarden/bitwarden-passkey-preservation';
@@ -2870,6 +2871,39 @@ export class SecureVaultService {
     });
   }
 
+  /** Background-only preparation. The batch contains secrets and must never be sent to a page. */
+  async prepareLocalTransfer(request: LocalTransferRequest, resources: readonly LocalTransferResource[] = []): Promise<{ sessionId: string; batch: LocalTransferBatch }> {
+    const input = structuredClone(request), readbacks = structuredClone([...resources]);
+    return this.runExclusive(async () => {
+      const { envelope, key, session } = await this.unlockedContext();
+      if (!session.id) throw new VaultLockedError();
+      const state = await this.readDecodedSnapshot(envelope, key, session);
+      const batch = await prepareLocalTransferBatch(state, input, readbacks);
+      await this.assertLocalTransferSession(session.id);
+      return { sessionId: session.id, batch };
+    });
+  }
+
+  /** One encrypted commit for the whole selection; no remote mutation is enqueued. */
+  async commitLocalTransfer(prepared: { sessionId: string; batch: LocalTransferBatch }, confirmed = false) {
+    const input = structuredClone(prepared);
+    return this.runExclusive(async () => {
+      if (input.batch.request.action === 'move' && !confirmed) throw new Error('移动项目需要明确确认。');
+      const { state, envelope, key } = await this.mutableContext();
+      const result = await applyLocalTransferBatch(state, input.batch);
+      if (!result.replayed) {
+        await this.assertLocalTransferSession(input.sessionId);
+        await this.persist(state, key, envelope.kdf, false, true, () => this.assertLocalTransferSession(input.sessionId));
+      }
+      return result;
+    });
+  }
+
+  private async assertLocalTransferSession(sessionId: string): Promise<void> {
+    const current = await this.sessions.read();
+    if (!current?.id || current.id !== sessionId || current.expiresAt <= this.now()) throw new VaultLockedError();
+  }
+
   private runExclusive<T>(operation: () => Promise<T>): Promise<T> {
     const result = this.operationTail.then(operation, operation);
     this.operationTail = result.then(() => undefined, () => undefined);
@@ -2919,11 +2953,12 @@ export class SecureVaultService {
     }
   }
 
-  private async persist(state: VaultState, key: CryptoKey, kdf: VaultKdfParameters, requireLockedAutofill = false, activity = true): Promise<void> {
+  private async persist(state: VaultState, key: CryptoKey, kdf: VaultKdfParameters, requireLockedAutofill = false, activity = true, beforeCommit?: () => Promise<void>): Promise<void> {
     const eligible = new Set(state.items.filter(supportsLockedAutofill).map((item) => item.id));
     state.settings.lockedAutofillItemIds = (state.settings.lockedAutofillItemIds || []).filter((id) => eligible.has(id));
     const envelope = await encryptVaultState(state, key, kdf);
     await this.refreshLockedAutofill(state, envelope, requireLockedAutofill);
+    await beforeCommit?.();
     await this.storage.write(envelope);
     this.clearDecryptedState();
     try {

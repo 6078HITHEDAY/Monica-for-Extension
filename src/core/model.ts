@@ -490,6 +490,10 @@ export interface VaultState {
   mdbx2DeletionCancellations?: import('./mdbx2-deletion-cancellation').Mdbx2DeletionCancellation[];
   /** Local encrypted recovery records, never a provider-synchronized field. */
   mdbx2MoveFinalizations?: import("./mdbx2-move-journal").Mdbx2MoveFinalizationRecord[];
+  localTransferReceipts?: import('./local-transfer').LocalTransferReceipt[];
+  localTransferFolders?: import('./local-transfer').LocalTransferFolder[];
+  localItemAttachments?: import('./local-transfer').LocalItemAttachment[];
+  localItemOrigins?: import('./local-transfer').LocalItemOrigin[];
   magic: "MONICA_EXTENSION_VAULT";
   schemaVersion: 2;
   createdAt: string;
