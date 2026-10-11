@@ -4,6 +4,7 @@
 
 ## 中文
 
+- 修复真实 KDBX 条目使用 Base64 身份、字段引用使用十六进制身份时无法匹配的问题，用户名与密码引用可正确解析。补充 KeePass 整组传输的文件准备与加密回执：原生字段、历史与附件保留，复制时重建项目及内部引用，原 Passkey 凭据与零计数保持不变；写入失败不留下半组内容，重启重试不覆盖后续修改。此部分尚未接入传输目标界面与云端发布流程，暂不表示 KeePass 批量传输目标已开放。
 - 修复 KeePass 操作回执超过保留数量后，旧请求可能被重复执行的问题。过期回执保留不含密码内容的操作标记，重试会提示检查当前内容，不会重新创建已删除分组或覆盖后续修改；浏览器重启后仍有效。现有工作副本与回执原位升级，新操作继续可用。
 - 批量传输可选择 Monica 本地库作为目标；本地库卡片也提供入口，可复制整组密码及附件，或在本地文件夹间移动。项目、附件与恢复回执一起加密提交，预览后内容变化会停止保存；浏览器重启后的重试不会覆盖后续修改或复活已删除的附件。新增本地附件上传、下载、替换与删除，替换和删除会检查当前版本，防止旧窗口覆盖新内容。单次传输与每个项目的附件总量上限为 16 MiB。
 - 修复加密密码库写入容量与读取上限不一致的问题：超过 64 MiB 时在覆盖原库之前停止保存，避免下次无法解锁；传输摘要及附件读取的临时明文字节会及时清理。
@@ -25,6 +26,7 @@
 
 ## English
 
+- Fixed native KDBX field references failing to match base64 entry identities against hexadecimal reference UUIDs, restoring username and password resolution. Added encrypted file preparation and receipts for future KeePass batch transfers: preserve native fields, history and attachments; rebase copied project/reference identities while retaining Passkey credentials and zero counters; commit complete batches and recover retries without overwriting later edits. Destination UI and cloud publication are not integrated yet, so this does not enable KeePass batch-transfer destinations.
 - Fixed old KeePass requests becoming executable again after their detailed receipts exceed the retention limit. Expired receipts now retain compact operation markers without password contents; retries ask users to check current data instead of recreating deleted groups or overwriting later changes, including after browser restart. Existing working copies and receipts migrate in place, and new operations remain available.
 - Batch transfer now offers the Monica local vault as a destination, with an entry on the local-vault card. Copy related password items and attachments together, or move them between local folders. Items, files and recovery receipts commit in one encrypted transaction; changed previews stop before saving, and retries after browser restart preserve later edits and deletions. Local attachments support upload, download, replacement and deletion, with revision checks to prevent stale windows overwriting newer contents. Attachments are limited to 16 MiB per transfer and per item.
 - Matched encrypted-vault writes to the reader's 64 MiB limit: oversized writes now stop before replacing the readable vault. Temporary plaintext used for transfer fingerprints and attachment reads is cleared.

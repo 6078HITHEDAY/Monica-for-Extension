@@ -1,4 +1,5 @@
 import { keePassFieldText, type KeePassEntryFieldValue, type KeePassEntryFields } from "./keepass-login-codec";
+import { base64ToBytes } from '../../security/encoding';
 
 /**
  * Port of Android `utils/KeePassFieldReferenceResolver.kt` (SHA 9930d8d8).
@@ -150,5 +151,12 @@ function rawFieldValue(entry: KeePassReferenceEntry, name: string): string {
 
 /** Kotlin's `trim('{', '}')` strips every leading and trailing brace, not just one. */
 export function normalizeUuid(value: string): string {
-  return value.trim().replace(/^[{}]+|[{}]+$/g, "").replace(/-/g, "").toLowerCase();
+  const text = value.trim().replace(/^[{}]+|[{}]+$/g, '');
+  // Native KdbxUuid.toString() uses base64; standard REF tokens use hex UUIDs.
+  // Decode before lowercasing: base64 identity is case sensitive.
+  if (/^[A-Za-z0-9+/]{22}==$/.test(text)) {
+    const bytes = base64ToBytes(text);
+    if (bytes.length === 16) return [...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('');
+  }
+  return text.replace(/-/g, '').toLowerCase();
 }

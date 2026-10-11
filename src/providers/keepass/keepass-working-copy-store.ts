@@ -32,9 +32,12 @@ export type KeePassDurableMutationKind =
   | "attachment-delete"
   | "item-sync"
   | "project-remove"
+  | "batch-transfer"
   | "project-resolve";
 
 export type KeePassDurableMutationResult =
+  | { type: 'batch-transfer'; inputSha256: string; outputSha256: string; snapshotItems: VaultItem[];
+      entries: Array<{ sourceItemId: string; targetItemId: string; entryUuid: string }> }
   | { type: 'project-resolve'; reviewToken: string; recoveryIntentTag: string; baseSha256: string; resolvedSha256: string }
   | { type: "group"; changed: boolean; groupUuid: string }
   | { type: "history"; changed: boolean; historyCount: number; modifiedAt: string }
@@ -609,6 +612,23 @@ function assertDurableReceipt(receipt: KeePassDurableMutationReceipt): void {
   if (receipt.kind === 'project-resolve') {
     if (receipt.result?.type !== 'project-resolve') throw invalidRecord();
     for (const value of [receipt.result.reviewToken, receipt.result.recoveryIntentTag, receipt.result.baseSha256, receipt.result.resolvedSha256]) assertSha256(value);
+    return;
+  }
+  if (receipt.kind === 'batch-transfer') {
+    const result = receipt.result;
+    if (result?.type !== 'batch-transfer') throw invalidRecord();
+    assertSha256(result.inputSha256); assertSha256(result.outputSha256);
+    if (!Array.isArray(result.snapshotItems) || !result.snapshotItems.length || result.snapshotItems.length > 200
+      || !Array.isArray(result.entries) || result.entries.length !== result.snapshotItems.length) throw invalidRecord();
+    const sources = new Set<string>(), targets = new Set<string>(), native = new Set<string>();
+    for (const entry of result.entries) {
+      assertOpaqueId(entry.sourceItemId); assertOpaqueId(entry.targetItemId); assertOpaqueId(entry.entryUuid);
+      if (sources.has(entry.sourceItemId) || targets.has(entry.targetItemId) || native.has(entry.entryUuid)) throw invalidRecord();
+      sources.add(entry.sourceItemId); targets.add(entry.targetItemId); native.add(entry.entryUuid);
+      const items = result.snapshotItems.filter(item => item.id === entry.targetItemId);
+      if (items.length !== 1 || items[0].providerRefs?.length !== 1 || items[0].providerRefs[0].providerId !== receipt.providerId
+        || items[0].providerRefs[0].remoteId !== entry.entryUuid || items[0].keepassEntryUuid !== entry.entryUuid) throw invalidRecord();
+    }
     return;
   }
   if (receipt.kind === 'project-remove') {

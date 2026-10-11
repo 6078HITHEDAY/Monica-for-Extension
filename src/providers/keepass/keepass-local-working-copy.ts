@@ -1,4 +1,5 @@
 import type { ProviderAccount } from '../../core/model';
+import { keePassTransferRequestHash, type KeePassTransferDraft } from './keepass-transfer-file';
 import type { KeePassProjectRemovalDraft } from '../../core/keepass-project-removal';
 import { keePassRemovalFileRequestHash } from '../../core/keepass-project-removal-journal';
 import { KeePassProvider, type KeePassUnlockCredential } from './keepass-provider';
@@ -186,6 +187,33 @@ export class KeePassLocalWorkingCopyService {
           updatedAt: receipt.completedAt }, record.revision, encrypted);
         this.release(saved); return receipt;
       } finally { bytes?.fill(0); this.release(record); }
+    });
+  }
+
+  /** Commit encrypted batch bytes and mapping before any live reload or export. */
+  async persistTransfer(account: ProviderAccount, input: { expectedWorkingSha256: string; draft: KeePassTransferDraft }): Promise<KeePassDurableMutationReceipt> {
+    const source = structuredClone(account), request = structuredClone(input);
+    this.assertSource(source);
+    const intentSha256 = await keePassTransferRequestHash(source, request);
+    return this.exclusive(source.id, async () => {
+      const previous = await this.readDurableReceipt(source, request.draft.operationId, 'batch-transfer', intentSha256);
+      if (previous) return previous;
+      const record = await this.checkedRecord(source);
+      let output: Uint8Array | undefined;
+      try {
+        const assertCurrent = this.provider.localSessionGuard(source);
+        if (record.workingSha256 !== request.expectedWorkingSha256) throw new Error('目标 KeePass 文件已变化，请重新预览。');
+        const result = await this.provider.prepareTransferFile(source, request.draft, { bytes: record.workingBytes, expectedSha256: record.workingSha256 });
+        output = result.bytes;
+        const receipt: KeePassDurableMutationReceipt = { providerId: source.id, operationId: request.draft.operationId,
+          kind: 'batch-transfer', intentSha256, completedAt: new Date().toISOString(), result: { type: 'batch-transfer',
+            inputSha256: result.inputSha256, outputSha256: result.outputSha256, snapshotItems: result.items, entries: result.entries } };
+        const encrypted = await sealKeePassDurableReceipt(source, receipt);
+        assertCurrent(); result.assertCurrent();
+        const saved = await this.storage.save({ ...record, workingBytes: output, workingSha256: result.outputSha256,
+          updatedAt: receipt.completedAt }, record.revision, encrypted);
+        this.release(saved); return receipt;
+      } finally { output?.fill(0); this.release(record); }
     });
   }
 

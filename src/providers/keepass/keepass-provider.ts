@@ -1,4 +1,5 @@
 import * as kdbxweb from "kdbxweb";
+import { applyKeePassTransferFile, keePassTransferContentHash, type KeePassTransferDraft, type KeePassTransferFileResult, type KeePassTransferNativeSource } from './keepass-transfer-file';
 import { preserveLocalPasswordHistory } from '../../core/password-history';
 import { preserveLocalWalletContentOrder } from '../../core/wallet-content-order';
 import { passwordGroupKey } from '../../core/password-groups';
@@ -269,6 +270,82 @@ export class KeePassProvider implements ProviderAdapter {
         entries: readKeePassEntries(database, live.databaseId, source.id), summary: structuredClone(live.summary),
         dirty: false, groupRevision: 0, historyRevision: 0 });
     }, assertCurrent);
+  }
+
+  /** Prepare a complete copy/move in a disposable session; caller commits exact bytes. */
+  async prepareTransferFile(account: ProviderAccount, draft: KeePassTransferDraft, input: {
+    bytes: Uint8Array; expectedSha256: string; credential?: KeePassUnlockCredential;
+  }): Promise<KeePassTransferFileResult> {
+    const source = structuredClone(account), request = structuredClone(draft), bytes = input.bytes.slice();
+    const credential = input.credential && structuredClone(input.credential);
+    const local = source.config.sourceMode === 'local-file';
+    let assertCurrent = () => undefined as void;
+    const digest = async (value: Uint8Array) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', value as BufferSource))]
+      .map(byte => byte.toString(16).padStart(2, '0')).join('');
+    const isolated = new KeePassProvider();
+    try {
+      const targetSession = this.sessions.get(source.id), targetRevision = targetSession?.groupRevision;
+      const localGuard = local ? this.localSessionGuard(source) : () => undefined;
+      assertCurrent = () => {
+        localGuard();
+        if (targetSession && (this.sessions.get(source.id) !== targetSession || targetSession.groupRevision !== targetRevision))
+          throw new Error('准备期间目标 KeePass 已锁定或变化。');
+      };
+      if (!/^[a-f0-9]{64}$/.test(input.expectedSha256) || await digest(bytes) !== input.expectedSha256)
+        throw new Error('目标 KeePass 文件版本已变化，请重新预览。');
+      if (local) {
+        const live = this.requireKeePassAccountSession(source);
+        const database = await kdbxweb.Kdbx.load(bytes.slice().buffer, live.database.credentials);
+        assertCurrent();
+        isolated.sessions.set(source.id, { ...live, database, entries: readKeePassEntries(database, live.databaseId, source.id) });
+      } else {
+        if (!credential) throw new Error('目标 KeePass 凭据不可用。');
+        await isolated.unlock(source, bytes, credential);
+      }
+      if (targetSession && await keePassTransferContentHash(targetSession.database)
+        !== await keePassTransferContentHash(isolated.requireSession(source.id).database))
+        throw new Error('目标 KeePass 仍有未持久保存的修改，请先同步后重试。');
+      assertCurrent();
+      const native = new Map<string, KeePassTransferNativeSource>();
+      const nativeIdentities = new Set<string>();
+      for (const row of request.rows) {
+        const item = row.source;
+        if (!item.keepassEntryUuid) continue;
+        const providerId = item.providerRefs.length === 1 && item.providerRefs[0].providerId;
+        if (!providerId || item.providerRefs[0].remoteId !== item.keepassEntryUuid) throw new Error('KeePass 来源身份不唯一。');
+        const identity = `${providerId}\u0000${item.keepassEntryUuid}`;
+        if (nativeIdentities.has(identity)) throw new Error('所选项目重复引用同一原生 KeePass 条目。');
+        nativeIdentities.add(identity);
+        const live = this.requireSession(providerId), entry = live.entries.entriesByUuid.get(item.keepassEntryUuid);
+        const original = live.entries.items.find(row => row.keepassEntryUuid === item.keepassEntryUuid);
+        const baseline = restoreContentFingerprint(item.providerRefs[0].etag || '');
+        if (!entry || !original || original.deletedAt || !baseline || baseline !== restoreContentFingerprint(fingerprint(original))
+          || baseline !== restoreContentFingerprint(fingerprint(item))) throw new Error('KeePass 来源内容已变化或有未保存修改，请重新预览。');
+        if (providerId === source.id) {
+          const targetOriginal = isolated.requireSession(source.id).entries.items.find(row => row.keepassEntryUuid === item.keepassEntryUuid);
+          if (!targetOriginal || baseline !== restoreContentFingerprint(fingerprint(targetOriginal))) throw new Error('来源修改尚未写入目标工作副本，请先同步。');
+        }
+        if (item.kind === 'login' && item.passwordGroupId) {
+          const selected = new Set(request.rows.filter(row => row.source.providerRefs.length === 1 && row.source.providerRefs[0].providerId === providerId)
+            .map(row => row.source.keepassEntryUuid));
+          if (live.entries.items.some(row => row.kind === 'login' && !row.deletedAt && row.passwordGroupId === item.passwordGroupId
+            && !selected.has(row.keepassEntryUuid))) throw new Error('KeePass 密码项目成员不完整。');
+        }
+        const groupRevision = live.groupRevision, historyRevision = live.historyRevision;
+        native.set(item.id, { database: live.database, entry, assertCurrent: () => {
+          if (this.sessions.get(providerId) !== live || live.groupRevision !== groupRevision || live.historyRevision !== historyRevision)
+            throw new Error('准备期间来源 KeePass 已锁定或变化。');
+        } });
+      }
+      const result = await applyKeePassTransferFile(isolated.requireSession(source.id).database, source, request, native);
+      const output = await isolated.snapshotFile(source.id);
+      try {
+        const outputSha256 = await digest(output);
+        assertCurrent(); for (const row of native.values()) row.assertCurrent();
+        return { ...result, inputSha256: input.expectedSha256, outputSha256, bytes: output,
+          assertCurrent: () => { assertCurrent(); for (const row of native.values()) row.assertCurrent(); } };
+      } catch (cause) { output.fill(0); throw cause; }
+    } finally { isolated.lock(); credential?.keyFile?.fill(0); bytes.fill(0); }
   }
 
   /** Internal persistence guard; contains no credential or serializable session state. */

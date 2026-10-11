@@ -1,4 +1,5 @@
 import type { ProviderAccount } from "../../core/model";
+import { keePassTransferRequestHash, type KeePassTransferDraft } from './keepass-transfer-file';
 import type { KeePassProjectRemovalDraft } from '../../core/keepass-project-removal';
 import { keePassRemovalFileRequestHash } from '../../core/keepass-project-removal-journal';
 import { normalizeOneDriveIdentity, type OneDriveItemIdentity } from "../onedrive/onedrive-graph-client";
@@ -517,6 +518,34 @@ export class KeePassRemoteSessionService {
       } finally {
         output?.fill(0); keyFile?.fill(0); record.baseBytes.fill(0); record.workingBytes.fill(0);
       }
+    });
+  }
+
+  async persistTransfer(account: ProviderAccount, input: { expectedWorkingSha256: string; draft: KeePassTransferDraft }): Promise<KeePassDurableMutationReceipt> {
+    const source = structuredClone(account), request = structuredClone(input);
+    if (source.kind !== 'keepass' || !source.enabled || !isRemoteKeePassSource(source.config.sourceMode)) throw invalidProvider();
+    const intentSha256 = await keePassTransferRequestHash(source, request);
+    return this.runPersistenceExclusive(source.id, async () => {
+      const previous = await this.readDurableReceipt(source, request.draft.operationId, 'batch-transfer', intentSha256);
+      if (previous) return previous;
+      const record = await this.storage.read(source.id);
+      if (!record) throw new KeePassRemoteSessionError('remote-working-copy-missing', 'KeePass 本机工作副本不存在。');
+      let output: Uint8Array | undefined, keyFile: Uint8Array | undefined;
+      try {
+        if (record.workingSha256 !== request.expectedWorkingSha256) throw new KeePassWorkingCopyStoreError('revision-stale', '目标 KeePass 文件已变化，请重新预览。');
+        keyFile = decodeKeyFile(optionalStringConfig(source, 'keyFile'));
+        const result = await this.provider.prepareTransferFile(source, request.draft, { bytes: record.workingBytes, expectedSha256: record.workingSha256,
+          credential: { password: stringConfig(source, 'databasePassword'), keyFile, sourceMode: remoteSourceMode(source) } });
+        output = result.bytes;
+        const receipt: KeePassDurableMutationReceipt = { providerId: source.id, operationId: request.draft.operationId,
+          kind: 'batch-transfer', intentSha256, completedAt: new Date().toISOString(), result: { type: 'batch-transfer',
+            inputSha256: result.inputSha256, outputSha256: result.outputSha256, snapshotItems: result.items, entries: result.entries } };
+        const encrypted = await sealKeePassDurableReceipt(source, receipt);
+        result.assertCurrent();
+        const saved = await this.storage.save({ ...record, workingBytes: output, workingSha256: result.outputSha256,
+          updatedAt: receipt.completedAt }, record.revision, encrypted);
+        saved.baseBytes.fill(0); saved.workingBytes.fill(0); return receipt;
+      } finally { output?.fill(0); keyFile?.fill(0); record.baseBytes.fill(0); record.workingBytes.fill(0); }
     });
   }
 
