@@ -4,6 +4,7 @@
 
 ## 中文
 
+- Passkey 和 Steam 页面新增批量传输入口，可直接复制或移动到 MDBX；候选项目沿用当前搜索、数据库和文件夹范围，包含分页之外的匹配结果。修复多个 MDBX 来源使用相同文件夹 ID 时路径混淆的问题；目录不可读的来源单独列出原因，保留分类时不再静默丢弃缺失的父目录。共享 Bitwarden 远端记录的项目暂不允许单独跨库移动，复制仍保留来源。
 - 去掉设置页语言和显示模式下拉框的内层聚焦包边；鼠标悬停及展开菜单只轻微提亮整行，键盘定位保留单层整行提示，并适配系统高对比度。
 - 整理设置页：语言、显示模式、自动同步和表单旁自动填充可在首页直接操作；按通用、同步与填充、密码库与安全分组，二级入口由十个缩减为四个。合并 Windows Hello 与保护方式、备份与迁移，移除重复的显示模式及独立安全说明入口。收紧分组间距与留白，语言/显示模式行由约 108px 缩至 72px，保留大字号下的完整文本和操作空间；补齐编辑内容页遗漏的多语言词条。
 - 加固设备密钥隔离：将旧存储中的设备密钥迁移至扩展专属 IndexedDB，网页内容脚本不能读取；迁移成功提交后才清理旧副本，保留原密钥与密码库数据，重试不会用旧副本覆盖已迁移密钥。迁移后的设备密钥模式不能直接降级到旧构建，建议保留密码保护的备份。
@@ -16,10 +17,11 @@
 - 无待写入修改的本地 MDBX 不再周期性触发同步任务；编辑后的本地写回与云端同步继续保留。
 - 修复 MDBX 批量传输把 Passkey“复制”执行为“移动”的问题：副本保留原凭据 ID、私钥及计数，来源记录不变。目标数据库已有相同凭据时提前阻止；受限条目可取消或跳过，复制中断后可重试。
 
-以上是已实现的改动，完整 Android 对齐仍在进行。Passkey／Steam 页面直达的统一移动／复制入口，以及以本地库、KeePass、Bitwarden 为目标的完整传输流程尚未补齐；不据此宣称所有数据库之间已完成互通。尚未发布新安装包或更新商店。
+以上是已实现的改动，完整 Android 对齐仍在进行。页面直达传输目前提供 MDBX 目标；以本地库、KeePass、Bitwarden 为目标的完整传输流程尚未补齐，不据此宣称所有数据库之间已完成互通。尚未发布新安装包或更新商店。
 
 ## English
 
+- Added a batch-transfer entry on Passkey and Steam pages for copying or moving to MDBX. Candidates retain the current search, database and folder scope, including matches beyond the current page. Fixed mixed folder paths when multiple MDBX sources use the same collection ID. Unreadable source folders are reported individually; preserving categories no longer silently drops missing ancestors. Items sharing a Bitwarden remote record cannot be moved individually across databases yet; copies retain the source.
 - Removed the nested focus outline from language and display-mode settings. Hovering or opening a menu subtly highlights the row; keyboard navigation keeps a single row-level indicator, including system high-contrast mode.
 - Reorganized settings into General, Sync and autofill, and Vault and security. Language, display mode and the sync/autofill switches work directly on the home page; secondary destinations are reduced from ten to four. Combined Windows Hello with protection settings, and backups with migration. Removed duplicate display-mode controls and the separate security explanation page. Reduced spacing and empty field hints, bringing standard language/display rows from about 108px to 72px while preserving enlarged-text usability. Completed missing editor translations.
 - Isolated device keys in extension-origin IndexedDB, inaccessible to content scripts. Legacy keys migrate unchanged; old copies are removed only after commit, and retries never replace an already migrated key with a legacy copy. Direct downgrade of a migrated device-key profile to an older build is unsupported; retain a password-protected backup.
@@ -32,4 +34,4 @@
 - Clean local MDBX databases no longer schedule periodic synchronization. Pending local writes and cloud synchronization remain supported.
 - Fixed MDBX batch transfer treating a Passkey copy as a move. Copies retain the credential ID, private key and counter while preserving the source. Existing credentials in the destination are blocked before transfer; unavailable entries can be cancelled or skipped, and interrupted copies can be retried.
 
-Full Android parity remains in progress. A shared transfer entry point directly on Passkey/Steam pages and complete transfer workflows targeting the local vault, KeePass and Bitwarden remain unfinished. This update does not claim interoperability between every database. No new release package or store update has been published.
+Full Android parity remains in progress. The direct page entry currently offers MDBX destinations; complete transfer workflows targeting the local vault, KeePass and Bitwarden remain unfinished. This update does not claim interoperability between every database. No new release package or store update has been published.

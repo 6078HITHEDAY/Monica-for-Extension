@@ -209,6 +209,74 @@ const noAttachments: Mdbx2BatchTransferAttachmentBridge = {
 };
 
 describe("MDBX2 batch transfer coordinator", () => {
+  it('blocks shared Bitwarden record moves before writes while permitting copies', async () => {
+    const { service, target } = await setupVault();
+    const source: ProviderAccount = { ...target, id: 'bw-shared', kind: 'bitwarden', config: {} };
+    await service.upsertProvider(source);
+    const rows = ['First password', 'Second password'].map(title => ({...createLoginItem({title}),
+      providerRefs: [{providerId: source.id, remoteId: 'shared-cipher'}]}));
+    await service.applyProviderSync(source.id, rows);
+    const native = new FakeNative();
+    const coordinator = new Mdbx2BatchTransferCoordinator(service, new EmptyRegistry(), new Mdbx2Provider(native), native, noAttachments);
+    const request = {itemIds: rows.map(item => item.id), targetProviderId: target.id, preserveCategories: false};
+    const moving = await coordinator.plan({...request, action: 'move'});
+    expect(moving.blockedCount).toBe(2);
+    expect(moving.items.every(item => item.blockedReason?.includes('共用远端记录'))).toBe(true);
+    expect((await coordinator.plan({...request, action: 'copy'})).transferableCount).toBe(2);
+    expect(native.batches).toEqual([]);
+    expect(await service.listItems()).toEqual(rows);
+  });
+  it('resolves identical collection IDs within each source database', async () => {
+    const { service, target } = await setupVault();
+    const native = new FakeNative();
+    const otherHandle = '77777777-7777-4777-8777-777777777777';
+    const sources = [SOURCE_HANDLE, otherHandle].map((handle, index): ProviderAccount => ({
+      ...target, id: `source-${index}`, config: { vaultHandle: handle }
+    }));
+    const items: VaultItem[] = [];
+    for (const [index, account] of sources.entries()) {
+      await service.upsertProvider(account);
+      native.collections.set(String(account.config.vaultHandle), [summary(SOURCE_COLLECTION, index ? 'Personal' : 'Work')]);
+      const item = { ...createLoginItem({ title: `Account ${index}` }), mdbxFolderId: SOURCE_COLLECTION,
+        providerRefs: [{ providerId: account.id, remoteId: `object-${index}`, revision: 'source-commit' }] };
+      await service.applyProviderSync(account.id, [...await service.listItems(), item]);
+      items.push((await service.getItem(item.id))!);
+    }
+    const coordinator = new Mdbx2BatchTransferCoordinator(service, new EmptyRegistry(), new Mdbx2Provider(native), native, noAttachments);
+    const plan = await coordinator.plan({ itemIds: items.map(item => item.id), targetProviderId: target.id,
+      preserveCategories: true, action: 'copy' });
+    expect(plan.blockedCount).toBe(0);
+    expect(plan.items.find(item => item.sourceItemId === items[0].id)?.sourcePath).toEqual(['Work']);
+    expect(plan.items.find(item => item.sourceItemId === items[1].id)?.sourcePath).toEqual(['Personal']);
+    for (const item of plan.items) expect(item.targetPath).toEqual(item.sourcePath);
+    expect(native.batches).toEqual([]);
+  });
+
+  it.each(['copy', 'move'] as const)('isolates unavailable source folders during a %s plan', async action => {
+    const { service, target } = await setupVault();
+    const sourceAccount: ProviderAccount = { ...target, id: 'unavailable-source', config: { vaultHandle: SOURCE_HANDLE } };
+    await service.upsertProvider(sourceAccount);
+    const source = await importNativeItem(service, { ...createLoginItem({ title: 'Unavailable' }),
+      mdbxFolderId: SOURCE_COLLECTION, providerRefs: [{ providerId: sourceAccount.id, remoteId: SOURCE_OBJECT }] });
+    const local = await service.upsertItem(createLoginItem({ title: 'Independent local' }));
+    const native = new FakeNative(), list = native.listCollections.bind(native);
+    native.listCollections = async handle => {
+      if (handle === SOURCE_HANDLE) throw new Error('Synthetic source locked');
+      return list(handle);
+    };
+    native.vaultStatus = async handle => {
+      if (handle === SOURCE_HANDLE) throw new Error('Do not bind a blocked source');
+      return { vaultHandle: handle, open: true, available: true, vaultId: `vault-${handle}` };
+    };
+    const coordinator = new Mdbx2BatchTransferCoordinator(service, new EmptyRegistry(), new Mdbx2Provider(native), native, noAttachments);
+    const plan = await coordinator.plan({ itemIds: [source.id, local.id], targetProviderId: target.id,
+      preserveCategories: false, action });
+    expect(plan.blockedCount).toBe(1);
+    expect(plan.transferableCount).toBe(1);
+    expect(plan.items.find(item => item.sourceItemId === source.id)?.blockedReason).toBe('Synthetic source locked');
+    expect(native.batches).toEqual([]);
+    expect(native.deleted).toEqual([]);
+  });
   it.each([false,true])('copies a Passkey with its original key and credential, preserves the source, and replays without duplication (interrupted: %s)', async interrupted => {
     const {service,target}=await setupVault(), native=new FakeNative();
     const pair=generateKeyPairSync('ec',{namedCurve:'prime256v1'});

@@ -679,10 +679,16 @@ export class Mdbx2BatchTransferCoordinator {
       catch (error) { sourceErrors.set(item.id, error instanceof Error ? error.message : '来源密码源不可用。'); }
     }
 
-    const sourceCollections: Mdbx2CollectionSummary[] = [];
+    const sourceCollections = new Map<string, Mdbx2CollectionSummary[]>();
     const mdbxAccounts = [...new Map([...sourceAccounts.values()].filter((account) => account.kind === "mdbx2").map((account) => [account.id, account])).values()];
     for (const account of mdbxAccounts) {
-      sourceCollections.push(...await listMdbx2TransferCollections(this.nativeClient, vaultHandleOf(account), false));
+      try {
+        sourceCollections.set(account.id, await listMdbx2TransferCollections(this.nativeClient, vaultHandleOf(account), false));
+      } catch (error) {
+        for (const item of selectedItems) if (sourceAccounts.get(item.id)?.id === account.id) {
+          sourceErrors.set(item.id, error instanceof Error ? error.message : '来源文件夹无法读取。');
+        }
+      }
     }
 
     const targetIds = new Map<string, string>();
@@ -695,7 +701,7 @@ export class Mdbx2BatchTransferCoordinator {
       targetProviderId: targetAccount.id,
       targetCollectionId,
       preserveCategories: input.preserveCategories,
-      collections: sourceCollections,
+      categorySourceForItem: item => ({ collections: sourceCollections.get(sourceAccounts.get(item.id)?.id || '') }),
       now: operationCreatedAt,
       idFactory: (item) => targetIds.get(item.id)!
     });
@@ -705,6 +711,14 @@ export class Mdbx2BatchTransferCoordinator {
     for (const row of plan.items) {
       row.blockedReason ||= sourceErrors.get(row.sourceItemId);
       const item = itemsById.get(row.sourceItemId)!;
+      const source = sourceAccounts.get(item.id);
+      if (!row.blockedReason && input.action === 'move' && source?.kind === 'bitwarden') {
+        const cipherId = item.providerRefs.find(ref => ref.providerId === source.id)?.remoteId?.replace(/#(?:fido2:.*|totp)$/, '');
+        if (cipherId && allItems.some(other => other.id !== item.id && !other.deletedAt && other.providerRefs.some(ref =>
+          ref.providerId === source.id && ref.remoteId?.replace(/#(?:fido2:.*|totp)$/, '') === cipherId))) {
+          row.blockedReason = '此 Bitwarden 登录项与其他密码、Passkey 或验证码共用远端记录，不能单独跨库移动；可使用复制保留来源。';
+        }
+      }
       if (!row.blockedReason && item.kind === 'passkey') {
         const key = await inspectPasskeyKey(item.privateKeyPkcs8, item.algorithm);
         if (key !== 'usable') row.blockedReason = '此 Passkey 的私钥不可导出或不可用，请保留原设备记录。';
@@ -761,7 +775,9 @@ export class Mdbx2BatchTransferCoordinator {
     };
     const moveBindings = new Map<string, Mdbx2TransferVaultBinding>();
     if (publicPlan.requiresMoveConfirmation) {
-      for (const account of [targetAccount, ...mdbxAccounts]) {
+      const movingSources = new Set(plan.items.filter(item => !item.blockedReason)
+        .map(item => sourceAccounts.get(item.sourceItemId)?.id));
+      for (const account of [targetAccount, ...mdbxAccounts.filter(account => movingSources.has(account.id))]) {
         if (!moveBindings.has(account.id)) moveBindings.set(account.id, await readMdbx2TransferBinding(this.nativeClient, account));
       }
     }

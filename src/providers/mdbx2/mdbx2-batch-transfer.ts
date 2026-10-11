@@ -15,6 +15,8 @@ export interface Mdbx2TransferCategorySource {
 }
 
 export interface Mdbx2BatchTransferPlanOptions extends Mdbx2TransferCategorySource {
+  /** Collection IDs are local to a database, including copied vaults. */
+  categorySourceForItem?: (item: VaultItem) => Mdbx2TransferCategorySource;
   action: Mdbx2BatchTransferAction;
   targetProviderId?: string;
   targetCollectionId?: string;
@@ -198,13 +200,14 @@ export function planMdbx2BatchTransfer(
   }
 
   const planned = items.map((item): Mdbx2BatchTransferPlanItem => {
-    const path = sourceCategoryPath(item, options);
+    const path = sourceCategoryPath(item, options.categorySourceForItem?.(item) ?? options);
     const effectiveAction = options.action;
     const blockedReason = (item.kind === 'passkey' && effectiveAction === 'copy' && item.providerRefs.some(ref => ref.providerId === options.targetProviderId)
       ? '同一 MDBX 数据库不能复制相同的 Passkey 凭据，请选择其他数据库。' : undefined)
+      || (options.preserveCategories && !path.complete ? '来源分类层级不完整，无法保留原路径；请修复来源或明确选择目标文件夹。' : undefined)
       || mdbx2PasswordHistoryTransferBlockReason(item, effectiveAction, options.targetProviderId)
       || transferBlockReason(item, selectedById, boundLoginsByTotpId);
-    if (path.segments.length && !path.complete) warnings.push(`项目「${item.title || item.id}」的来源分类层级不完整，已保留可解析部分。`);
+    if (!path.complete) warnings.push(`项目「${item.title || item.id}」的来源分类层级不完整，请确认目标文件夹。`);
     if (blockedReason) warnings.push(`项目「${item.title || item.id}」未传输：${blockedReason}`);
     const targetPath = options.preserveCategories ? path.segments : [];
     const targetItem = blockedReason ? undefined : targetItems.get(item.id);

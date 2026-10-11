@@ -1,6 +1,6 @@
 {
   "title": "Monica · 数据库与文件夹",
-  "brief": "沿用青绿 M3E 和系统字体。数据库与文件夹连续列表，12px边距、24px外圆角、4px相邻圆角；完整路径与选中状态可见。复制保留源记录，受限项列出原因并允许取消或跳过。",
+  "brief": "沿用青绿 M3E 和系统字体。数据库与文件夹连续列表，12px边距、24px外圆角、4px相邻圆角；完整路径与选中状态可见。Passkey/Steam页面的传输入口继承当前搜索与数据库/文件夹范围（包含分页外匹配项），后台预览再展开必要关联项目。复制保留源记录，受限项列出原因并允许取消或跳过。当前执行目标为MDBX，其他后端仍在接入。保留分类时按来源数据库分别解析文件夹，不能跨库混用同名/同ID目录。 复制/移动选项在窄屏或大字号下排列为两条完整行，图标与标题同排、说明自然换行，避免两列挤压。",
   "frame": "phone",
   "platform": "web",
   "paletteKey": "teal",
@@ -15,9 +15,17 @@
   },
   "frames": [
     {
+      "id": "transferentry318",
+      "name": "Passkey",
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 850
+    },
+    {
       "id": "folderfilter318",
       "name": "Steam · 筛选",
-      "x": 0,
+      "x": 430,
       "y": 0,
       "w": 390,
       "h": 850
@@ -25,7 +33,7 @@
     {
       "id": "foldertransfer318",
       "name": "Passkey · 复制",
-      "x": 430,
+      "x": 860,
       "y": 0,
       "w": 390,
       "h": 850
@@ -33,9 +41,111 @@
   ],
   "groups": [
     {
+      "id": "transferentry318header",
+      "frameId": "transferentry318",
+      "x": 12,
+      "y": 12,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "transferentry318bar",
+          "kind": "topAppBar",
+          "label": "Passkey",
+          "icon": "arrow_back",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled"
+        }
+      ]
+    },
+    {
+      "id": "transferentry318rows",
+      "frameId": "transferentry318",
+      "x": 12,
+      "y": 100,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "transferentry3180",
+          "size": 366,
+          "icon": "search",
+          "radius": 24,
+          "variant": "filled",
+          "kind": "searchBar",
+          "label": "搜索当前分类"
+        },
+        {
+          "id": "transferentry3181",
+          "size": 366,
+          "icon": null,
+          "radius": 4,
+          "variant": "filled",
+          "kind": "select",
+          "label": "数据库",
+          "tabs": [
+            {
+              "label": "工作密码库",
+              "icon": null
+            }
+          ],
+          "selected": 0
+        },
+        {
+          "id": "transferentry3182",
+          "size": 366,
+          "icon": "folder",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "工作 / 登录",
+          "supporting": "当前文件夹"
+        },
+        {
+          "id": "transferentry3183",
+          "size": 366,
+          "icon": "drive_file_move",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "button",
+          "label": "批量传输"
+        },
+        {
+          "id": "transferentry3184",
+          "size": 366,
+          "icon": "key",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "GitHub",
+          "supporting": "可跨端使用"
+        },
+        {
+          "id": "transferentry3185",
+          "size": 366,
+          "icon": "key",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "设备密钥",
+          "supporting": "仅原设备可用"
+        },
+        {
+          "id": "transferentry3186",
+          "size": 366,
+          "icon": "chevron_right",
+          "radius": 24,
+          "variant": "filled",
+          "kind": "button",
+          "label": "下一页"
+        }
+      ]
+    },
+    {
       "id": "folderfilter318header",
       "frameId": "folderfilter318",
-      "x": 12,
+      "x": 442,
       "y": 12,
       "axis": "y",
       "gap": 4,
@@ -54,7 +164,7 @@
     {
       "id": "folderfilter318rows",
       "frameId": "folderfilter318",
-      "x": 12,
+      "x": 442,
       "y": 100,
       "axis": "y",
       "gap": 4,
@@ -67,7 +177,13 @@
           "variant": "filled",
           "kind": "select",
           "label": "数据库",
-          "value": "游戏密码库"
+          "tabs": [
+            {
+              "label": "游戏密码库",
+              "icon": null
+            }
+          ],
+          "selected": 0
         },
         {
           "id": "folderfilter3181",
@@ -123,7 +239,7 @@
     {
       "id": "foldertransfer318header",
       "frameId": "foldertransfer318",
-      "x": 442,
+      "x": 872,
       "y": 12,
       "axis": "y",
       "gap": 4,
@@ -142,7 +258,7 @@
     {
       "id": "foldertransfer318rows",
       "frameId": "foldertransfer318",
-      "x": 442,
+      "x": 872,
       "y": 100,
       "axis": "y",
       "gap": 4,
@@ -155,7 +271,13 @@
           "variant": "filled",
           "kind": "select",
           "label": "目标数据库",
-          "value": "家庭 MDBX"
+          "tabs": [
+            {
+              "label": "家庭 MDBX",
+              "icon": null
+            }
+          ],
+          "selected": 0
         },
         {
           "id": "foldertransfer3181",

@@ -22,6 +22,8 @@ const props = defineProps<{
   providers: ProviderAccount[];
   runtimeStatuses: Record<string, Mdbx2VaultRuntimeStatus>;
   initialTargetProviderId?: string;
+  scopeItemIds?: string[];
+  scopeLabel?: string;
 }>();
 
 const emit = defineEmits<{
@@ -56,7 +58,10 @@ const targetProviders = computed(() => props.providers.filter((provider) => prov
 const targetProvider = computed(() => targetProviders.value.find((provider) => provider.id === targetProviderId.value));
 const targetRuntime = computed(() => targetProviderId.value ? props.runtimeStatuses[targetProviderId.value] : undefined);
 const targetReady = computed(() => Boolean(targetRuntime.value?.open && targetRuntime.value.available));
-const activeItems = computed(() => props.items.filter((item) => !item.deletedAt));
+const activeItems = computed(() => {
+  const scope = props.scopeItemIds ? new Set(props.scopeItemIds) : undefined;
+  return props.items.filter(item => !item.deletedAt && (!scope || scope.has(item.id)));
+});
 const filteredItems = computed(() => {
   const needle = query.value.trim().toLocaleLowerCase();
   return activeItems.value
@@ -108,6 +113,12 @@ watch(targetProviders, (providers) => {
     targetProviderId.value = providers.find((provider) => readyFor(provider.id))?.id || providers[0]?.id || "";
   }
 }, { immediate: true });
+
+watch(activeItems, items => {
+  if (executing.value) return;
+  const available = new Set(items.map(item => item.id));
+  selectedIds.value = new Set([...selectedIds.value].filter(id => available.has(id)));
+});
 
 onBeforeUnmount(() => stopProgressPolling());
 
@@ -199,6 +210,7 @@ async function createPlan(): Promise<void> {
     return;
   }
   planning.value = true;
+  const selection = selectedSignature.value;
   error.value = "";
   executeResult.value = null;
   moveConfirmed.value = false;
@@ -210,6 +222,7 @@ async function createPlan(): Promise<void> {
       preserveCategories: preserveCategories.value,
       action: action.value
     });
+    if (selection !== selectedSignature.value) return;
     planResult.value = result;
     preparedRequest.value = {
       itemIds: [...selectedIds.value],
@@ -336,7 +349,7 @@ function errorMessage(cause: unknown): string {
     <section class="editor-dialog mdbx2-batch-dialog" role="dialog" aria-modal="true" aria-labelledby="mdbx2-batch-title">
       <header class="mdbx2-batch-header">
         <div>
-          <span class="dialog-eyebrow"><m3e-icon name="database"></m3e-icon>{{ tr('MDBX2 批量传输') }}</span>
+          <span class="dialog-eyebrow"><m3e-icon name="database"></m3e-icon>{{ scopeLabel ? `${scopeLabel} · ` : '' }}{{ tr('MDBX2 批量传输') }}</span>
           <h2 id="mdbx2-batch-title">{{ tr('复制或移动项目') }}</h2>
 
         </div>
@@ -750,7 +763,7 @@ function errorMessage(cause: unknown): string {
 
 .batch-action-segments {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
   gap: 8px;
 }
 
@@ -758,16 +771,23 @@ function errorMessage(cause: unknown): string {
   position: relative;
   min-width: 0;
   cursor: pointer;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
 }
 
 .batch-action-segments span {
-  min-height: 72px;
+  min-width: 0;
+  min-height: 48px;
   display: grid;
   grid-template-columns: 24px minmax(0, 1fr);
   align-content: center;
   column-gap: 8px;
   border-radius: 8px;
-  padding: 8px 10px;
+  padding: 0;
+  overflow-wrap: anywhere;
 }
 
 .batch-action-segments span m3e-icon {

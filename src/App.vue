@@ -252,6 +252,7 @@ const keePassGroupsProvider = ref<ProviderAccount | undefined>();
 const mdbx2DialogOpen = ref(false);
 const mdbx2BatchTransferDialogOpen = ref(false);
 const mdbx2BatchTransferTargetProviderId = ref<string | undefined>();
+const batchTransferScope = ref<{ label: string; itemIds: string[] }>();
 const mdbx2DialogMode = ref<"local" | "remote">("local");
 const editingMdbx2Id = ref<string | undefined>();
 const mdbx2HostStatus = ref<Mdbx2HostStatus | null>(null);
@@ -786,6 +787,7 @@ function clearVaultView() {
   mdbx2BatchTransferDialogOpen.value = false;
   mdbx2BatchTransferTargetProviderId.value = undefined;
   editingMdbx2Id.value = undefined;
+  batchTransferScope.value = undefined;
   closeAttachmentDialog();
   closeKeePassHistory();
   closeKeePassGroups();
@@ -1724,11 +1726,21 @@ function closeMdbx2Dialog() {
 }
 
 function openMdbx2BatchTransfer(provider?: ProviderAccount) {
+  batchTransferScope.value = undefined;
   mdbx2BatchTransferTargetProviderId.value = provider?.id;
   mdbx2BatchTransferDialogOpen.value = true;
 }
 
+function openSectionBatchTransfer() {
+  const steam = activeSection.value === 'steam';
+  const items = steam ? filteredSteamItems.value : filteredSectionItems.value;
+  batchTransferScope.value = { label: steam ? 'Steam' : 'Passkey', itemIds: items.map(item => item.id) };
+  mdbx2BatchTransferTargetProviderId.value = undefined;
+  mdbx2BatchTransferDialogOpen.value = true;
+}
+
 function closeMdbx2BatchTransfer() {
+  batchTransferScope.value = undefined;
   mdbx2BatchTransferDialogOpen.value = false;
   mdbx2BatchTransferTargetProviderId.value = undefined;
 }
@@ -2888,6 +2900,7 @@ function errorCode(error: unknown): string | undefined {
           <m3e-button variant="text" type="button" class="vault-quick-filter" toggle :selected.prop="hasAndroidFilter('favorite')" @beforeinput.prevent @click="toggleAndroidQuickFilter('favorite')"><m3e-icon slot="icon" name="star" aria-hidden="true" />{{ tr('收藏') }}</m3e-button>
           <m3e-button variant="text" v-if="managerFilterSummary" type="button" class="vault-filter-summary" @click="filterDialogOpen = true"><m3e-icon slot="icon" name="tune" aria-hidden="true" /><span>{{ managerFilterSummary }}</span></m3e-button>
           <m3e-button variant="text" v-if="hasActiveManagerFilter" type="button" class="vault-clear-filters" @click="clearManagerFilters()">{{ tr('清除筛选') }}</m3e-button>
+          <m3e-button v-if="activeSection === 'passkeys' || activeSection === 'steam'" variant="tonal" @click="openSectionBatchTransfer"><m3e-icon slot="icon" name="drive_file_move" />{{ tr('批量传输') }}</m3e-button>
           <p class="vault-result-count" role="status">{{ tr('{0} 个结果', { 0: listTotal }) }}</p>
         </div>
           <div v-if="filterDialogOpen" class="modal-backdrop" role="presentation" @mousedown.self="filterDialogOpen = false"><section class="filter-dialog" role="dialog" aria-modal="true" aria-labelledby="filter-dialog-title"><header><div><h2 id="filter-dialog-title">{{ tr('筛选密码库') }}</h2><p>{{ tr('按密码源、Android 分类和快捷条件组合筛选。') }}</p></div><m3e-icon-button :aria-label="tr('关闭筛选')" @click="filterDialogOpen = false"><m3e-icon name="close"></m3e-icon></m3e-icon-button></header><div class="filter-dialog-body"><m3e-form-field v-field-label variant="filled" hide-required-marker class="field filter-kind-field"><label slot="label">{{ tr('项目类型') }}</label><component :is="materialSelectTag" @input="kindFilter = ($event.target as HTMLElement &amp; { value: string }).value as VaultItemKind || undefined" ><component :is="materialOptionTag" :selected.prop="!kindFilter" value="">{{ tr('全部类型') }}</component><component :is="materialOptionTag" :selected.prop="String(kindFilter ?? '') === String(kind)" v-for="kind in (['login','api-token','card','identity','billing-address','payment-account','secure-note','totp','passkey'] as VaultItemKind[])" :key="kind" :value="kind">{{ itemKindLabel(kind) }}</component></component></m3e-form-field><span class="filter-caption">{{ tr('密码源') }}</span><div class="filter-chip-row" role="group" :aria-label="tr('密码源')"><m3e-button variant="text" type="button" :class="{ selected: databaseSourceFilter === 'all' }" toggle :selected.prop="databaseSourceFilter === 'all'" @beforeinput.prevent @click="databaseSourceFilter = 'all'"><m3e-icon slot="icon" name="list"></m3e-icon>{{ tr('全部') }}</m3e-button><m3e-button variant="text" type="button" :class="{ selected: databaseSourceFilter === 'local' }" toggle :selected.prop="databaseSourceFilter === 'local'" @beforeinput.prevent @click="databaseSourceFilter = 'local'"><m3e-icon slot="icon" name="smartphone"></m3e-icon>{{ tr('Monica 本地库') }}</m3e-button><m3e-button variant="text" v-for="source in databaseSources" :key="source.id" type="button" :class="{ selected: databaseSourceFilter === source.id }" toggle :selected.prop="databaseSourceFilter === source.id" @beforeinput.prevent @click="databaseSourceFilter = source.id"><m3e-icon slot="icon" :name="source.kind === 'bitwarden' ? 'cloud_sync' : source.kind === 'mdbx2' ? 'storage' : 'key'"></m3e-icon><span class="filter-label">{{ providerDisplayName(source) }}</span></m3e-button></div><span class="filter-caption">{{ tr('文件夹') }}</span><FolderScopeList v-model="folderFilter" :folders="databaseFolders" :source-names="sourceNames" :show-source="databaseSourceFilter === 'all'" /><span class="filter-caption">{{ tr('快捷筛选') }}</span><div class="filter-chip-row filter-dialog-quick" role="group" :aria-label="tr('快捷筛选条件')"><m3e-button variant="text" type="button" :class="{ selected: hasAndroidFilter('favorite') }" toggle :selected.prop="hasAndroidFilter('favorite')" @beforeinput.prevent @click="toggleAndroidQuickFilter('favorite')"><m3e-icon slot="icon" name="star"></m3e-icon>{{ tr('收藏') }}</m3e-button><m3e-button variant="text" type="button" :class="{ selected: hasAndroidFilter('two-fa') }" toggle :selected.prop="hasAndroidFilter('two-fa')" @beforeinput.prevent @click="toggleAndroidQuickFilter('two-fa')"><m3e-icon slot="icon" name="security"></m3e-icon>{{ tr('验证码') }}</m3e-button><m3e-button variant="text" type="button" :class="{ selected: hasAndroidFilter('notes') }" toggle :selected.prop="hasAndroidFilter('notes')" @beforeinput.prevent @click="toggleAndroidQuickFilter('notes')"><m3e-icon slot="icon" name="description"></m3e-icon>{{ tr('笔记') }}</m3e-button><m3e-button variant="text" type="button" :class="{ selected: hasAndroidFilter('passkey') }" toggle :selected.prop="hasAndroidFilter('passkey')" @beforeinput.prevent @click="toggleAndroidQuickFilter('passkey')"><m3e-icon slot="icon" name="key_vertical"></m3e-icon>Passkey</m3e-button><m3e-button variant="text" type="button" :class="{ selected: hasAndroidFilter('uncategorized') }" toggle :selected.prop="hasAndroidFilter('uncategorized')" @beforeinput.prevent @click="toggleAndroidQuickFilter('uncategorized')"><m3e-icon slot="icon" name="folder_off"></m3e-icon>{{ tr('未分类') }}</m3e-button><m3e-button variant="text" type="button" :class="{ selected: hasAndroidFilter('local-only') }" toggle :selected.prop="hasAndroidFilter('local-only')" @beforeinput.prevent @click="toggleAndroidQuickFilter('local-only')"><m3e-icon slot="icon" name="key"></m3e-icon>{{ tr('仅本地') }}</m3e-button><m3e-button variant="text" type="button" :class="{ selected: hasAndroidFilter('attachments') }" toggle :selected.prop="hasAndroidFilter('attachments')" @beforeinput.prevent @click="toggleAndroidQuickFilter('attachments')"><m3e-icon slot="icon" name="attach_file"></m3e-icon>{{ tr('附件') }}</m3e-button></div></div><footer><m3e-button variant="text" @click="clearManagerFilters()">{{ tr('清除筛选') }}</m3e-button><m3e-button variant="filled" @click="filterDialogOpen = false">{{ tr('完成') }}</m3e-button></footer></section></div>
@@ -3185,6 +3198,8 @@ function errorCode(error: unknown): string | undefined {
       :providers="providers"
       :runtime-statuses="mdbx2RuntimeStatuses"
       :initial-target-provider-id="mdbx2BatchTransferTargetProviderId"
+      :scope-item-ids="batchTransferScope?.itemIds"
+      :scope-label="batchTransferScope?.label"
       @close="closeMdbx2BatchTransfer"
       @completed="handleMdbx2BatchTransferCompleted"
       @notice="showNotice"

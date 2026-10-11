@@ -35,6 +35,16 @@ const baseLogin = (): LoginItem => ({
 });
 
 describe("MDBX2 batch transfer planner", () => {
+  it('requires an explicit destination instead of silently dropping a missing folder ancestor', () => {
+    const source = { ...baseLogin(), boundTotpItemId: undefined, mdbxFolderId: 'missing-folder' };
+    const preserve = planMdbx2BatchTransfer([source], { action: 'copy', preserveCategories: true });
+    expect(preserve.items[0].blockedReason).toContain('来源分类层级不完整');
+    expect(preserve.items[0].targetItem).toBeUndefined();
+    const explicit = planMdbx2BatchTransfer([source], { action: 'copy', preserveCategories: false, targetCollectionId: 'chosen-folder' });
+    expect(explicit.blockedCount).toBe(0);
+    expect(explicit.items[0].targetItem?.mdbxFolderId).toBe('chosen-folder');
+    expect(source.mdbxFolderId).toBe('missing-folder');
+  });
   it.each(['copy', 'move'] as const)('refuses %s with history when only a pending target reference exists', action => {
     const source = { ...baseLogin(), boundTotpItemId: undefined, providerRefs: [{ providerId: 'target' }],
       passwordHistory: [{ password: 'synthetic old', lastUsedAt: '1970-01-01T00:00:00.000Z' }] };
