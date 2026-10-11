@@ -1,4 +1,5 @@
-import { chromium, expect, test, type BrowserContext, type CDPSession, type Page, type TestInfo } from "@playwright/test";
+import { expect, test, type BrowserContext, type CDPSession, type Page, type TestInfo } from "@playwright/test";
+import { launchTestContext } from './fixtures/edge';
 import path from "node:path";
 
 interface RuntimeResponse<T = unknown> {
@@ -9,7 +10,7 @@ interface RuntimeResponse<T = unknown> {
 
 async function launchExtension(testInfo: TestInfo): Promise<{ context: BrowserContext; manager: Page }> {
   const extensionPath = path.resolve("dist");
-  const context = await chromium.launchPersistentContext(testInfo.outputPath("p"), {
+  const context = await launchTestContext(testInfo.outputPath("p"), {
     channel: "chromium",
     headless: true, locale: "zh-CN",
     args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]

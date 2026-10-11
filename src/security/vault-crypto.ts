@@ -109,7 +109,10 @@ export async function createDeviceVaultKey(): Promise<{ key: CryptoKey; rawKey: 
 export async function encryptVaultState(state: VaultState, key: CryptoKey, kdf: VaultKdfParameters): Promise<VaultEnvelope> {
   const iv = randomBytes(12);
   const plaintext = new TextEncoder().encode(JSON.stringify(state));
-  const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv: iv as BufferSource, additionalData: AAD as BufferSource, tagLength: 128 }, key, plaintext);
+  let encrypted: ArrayBuffer;
+  try {
+    encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv: iv as BufferSource, additionalData: AAD as BufferSource, tagLength: 128 }, key, plaintext);
+  } finally { plaintext.fill(0); }
   return {
     version: 1,
     kdf,
@@ -127,7 +130,10 @@ export async function decryptVaultState(envelope: VaultEnvelope, key: CryptoKey)
     key,
     base64ToBytes(envelope.ciphertext) as BufferSource
   );
-  const state = migrateVaultState(JSON.parse(new TextDecoder().decode(decrypted)));
+  let state: VaultState;
+  try { state = migrateVaultState(JSON.parse(new TextDecoder().decode(decrypted))); }
+  catch { throw new Error('Vault payload is invalid or unsupported'); }
+  finally { new Uint8Array(decrypted).fill(0); }
   if (
     state.magic !== "MONICA_EXTENSION_VAULT" ||
     state.schemaVersion !== 2 ||

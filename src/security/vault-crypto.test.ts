@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createEmptyVaultState } from "../core/model";
 import {
   createDeviceVaultKey,
@@ -48,6 +48,39 @@ describe("vault key derivation", () => {
 });
 
 describe("vault envelope round-trip", () => {
+  it.each([false, true])('clears the encoded vault plaintext even when encryption fails (%s)', async fail => {
+    const { key, kdf } = await createDeviceVaultKey();
+    const state = createEmptyVaultState('2026-10-10T00:00:00.000Z');
+    const encrypt = crypto.subtle.encrypt.bind(crypto.subtle);
+    let captured: Uint8Array | undefined;
+    const spy = vi.spyOn(crypto.subtle, 'encrypt').mockImplementationOnce(async (algorithm, key, data) => {
+      captured = data as Uint8Array;
+      if (fail) throw new Error('synthetic encryption failure');
+      return encrypt(algorithm, key, data);
+    });
+    try {
+      const operation = encryptVaultState(state, key, kdf);
+      if (fail) await expect(operation).rejects.toThrow('synthetic encryption failure');
+      else await expect(operation).resolves.toMatchObject({ cipher: 'AES-256-GCM' });
+      expect(captured?.length).toBeGreaterThan(0);
+      expect(captured?.every(value => value === 0)).toBe(true);
+    } finally { spy.mockRestore(); }
+  });
+
+  it('clears decrypted bytes after parsing without changing the returned vault', async () => {
+    const { key, kdf } = await createDeviceVaultKey();
+    const state = createEmptyVaultState('2026-10-10T00:00:00.000Z');
+    const envelope = await encryptVaultState(state, key, kdf);
+    const decrypt = crypto.subtle.decrypt.bind(crypto.subtle);
+    let captured: ArrayBuffer | undefined;
+    const spy = vi.spyOn(crypto.subtle, 'decrypt').mockImplementationOnce(async (...args) => { captured = await decrypt(...args); return captured; });
+    try {
+      expect(await decryptVaultState(envelope, key)).toMatchObject({ magic: state.magic, items: state.items });
+      expect(captured?.byteLength).toBeGreaterThan(0);
+      expect(new Uint8Array(captured!).every(value => value === 0)).toBe(true);
+    } finally { spy.mockRestore(); }
+  });
+
   it("unlocks a vault holding source envelopes this build cannot parse", async () => {
     const state = createEmptyVaultState("2026-07-18T00:00:00.000Z");
     const future = {

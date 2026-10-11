@@ -63,6 +63,9 @@ function redactValue(value: unknown, seen: WeakSet<object>): unknown {
 
 function sanitizeText(input: string): string {
   return input
+    // Match quoted JSON fields and complete quoted values before sanitizing
+    // embedded bearer tokens; otherwise a multiword secret can leave a suffix.
+    .replace(/\b([\w.-]*(?:password|passphrase|token|secret|authorization|cookie|credential|private[_-]?key|api[_-]?key)[\w.-]*|pass|code)["']?\s*[:=]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;}]*)/gi, '$1=[REDACTED]')
     .replace(/https?:\/\/[^\s"'<>]+/gi, "[REDACTED_URL]")
     .replace(/[\p{L}\p{N}._%+-]+@[\p{L}\p{N}.-]+\.[\p{L}]{2,}/gu, "[REDACTED_EMAIL]")
     .replace(/\b(?:bearer|basic)\s+[a-z0-9._~+/=-]+/gi, "[REDACTED_AUTH]")

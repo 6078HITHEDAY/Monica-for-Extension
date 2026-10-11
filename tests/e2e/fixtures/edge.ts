@@ -6,6 +6,11 @@ import { randomUUID } from "node:crypto";
 
 const profiles = new Map<string, string>();
 
+/** Opt into installed Edge locally while retaining bundled Chromium in CI. */
+export function launchTestContext(profile: string, options: Parameters<typeof chromium.launchPersistentContext>[1] = {}) {
+  return process.env.MONICA_E2E_EDGE === '1' ? launchEdgeContext(profile, options) : chromium.launchPersistentContext(profile, options);
+}
+
 /** Actual Edge acceptance, with an isolated profile and no browser fallback. */
 export async function launchEdgeContext(
   profile: string,

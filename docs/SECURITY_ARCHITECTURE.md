@@ -2,7 +2,7 @@
 
 ## Security claim
 
-Monica Extension keeps the full vault and private keys behind explicit unlocking. A user may grant individual password logins permission to fill while locked; only those usernames/passwords are retained in a separately encrypted, device-local cache. Web pages do not receive vault listings or provider credentials. Autofill and Passkey operations require an extension-controlled user decision and are bound to the requesting page context.
+Monica Extension mediates full-vault and private-key access through the trusted background service. Master-password mode requires unlocking; optional device-key mode can unlock automatically and relies on browser/OS profile protection. A user may grant individual password logins permission to fill while locked; only those usernames/passwords are retained in a separately encrypted, device-local cache. Web pages do not receive vault listings or provider credentials. Autofill and Passkey operations require an extension-controlled user decision and are bound to the requesting page context.
 
 This is an engineering security claim, not a claim of formal verification. The repository has automated security gates but has not yet completed an independent third-party audit. See **Assurance status** below.
 
@@ -28,7 +28,7 @@ This is an engineering security claim, not a claim of formal verification. The r
 | Main-world Passkey bridge | Hostile page boundary | Public WebAuthn request/result messages only |
 | Web page and frames | Untrusted | No vault listing, provider credential, TOTP seed or private key |
 | WebDAV/Bitwarden/Steam server | Untrusted remote peer | Protocol-required requests; encrypted backup bytes where configured |
-| Browser profile/OS | Platform trust | Encrypted vault and short-lived trusted session material |
+| Browser profile/OS | Platform trust | Encrypted vault, persistent keys for device-key/locked-autofill modes, and trusted session material |
 | Build dependencies/CI | Supply-chain boundary | Source and test fixtures, never production user secrets |
 
 ## Website icons
@@ -91,7 +91,7 @@ Repository Actions are restricted to GitHub-owned actions plus the explicitly us
 ## Cryptography
 
 - Vault: AES-256-GCM with 128-bit tag and fixed versioned AAD.
-- Vault protection: master-password mode uses Argon2id v1.3 with 64 MiB memory, 3 iterations, parallelism 1 and a 32-byte salt. Optional device-key mode uses a random 256-bit key stored in extension-local browser storage and is accurately presented as lower offline protection. Imported KDF parameters are bounded; legacy PBKDF2 envelopes migrate after successful unlock/restore.
+- Vault protection: master-password mode uses Argon2id v1.3 with 64 MiB memory, 3 iterations, parallelism 1 and a 32-byte salt. Optional device-key mode uses a random 256-bit key stored in extension-origin IndexedDB (`monica-extension-device-keys`), inaccessible to page/content-script origins but still within the browser profile. It provides lower offline protection. Imported KDF parameters are bounded; legacy PBKDF2 envelopes migrate after successful unlock/restore.
 - Android backup: AES-256-GCM with Android's `MONICA_ENC_V1` envelope and PBKDF2-HMAC-SHA256 at 100,000 iterations.
 - Randomness: Web Crypto random values.
 - Passkeys: independent and file-backed ES256 credentials sign with zero; live Bitwarden bindings follow its official zero/positive branches. Positive counters require a fresh sync, optimistic server revision check and confirmed durable write before signing. Usage statistics neither enqueue writes nor change file-provider fingerprints; interrupted prepared assertions cannot be returned as committed. Android device-bound aliases remain non-exportable metadata. Explicit backup flags are preserved. Neither zeroing nor freezing a historical positive counter resets the relying party's state; such independent copies may require re-registration.
@@ -101,13 +101,17 @@ AES-GCM, legacy PBKDF2 and ECDSA use platform Web Crypto. Argon2id uses the bund
 
 ## Data lifecycle
 
-- At rest: an authenticated encrypted vault envelope in IndexedDB. Device-key mode stores a separate random key in extension-local browser storage; master-password mode stores no derived key there. Opted-in logins have a separate authenticated encrypted projection described below.
+- At rest: an authenticated encrypted vault envelope in IndexedDB. Device-key mode stores its random key in a separate extension-origin IndexedDB; master-password mode stores no derived key there. Opted-in logins have a separate authenticated encrypted projection described below.
+- Legacy device-key storage: startup migrates all legacy `chrome.storage.local` key entries, including orphaned entries, and removes each legacy copy only after the IndexedDB transaction commits. Retry never overwrites an existing private copy from legacy storage. Key bytes and vault ciphertext remain unchanged. Old builds cannot read the new key location; direct downgrade of a migrated device-key profile is unsupported.
 - Unlocked: plaintext exists in the trusted background process memory.
 - Legacy unlock/restore: authentication completes with the bounded legacy KDF, then a fresh Argon2id envelope is committed before the new session key is used; a failed best-effort migration leaves the authenticated legacy envelope usable for retry.
 - Session continuity: only trusted extension contexts may access session key material.
 - Lock: full-vault session access, pending captures, pending Passkey requests and provider synchronization are cleared/cancelled. Explicitly granted username/password projections remain available for selected fills.
 - Export: vault exports are authenticated encrypted envelopes; Android WebDAV backups preserve the source encryption mode/configuration.
-- Diagnostics: response bodies and credentials are excluded; identifiers are redacted before export.
+- Diagnostics: response bodies are excluded; structured credentials, quoted secret fields and identifiers are redacted before export. Invalid decrypted JSON reports a generic parse error without source snippets. Text redaction is defense in depth, not permission to log arbitrary decrypted input.
+- Plaintext buffers: vault encryption clears encoded plaintext bytes on success/failure; decryption clears plaintext bytes after parsing. JavaScript strings/objects and browser-managed copies cannot be guaranteed erased.
+
+The current master-password policy accepts four characters for compatibility. This minimum is not a security recommendation: offline protection still depends on password entropy. Prefer a long, unique, randomly generated master password or a random multiword passphrase; Argon2id cannot compensate for a guessable password.
 
 ## Filling selected passwords while locked
 
@@ -122,6 +126,8 @@ This feature deliberately changes the protection of selected passwords: anyone u
 ## Assurance status
 
 Automated evidence currently includes unit tests, security-boundary tests, Chromium MV3 end-to-end tests, production dependency audit, release secret/source-map scan and deterministic package verification.
+
+The [2026-10-10 extension security review](security-review-2026-10-10.md) records reproduced findings, fixes, actual Edge isolation/migration evidence, dependency results and the scope of this review. Historical CI/release controls above are not proof that every external repository setting was rechecked in that review.
 
 Not yet complete:
 

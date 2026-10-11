@@ -11,13 +11,18 @@ const nativeJson = JSON as typeof JSON & {
 
 export function parseLosslessJson(text: string): unknown {
   if (!nativeJson.rawJSON || !nativeJson.isRawJSON) throw new Error("此浏览器不支持无损 JSON 读取，请升级 Microsoft Edge。");
-  return JSON.parse(text, (key: string, value: unknown, context?: { source?: string }) => {
+  try { return JSON.parse(text, (key: string, value: unknown, context?: { source?: string }) => {
     if (typeof value !== "number") return value;
     const source = context?.source;
     if (!source) throw new Error("此浏览器不能保留 JSON 数字精度。");
     if (/^-?(?:0|[1-9]\d*)$/.test(source) && Number.isSafeInteger(value) && !Object.is(value, -0)) return value;
     return nativeJson.rawJSON!(source);
-  });
+  }); } catch (error) {
+    // Native SyntaxErrors can quote decrypted passwords/tokens from the input.
+    // Preserve feature-support failures but never propagate source snippets.
+    if (error instanceof SyntaxError) throw new SyntaxError('JSON 数据无效。');
+    throw error;
+  }
 }
 
 export function jsonScalarText(value: unknown): string {
