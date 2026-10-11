@@ -79,7 +79,17 @@ export interface KeePassEncryptedMutationReceipt {
   ciphertext: string;
 }
 
-export type KeePassWorkingCopyStoreErrorCode = "record-invalid" | "revision-stale" | "operation-reused";
+/** Payload eviction must not erase the identity of a committed operation. */
+export interface KeePassExpiredOperation {
+  version: 1;
+  providerId: string;
+  operationId: string;
+  expired: true;
+}
+
+export type KeePassStoredMutationReceipt = KeePassEncryptedMutationReceipt | KeePassExpiredOperation;
+
+export type KeePassWorkingCopyStoreErrorCode = "record-invalid" | "revision-stale" | "operation-reused" | "operation-expired";
 
 export class KeePassWorkingCopyStoreError extends Error {
   constructor(readonly code: KeePassWorkingCopyStoreErrorCode, message: string) {
@@ -100,7 +110,7 @@ export interface KeePassWorkingCopyStorage {
 export class MemoryKeePassWorkingCopyStorage implements KeePassWorkingCopyStorage {
   constructor(
     private readonly records = new Map<string, KeePassRemoteWorkingCopyRecord>(),
-    private readonly receipts = new Map<string, KeePassEncryptedMutationReceipt>()
+    private readonly receipts = new Map<string, KeePassStoredMutationReceipt>()
   ) {}
 
   async read(providerId: string): Promise<KeePassRemoteWorkingCopyRecord | undefined> {
@@ -116,16 +126,19 @@ export class MemoryKeePassWorkingCopyStorage implements KeePassWorkingCopyStorag
     assertProviderId(providerId);
     assertOperationId(operationId);
     const receipt = this.receipts.get(receiptKey(providerId, operationId));
-    return receipt ? cloneEncryptedReceipt(validateEncryptedReceipt(receipt)) : undefined;
+    if (!receipt) return undefined;
+    assertReceiptIdentity(receipt, providerId, operationId);
+    return readActiveReceipt(receipt);
   }
 
   async hasReceipts(providerId: string): Promise<boolean> {
     assertProviderId(providerId);
-    for (const receipt of this.receipts.values()) if (receipt.providerId === providerId) return true;
+    for (const receipt of this.receipts.values()) if (receipt.providerId === providerId && !('expired' in receipt)) return true;
     return false;
   }
 
   async save(input: KeePassRemoteWorkingCopyInput, expectedRevision: number, receipt?: KeePassEncryptedMutationReceipt): Promise<KeePassRemoteWorkingCopyRecord> {
+    if (receipt && receipt.providerId !== input.providerId) throw invalidRecord();
     const record = nextRecord(input, expectedRevision, this.records.get(input.providerId));
     const durableReceipt = receipt ? nextEncryptedReceipt(receipt, this.receipts.get(receiptKey(receipt.providerId, receipt.operationId))) : undefined;
     this.records.set(record.providerId, cloneRecord(record));
@@ -139,7 +152,10 @@ export class MemoryKeePassWorkingCopyStorage implements KeePassWorkingCopyStorag
   async deleteReceipt(providerId: string, operationId: string): Promise<void> {
     assertProviderId(providerId);
     assertOperationId(operationId);
-    this.receipts.delete(receiptKey(providerId, operationId));
+    const key = receiptKey(providerId, operationId);
+    // Acknowledgement may release a live recovery receipt (including item-sync's
+    // reusable ID), but it cannot erase an already retired operation identity.
+    if (!this.receipts.get(key) || !('expired' in this.receipts.get(key)!)) this.receipts.delete(key);
   }
 
   async delete(providerId: string): Promise<void> {
@@ -152,6 +168,7 @@ export class MemoryKeePassWorkingCopyStorage implements KeePassWorkingCopyStorag
 export class IndexedDbKeePassWorkingCopyStorage implements KeePassWorkingCopyStorage {
   private readonly storeName = "working-copies";
   private readonly receiptStoreName = "operation-receipts";
+  private readonly expiredStoreName = "expired-operations";
 
   constructor(private readonly databaseName = "monica-extension-keepass-working-copies") {}
 
@@ -195,8 +212,9 @@ export class IndexedDbKeePassWorkingCopyStorage implements KeePassWorkingCopySto
     assertOperationId(operationId);
     const database = await this.openDatabase();
     return new Promise((resolve, reject) => {
-      const transaction = database.transaction(this.receiptStoreName, "readonly");
+      const transaction = database.transaction([this.receiptStoreName, this.expiredStoreName], "readonly");
       const request = transaction.objectStore(this.receiptStoreName).get(receiptKey(providerId, operationId));
+      const expiredRequest = transaction.objectStore(this.expiredStoreName).get(receiptKey(providerId, operationId));
       let result: KeePassEncryptedMutationReceipt | undefined;
       let failed = false;
       const fail = (cause: unknown) => {
@@ -209,12 +227,20 @@ export class IndexedDbKeePassWorkingCopyStorage implements KeePassWorkingCopySto
       request.onsuccess = () => {
         try {
           result = request.result ? validateEncryptedReceipt(request.result) : undefined;
-          if (result && (result.providerId !== providerId || result.operationId !== operationId)) throw invalidRecord();
+          if (result) assertReceiptIdentity(result, providerId, operationId);
         } catch (cause) {
           fail(cause);
         }
       };
       request.onerror = () => fail(request.error);
+      expiredRequest.onsuccess = () => {
+        if (!expiredRequest.result) return;
+        try {
+          assertReceiptIdentity(validateExpiredOperation(expiredRequest.result), providerId, operationId);
+          throw expiredOperation();
+        } catch (cause) { fail(cause); }
+      };
+      expiredRequest.onerror = () => fail(expiredRequest.error);
       transaction.oncomplete = () => {
         database.close();
         if (!failed) resolve(result ? cloneEncryptedReceipt(result) : undefined);
@@ -245,12 +271,15 @@ export class IndexedDbKeePassWorkingCopyStorage implements KeePassWorkingCopySto
     assertInput(input);
     assertExpectedRevision(expectedRevision);
     if (receipt) assertEncryptedReceipt(receipt);
+    if (receipt && receipt.providerId !== input.providerId) throw invalidRecord();
     const database = await this.openDatabase();
     return new Promise((resolve, reject) => {
-      const transaction = database.transaction([this.storeName, this.receiptStoreName], "readwrite");
+      const transaction = database.transaction([this.storeName, this.receiptStoreName, this.expiredStoreName], "readwrite");
       const store = transaction.objectStore(this.storeName);
       const request = store.get(input.providerId);
       const receiptStore = transaction.objectStore(this.receiptStoreName);
+      const expiredStore = transaction.objectStore(this.expiredStoreName);
+      const expiredRequest = receipt ? expiredStore.get(receiptKey(receipt.providerId, receipt.operationId)) : undefined;
       const receiptRequest = receipt ? receiptStore.get(receiptKey(receipt.providerId, receipt.operationId)) : undefined;
       const receiptListRequest = receipt ? receiptStore.index("providerId").getAll(receipt.providerId, KEEPASS_DURABLE_RECEIPT_LIMIT + 1) : undefined;
       let result: KeePassRemoteWorkingCopyRecord | undefined;
@@ -258,6 +287,7 @@ export class IndexedDbKeePassWorkingCopyStorage implements KeePassWorkingCopySto
       let recordReady = false;
       let receiptReady = !receipt;
       let receiptListReady = !receipt;
+      let expiredReady = !receipt;
       let existingReceipt: KeePassEncryptedMutationReceipt | undefined;
       let providerReceipts: KeePassEncryptedMutationReceipt[] = [];
       const fail = (cause: unknown) => {
@@ -268,14 +298,18 @@ export class IndexedDbKeePassWorkingCopyStorage implements KeePassWorkingCopySto
         reject(cause);
       };
       const maybeWrite = () => {
-        if (rejected || !recordReady || !receiptReady || !receiptListReady) return;
+        if (rejected || !recordReady || !receiptReady || !receiptListReady || !expiredReady) return;
         try {
           if (receipt) {
             const durableReceipt = nextEncryptedReceipt(receipt, existingReceipt);
             if (!existingReceipt) {
               if (providerReceipts.length >= KEEPASS_DURABLE_RECEIPT_LIMIT) {
                 const oldest = [...providerReceipts].sort((left, right) => left.completedAt.localeCompare(right.completedAt))[0];
-                if (oldest) receiptStore.delete(receiptKey(oldest.providerId, oldest.operationId));
+                if (oldest) {
+                  const key = receiptKey(oldest.providerId, oldest.operationId);
+                  expiredStore.put({ key, ...retireOperation(oldest) });
+                  receiptStore.delete(key);
+                }
               }
               receiptStore.put({ key: receiptKey(durableReceipt.providerId, durableReceipt.operationId), ...cloneEncryptedReceipt(durableReceipt) });
             }
@@ -296,6 +330,19 @@ export class IndexedDbKeePassWorkingCopyStorage implements KeePassWorkingCopySto
         }
       };
       request.onerror = () => fail(request.error);
+      if (expiredRequest) {
+        expiredRequest.onsuccess = () => {
+          try {
+            if (expiredRequest.result) {
+              assertReceiptIdentity(validateExpiredOperation(expiredRequest.result), receipt!.providerId, receipt!.operationId);
+              throw expiredOperation();
+            }
+            expiredReady = true;
+            maybeWrite();
+          } catch (cause) { fail(cause); }
+        };
+        expiredRequest.onerror = () => fail(expiredRequest.error);
+      }
       if (receiptRequest) {
         receiptRequest.onsuccess = () => {
           try {
@@ -348,15 +395,17 @@ export class IndexedDbKeePassWorkingCopyStorage implements KeePassWorkingCopySto
     assertProviderId(providerId);
     const database = await this.openDatabase();
     return new Promise((resolve, reject) => {
-      const transaction = database.transaction([this.storeName, this.receiptStoreName], "readwrite");
+      const transaction = database.transaction([this.storeName, this.receiptStoreName, this.expiredStoreName], "readwrite");
       transaction.objectStore(this.storeName).delete(providerId);
-      const receiptStore = transaction.objectStore(this.receiptStoreName);
-      const cursor = receiptStore.index("providerId").openKeyCursor(IDBKeyRange.only(providerId));
-      cursor.onsuccess = () => {
-        if (!cursor.result) return;
-        receiptStore.delete(cursor.result.primaryKey);
-        cursor.result.continue();
-      };
+      for (const name of [this.receiptStoreName, this.expiredStoreName]) {
+        const receiptStore = transaction.objectStore(name);
+        const cursor = receiptStore.index("providerId").openKeyCursor(IDBKeyRange.only(providerId));
+        cursor.onsuccess = () => {
+          if (!cursor.result) return;
+          receiptStore.delete(cursor.result.primaryKey);
+          cursor.result.continue();
+        };
+      }
       transaction.oncomplete = () => { database.close(); resolve(); };
       transaction.onerror = () => { database.close(); reject(transaction.error); };
       transaction.onabort = () => { database.close(); reject(transaction.error || new Error("KeePass working-copy transaction aborted")); };
@@ -365,11 +414,15 @@ export class IndexedDbKeePassWorkingCopyStorage implements KeePassWorkingCopySto
 
   private openDatabase(): Promise<IDBDatabase> {
     return new Promise((resolve, reject) => {
-      const request = indexedDB.open(this.databaseName, 2);
+      const request = indexedDB.open(this.databaseName, 3);
       request.onupgradeneeded = () => {
         if (!request.result.objectStoreNames.contains(this.storeName)) request.result.createObjectStore(this.storeName);
         if (!request.result.objectStoreNames.contains(this.receiptStoreName)) {
           const store = request.result.createObjectStore(this.receiptStoreName, { keyPath: "key" });
+          store.createIndex("providerId", "providerId", { unique: false });
+        }
+        if (!request.result.objectStoreNames.contains(this.expiredStoreName)) {
+          const store = request.result.createObjectStore(this.expiredStoreName, { keyPath: "key" });
           store.createIndex("providerId", "providerId", { unique: false });
         }
       };
@@ -432,11 +485,11 @@ function assertExpectedRevision(value: number): void {
 
 function nextEncryptedReceipt(
   receipt: KeePassEncryptedMutationReceipt,
-  existing: KeePassEncryptedMutationReceipt | undefined
+  existing: KeePassStoredMutationReceipt | undefined
 ): KeePassEncryptedMutationReceipt {
   const validated = validateEncryptedReceipt(receipt);
   if (!existing) return validated;
-  const current = validateEncryptedReceipt(existing);
+  const current = readActiveReceipt(existing);
   if (current.providerId !== validated.providerId || current.operationId !== validated.operationId || current.intentTag !== validated.intentTag) {
     throw new KeePassWorkingCopyStoreError("operation-reused", "KeePass 操作标识已经用于其他持久操作。");
   }
@@ -590,11 +643,42 @@ function receiptKey(providerId: string, operationId: string): string {
   return `${providerId}\u0000${operationId}`;
 }
 
-function pruneMemoryReceipts(receipts: Map<string, KeePassEncryptedMutationReceipt>, providerId: string): void {
-  const providerReceipts = [...receipts.entries()].filter(([, receipt]) => receipt.providerId === providerId);
+function pruneMemoryReceipts(receipts: Map<string, KeePassStoredMutationReceipt>, providerId: string): void {
+  const providerReceipts = [...receipts.entries()].filter((entry): entry is [string, KeePassEncryptedMutationReceipt] =>
+    entry[1].providerId === providerId && !('expired' in entry[1]));
   if (providerReceipts.length < KEEPASS_DURABLE_RECEIPT_LIMIT) return;
   providerReceipts.sort(([, left], [, right]) => left.completedAt.localeCompare(right.completedAt));
-  receipts.delete(providerReceipts[0][0]);
+  receipts.set(providerReceipts[0][0], retireOperation(providerReceipts[0][1]));
+}
+
+function retireOperation(receipt: KeePassEncryptedMutationReceipt): KeePassExpiredOperation {
+  return { version: 1, providerId: receipt.providerId, operationId: receipt.operationId, expired: true };
+}
+
+function validateExpiredOperation(value: unknown): KeePassExpiredOperation {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw invalidRecord();
+  const row = value as KeePassExpiredOperation & { key?: string };
+  if (Object.keys(row).some(key => !['key', 'version', 'providerId', 'operationId', 'expired'].includes(key))
+    || row.version !== 1 || row.expired !== true) throw invalidRecord();
+  assertProviderId(row.providerId); assertOperationId(row.operationId);
+  if (row.key !== undefined && row.key !== receiptKey(row.providerId, row.operationId)) throw invalidRecord();
+  return { version: 1, providerId: row.providerId, operationId: row.operationId, expired: true };
+}
+
+function assertReceiptIdentity(receipt: KeePassStoredMutationReceipt, providerId: string, operationId: string): void {
+  if (receipt.providerId !== providerId || receipt.operationId !== operationId) throw invalidRecord();
+}
+
+function readActiveReceipt(value: KeePassStoredMutationReceipt): KeePassEncryptedMutationReceipt {
+  if ('expired' in value) {
+    validateExpiredOperation(value);
+    throw expiredOperation();
+  }
+  return validateEncryptedReceipt(value);
+}
+
+function expiredOperation(): KeePassWorkingCopyStoreError {
+  return new KeePassWorkingCopyStoreError('operation-expired', '此 KeePass 操作的详细回执已过期，不能重复执行。请刷新并检查当前内容。');
 }
 
 function invalidRecord(): KeePassWorkingCopyStoreError {

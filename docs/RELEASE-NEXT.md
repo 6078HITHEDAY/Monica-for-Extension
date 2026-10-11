@@ -4,6 +4,7 @@
 
 ## 中文
 
+- 修复 KeePass 操作回执超过保留数量后，旧请求可能被重复执行的问题。过期回执保留不含密码内容的操作标记，重试会提示检查当前内容，不会重新创建已删除分组或覆盖后续修改；浏览器重启后仍有效。现有工作副本与回执原位升级，新操作继续可用。
 - 批量传输可选择 Monica 本地库作为目标；本地库卡片也提供入口，可复制整组密码及附件，或在本地文件夹间移动。项目、附件与恢复回执一起加密提交，预览后内容变化会停止保存；浏览器重启后的重试不会覆盖后续修改或复活已删除的附件。新增本地附件上传、下载、替换与删除，替换和删除会检查当前版本，防止旧窗口覆盖新内容。单次传输与每个项目的附件总量上限为 16 MiB。
 - 修复加密密码库写入容量与读取上限不一致的问题：超过 64 MiB 时在覆盖原库之前停止保存，避免下次无法解锁；传输摘要及附件读取的临时明文字节会及时清理。
 - Bitwarden 项目复制到 MDBX 时可携带 Steam maFile 等附件，Passkey／验证码投影会读取其所属远端记录的附件；校验加密完整性和真实文件大小，复制后回读目标并核对 SHA-256，中断后可重试且不重复复制。个人附件按项目读取，避免每个文件都下载整库。修正附件传输失败时的临时明文清理；尚未具备持久删除恢复的 KeePass、Bitwarden 和旧 WebDAV 来源暂仅允许复制，移动在预览阶段说明原因并保留来源。
@@ -24,6 +25,7 @@
 
 ## English
 
+- Fixed old KeePass requests becoming executable again after their detailed receipts exceed the retention limit. Expired receipts now retain compact operation markers without password contents; retries ask users to check current data instead of recreating deleted groups or overwriting later changes, including after browser restart. Existing working copies and receipts migrate in place, and new operations remain available.
 - Batch transfer now offers the Monica local vault as a destination, with an entry on the local-vault card. Copy related password items and attachments together, or move them between local folders. Items, files and recovery receipts commit in one encrypted transaction; changed previews stop before saving, and retries after browser restart preserve later edits and deletions. Local attachments support upload, download, replacement and deletion, with revision checks to prevent stale windows overwriting newer contents. Attachments are limited to 16 MiB per transfer and per item.
 - Matched encrypted-vault writes to the reader's 64 MiB limit: oversized writes now stop before replacing the readable vault. Temporary plaintext used for transfer fingerprints and attachment reads is cleared.
 - Bitwarden-to-MDBX copies now include Steam maFiles and other attachments, including parent-Cipher files for Passkey and OTP projections. Authenticated downloads establish actual file sizes; destination readback verifies SHA-256, and interrupted copies can be retried without duplication. Personal attachments fetch the relevant Cipher instead of downloading the entire vault for each file. Temporary plaintext is cleared on transfer failures. KeePass, Bitwarden and legacy WebDAV sources currently allow copying only; moves remain blocked in the preview until durable source-deletion recovery is integrated.

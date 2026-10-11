@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  KEEPASS_DURABLE_RECEIPT_LIMIT,
   type KeePassEncryptedMutationReceipt,
+  type KeePassStoredMutationReceipt,
   KeePassWorkingCopyStoreError,
   MemoryKeePassWorkingCopyStorage,
   type KeePassRemoteWorkingCopyRecord
@@ -43,7 +45,7 @@ describe("KeePass remote working-copy storage", () => {
 
   it("stores a bounded durable receipt with the working copy and rejects changed intent", async () => {
     const records = new Map<string, KeePassRemoteWorkingCopyRecord>();
-    const receipts = new Map<string, KeePassEncryptedMutationReceipt>();
+    const receipts = new Map<string, KeePassStoredMutationReceipt>();
     const first = new MemoryKeePassWorkingCopyStorage(records, receipts);
     const durable = receipt();
     await first.save(fixture(), 0, durable);
@@ -62,6 +64,55 @@ describe("KeePass remote working-copy storage", () => {
     await second.save({ ...fixture(), workingBytes: new Uint8Array([9]) }, 2, durable);
     await second.delete(durable.providerId);
     await expect(second.readReceipt(durable.providerId, durable.operationId)).resolves.toBeUndefined();
+  });
+
+  it('never treats an evicted operation as new after restart or overwrites later bytes', async () => {
+    const records = new Map<string, KeePassRemoteWorkingCopyRecord>();
+    const receipts = new Map<string, KeePassStoredMutationReceipt>();
+    const first = new MemoryKeePassWorkingCopyStorage(records, receipts);
+    const durable = receipt();
+    await first.save(fixture(), 0, durable);
+    for (let n = 0; n < KEEPASS_DURABLE_RECEIPT_LIMIT; n++) {
+      await first.save({ ...fixture(), workingBytes: Uint8Array.of(7, 8, 9) }, n + 1, {
+        ...durable, operationId: `later-${n}`, completedAt: '2026-08-08T00:00:00Z'
+      });
+    }
+    const second = new MemoryKeePassWorkingCopyStorage(records, receipts);
+    const later = await second.read(durable.providerId);
+    await expect(second.readReceipt(durable.providerId, durable.operationId)).rejects.toMatchObject({ code: 'operation-expired' });
+    await expect(second.save(fixture(), later!.revision, durable)).rejects.toMatchObject({ code: 'operation-expired' });
+    await expect(second.read(durable.providerId)).resolves.toEqual(later);
+    await expect(second.readReceipt(durable.providerId, 'later-0')).resolves.toBeDefined();
+    // Releasing other recovery receipts cannot make an expired operation new.
+    await second.deleteReceipt(durable.providerId, durable.operationId);
+    for (let n = 0; n < KEEPASS_DURABLE_RECEIPT_LIMIT; n++) await second.deleteReceipt(durable.providerId, `later-${n}`);
+    await expect(second.hasReceipts(durable.providerId)).resolves.toBe(false);
+    await expect(second.readReceipt(durable.providerId, durable.operationId)).rejects.toMatchObject({ code: 'operation-expired' });
+    expect([...receipts.values()]).toEqual([{ version: 1, providerId: durable.providerId, operationId: durable.operationId, expired: true }]);
+    // Detaching a provider is the explicit boundary for removing its guard.
+    await second.delete(durable.providerId);
+    await expect(second.readReceipt(durable.providerId, durable.operationId)).resolves.toBeUndefined();
+  });
+
+  it('rejects a receipt for another provider before committing any bytes', async () => {
+    const storage = new MemoryKeePassWorkingCopyStorage();
+    await expect(storage.save(fixture(), 0, { ...receipt(), providerId: 'other' })).rejects.toMatchObject({ code: 'record-invalid' });
+    await expect(storage.read(fixture().providerId)).resolves.toBeUndefined();
+    await expect(storage.hasReceipts('other')).resolves.toBe(false);
+  });
+
+  it('fails closed for malformed or misbound retired operations', async () => {
+    const receipts = new Map<string, KeePassStoredMutationReceipt>();
+    const storage = new MemoryKeePassWorkingCopyStorage(new Map(), receipts);
+    const durable = receipt(), key = `${durable.providerId}\u0000${durable.operationId}`;
+    for (const invalid of [
+      { version: 1, providerId: durable.providerId, operationId: 'wrong', expired: true },
+      { version: 1, providerId: durable.providerId, operationId: durable.operationId, expired: false },
+      { version: 1, providerId: durable.providerId, operationId: durable.operationId, expired: true, password: 'must-not-retain' }
+    ]) {
+      receipts.set(key, invalid as KeePassStoredMutationReceipt);
+      await expect(storage.readReceipt(durable.providerId, durable.operationId)).rejects.toMatchObject({ code: 'record-invalid' });
+    }
   });
 });
 
