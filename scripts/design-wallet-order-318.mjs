@@ -1,0 +1,43 @@
+import { readFile, writeFile } from 'node:fs/promises';
+import { deflateRawSync } from 'node:zlib';
+const root = new URL('../', import.meta.url);
+const source = JSON.parse(await readFile(new URL('docs/design/android-interop-315.m3e.json', root), 'utf8'));
+const doc = { ...source, title: 'Monica · 钱包内容顺序', brief: '基本资料直接编辑；分区摘要不展示秘密。点击编辑内容，上移/下移调整顺序。外侧24px、相邻4px圆角，左右12px。完成内容编辑后回到主表单统一保存；取消主表单丢弃草稿。', frames: [], groups: [] };
+function frame(id, name, x, height) {
+  doc.frames.push({ id, name, x, y: 0, w: 360, h: height });
+  let serial = 0;
+  return (y, item) => { const group = `${id}-${serial++}`; doc.groups.push({ id: group, frameId: id, x: x + 12, y, axis: 'y', gap: 4,
+    items: [{ id: `${group}-control`, icon: null, size: 336, variant: 'filled', radius: 24, ...item }] }); };
+}
+const main = frame('walletorder318', '银行卡 · 内容顺序', 0, 950);
+main(12, { kind: 'topAppBar', label: '编辑银行卡', icon: 'close' });
+main(100, { kind: 'textField', label: '名称', value: '旅行卡' });
+main(186, { kind: 'textField', label: '持卡人', value: 'Synthetic Holder' });
+main(272, { kind: 'textField', label: '卡号', value: '•••• 1111' });
+main(374, { kind: 'listItem', label: '自定义字段', supporting: '点击编辑', icon: 'text_fields', icon2: 'edit', radius: 4 });
+main(452, { kind: 'listItem', label: '账单地址', supporting: '点击编辑', icon: 'home', icon2: 'edit', radius: 4 });
+main(530, { kind: 'listItem', label: '更多银行卡信息', supporting: '点击编辑', icon: 'tune', icon2: 'edit', radius: 4 });
+main(608, { kind: 'listItem', label: '备注', supporting: '点击编辑', icon: 'notes', icon2: 'edit', radius: 4 });
+main(692, { kind: 'button', label: '上移账单地址', icon: 'arrow_upward', variant: 'tonal' });
+main(762, { kind: 'button', label: '下移账单地址', icon: 'arrow_downward', variant: 'tonal' });
+main(850, { kind: 'button', label: '加密保存', icon: 'check' });
+const extra = frame('walletextra318', '补充内容 · 独立编辑', 450, 760);
+extra(12, { kind: 'topAppBar', label: '更多银行卡信息', icon: 'arrow_back' });
+extra(110, { kind: 'textField', label: '银行', value: 'Synthetic Bank' });
+extra(204, { kind: 'select', label: '卡类型', options: ['信用卡', '借记卡', '预付卡'], value: '信用卡' });
+extra(298, { kind: 'textField', label: '昵称', value: '旅行' });
+extra(392, { kind: 'textField', label: 'PIN', value: '••••' });
+extra(486, { kind: 'textField', label: 'IBAN', value: 'Synthetic account' });
+extra(624, { kind: 'button', label: '完成', icon: 'check' });
+const custom = frame('walletcustom318', '自定义字段 · 保护与排序', 900, 760);
+custom(12, { kind: 'topAppBar', label: '自定义字段', icon: 'arrow_back' });
+custom(110, { kind: 'textField', label: '字段名称', value: '恢复说明' });
+custom(204, { kind: 'textField', label: '字段值', value: '••••••••' });
+custom(298, { kind: 'select', label: '字段类型', options: ['文本', '隐藏', '布尔'], value: '隐藏' });
+custom(398, { kind: 'button', label: '上移字段', icon: 'arrow_upward', variant: 'tonal' });
+custom(468, { kind: 'button', label: '下移字段', icon: 'arrow_downward', variant: 'tonal' });
+custom(546, { kind: 'button', label: '添加字段', icon: 'add', variant: 'text' });
+custom(636, { kind: 'button', label: '完成', icon: 'check' });
+await writeFile(new URL('docs/design/wallet-order-318.m3e.json', root), JSON.stringify(doc, null, 2) + '\n');
+const link = 'http://127.0.0.1:5186/#docz=' + deflateRawSync(JSON.stringify(doc)).toString('base64url');
+await writeFile(new URL('docs/design/wallet-order-318.md', root), `# Wallet content order\n\n${doc.brief}\n\nReuse Android 1.0.318 keys: card billing/extended/custom/notes; document identity/address/custom/notes. Keep unavailable photos/attachments and future keys unchanged. Basic identity/document validity fields and the existing card face stay outside this ordering group.\n\n[Editable local Canvas](${link})\n`);

@@ -1,6 +1,7 @@
 import type { LoginItem } from "../../core/model";
 import { decodeBase32 } from "../../core/totp";
 import { bytesToBase64 } from "../../security/encoding";
+import { parseLosslessJson, jsonScalarText } from '../../core/lossless-json';
 
 export { STEAM_MAFILE_MARKER_FIELD, STEAM_MAFILE_MARKER_VALUE, STEAM_MAFILE_MAX_BYTES,
   isSteamMaFileLogin, isSteamMaFileName } from '../../core/steam-mafile-contract';
@@ -52,7 +53,7 @@ export async function parseSteamMaFile(rawJson: string, fileName = ""): Promise<
 
 function sharedSecretValue(root: Record<string, unknown>): { value: string; encoding: "base64" | "base32" } | undefined {
   const uri = stringValue(root, "uri", "Uri", "otp_uri", "otpUri", "otpauth_uri", "otpauthUri", "steam_uri", "steamUri", "url", "URL");
-  const candidate = uri || stringValue(root, "shared_secret", "sharedSecret");
+  const candidate = /^(steam|otpauth):\/\//i.test(uri) ? uri : stringValue(root, "shared_secret", "sharedSecret");
   if (!candidate) return undefined;
   if (/^steam:\/\//i.test(candidate)) {
     const encoded = candidate.slice(candidate.indexOf("://") + 3).split(/[?#]/, 1)[0].replace(/^\/+|\/+$/g, "");
@@ -88,7 +89,7 @@ function decodeBase32Safe(value: string): Uint8Array | undefined {
 }
 
 function parseObject(raw: string): Record<string, unknown> {
-  const parsed: unknown = JSON.parse(raw.trim());
+  const parsed: unknown = parseLosslessJson(raw.trim());
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Steam maFile 根节点必须是 JSON 对象。");
   return parsed as Record<string, unknown>;
 }
@@ -108,7 +109,13 @@ function stringValue(raw: Record<string, unknown>, ...names: string[]): string {
 
 function firstSteamId(root: Record<string, unknown>, session: Record<string, unknown>): string {
   const names = ["steamid", "steam_id", "SteamID", "steam64", "steam_id64", "steamID64", "SteamID64", "sbeamid"];
-  return validSteamId(stringValue(root, ...names)) || validSteamId(stringValue(session, ...names));
+  for (const object of [root, session]) {
+    for (const name of names) {
+      const id = validSteamId(jsonScalarText(object[name]).trim());
+      if (id) return id;
+    }
+  }
+  return '';
 }
 
 function steamIdFromFileName(fileName: string): string {

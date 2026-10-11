@@ -47,6 +47,18 @@ const emptyProof = (record: PasswordProjectRemovalRecord) => record.ownerTransfe
 })) : [];
 
 describe('durable password project removal transaction', () => {
+  it.each(['bitwarden', 'mdbx2', 'monica-webdav'] as const)('limits server-assigned creation-time acknowledgement to Bitwarden: %s', async kind => {
+    const { service, input } = await fixture(kind);
+    const record = (await service.stagePasswordProjectRemoval(input)).removal!;
+    const rows = await acknowledge(service, kind);
+    const serverTime = '2026-10-09T12:00:00.000Z';
+    await service.applyProviderSync(kind, rows.map(row => ({ ...row, createdAt: serverTime })));
+    if (kind !== 'bitwarden') { await expect(service.inspectPasswordProjectRemoval(record.id)).rejects.toThrow('已变化'); return; }
+    const observed = await service.inspectPasswordProjectRemoval(record.id);
+    expect(observed.items.every(row => row.createdAt === serverTime)).toBe(true);
+    await service.applyProviderSync(kind, observed.items.map((row, index) => index ? row : { ...row, password: 'concurrent real password change' }));
+    await expect(service.inspectPasswordProjectRemoval(record.id)).rejects.toThrow('已变化');
+  });
   it.each([false, true])('cancels preparation after provider acknowledgement %s while keeping the edited full project and later password', async synced => {
     const { service, storage, rows, input } = await fixture('mdbx2');
     const record = (await service.stagePasswordProjectRemoval(input)).removal!;

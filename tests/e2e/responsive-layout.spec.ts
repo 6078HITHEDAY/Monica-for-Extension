@@ -31,7 +31,7 @@ async function launch(testInfo: TestInfo, width: number, height: number, scale: 
     { ...common, id: "responsive-passkey", kind: "passkey", title: "Workspace device-bound Passkey", credentialId: "AQID", rpId: "responsive.example.test", rpName: "Workspace", userHandle: "dXNlcg", userName: "design.workspace@example.test", algorithm: -7, publicKey: "metadata-only", signCount: 0, discoverable: true, sourceMode: "android-keystore" }
   ]) expect(await page.evaluate((item) => chrome.runtime.sendMessage({ type: "VAULT_UPSERT_ITEM", item }), item)).toMatchObject({ ok: true });
   await page.reload();
-  await expect(page.locator(".page-heading h1")).toBeVisible();
+  await expect(page.locator(".page-heading h1, .settings-page-header h1")).toBeVisible();
   await page.evaluate((value) => { document.documentElement.style.fontSize = `${value}%`; }, scale);
   await page.evaluate(() => document.fonts.ready);
   return { context, page, extensionId };
@@ -79,7 +79,6 @@ for (const [width, height, scale] of sizes) {
       await expect(page.locator(".item-card")).toHaveCount(5);
       for (const section of ["All items", "API key", "Login", "Wallet and identity", "Secure Note", "Verification codes", "Steam", "Passkey", "Secure Send", "Archive", "Recycle Bin", "Timeline", "Sources", "Settings and backups", "Generator"]) {
         await navigate(page, section);
-        if (section === "Settings and backups") await page.locator(".settings-disclosure").evaluateAll((items) => items.forEach((item) => { (item as HTMLDetailsElement).open = true; }));
         await expectUsableControls(page.locator("#main-content"));
         if (["Login", "Wallet and identity", "Secure Note", "Verification codes", "Passkey"].includes(section)) {
           await page.getByRole("button", { name: /^View details for / }).first().click();

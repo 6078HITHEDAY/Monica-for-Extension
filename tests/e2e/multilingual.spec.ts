@@ -1,5 +1,6 @@
+import { launchTestContext } from './fixtures/edge';
 import { chooseOption, dialogContent } from "./fixtures/material";
-import { chromium, expect, test, type Locator } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { localeOptions } from "../../src/i18n/locales";
@@ -35,7 +36,7 @@ async function usable(root: Locator) {
 }
 
 test("language names stay readable in settings on narrow screens", async ({}, testInfo) => {
-  const context = await chromium.launchPersistentContext(testInfo.outputPath("language-picker-profile"), {
+  const context = await launchTestContext(testInfo.outputPath("language-picker-profile"), {
     channel: "chromium", headless: true, locale: "zh-CN", reducedMotion: "reduce",
     args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`]
   });
@@ -81,7 +82,7 @@ test("language names stay readable in settings on narrow screens", async ({}, te
 for (const language of extraLanguages) {
   test(`${language.label}: offline pages, narrow controls, editing and locked autofill`, async ({}, testInfo) => {
     const catalog: Record<string, string> = JSON.parse(readFileSync(`public/locales/ui-${language.value}.json`, "utf8"));
-    const context = await chromium.launchPersistentContext(testInfo.outputPath("profile"), {
+    const context = await launchTestContext(testInfo.outputPath("profile"), {
       channel: "chromium", headless: true, locale: language.value, colorScheme: "dark", reducedMotion: "reduce",
       viewport: { width: 390, height: 640 },
       args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`]
@@ -111,7 +112,7 @@ for (const language of extraLanguages) {
       const navigate = async (index: number) => {
         await manager.getByRole("button", { name: catalog["打开导航"], exact: true }).click();
         await manager.locator(".sidebar .nav-item").nth(index).click();
-        await expect(manager.locator(".page-heading h1")).toBeVisible();
+        await expect(manager.locator(".page-heading h1, .settings-page-header h1")).toBeVisible();
       };
       const pages = await manager.locator(".sidebar .nav-item").count();
       expect(pages).toBeGreaterThanOrEqual(14);
@@ -120,7 +121,6 @@ for (const language of extraLanguages) {
         await manager.evaluate((scale) => { document.documentElement.style.fontSize = `${scale}%`; }, scale);
         for (let index = 0; index < pages; index++) {
           await navigate(index);
-          await manager.locator(".settings-disclosure").evaluateAll((items) => items.forEach((item) => { (item as HTMLDetailsElement).open = true; }));
           await usable(manager.locator("#main-content"));
         }
       }

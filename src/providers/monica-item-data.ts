@@ -168,6 +168,7 @@ function decodeBankCard(data: Record<string, unknown>): Omit<CardItem, keyof Mon
     branchCode: optionalString(firstString(data, "branchCode")),
     currency: optionalString(firstString(data, "currency")),
     customerServicePhone: optionalString(firstString(data, "customerServicePhone")),
+    editorSectionOrder: readWalletEditorSectionOrder(data.editorSectionOrder),
     customFields: parseSecureCustomFields(data.customFields),
     cardFace: readCardFaceConfig(data.cardFace)
   };
@@ -187,6 +188,7 @@ function decodeDocument(data: Record<string, unknown>): Omit<IdentityItem, keyof
     lastName,
     fullName: Object.prototype.hasOwnProperty.call(data, "fullName") ? jsonScalarText(data.fullName) : nameFromParts || firstString(data, "name"),
     documentTitle: typeof data.title === "string" ? data.title : undefined,
+    editorSectionOrder: readWalletEditorSectionOrder(data.editorSectionOrder),
     birthDate: optionalString(firstString(data, "birthDate")),
     issuedDate: optionalString(firstString(data, "issuedDate", "issueDate")),
     expiryDate: optionalString(firstString(data, "expiryDate")),
@@ -338,12 +340,14 @@ function buildMonicaItemData(item: VaultItem): Record<string, unknown> | undefin
         branchCode: item.branchCode || "",
         currency: item.currency || "",
         customerServicePhone: item.customerServicePhone || "",
+        ...(item.editorSectionOrder !== undefined ? { editorSectionOrder: readWalletEditorSectionOrder(item.editorSectionOrder) } : {}),
         customFields: serializeSecureCustomFields(item.customFields),
         ...(item.cardFace !== undefined ? { cardFace: item.cardFace } : {})
       };
     case "identity":
       return {
         documentType: item.documentType,
+        ...(item.editorSectionOrder !== undefined ? { editorSectionOrder: readWalletEditorSectionOrder(item.editorSectionOrder) } : {}),
         documentNumber: item.documentNumber,
         fullName: item.fullName,
         issuedDate: item.issuedDate || "",
@@ -425,6 +429,13 @@ export function parseMonicaItemData(value: unknown): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+/** Validation only: filtering/deduplicating would destroy newer Android presentation data. */
+export function readWalletEditorSectionOrder(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.some(key => typeof key !== 'string')) throw new Error('钱包内容顺序格式不受支持。');
+  return [...value];
 }
 
 export function readCardFaceConfig(value: unknown): CardFaceConfig | null | undefined {

@@ -1,5 +1,5 @@
 import { launchEdgeContext } from "./fixtures/edge";
-import { chooseOption, dialogContent } from "./fixtures/material";
+import { chooseOption } from "./fixtures/material";
 import { expect, test, type BrowserContext, type Page, type TestInfo } from "@playwright/test";
 import path from "node:path";
 
@@ -22,7 +22,7 @@ async function launch(testInfo: TestInfo): Promise<{ context: BrowserContext; pa
   return { context, page };
 }
 
-test("settings manages encrypted autofill site exclusions in a compact dialog", async ({}, testInfo) => {
+test("settings manages encrypted autofill site exclusions on a secondary page", async ({}, testInfo) => {
   const { context, page } = await launch(testInfo);
   try {
     const result = await page.evaluate(async () => chrome.runtime.sendMessage({
@@ -34,7 +34,7 @@ test("settings manages encrypted autofill site exclusions in a compact dialog", 
     await page.getByRole("button", { name: "设置与备份" }).click();
     await expect(page.getByRole("button", { name: /自动填充排除项/ })).toHaveAccessibleName("自动填充排除项 自动填充 1 个 · 保存提示 1 个");
     await page.getByRole("button", { name: /自动填充排除项/ }).click();
-    const dialog = dialogContent(page, { name: "自动填充排除项" });
+    const dialog = page.locator('[data-settings-page="exclusions"]');
     await expect(dialog).toBeVisible();
     await expect(dialog.getByText("blocked.example.com", { exact: true })).toBeVisible();
     await expect(dialog.getByText("save.example.com", { exact: true })).toBeVisible();

@@ -18,6 +18,7 @@ export interface HomePreferences {
   lastSourceId: string;
   passwordStackMode: PasswordStackMode;
   passwordWebsiteMatch: WebsiteStackMatch;
+  managerScopes?: Record<string, {source: string; folder: string}>;
 }
 
 /** Preferences contain identifiers only and live inside the encrypted vault. */
@@ -41,8 +42,18 @@ export function normalizeHomePreferences(input?: unknown): HomePreferences {
     preferredSourceId: sourceId(raw.preferredSourceId, "local"),
     lastSourceId: sourceId(raw.lastSourceId, "all"),
     passwordStackMode: PASSWORD_STACK_MODES.includes(raw.passwordStackMode as PasswordStackMode) ? raw.passwordStackMode as PasswordStackMode : "none",
-    passwordWebsiteMatch: raw.passwordWebsiteMatch === "relaxed" ? "relaxed" : "strict"
+    passwordWebsiteMatch: raw.passwordWebsiteMatch === "relaxed" ? "relaxed" : "strict",
+    managerScopes: normalizeManagerScopes(raw.managerScopes)
   };
+}
+
+export function normalizeManagerScopes(input: unknown): Record<string,{source:string;folder:string}> {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
+  return Object.fromEntries(Object.entries(input).filter(([section,value]) =>
+    ['vault','passwords','wallet','notes','totp','api-tokens','steam','passkeys','archive','trash'].includes(section)
+    && value && typeof value.source === 'string' && value.source.length <= 256
+    && typeof value.folder === 'string' && value.folder.length <= 8192)
+    .map(([section,value])=>[section,{source:value.source,folder:value.folder}]));
 }
 
 export function homeStartupSource(preferences: HomePreferences, availableIds: readonly string[]): { id: string; missing: boolean } {

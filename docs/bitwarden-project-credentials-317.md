@@ -1,5 +1,7 @@
 # Bitwarden password projects — Android 1.0.317
 
+2026-10-09 follow-up: [complete project sync batches](bitwarden-project-batch-318.md) prevent the 100-item limit and targeted sync from splitting queued project members. Real Vaultwarden 99+2 upload/restart/independent readback and 301 related regressions pass. The application records below retain their original versions and scope.
+
 Android's `CipherSyncProcessor` reads `monica.content.credential` and projects
 its explicit `projectId` into the password row's group identity. The extension
 now follows this convention when decoding encrypted login ciphers. Missing,

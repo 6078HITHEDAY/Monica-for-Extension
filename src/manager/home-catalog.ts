@@ -39,6 +39,8 @@ export function itemHomeFolders(item: VaultItem, providers: readonly ProviderAcc
 
 function foldersForSources(item: VaultItem, sources: readonly string[]): HomeFolderRef[] {
   return sources.map(sourceId => {
+    // KDBX's root has a UUID, but contributes no path segment.
+    if (item.keepassGroupUuid && !item.keepassGroupPath && !item.categoryName?.trim()) return { sourceId, type: 'uncategorized', value: 'none', label: '' };
     if (item.keepassGroupUuid || item.keepassGroupPath) return { sourceId, type: "keepass", value: item.keepassGroupUuid || item.keepassGroupPath!, label: item.keepassGroupPath || "" };
     if (item.mdbxFolderId) return { sourceId, type: "mdbx", value: item.mdbxFolderId, label: item.categoryName?.trim() || "" };
     const remoteFolder = item.providerRefs.find(ref => ref.providerId === sourceId)?.remoteFolderId;

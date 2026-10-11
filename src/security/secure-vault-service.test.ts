@@ -250,6 +250,11 @@ describe("encrypted vault", () => {
     expect(keePass.config).toEqual({ fileName: "personal.kdbx", databaseId: 7, protectionMode: "password-and-key-file" });
     expect(JSON.stringify(await service.listProviders())).not.toMatch(/keepass-password-secret|keepass-key-secret/);
 
+    const localKeePass = await service.upsertProvider({ ...keePass, config: { ...keePass.config,
+      sourceMode: 'local-file', localFileSourceSha256: 'a'.repeat(64), cacheEncryptionKey: 'local-receipt-secret' } });
+    expect(localKeePass.config.localFileSourceSha256).toBe('a'.repeat(64));
+    expect(JSON.stringify(await service.listProviders())).not.toContain('local-receipt-secret');
+
     const remoteKeePass = await service.upsertProvider({
       id: "keepass-remote",
       kind: "keepass",

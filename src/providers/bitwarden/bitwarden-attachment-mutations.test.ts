@@ -48,6 +48,17 @@ describe("Bitwarden durable attachment mutations", () => {
     expect(request.lastKnownRevisionDate).toBe("2026-08-08T00:00:00.000Z");
     expect(request.fileSize).toBeGreaterThan(plaintext.length);
     const attachmentKey = await decryptBitwardenSymmetricKey(String(request.key), server.vaultKey);
+    // Check the wire bytes independently of our own reader: Android/Bitwarden
+    // require type || IV || MAC || ciphertext, not the historical Monica layout.
+    const body = [...server.bodies.values()][0];
+    expect(body[0]).toBe(2);
+    expect(body.length % 16).toBe(1);
+    const aes = await crypto.subtle.importKey('raw', attachmentKey.encKey as BufferSource, 'AES-CBC', false, ['decrypt']);
+    const plain = await crypto.subtle.decrypt({ name: 'AES-CBC', iv: body.slice(1, 17) as BufferSource }, aes, body.slice(49) as BufferSource);
+    expect(new Uint8Array(plain)).toEqual(plaintext);
+    const hmac = await crypto.subtle.importKey('raw', attachmentKey.macKey as BufferSource, { name: 'HMAC', hash: 'SHA-256' }, false, ['verify']);
+    expect(await crypto.subtle.verify('HMAC', hmac, body.slice(17, 49) as BufferSource,
+      Uint8Array.from([...body.slice(1, 17), ...body.slice(49)]) as BufferSource)).toBe(true);
     expect(attachmentKey).not.toEqual(server.vaultKey);
     expect(attachmentKey.encKey).not.toEqual(server.vaultKey.encKey);
     attachmentKey.encKey.fill(0);
@@ -107,6 +118,22 @@ describe("Bitwarden durable attachment mutations", () => {
     expect(server.prepareCount).toBe(1);
     expect(server.attachments()).toHaveLength(1);
     expect(server.bodies.has("attachment-1")).toBe(true);
+  });
+
+  it.each([0, 1] as const)('resumes a prepared historical layout without changing attachment identity (mode %s)', async mode => {
+    const server = new FakeBitwardenAttachmentServer(mode);
+    const store = new MemoryBitwardenAttachmentMutationStore();
+    const input = uploadInput(server, new TextEncoder().encode('legacy prepared upload'));
+    server.failUploadBeforeStoreOnce = true;
+    await expect(mutationService(server, store).upload(input)).rejects.toMatchObject({ code: 'bitwarden-attachment-upload-pending' });
+    // Model metadata persisted by the previous writer, before any bytes arrived.
+    const record = (await store.read(PROVIDER_ID, OPERATION_ID))!;
+    await store.save({ ...record, encryptedSizeBytes: record.encryptedSizeBytes! - 1 }, record.revision);
+    server.attachments()[0].Size = String(record.encryptedSizeBytes! - 1);
+    const result = await mutationService(server, store).upload(input);
+    expect(result.attachment?.attachmentId).toBe('attachment-1');
+    expect(server.prepareCount).toBe(1);
+    expect(server.bodies.get('attachment-1')!.length % 16).toBe(0);
   });
 
   it("finds and rolls back metadata after a lost create response before allowing a fresh attempt", async () => {

@@ -20,7 +20,7 @@ async function change(event: Event) {
 </script>
 
 <template>
-  <m3e-form-field v-field-label variant="filled" hide-required-marker hide-subscript="never" class="language-picker">
+  <m3e-form-field v-field-label variant="filled" hide-required-marker :hide-subscript="error ? 'never' : 'always'" data-settings-select class="language-picker">
     <label slot="label">{{ label || tr('语言') }}</label>
     <component :is="materialSelectTag"  :aria-label="tr('界面语言')" :aria-busy="busy" :disabled="busy" @change="change">
       <component :is="materialOptionTag" :selected.prop="String(localePreference ?? '') === String('system')" value="system">{{ tr('跟随浏览器') }}</component>

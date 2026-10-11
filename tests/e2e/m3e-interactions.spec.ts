@@ -1,10 +1,11 @@
+import { launchTestContext } from './fixtures/edge';
 import { chooseOption, dialogContent } from "./fixtures/material";
-import { chromium, expect, test, type Page, type TestInfo } from "@playwright/test";
+import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import path from "node:path";
 
 async function start(testInfo: TestInfo) {
   const extension = path.resolve("dist");
-  const context = await chromium.launchPersistentContext(testInfo.outputPath("profile"), {
+  const context = await launchTestContext(testInfo.outputPath("profile"), {
     channel: "chromium", headless: true, locale: "zh-CN", colorScheme: "light",
     viewport: { width: 1280, height: 900 },
     args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`]
@@ -256,26 +257,21 @@ test("settings switches keep their saved state after a failed write and allow re
   } finally { await context.close(); }
 });
 
-test("appearance choices preserve a Nothing preference and trap keyboard focus", async ({}, testInfo) => {
+test("appearance choices preserve a Nothing preference and return focus from the secondary page", async ({}, testInfo) => {
   const { page, context } = await start(testInfo);
   try {
     await navigate(page, /^设置与备份/);
-    const trigger = page.locator(".appearance-trigger").getByRole("button");
+    const trigger = page.locator('[data-settings-entry="appearance"]');
     await trigger.click();
-    const dialog = dialogContent(page, { name: "外观", exact: true });
-    const close = dialog.getByRole("button", { name: "关闭外观设置" });
-    await expect(dialog.locator("m3e-button-segment").filter({ hasText: "跟随系统" })).toBeFocused();
-    await page.keyboard.press("Shift+Tab");
-    await expect(close).toBeFocused();
-    await page.keyboard.press("Shift+Tab");
-    await expect(dialog.getByRole("radio", { name: "Monica", exact: true })).toBeFocused();
-    await page.keyboard.press("Tab");
-    await expect(close).toBeFocused();
-    await dialog.getByRole("radio", { name: "Nothing", exact: true }).click();
-    await dialog.locator("m3e-button-segment").filter({ hasText: "深色" }).click();
-    await page.keyboard.press("Escape");
-    await expect(dialog).toHaveCount(0);
+    const detail = page.locator('[data-settings-page="appearance"]');
+    await expect(detail.locator('h1')).toBeFocused();
+    await page.keyboard.press('Shift+Tab');
+    await expect(detail.getByRole('button', {name: '返回', exact: true})).toBeFocused();
+    await detail.getByRole('radio', { name: 'Nothing', exact: true }).click();
+
+    await detail.locator('[data-settings-back]').click();
     await expect(trigger).toBeFocused();
+    await chooseOption(page.getByRole('combobox', {name: '显示模式', exact: true}), 'dark');
     await page.reload();
     await expect(page.locator("html")).toHaveAttribute("data-palette", "nothing");
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");

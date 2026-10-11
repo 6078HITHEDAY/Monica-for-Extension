@@ -1,6 +1,8 @@
 import type { LoginItem, PendingMutation, ProviderAccount } from './model';
 import { readProjectCredential } from './project-credentials';
 import type { Mdbx2RestoreRecord } from './mdbx2-restore-journal';
+import { validateBitwardenProjectDeletion, type BitwardenProjectDeletionJournal } from './bitwarden-project-removal-journal';
+import { validateBitwardenProjectPasskeyPreservation, type BitwardenProjectPasskeyPreservation } from './bitwarden-passkey-preservation-journal';
 
 export interface PasswordProjectRemovalProof {
   providerId: string;
@@ -17,6 +19,8 @@ export interface PasswordProjectRemovalRecord {
   createdAt: string;
   updatedAt: string;
   status: 'preparing' | 'deleting' | 'completed' | 'cancelled';
+  /** Durable stop before deletion; recovery only reads originals and copies. */
+  bitwardenPreparationRecovery?: { version: 1; reason: 'local-changed' };
   /** Snapshots stay in the encrypted local vault and are never provider metadata. */
   retained: LoginItem[];
   removed: LoginItem[];
@@ -25,6 +29,8 @@ export interface PasswordProjectRemovalRecord {
   providerBindings: ProviderAccount[];
   ownerTransfer?: { sourceItemId: string; targetItemId: string };
   proofs?: PasswordProjectRemovalProof[];
+  bitwardenDeletion?: BitwardenProjectDeletionJournal;
+  bitwardenPasskeyPreservation?: BitwardenProjectPasskeyPreservation;
   nativeDeletion?: {
     intent: PasswordProjectNativeDeletionIntent;
     deletedAt: string;
@@ -52,6 +58,7 @@ export function readPasswordProjectRemovalJournal(value: unknown): PasswordProje
   if (value === undefined) return [];
   if (!Array.isArray(value) || value.length > 100) throw invalid();
   const operations = new Set<string>();
+  let preservationBytes = 0;
   for (const record of value as PasswordProjectRemovalRecord[]) {
     if (!record || record.version !== 1 || !id(record.id) || operations.has(record.id) || !hash(record.requestHash)
       || !['preparing', 'deleting', 'completed', 'cancelled'].includes(record.status)
@@ -86,6 +93,13 @@ export function readPasswordProjectRemovalJournal(value: unknown): PasswordProje
         || row.providerRefs.some(ref => !ref || !rowProviders.has(ref.providerId))
         || new Set(row.providerRefs.map(ref => ref.providerId)).size !== rowProviders.size)) throw invalid();
     const externalProviderIds = new Set(record.providerBindings.filter(provider => provider.kind !== 'local').map(provider => provider.id));
+    if (record.bitwardenPreparationRecovery !== undefined) {
+      const recovery = record.bitwardenPreparationRecovery;
+      const external = record.providerBindings.filter(provider => provider.kind !== 'local');
+      if (!recovery || recovery.version !== 1 || recovery.reason !== 'local-changed' || external.length !== 1
+        || external[0].kind !== 'bitwarden' || !['preparing', 'cancelled'].includes(record.status)
+        || record.bitwardenDeletion || record.nativeDeletion) throw invalid();
+    }
     if (record.ownerTransfer && (!record.removed.some(row => row.id === record.ownerTransfer!.sourceItemId)
       || !record.retained.some(row => row.id === record.ownerTransfer!.targetItemId))) throw invalid();
     if (!['preparing', 'cancelled'].includes(record.status) && !Array.isArray(record.proofs)) throw invalid();
@@ -143,11 +157,17 @@ export function readPasswordProjectRemovalJournal(value: unknown): PasswordProje
       }
       if (receipt && (!id(receipt.operationId) || !id(receipt.commitId)) || (record.status === 'completed') !== Boolean(receipt)) throw invalid();
     }
+    if (record.bitwardenDeletion !== undefined) validateBitwardenProjectDeletion(record.bitwardenDeletion, record);
+    if (record.bitwardenPasskeyPreservation !== undefined) {
+      validateBitwardenProjectPasskeyPreservation(record.bitwardenPasskeyPreservation, record);
+      preservationBytes += new TextEncoder().encode(JSON.stringify(record.bitwardenPasskeyPreservation)).byteLength;
+      if (preservationBytes > 8 * 1024 * 1024) throw invalid();
+    }
     if (record.cancellationItems !== undefined) {
       if (!Array.isArray(record.cancellationItems) || record.cancellationItems.length !== rowIds.size
         || new Set(record.cancellationItems.map(row => row?.id)).size !== rowIds.size) throw invalid();
       // Reuse the full snapshot validator without recursively carrying cancellation data.
-      const { cancellationItems, nativeDeletion: _native, proofs: _proofs, ...base } = record;
+      const { cancellationItems, nativeDeletion: _native, bitwardenDeletion: _bitwarden, bitwardenPasskeyPreservation: _preservation, proofs: _proofs, ...base } = record;
       const cancellation = readPasswordProjectRemovalJournal([{ ...base, status: 'preparing', ownerTransfer: undefined,
         retained: cancellationItems.filter(row => record.retained.some(item => item.id === row?.id)),
         removed: cancellationItems.filter(row => record.removed.some(item => item.id === row?.id)) }])[0];

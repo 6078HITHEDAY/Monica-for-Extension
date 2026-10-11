@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { copyFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { verifyReviewedRuntime } from './interop-reviewed-runtime.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repository = resolve(process.env.MONICA_ANDROID_REPOSITORY || join(root, '..', 'Monica-main'));
@@ -20,12 +21,15 @@ const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const testSet = process.env.MONICA_APP_INTEROP_TEST_SET;
 if (stage.startsWith('passkey-signatures-') && testSet !== 'passkey-signatures') throw new Error('Passkey signature stages require MONICA_APP_INTEROP_TEST_SET=passkey-signatures');
 if (stage === 'keepass-project-export' && testSet !== 'keepass-project') throw new Error('KeePass project stage requires MONICA_APP_INTEROP_TEST_SET=keepass-project');
+if (stage.startsWith('project-fields-') && testSet !== 'project-fields-ui') throw new Error('Rich project stages require MONICA_APP_INTEROP_TEST_SET=project-fields-ui');
 const appFixtureDirectory = testSet === 'passkey-signatures' ? 'extension-interop-317-passkey' : 'extension-interop-315';
 const targetedAndroidTestSources = [];
 if (testSet) {
   const selected = { 'api-address': 'ExtensionApiAddressInteropTest.kt', 'full-fields': 'ExtensionAndroid315InteropTest.kt',
     'project-credentials': 'ExtensionProjectCredentialInteropTest.kt', 'bitwarden-project': 'ExtensionBitwardenProjectInteropTest.kt',
+    'project-fields-ui': 'ExtensionProjectFieldsUiInteropTest.kt',
     'passkey-signatures': 'ExtensionPasskeySignatureInteropTest.kt',
+    'bitwarden-copies': 'ExtensionBitwardenCopyInteropTest.kt',
     'system-credentials': 'ExtensionSystemCredentialInteropTest.kt',
     'system-backends': 'ExtensionSystemBackendCredentialInteropTest.kt',
     'passkey-repairs': 'ExtensionPasskeyRepairAcceptanceTest.kt',
@@ -169,6 +173,42 @@ const report = { stage, startedAt: runStamp, serial, androidUser: 0, avd: 'Monic
 if (deviceIndependentBuild) report.deviceProvenance = 'Not observed: build only. Installation and instrumentation must verify their own device and exact built APK hashes.';
 if (testSet) Object.assign(report, { testSet, targetedAndroidTestSources });
 try {
+  if (process.env.MONICA_APP_INTEROP_REVIEWED_RUNTIME) {
+    report.reviewedRuntimeReuse = await verifyReviewedRuntime(process.env.MONICA_APP_INTEROP_REVIEWED_RUNTIME, repository);
+    if (!deviceIndependentBuild && installedApkSha256 !== report.reviewedRuntimeReuse.runtimeApkSha256)
+      throw new Error('Installed application differs from the reviewed runtime');
+    if (stage !== 'build') {
+      const build = JSON.parse(await readFile(join(evidence, 'build-evidence.json')));
+      if (build.status !== 'passed' || build.androidSourcesUnchanged !== true || build.testSourcesUnchanged !== true ||
+          JSON.stringify(build.baseline) !== JSON.stringify(baseline) ||
+          JSON.stringify(build.reviewedRuntimeReuse) !== JSON.stringify(report.reviewedRuntimeReuse) ||
+          JSON.stringify(build.testSourceHashes) !== JSON.stringify(testSourceHashes) ||
+          hash(await readFile(testApk)) !== build.builtTestApkSha256 ||
+          (stage !== 'install-test' && installedTestApkSha256 !== build.builtTestApkSha256))
+        throw new Error('Current runtime/test-only build provenance mismatch');
+    }
+  }
+  if (stage.startsWith('project-fields-')) {
+    const runtimePath = join(evidence, 'runtime-evidence.json');
+    const runtimeBytes = await readFile(runtimePath);
+    const runtimeProof = JSON.parse(runtimeBytes);
+    const buildBytes = await readFile(runtimeProof.buildEvidence);
+    const build = JSON.parse(buildBytes);
+    const productionDiff = await command('git', ['diff', 'HEAD', '--', 'Monica for Android',
+      ':(exclude)Monica for Android/docs', ':(exclude)Monica for Android/app/src/test', ':(exclude)Monica for Android/app/src/androidTest'], { cwd: repository });
+    if (productionDiff.bytes.length) throw new Error('Current runtime source has unbuilt production edits');
+    if (runtimeProof.status !== 'passed' || runtimeProof.productionSourceUnmodified !== true ||
+        runtimeProof.runtimeRevision !== baseline.revision || runtimeProof.runtimeApkSha256 !== installedApkSha256 ||
+        runtimeProof.testApkSha256 !== installedTestApkSha256 || runtimeProof.testApkSha256 !== build.builtTestApkSha256 ||
+        hash(buildBytes) !== runtimeProof.buildEvidenceSha256 ||
+        hash(await readFile(runtimeProof.runtimeApk)) !== installedApkSha256 ||
+        hash(await readFile(runtimeProof.runtimeDeviceEvidence)) !== runtimeProof.runtimeDeviceEvidenceSha256 ||
+        JSON.stringify(testSourceHashes) !== JSON.stringify(build.testSourceHashes) ||
+        targetedAndroidTestSources.some(source => !build.targetedAndroidTestSources.some(prior => prior.source === source.source && prior.sha256 === source.sha256)))
+      throw new Error('Current rich-project runtime, instrumentation, or source evidence mismatch');
+    report.runtimeEvidence = { path: runtimePath, sha256: hash(runtimeBytes), runtimeRevision: runtimeProof.runtimeRevision,
+      runtimeApkSha256: installedApkSha256, compileApkSha256: runtimeProof.compileApkSha256 };
+  }
   if (!deviceIndependentBuild) report.deviceBootId = (await command(adb, ['-s', serial, 'shell', 'cat', '/proc/sys/kernel/random/boot_id'])).text.trim();
   if (stage === 'build') {
     const retainedBuildConfig = process.env.MONICA_APP_INTEROP_KEEP_BUILD_CONFIG === '1'
@@ -204,7 +244,9 @@ try {
           untrackedFiles: untracked, sourceRule: 'Same clean tracked commit, exact prior APK/API jar, only explicit documentation/scratch/replaced test sources untracked' };
       }
       if (previous.status !== 'passed' || previous.androidSourcesUnchanged !== true ||
-          (!verifiedNonProductionStatusChange && JSON.stringify(previous.baseline) !== JSON.stringify(baseline)) ||
+          (!(report.reviewedRuntimeReuse?.buildEvidence === resolve(reuseBuildPath) &&
+             report.reviewedRuntimeReuse.buildEvidenceSha256 === hash(previousBytes)) &&
+           !verifiedNonProductionStatusChange && JSON.stringify(previous.baseline) !== JSON.stringify(baseline)) ||
           hash(await readFile(previous.builtAppApk)) !== previous.builtAppApkSha256) {
         throw new Error('Application APK reuse requires a successful build of the exact unchanged Android source');
       }
@@ -231,7 +273,10 @@ try {
         'PasskeyCredentialDiscoveryPolicyTest', 'PasskeyRemarkAndNavigationGuardTest.remarkWinsWithoutChangingOriginalPasskeyIdentity',
         'PasskeyRemarkAndNavigationGuardTest.blankRemarkFallsBackToOriginalDisplayName',
         'PasskeyRemarkAndNavigationGuardTest.credentialSelectorUsesAccountTitleWithoutNotes', 'PasskeyUserVerificationGuardTest',
-        'PasskeyNotesCodecTest', 'PasskeyMapperInteropTest'].flatMap(name => ['--tests', `*.${name}`])] : [];
+        'PasskeyNotesCodecTest', 'PasskeyMapperInteropTest',
+        ...(process.env.MONICA_APP_INTEROP_BACKUP_FLAG_REGRESSIONS === '1'
+          ? ['PasskeyBackupFlagsTest', 'PasskeyBackupFlagsMigrationTest', 'KeePassDxPasskeyCodecTest', 'KeePassPasskeySyncMergeTest'] : [])]
+        .flatMap(name => ['--tests', `*.${name}`])] : [];
     const result = await command('.\\gradlew.bat', ['--project-cache-dir', join(root, '.tmp', 'android-app-gradle-315'), '-I', join(root, 'tests', 'interop', 'android-app', 'interop.init.gradle'),
       ...passkeyRegressionTasks,
       ...(buildApplication ? [':app:assembleDebug', '-PincludeX86TestAbi'] : []), ':app:assembleDebugAndroidTest', '-PdailySeq=36', '-Pkotlin.compiler.execution.strategy=in-process', ...resourceArgs, '--no-daemon', '--console=plain'], { cwd: project, shell: true, echo: true });
@@ -277,12 +322,15 @@ try {
       zip: 'importExtensionArchiveWithoutModifyingUserData',
       'project-credentials-export': 'exportProjectCredentials',
       'project-credentials-import': 'restoreAndEditProjectCredentials',
+      'project-fields-export': 'exportRichProject',
+      'project-fields-import': 'importEditRichProjectInCompose',
       'passkey-signatures-export': 'generateExportAndSign',
       'passkey-signatures-import': 'importAndSignReturnedKeys',
       'passkey-signatures-kdbx': 'importSignEditAndReturnKeePassKeys',
       'passkey-signatures-webdav': 'importSignEditAndReturnWebDavKeys',
       'passkey-signatures-bitwarden': 'importSignEditAndReturnBitwardenKey',
       'bitwarden-project': 'downloadEditAndUploadProjects',
+      'bitwarden-copies': 'importEditUploadAndReimportCopies',
       cleanup: 'cleanupAbortedSyntheticUiFixture',
       'zip-note-export': 'exportBoundNoteArchive',
       'zip-note-import': 'restoreBoundNoteArchiveAndExportAgain',
@@ -295,7 +343,7 @@ try {
     const createUi = stage === 'ui' || stage === 'ui-recheck';
     if (!methods[stage] && !createUi && stage !== 'edge-ui' && stage !== 'failures') throw new Error('Choose build, install-test, export, import, zip, zip-note-export, zip-note-import, edge-note-import, ui, ui-recheck, edge-ui, cleanup, or failures');
     await assertNoActiveInstrumentation();
-    if (createUi || stage === 'edge-ui') {
+    if (createUi || stage === 'edge-ui' || stage === 'project-fields-import') {
       const foregroundUser = (await command(adb, ['-s', serial, 'shell', 'am', 'get-current-user'])).text.trim();
       if (foregroundUser !== '0') throw new Error(`Android user ${foregroundUser} is active; UI fixtures belong to user 0. Coordinate with the active user session; no user switch or test was submitted.`);
     }
@@ -314,10 +362,12 @@ try {
     }
     if (stage === 'zip') report.inputs = [await push('extension.zip')];
     if (stage === 'project-credentials-import') report.inputs = [await push('extension-project-credentials.zip')];
+    if (stage === 'project-fields-import') report.inputs = [await push('edge-project-fields.mdbx')];
     if (stage === 'passkey-signatures-import') report.inputs = [await push('extension-passkeys.mdbx')];
     if (stage === 'passkey-signatures-kdbx') report.inputs = [await push('extension-passkeys.kdbx'), await push('extension-passkeys-expected.json')];
     if (stage === 'passkey-signatures-webdav') report.inputs = [await push('extension-passkeys-expected.json'), await pushSyntheticRemotePasskeyInput()];
     if (stage === 'passkey-signatures-bitwarden') report.inputs = [await pushSyntheticRemotePasskeyInput()];
+    if (stage === 'bitwarden-copies') report.inputs = [await push('bitwarden-snapshot-input.json')];
     if (stage === 'bitwarden-project') {
       const mappings = (await command(adb, ['-s', serial, 'reverse', '--list'])).text;
       const existing = mappings.split(/\r?\n/).map(line => line.trim().split(/\s+/)).find(parts => parts[1] === 'tcp:18316');
@@ -346,9 +396,11 @@ try {
         : stage === 'failures' ? 'takagi.ru.monica.credentialexchange.ExtensionAndroid315FailureTest#rejectedInputsAndCancelledPreviewKeepExistingData'
         : `takagi.ru.monica.credentialexchange.${stage.startsWith('api-address-') ? 'ExtensionApiAddressInteropTest'
           : stage.startsWith('project-credentials-') ? 'ExtensionProjectCredentialInteropTest'
+          : stage.startsWith('project-fields-') ? 'ExtensionProjectFieldsUiInteropTest'
           : stage.startsWith('passkey-signatures-') ? 'ExtensionPasskeySignatureInteropTest'
           : stage === 'password-history-import' ? 'ExtensionPasswordHistoryInteropTest'
           : stage === 'keepass-project-export' ? 'ExtensionKeePassProjectInteropTest'
+          : stage === 'bitwarden-copies' ? 'ExtensionBitwardenCopyInteropTest'
           : stage === 'bitwarden-project' ? 'ExtensionBitwardenProjectInteropTest' : 'ExtensionAndroid315InteropTest'}#${methods[stage]}`, 'takagi.ru.monica.test/androidx.test.runner.AndroidJUnitRunner'], { echo: true, allowFailure: true });
     await writeFile(join(evidence, `${stage}.log`), result.bytes);
     await writeFile(join(evidence, `${stage}-${runStamp}.log`), result.bytes);
@@ -362,9 +414,13 @@ try {
       }
     }
     if (result.stderr) report.instrumentationStderr = result.stderr;
+    if (stage === 'bitwarden-copies') {
+      try { report.outputs.push(await pull('android-bitwarden-copies.json')); }
+      catch (error) { (report.diagnosticPullErrors ??= []).push({name: 'android-bitwarden-copies.json', message: String(error)}); }
+    }
     if (result.code !== 0) throw new Error(`Instrumentation client exited ${result.code}; incomplete output is preserved in ${stage}-${runStamp}.log. This is not a test pass.`);
     if (!/OK \(1 test\)/.test(result.text) || /FAILURES|INSTRUMENTATION_FAILED|Process crashed/i.test(result.text)) throw new Error(`Android application fixture failed; see ${stage}.log`);
-    const files = stage === 'keepass-project-export' ? []
+    const files = stage === 'keepass-project-export' || stage === 'bitwarden-copies' ? []
       : stage === 'api-address-export' ? ['android-api-address.mdbx', 'android-api-address.json']
       : stage === 'passkey-signatures-export' ? ['android-passkeys.mdbx', 'android-signatures.json']
       : stage === 'passkey-signatures-import' ? ['android-return-passkeys.mdbx', 'android-return-signatures.json']
@@ -376,6 +432,8 @@ try {
       : stage === 'bitwarden-project' ? ['bitwarden-project-return.json']
       : stage === 'project-credentials-export' ? ['android-project-credentials.zip', 'android-project-credentials.json']
       : stage === 'project-credentials-import' ? ['android-project-credentials-return.zip', 'android-project-credentials-return.json']
+      : stage === 'project-fields-export' ? ['android-project-fields.mdbx', 'android-project-fields.json']
+      : stage === 'project-fields-import' ? ['android-project-fields-return.mdbx', 'android-project-fields-return.json', 'android-project-fields-detail.png']
       : stage === 'api-address-import' ? ['android-api-address-return.mdbx', 'android-api-address-return.json']
       : stage === 'edge-note-import' ? ['android-edge-note-return.zip', 'android-edge-note-restore.json']
       : stage === 'password-history-import' ? ['android-history-mdbx-return.zip', 'android-history-keepass-return.zip', 'android-history-return.json']
@@ -402,6 +460,11 @@ try {
   }
   report.status = 'passed';
 } catch (error) {
+  if (stage === 'project-fields-import') {
+    for (const name of ['android-project-fields-return.json', 'android-project-fields-return.mdbx', 'android-project-fields-detail.png']) {
+      try { report.outputs.push(await pull(name)); } catch { /* UI may fail before producing a result. */ }
+    }
+  }
   if (stage === 'password-history-import') {
     try { report.outputs.push(await pull('android-history-return.json')); } catch { /* May fail before restore. */ }
   }
@@ -423,6 +486,7 @@ try {
   if (stage === 'bitwarden-project') await command(adb, ['-s', serial, 'shell', 'run-as', 'takagi.ru.monica', 'rm', '-f', 'files/extension-interop-315/bitwarden-project-input.json'], { allowFailure: true });
   if (stage === 'passkey-signatures-webdav') await command(adb, ['-s', serial, 'shell', 'run-as', 'takagi.ru.monica', 'rm', '-f', `files/${appFixtureDirectory}/webdav-passkey-input.json`], { allowFailure: true });
   if (stage === 'passkey-signatures-bitwarden') await command(adb, ['-s', serial, 'shell', 'run-as', 'takagi.ru.monica', 'rm', '-f', `files/${appFixtureDirectory}/bitwarden-passkey-input.json`], { allowFailure: true });
+  if (stage === 'bitwarden-copies') await command(adb, ['-s', serial, 'shell', 'run-as', 'takagi.ru.monica', 'rm', '-f', 'files/extension-interop-315/bitwarden-snapshot-input.json'], { allowFailure: true });
   if (!deviceIndependentBuild) {
   const afterBoot = await command(adb, ['-s', serial, 'shell', 'cat', '/proc/sys/kernel/random/boot_id'], { allowFailure: true });
   report.deviceBootIdAfter = afterBoot.code === 0 ? afterBoot.text.trim() : null;

@@ -230,6 +230,8 @@ export interface CardItem extends VaultItemBase {
   customerServicePhone?: string;
   customFields?: SecureCustomField[];
   cardFace?: CardFaceConfig | null;
+  /** Android wallet presentation metadata; retain unknown section keys and their order. */
+  editorSectionOrder?: string[];
 }
 
 export interface CardFaceConfig {
@@ -266,6 +268,8 @@ export interface IdentityItem extends VaultItemBase {
   address?: Partial<AddressFields>;
   customFields?: SecureCustomField[];
   cardFace?: CardFaceConfig | null;
+  /** Android wallet presentation metadata; independent of custom-field ordering. */
+  editorSectionOrder?: string[];
 }
 
 export interface AddressFields {
@@ -325,6 +329,8 @@ export interface PasskeyItem extends VaultItemBase {
   keyAlgorithm?: string;
   publicKey: string;
   privateKeyPkcs8?: string;
+  /** Non-secret projection of an unresolved device reference; never grants signing capability. */
+  keyMaterialHint?: "device-reference";
   /** Persisted source counter. Independent/file-backed assertions use zero without rewriting it. */
   signCount: number;
   /** Local history of observed counters; an unconfirmed local increment does not advance it. */
@@ -413,6 +419,8 @@ export interface ProviderMutationReceipt {
 export interface ProviderConflictInput {
   itemId: string;
   reason: string;
+  /** Recovery retained data that ordinary refresh must not silently discard. */
+  requiresExplicitResolution?: true;
   local?: VaultItem;
   remote?: VaultItem;
 }

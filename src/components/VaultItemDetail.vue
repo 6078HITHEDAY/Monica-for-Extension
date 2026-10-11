@@ -6,7 +6,8 @@ import { tr, locale } from '../i18n';
 import { computed, reactive, ref, useId } from "vue";
 import type { LoginItem, ProviderAccount, TotpItem, VaultItem } from "../core/model";
 import { findBoundTotpItem } from "../core/login-otp";
-import { itemIcon, itemKindLabel, sourceLabel } from "../manager/item-metadata";
+import { itemIcon, itemKindLabel } from "../manager/item-metadata";
+import PasskeyStatus from './PasskeyStatus.vue';
 import { parseSshKeyMetadata, parseWifiMetadata } from "../core/special-login";
 import { wifiAdvancedDetailFields } from "../core/wifi-settings";
 import TotpCodeCell from "./TotpCodeCell.vue";
@@ -192,6 +193,7 @@ const fields = computed<DetailField[]>(() => {
         { label: tr('证件类型'), value: typeLabels[item.documentType] || item.documentType },
         item.documentNumber && { label: tr('证件号码'), value: item.documentNumber, secret: true, showLastFour: true, mono: true },
         item.fullName && { label: tr('姓名'), value: item.fullName },
+        item.documentTitle && { secondary: true, label: tr('人物称谓'), value: item.documentTitle },
         (item.firstName || item.middleName || item.lastName) && { secondary: true, label: tr('姓名分写'), value: [item.firstName, item.middleName, item.lastName].filter(Boolean).join(" · ") },
         item.birthDate && { secondary: true, label: tr('出生日期'), value: item.birthDate },
         item.issuedDate && { secondary: true, label: tr('签发日期'), value: item.issuedDate },
@@ -199,6 +201,7 @@ const fields = computed<DetailField[]>(() => {
         item.issuedBy && { secondary: true, label: tr('签发机关'), value: item.issuedBy },
         item.nationality && { secondary: true, label: tr('国籍'), value: item.nationality },
         item.company && { secondary: true, label: tr('公司'), value: item.company },
+        item.username && { secondary: true, label: tr('用户名'), value: item.username },
         item.ssn && { secondary: true, label: "SSN", value: item.ssn, secret: true, mono: true },
         item.passportNumber && { secondary: true, label: tr('护照号'), value: item.passportNumber, secret: true, mono: true },
         item.licenseNumber && { secondary: true, label: tr('驾照号'), value: item.licenseNumber, secret: true, mono: true },
@@ -206,6 +209,17 @@ const fields = computed<DetailField[]>(() => {
         item.phone && { secondary: true, label: tr('电话'), value: item.phone },
         item.additionalInfo && { secondary: true, label: tr('补充信息'), value: item.additionalInfo }
       ].filter(Boolean) as DetailField[];
+      for (const [key, label] of Object.entries(BILLING_ADDRESS_FIELDS)) {
+        const value = item.address?.[key as BillingAddressField];
+        if (value) rows.push({ section: 'ADDRESS', label: tr(label), value });
+        if (key === 'apartment' && item.address3) rows.push({ section: 'ADDRESS', label: tr('地址第三行'), value: item.address3 });
+      }
+      // Imported identities can carry distinct address contacts. Do not hide
+      // them or synthesize them from the person's primary identity fields.
+      for (const [key, label] of [['fullName', '姓名'], ['company', '公司'], ['email', '邮箱'], ['phone', '电话']] as const) {
+        const value = item.address?.[key];
+        if (value && value !== item[key]) rows.push({ section: 'ADDRESS', label: `${tr('地址')} · ${tr(label)}`, value });
+      }
       for (const field of item.customFields || []) rows.push({ label: field.name, value: field.value, secret: field.protected, custom: true });
       return rows;
     }
@@ -299,7 +313,7 @@ const fieldSections = computed(() => {
     { id: "websites", order: -1, title: tr('匹配网站（可选）'), collapsible: false, fields: indexed.filter(field => field.section === "WEBSITES") },
     { id: "secondary", order: -1, title: tr('更多信息'), collapsible: true, fields: indexed.filter(field => !field.custom && field.secondary && !field.section) },
     { id: "custom", order: rank("CUSTOM_FIELDS"), title: tr('自定义字段'), collapsible: true, fields: indexed.filter(field => field.custom) },
-    ...[["AUTHENTICATOR","验证码"],["PAYMENT","支付信息"],["CONTACT","个人信息"],["ADDRESS","地址"]].map(([id,title])=>({id,title,order:rank(id),collapsible:false,fields:indexed.filter(field=>field.section===id)}))
+    ...[["AUTHENTICATOR","验证码"],["PAYMENT","支付信息"],["CONTACT","个人信息"],["ADDRESS","地址"]].map(([id,title])=>({id,title:tr(title),order:rank(id),collapsible:false,fields:indexed.filter(field=>field.section===id)}))
   ].filter(section => section.fields.length).map(section => {
     // Keep short fields in pairs without leaving a half-empty row before a wide value.
     let unpaired: (typeof indexed)[number] | undefined;
@@ -333,6 +347,7 @@ const fieldSections = computed(() => {
       <div class="detail-scroll">
         <div class="detail-body">
           <div class="detail-main" style="display:flex;flex-direction:column">
+            <PasskeyStatus v-if="item.kind === 'passkey'" :item="item" :providers="providers" detail />
             <section v-if="item.kind==='opaque'" class="detail-section"><h3>只读保护</h3><p>{{item.readOnlyReason}}</p><p>类型 {{item.nativeType}} · 版本 {{item.payloadSchemaVersion}}</p><ProtectedValue v-if="item.originalPayload!==undefined" label="完整原始内容" :value="item.originalPayload" secret /></section>
             <ProjectCredentialNavigation v-if="members.length > 1 || projectGroups" :item-id="item.id" :members="members" @open="member => emit('open', member)"><m3e-button v-if="canDetach && item.kind==='login'" type="button" variant="text" @click="emit('detach',item)">{{ tr('拆分为独立密码') }}</m3e-button></ProjectCredentialNavigation>
             <section v-if="item.kind === 'login' && (item.boundNoteEntryId || item.boundNoteId != null)" class="detail-section" :style="{order:rank('NOTES')}">
@@ -380,7 +395,6 @@ const fieldSections = computed(() => {
               <p class="detail-notes-line">{{ item.notes }}</p>
             </section>
             <p v-if="!fieldSections.length && item.kind !== 'secure-note' && item.kind !== 'opaque' && !item.notes" class="detail-empty">{{ tr('暂无内容') }}</p>
-            <p v-if="item.kind === 'passkey' && sourceLabel(item.sourceMode) === tr('Android 元数据')" class="supporting detail-context-note">{{ tr('该 Passkey 来自 Android 备份，仅保留元数据；浏览器无法用它完成 WebAuthn 签名。') }}</p>
           </div>
 
           <aside class="detail-sidebar" aria-labelledby="detail-metadata-title">

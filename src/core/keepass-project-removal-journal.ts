@@ -19,7 +19,8 @@ export function keePassRemovalRequestKey(source: ProviderAccount, draft: KeePass
 export async function keePassRemovalFileRequestHash(source: ProviderAccount, request: {
   operationId: string; expectedWorkingSha256: string; draft: KeePassProjectRemovalDraft;
 }): Promise<string> {
-  const keys = ['sourceMode', 'databaseId', 'webDavBaseUrl', 'webDavUsername', 'remotePath', 'oneDriveDriveId', 'oneDriveItemId'];
+  const keys = ['sourceMode', 'databaseId', 'webDavBaseUrl', 'webDavUsername', 'remotePath', 'oneDriveDriveId', 'oneDriveItemId',
+    ...(source.config.sourceMode === 'local-file' ? ['localFileSourceSha256'] : [])];
   const text = JSON.stringify({ request, source: { id: source.id,
     config: Object.fromEntries(keys.map(key => [key, source.config[key]])),
     oneDriveConnectionId: (source.config.oneDriveConnection as { id?: unknown } | undefined)?.id } },

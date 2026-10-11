@@ -1,6 +1,6 @@
 {
   "sourceSha256": "a0b648e4531fd6cb23b0473e47ce39461d8e49c33d4a5fc64023c424ab37fb5d",
-  "fontSha256": "2f150ba5eba16e3106d3500847ee96edd12a1d0151351b84ac7ae5999a5d8508",
+  "fontSha256": "479654837340ad7b33c9312e405df434f874559012f315bd8b39c2ce2154802d",
   "fontTools": "4.60.1",
   "axes": {
     "FILL": [
@@ -26,7 +26,9 @@
     "approval",
     "archive",
     "arrow_back",
+    "arrow_downward",
     "arrow_forward",
+    "arrow_upward",
     "attach_file",
     "attach_file_add",
     "attach_file_off",
@@ -85,6 +87,7 @@
     "drag_indicator",
     "drive_file_move",
     "edit",
+    "edit_note",
     "email",
     "encrypted",
     "error",
@@ -136,6 +139,7 @@
     "link",
     "link_off",
     "list",
+    "location_on",
     "lock",
     "lock_clock",
     "lock_open",

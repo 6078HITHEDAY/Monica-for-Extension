@@ -6,9 +6,10 @@ beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(100_000); });
 afterEach(() => vi.useRealTimers());
 
 describe("MDBX local and cloud automatic-sync connection eligibility", () => {
-  it("admits an already-open local vault without requiring WebDAV state", () => {
-    expect(mdbx2AutomaticSyncEligible({ vaultHandle: "open-local" })).toBe(true);
-    expect(mdbx2AutomaticSyncEligible({ vaultHandle: "open-local", webDavBaseUrl: "" })).toBe(true);
+  it("leaves a clean local vault idle but flushes local edits without requiring WebDAV state", () => {
+    expect(mdbx2AutomaticSyncEligible({ vaultHandle: "open-local" })).toBe(false);
+    expect(mdbx2AutomaticSyncEligible({ vaultHandle: "open-local", webDavBaseUrl: "" },true)).toBe(true);
+    expect(mdbx2AutomaticSyncEligible({},true)).toBe(false);
   });
   it("admits a fully registered cloud vault but not partially configured cloud connections", () => {
     const full = { vaultHandle: "open-cloud", webDavBaseUrl: "https://example.invalid/dav", syncStateHandle: "registered", remotePath: "isolated" };

@@ -6,7 +6,7 @@ import { decodeBitwardenCredentialId, normalizeCredentialId, toBitwardenCredenti
 import { normalizeRpId } from "../../passkey/webauthn-core";
 import { jsonScalarText, parseLosslessJson } from "../../core/lossless-json";
 import { assertWritableSshKeyData } from "../../core/ssh-key-data";
-import { readProjectCredential } from "../../core/project-credentials";
+import { PROJECT_CREDENTIAL_FIELD, readProjectCredential } from "../../core/project-credentials";
 import { parsePasswordCoverField } from "../../core/password-cover";
 import { walletFieldsToItem, walletItemToFields, walletManagedNames, type WalletItem } from "./bitwarden-wallet-fields";
 
@@ -58,7 +58,8 @@ export interface DecodedBitwardenCipher {
   unsupported?: boolean;
 }
 
-export async function decodeBitwardenCipher(raw: Record<string, unknown>, providerId: string, vaultKey: BitwardenSymmetricKey, remoteFolderName?: string): Promise<DecodedBitwardenCipher> {
+export async function decodeBitwardenCipher(raw: Record<string, unknown>, providerId: string, vaultKey: BitwardenSymmetricKey, remoteFolderName?: string,
+  options: { requireReadableProjectMembership?: boolean } = {}): Promise<DecodedBitwardenCipher> {
   const cipherId = stringValue(raw, "Id", "id");
   if (!cipherId) return { items: [], warning: "Bitwarden Cipher 缺少 ID，已跳过。" };
   const key = await resolveBitwardenCipherKey(raw, vaultKey);
@@ -108,6 +109,10 @@ export async function decodeBitwardenCipher(raw: Record<string, unknown>, provid
     const customFields = decodedFields
       .filter(isEditableBitwardenUserField)
       .map((field) => ({ name: field.name, value: field.value, protected: field.type === BITWARDEN_HIDDEN_FIELD }));
+    if (options.requireReadableProjectMembership && (decodedFields.some(field => !field.readable)
+      || decodedFields.some(field => field.name === PROJECT_CREDENTIAL_FIELD && !isEditableBitwardenUserField(field))
+      || decodedFields.some(field => field.name === PROJECT_CREDENTIAL_FIELD) && !readProjectCredential(customFields)))
+      throw new Error('Bitwarden 凭据项目元数据无法完整读取，不能据此判断成员移除范围。');
     const sshKeyData = bitwardenSshKeyData(systemFields);
     const loginType = bitwardenLoginType(systemFields, sshKeyData);
     const wifiMetadata = bitwardenSystemValue(systemFields, "monica_wifi_data", "MonicaWifiData") || undefined;
@@ -1312,8 +1317,11 @@ function decodeStandaloneTotp(login: LoginItem, rawSecret: string, reference: Pr
     title: login.title,
     favorite: login.favorite,
     notes: login.notes,
+    ...(login.categoryName ? { categoryName: login.categoryName } : {}),
     createdAt: login.createdAt,
     updatedAt: login.updatedAt,
+    ...(login.deletedAt ? { deletedAt: login.deletedAt } : {}),
+    ...(login.archivedAt ? { archivedAt: login.archivedAt } : {}),
     providerRefs: [{ ...reference, remoteId: `${reference.remoteId}#totp` }],
     secret,
     issuer: parameters.issuer || login.title,

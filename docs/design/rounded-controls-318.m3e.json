@@ -1,0 +1,228 @@
+{
+  "title": "Monica · 圆润控件与搜索聚焦",
+  "brief": "数据库选择和表单使用四角24px填充容器，取消底部横线。只有聚焦或校验错误时显示完整圆角轮廓。搜索保持胶囊形，内部输入不画框。Canvas的outlined控件用于示意轮廓几何；产品保留填充色和内部浮动标签。",
+  "frame": "phone",
+  "platform": "web",
+  "paletteKey": "teal",
+  "theme": {
+    "dark": true,
+    "bothModes": true,
+    "contrast": "standard",
+    "shape": "full",
+    "font": "system",
+    "emphasized": true,
+    "motion": "standard"
+  },
+  "frames": [
+    {
+      "id": "rounded318-0",
+      "name": "数据库与搜索",
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 680
+    },
+    {
+      "id": "rounded318-1",
+      "name": "新建项目",
+      "x": 430,
+      "y": 0,
+      "w": 390,
+      "h": 680
+    }
+  ],
+  "groups": [
+    {
+      "id": "rounded318-0-0",
+      "frameId": "rounded318-0",
+      "x": 12,
+      "y": 20,
+      "axis": "y",
+      "items": [
+        {
+          "id": "rounded318-0-0-control",
+          "kind": "topAppBar",
+          "label": "密码库",
+          "icon": null,
+          "size": 366,
+          "variant": "filled"
+        }
+      ]
+    },
+    {
+      "id": "rounded318-0-1",
+      "frameId": "rounded318-0",
+      "x": 12,
+      "y": 132,
+      "axis": "y",
+      "items": [
+        {
+          "id": "rounded318-0-1-control",
+          "kind": "searchBar",
+          "label": "搜索当前分类",
+          "icon": "search",
+          "size": 366,
+          "variant": "filled"
+        }
+      ]
+    },
+    {
+      "id": "rounded318-0-2",
+      "frameId": "rounded318-0",
+      "x": 12,
+      "y": 244,
+      "axis": "y",
+      "items": [
+        {
+          "id": "rounded318-0-2-control",
+          "kind": "select",
+          "label": "数据库",
+          "icon": null,
+          "size": 366,
+          "variant": "outlined",
+          "tabs": [
+            {
+              "label": "全部数据库",
+              "icon": ""
+            }
+          ],
+          "selected": 0
+        }
+      ]
+    },
+    {
+      "id": "rounded318-0-3",
+      "frameId": "rounded318-0",
+      "x": 12,
+      "y": 356,
+      "axis": "y",
+      "items": [
+        {
+          "id": "rounded318-0-3-control",
+          "kind": "listItem",
+          "label": "GitHub",
+          "icon": "key",
+          "size": 366,
+          "variant": "filled"
+        }
+      ]
+    },
+    {
+      "id": "rounded318-0-4",
+      "frameId": "rounded318-0",
+      "x": 12,
+      "y": 468,
+      "axis": "y",
+      "items": [
+        {
+          "id": "rounded318-0-4-control",
+          "kind": "listItem",
+          "label": "工作邮箱",
+          "icon": "lock",
+          "size": 366,
+          "variant": "filled"
+        }
+      ]
+    },
+    {
+      "id": "rounded318-1-0",
+      "frameId": "rounded318-1",
+      "x": 442,
+      "y": 20,
+      "axis": "y",
+      "items": [
+        {
+          "id": "rounded318-1-0-control",
+          "kind": "topAppBar",
+          "label": "新建项目",
+          "icon": null,
+          "size": 366,
+          "variant": "filled"
+        }
+      ]
+    },
+    {
+      "id": "rounded318-1-1",
+      "frameId": "rounded318-1",
+      "x": 442,
+      "y": 132,
+      "axis": "y",
+      "items": [
+        {
+          "id": "rounded318-1-1-control",
+          "kind": "textField",
+          "label": "名称",
+          "icon": null,
+          "size": 366,
+          "variant": "outlined"
+        }
+      ]
+    },
+    {
+      "id": "rounded318-1-2",
+      "frameId": "rounded318-1",
+      "x": 442,
+      "y": 244,
+      "axis": "y",
+      "items": [
+        {
+          "id": "rounded318-1-2-control",
+          "kind": "select",
+          "label": "类型",
+          "icon": null,
+          "size": 366,
+          "variant": "outlined",
+          "tabs": [
+            {
+              "label": "银行卡",
+              "icon": ""
+            }
+          ],
+          "selected": 0
+        }
+      ]
+    },
+    {
+      "id": "rounded318-1-3",
+      "frameId": "rounded318-1",
+      "x": 442,
+      "y": 356,
+      "axis": "y",
+      "items": [
+        {
+          "id": "rounded318-1-3-control",
+          "kind": "select",
+          "label": "保存到",
+          "icon": null,
+          "size": 366,
+          "variant": "outlined",
+          "tabs": [
+            {
+              "label": "本地",
+              "icon": ""
+            }
+          ],
+          "selected": 0
+        }
+      ]
+    },
+    {
+      "id": "rounded318-1-4",
+      "frameId": "rounded318-1",
+      "x": 442,
+      "y": 468,
+      "axis": "y",
+      "items": [
+        {
+          "id": "rounded318-1-4-control",
+          "kind": "button",
+          "label": "加密保存",
+          "icon": "check",
+          "size": 366,
+          "variant": "filled"
+        }
+      ]
+    }
+  ],
+  "dynamicColor": false
+}

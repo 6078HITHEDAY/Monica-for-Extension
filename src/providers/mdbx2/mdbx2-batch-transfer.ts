@@ -161,7 +161,7 @@ export function planMdbx2BatchTransfer(
   const targetItems = new Map<string, VaultItem>();
   const copiedGroupIds = new Map<string, string>();
   items.forEach((item, index) => {
-    const effectiveAction = effectiveTransferAction(item, options.action);
+    const effectiveAction = options.action;
     const targetItem = normalizeMdbx2TransferItem(item, {
       action: effectiveAction,
       targetCollectionId: options.targetCollectionId,
@@ -199,14 +199,13 @@ export function planMdbx2BatchTransfer(
 
   const planned = items.map((item): Mdbx2BatchTransferPlanItem => {
     const path = sourceCategoryPath(item, options);
-    const effectiveAction = effectiveTransferAction(item, options.action);
-    const blockedReason = mdbx2PasswordHistoryTransferBlockReason(item, effectiveAction, options.targetProviderId)
+    const effectiveAction = options.action;
+    const blockedReason = (item.kind === 'passkey' && effectiveAction === 'copy' && item.providerRefs.some(ref => ref.providerId === options.targetProviderId)
+      ? '同一 MDBX 数据库不能复制相同的 Passkey 凭据，请选择其他数据库。' : undefined)
+      || mdbx2PasswordHistoryTransferBlockReason(item, effectiveAction, options.targetProviderId)
       || transferBlockReason(item, selectedById, boundLoginsByTotpId);
     if (path.segments.length && !path.complete) warnings.push(`项目「${item.title || item.id}」的来源分类层级不完整，已保留可解析部分。`);
     if (blockedReason) warnings.push(`项目「${item.title || item.id}」未传输：${blockedReason}`);
-    if (!blockedReason && item.kind === "passkey" && options.action === "copy") {
-      warnings.push(`Passkey「${item.title || item.id}」不能创建第二份凭据，将按移动处理。`);
-    }
     const targetPath = options.preserveCategories ? path.segments : [];
     const targetItem = blockedReason ? undefined : targetItems.get(item.id);
     const boundLogin = item.kind === "totp" ? boundLoginsByTotpId.get(item.id)?.[0] : undefined;
@@ -230,10 +229,6 @@ export function planMdbx2BatchTransfer(
     blockedCount: planned.filter((item) => item.blockedReason).length,
     warnings: [...new Set(warnings)]
   };
-}
-
-function effectiveTransferAction(item: VaultItem, requested: Mdbx2BatchTransferAction): Mdbx2BatchTransferAction {
-  return item.kind === "passkey" ? "move" : requested;
 }
 
 /** Native MDBX2 has no Android password-only history carrier. A local overlay is not a transfer. */

@@ -1,0 +1,203 @@
+{
+  "title": "Monica · Passkey 使用状态",
+  "brief": "沿用 Monica 青绿 M3E 主题与系统字体。列表在来源旁放文字状态：浏览器不可用、仅原设备、跨端受限。可导出的本地库凭据不标为仅本地可用。详情用连续圆角列表说明浏览器登录、跨端保存与限制原因，先显示能力再显示技术字段；不展示私钥。12px页边距，24px外圆角，4px相邻圆角，状态同时使用文字和图标。",
+  "frame": "phone",
+  "platform": "web",
+  "paletteKey": "teal",
+  "theme": {
+    "dark": true,
+    "bothModes": true,
+    "contrast": "standard",
+    "shape": "rounded",
+    "font": "system",
+    "emphasized": true,
+    "motion": "standard"
+  },
+  "frames": [
+    {
+      "id": "passkeystatus318",
+      "name": "Passkey",
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 830
+    },
+    {
+      "id": "passkeydetail318",
+      "name": "历史凭据",
+      "x": 430,
+      "y": 0,
+      "w": 390,
+      "h": 830
+    }
+  ],
+  "groups": [
+    {
+      "id": "passkeystatus318-header",
+      "frameId": "passkeystatus318",
+      "x": 12,
+      "y": 12,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "passkeystatus318-bar",
+          "kind": "topAppBar",
+          "label": "Passkey",
+          "icon": "arrow_back",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled"
+        }
+      ]
+    },
+    {
+      "id": "passkeystatus318-content",
+      "frameId": "passkeystatus318",
+      "x": 12,
+      "y": 110,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "passkeystatus318-0-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "kind": "searchBar",
+          "label": "搜索 Passkey",
+          "icon": "search"
+        },
+        {
+          "id": "passkeystatus318-1-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "GitHub · 可跨端保存",
+          "supporting": "Bitwarden · user@example.test",
+          "icon": "key"
+        },
+        {
+          "id": "passkeystatus318-2-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "Android 设备密钥 · 浏览器不可用",
+          "supporting": "仅原设备 · 未包含可导出的私钥",
+          "icon": "smartphone"
+        },
+        {
+          "id": "passkeystatus318-3-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "历史凭据 · 跨端受限",
+          "supporting": "KeePass · 有非零计数历史",
+          "icon": "info"
+        },
+        {
+          "id": "passkeystatus318-4-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "本地 Passkey · 可跨端保存",
+          "supporting": "Monica 本地库 · 尚未连接同步",
+          "icon": "key"
+        }
+      ]
+    },
+    {
+      "id": "passkeydetail318-header",
+      "frameId": "passkeydetail318",
+      "x": 442,
+      "y": 12,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "passkeydetail318-bar",
+          "kind": "topAppBar",
+          "label": "历史凭据",
+          "icon": "arrow_back",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled"
+        }
+      ]
+    },
+    {
+      "id": "passkeydetail318-content",
+      "frameId": "passkeydetail318",
+      "x": 442,
+      "y": 110,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "passkeydetail318-0-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "使用状态 · 跨端受限",
+          "supporting": "密钥可以用于浏览器签名",
+          "icon": "info"
+        },
+        {
+          "id": "passkeydetail318-1-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "浏览器登录",
+          "supporting": "可用；网站仍会校验凭据与账户",
+          "icon": "check"
+        },
+        {
+          "id": "passkeydetail318-2-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "跨端保存 · 计数受限",
+          "supporting": "Android 使用零计数，部分网站可能拒绝登录",
+          "icon": "sync"
+        },
+        {
+          "id": "passkeydetail318-3-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "密码源",
+          "supporting": "KeePass · KDBX / WebDAV",
+          "icon": "database"
+        },
+        {
+          "id": "passkeydetail318-4-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "更多信息",
+          "supporting": "算法、凭据 ID 与原始标志",
+          "icon": "chevron_right"
+        },
+        {
+          "id": "passkeydetail318-5-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "kind": "button",
+          "label": "关闭",
+          "icon": "close"
+        }
+      ]
+    }
+  ],
+  "dynamicColor": false
+}

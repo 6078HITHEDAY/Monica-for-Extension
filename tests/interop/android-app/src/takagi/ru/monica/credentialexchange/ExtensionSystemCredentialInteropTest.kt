@@ -34,6 +34,8 @@ class ExtensionSystemCredentialInteropTest {
         assertEquals(config.getString("inputSha256"), sourceHash)
         val fixture = TransferFixture()
         var targetId: Long? = null
+        val seedOnly = InstrumentationRegistry.getArguments().getString("cmSeedOnly") == "true"
+        var retainedForHostCleanup = false
         try {
             // Never overwrite an existing master password or a user's records.
             assertFalse(fixture.security.isMasterPasswordSet())
@@ -71,6 +73,18 @@ class ExtensionSystemCredentialInteropTest {
                 })
             }
             File(output, "ready.json").writeText(snapshot().toString(2))
+            if (seedOnly) {
+                // Only a verified fresh synthetic install can reach here. The host install
+                // journal removes that whole installation after normal system/UI acceptance.
+                // Do not keep a JUnit process alive throughout manual UI observations.
+                fixture.model.viewModelScope.cancel()
+                fixture.server.shutdown()
+                fixture.vaultKey.clear()
+                retainedForHostCleanup = true
+                File(output, "seed-only.json").writeText(JSONObject()
+                    .put("freshSyntheticInstallation", true).put("hostUninstallRequired", true).toString())
+                return@runBlocking
+            }
             // Test runner observes real UI and signals completion. No signing helpers/reflection here.
             withTimeout(1_200_000) {
                 while (!File(output, "finish").exists()) {
@@ -83,12 +97,14 @@ class ExtensionSystemCredentialInteropTest {
             }
             File(output, "storage-final.json").writeText(snapshot().toString(2))
         } finally {
+            if (!retainedForHostCleanup) {
             try {
                 targetId?.let { id -> fixture.db.passkeyDao().getAllPasskeysSync().filter { it.mdbxDatabaseId == id }
                     .forEach { fixture.passkeys.deletePasskeyByRecordId(it.id) } }
             } finally {
                 fixture.close()
                 File(output, "fixture-cleanup.json").writeText(JSONObject().put("complete", true).toString())
+            }
             }
         }
     }

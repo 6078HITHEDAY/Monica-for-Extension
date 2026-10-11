@@ -12,6 +12,59 @@ const RSA_FIXTURE_TIMEOUT_MS = 15_000;
 const P256_PKCS8 = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgsloK6aKNvj0CZMYdBdSZs+AUAsFy1t66q4tq5SvyeJahRANCAASlCTbHlIcaKQ2lzoEFhtjkLEO++f3cYq6FMYG7eH3BmuLQPz71FAtWq4z+tIb7oequwhUJL3xos1nA8jFqpkDs";
 
 describe("Bitwarden provider", () => {
+  it.each(['update', 'passkey', 'trash', 'restore'] as const)('keeps folder context in the %s acknowledgement for a login and its credentials', async operation => {
+    const folderName = '跨端 / Passkeys', folderId = 'folder-passkeys', changedAt = '2026-10-10T00:00:00.000Z';
+    let raw: Record<string, unknown> = { ...await loginCipher('original', OLD_REVISION, [await fidoCredential('folder-key', 23)]), FolderId: folderId };
+    (raw.Login as Record<string, unknown>).Totp = await encryptBitwardenString('otpauth://totp/Example?secret=JBSWY3DPEHPK3PXP&issuer=Example', KEY);
+    if (operation === 'restore') raw.DeletedDate = OLD_REVISION;
+    const events: string[] = [];
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input), method = init?.method || 'GET';
+      if (new URL(url).pathname === '/api/sync') return json({Profile: {Id: 'user'}, Folders: [{Id: folderId, Name: await encryptBitwardenString(folderName, KEY)}], Ciphers: [raw]});
+      if (method === 'GET' && url.endsWith('/details')) return json(raw);
+      if (method === 'PUT' && url.endsWith('/delete')) { events.push('trash'); raw = {...raw, DeletedDate: changedAt, RevisionDate: changedAt}; return new Response(null, {status: 204}); }
+      if (method === 'PUT' && url.endsWith('/restore')) { events.push('restore'); raw = {...raw, DeletedDate: null, RevisionDate: OLD_REVISION}; return json(raw); }
+      if (method === 'PUT' && url.endsWith('/ciphers/cipher-1')) { events.push('update'); raw = {...JSON.parse(String(init?.body)), id: 'cipher-1', revisionDate: changedAt, creationDate: OLD_REVISION}; return json(raw); }
+      throw new Error(`Unexpected ${method} ${url}`);
+    }) as unknown as typeof fetch;
+    const provider = new BitwardenProvider(fetcher);
+    const initial = (await provider.sync(account(), {localItems: [], now: OLD_REVISION})).items;
+    expect(initial).toHaveLength(3);
+    expect(initial.find(row => row.kind === 'login')?.categoryName).toBe(folderName);
+    const local = initial.map(row => {
+      if (operation === 'restore') return {...row, deletedAt: undefined, updatedAt: changedAt,
+        ...(row.kind === 'login' ? {notes: 'A restored local edit'} : {})};
+      if (operation === 'passkey') return row.kind === 'passkey' ? {...row, signCount: 24, updatedAt: changedAt} : row;
+      if (row.kind !== 'login') return row;
+      return {...row, updatedAt: changedAt, ...(operation === 'trash' ? {deletedAt: changedAt} : {deletedAt: undefined, notes: 'A local edit'})};
+    });
+    const result = await provider.sync(account(), {localItems: local, now: changedAt});
+    expect(result.conflicts).toEqual([]);
+    expect(result.items).toHaveLength(3);
+    for (const row of result.items) {
+      expect(row.categoryName).toBe(folderName);
+      expect(row.providerRefs).toContainEqual(expect.objectContaining({remoteFolderId: folderId}));
+      if (row.kind === 'passkey') expect(row).toMatchObject({privateKeyPkcs8: P256_PKCS8, signCount: operation === 'passkey' ? 24 : 23});
+    }
+    expect(events).toEqual(operation === 'restore' ? ['restore', 'update'] : [operation === 'trash' ? 'trash' : 'update']);
+  });
+
+  it('keeps local wallet layout while accepting changed remote content without a false write', async () => {
+    const raw = { Id: 'card-1', Type: 3, Name: await encryptBitwardenString('Card', KEY), RevisionDate: OLD_REVISION,
+      CreationDate: OLD_REVISION, Card: { CardholderName: await encryptBitwardenString('Holder', KEY), Number: await encryptBitwardenString('4111111111111111', KEY) } };
+    const fetcher = vi.fn(async () => json({ Profile: { Id: 'user' }, Ciphers: [raw] })) as unknown as typeof fetch;
+    const provider = new BitwardenProvider(fetcher);
+    const initial = (await provider.sync(account(), { localItems: [], now: OLD_REVISION })).items[0];
+    if (initial.kind !== 'card') throw new Error('Expected card fixture');
+    const local = { ...initial, editorSectionOrder: ['notes', 'future'] };
+    expect(await bitwardenMutationFingerprint(local)).toBe(await bitwardenMutationFingerprint(initial));
+    raw.Name = await encryptBitwardenString('Remote renamed', KEY);
+    raw.RevisionDate = '2026-10-09T00:00:00.000Z';
+    const result = await provider.sync(account(), { localItems: [local], now: raw.RevisionDate });
+    expect(result.conflicts).toHaveLength(0);
+    expect(result.items[0]).toMatchObject({ id: initial.id, title: 'Remote renamed', editorSectionOrder: ['notes', 'future'] });
+    expect((fetcher as ReturnType<typeof vi.fn>).mock.calls.every(([, init]) => !init?.method || init.method === 'GET')).toBe(true);
+  });
   it('refuses incomplete history before creating even a category folder', async () => {
     const fetcher = vi.fn(async () => { throw new Error('No network action expected'); }) as unknown as typeof fetch;
     const item: LoginItem = { id: 'partial-history', kind: 'login', title: 'History', username: 'test', password: 'current',
@@ -627,6 +680,7 @@ describe("Bitwarden provider", () => {
     let postCount = 0;
     const deleteUrls: string[] = [];
     const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/details')) return json(remote[0]);
       if (String(input).includes("/sync")) return json({ Profile: { Id: "user" }, Ciphers: remote });
       if (init?.method === "POST") {
         postCount += 1;
@@ -637,7 +691,7 @@ describe("Bitwarden provider", () => {
       }
       if (init?.method === "PUT" && String(input).endsWith("/delete")) {
         deleteUrls.push(String(input));
-        remote = remote.map((cipher) => ({ ...cipher, deletedDate: "2026-07-15T04:03:00.000Z" }));
+        remote = remote.map((cipher) => ({ ...cipher, revisionDate: "2026-07-15T04:03:00.000Z", deletedDate: "2026-07-15T04:03:00.000Z" }));
         return new Response(null, { status: 200 });
       }
       throw new Error(`Unexpected ${init?.method} ${String(input)}`);
@@ -666,7 +720,8 @@ describe("Bitwarden provider", () => {
     const deleted = { ...created.items[0], updatedAt: "2026-07-15T04:02:00.000Z", deletedAt: "2026-07-15T04:02:00.000Z" } as LoginItem;
     const afterDelete = await provider.sync(account(), { now: "2026-07-15T04:03:00.000Z", localItems: [deleted] });
     expect(afterDelete.conflicts).toEqual([]);
-    expect(afterDelete.items).toEqual([expect.objectContaining({ id: local.id, deletedAt: deleted.deletedAt })]);
+    expect(afterDelete.items).toEqual([expect.objectContaining({ id: local.id, deletedAt: '2026-07-15T04:03:00.000Z',
+      providerRefs: [expect.objectContaining({ revision: '2026-07-15T04:03:00.000Z' })] })]);
     expect(deleteUrls).toEqual(["https://self.example.com/api/ciphers/created-cipher/delete"]);
   });
 
@@ -868,12 +923,16 @@ describe("Bitwarden provider", () => {
   });
 
   it("never issues Bitwarden's permanent delete for a locally trashed item", async () => {
-    const remote = await loginCipher("remote-secret", OLD_REVISION);
+    const remote: Record<string, unknown> = await loginCipher("remote-secret", OLD_REVISION);
     const methods: string[] = [];
     const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       if (String(input).includes("/sync")) return json({ Profile: { Id: "user" }, Ciphers: [remote] });
       methods.push(`${init?.method} ${new URL(String(input)).pathname}`);
-      if (init?.method === "PUT" && String(input).endsWith("/delete")) return new Response(null, { status: 200 });
+      if (String(input).endsWith('/details')) return json(remote);
+      if (init?.method === "PUT" && String(input).endsWith("/delete")) {
+        remote.DeletedDate = '2026-07-15T07:00:00.000Z'; remote.RevisionDate = '2026-07-15T07:01:00.000Z';
+        return new Response(null, { status: 200 });
+      }
       throw new Error(`Unexpected ${init?.method} ${String(input)}`);
     }) as unknown as typeof fetch;
     const provider = new BitwardenProvider(fetcher);
@@ -902,16 +961,18 @@ describe("Bitwarden provider", () => {
         deletedAt: trashed.deletedAt
       })
     ]);
-    expect(methods).toEqual(["PUT /api/ciphers/cipher-1/delete"]);
+    expect(methods).toEqual(["PUT /api/ciphers/cipher-1/delete", "GET /api/ciphers/cipher-1/details"]);
   });
 
   it("moves every login and Passkey sibling into the local recycle-bin projection together", async () => {
-    const remote = await loginCipher("remote-secret", OLD_REVISION, [await fidoCredential("first", 1), await fidoCredential("second", 2)]);
+    const remote: Record<string, unknown> = await loginCipher("remote-secret", OLD_REVISION, [await fidoCredential("first", 1), await fidoCredential("second", 2)]);
     let deleteCount = 0;
     const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/details')) return json(remote);
       if (String(input).includes("/sync")) return json({ Profile: { Id: "user" }, Ciphers: [remote] });
       if (String(input).endsWith("/delete") && init?.method === "PUT") {
         deleteCount += 1;
+        remote.DeletedDate = '2026-07-15T07:01:00.000Z'; remote.RevisionDate = '2026-07-15T07:02:00.000Z';
         return new Response(null, { status: 200 });
       }
       throw new Error(`Unexpected ${init?.method} ${String(input)}`);

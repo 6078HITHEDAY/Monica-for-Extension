@@ -1,3 +1,4 @@
+import { passkeyKeyMaterialHint } from '../../passkey/private-key-portability';
 import { parseLosslessJson, jsonScalarText } from "../../core/lossless-json";
 import { assertPortablePasswordHistory } from '../../core/password-history';
 import type { ProviderReference, TotpItem, VaultItem } from "../../core/model";
@@ -95,6 +96,7 @@ export function decodeMdbx2Object(
     const portableKey = parsePortablePasskeyPrivateKey(payload.private_key_alias);
     const usable = portablePasskeyKeyMatchesAlgorithm(portableKey, item.algorithm);
     item.privateKeyPkcs8 = usable ? portableKey.pkcs8Base64 : undefined;
+    item.keyMaterialHint = usable ? undefined : passkeyKeyMaterialHint(payload.private_key_alias);
     item.sourceMode = usable ? "browser-local" : "android-metadata-only";
   }
   return { logicalObjectId, payload, item };

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, markRaw, reactive, ref, shallowRef, watch } from "vue";
+import { computed, markRaw, nextTick, reactive, ref, shallowRef, watch } from "vue";
 import type { SecureCustomField, VaultItem, ProviderAccount } from "../core/model";
 import { BLOCK_EDITABLE_KEYS, BASE_CONTENT_ORDER, contentRank, createContentBlock, createWalletContent, editContentBlock, editWalletContent, orderedContentTokens, putContentBlock, putWalletContent, readContentBlocks, readWalletContents, removeContentBlock, moveContentToken, withContentOrder, type ContentBlock, type ContentBlockKind, type StoredContent, type WalletContent, type WalletKind } from "../core/password-content";
 import { monicaItemDataToVaultItem, vaultItemToMonicaItemData } from "../providers/monica-item-data";
@@ -8,10 +8,11 @@ import VaultItemEditor from "./VaultItemEditor.vue";
 import WalletAssetEditor from "./WalletAssetEditor.vue";
 import AttachmentPreview from "./AttachmentPreview.vue";
 import ContentOrderList from "./ContentOrderList.vue";
+import EditorContentSection from "./EditorContentSection.vue";
+import { tr } from "../i18n";
 import type { WalletAsset } from "../core/password-content";
 import { readVerifiedAttachment } from "../manager/attachment-reader";
 import { vaultClient } from "../runtime/client";
-import { materialSelectTag, materialOptionTag } from "../lib/material-controls";
 
 const props = defineProps<{ fields: SecureCustomField[]; providers: ProviderAccount[]; providerId: string; owner?: VaultItem; projectTokens?: string[]; credentialLabels?: Record<string, string> }>();
 const emit = defineEmits<{ update: [fields: SecureCustomField[]] }>();
@@ -61,24 +62,43 @@ function addAsset(wallet: WalletContent, asset: WalletAsset) {
     emit('update', putWalletContent(props.fields, editWalletContent(current, { data, assets: [...current.raw.assets as WalletAsset[], asset] })));
   } catch (cause) { error.value = String(cause); }
 }
+const addOpen = ref(false);
+const icons: Record<string,string> = { API_KEY: 'key', API_TOKEN: 'token', SSH_KEY: 'terminal', GPG_KEY: 'key', QR_CODE: 'qr_code_2', BANK_CARD: 'credit_card', DOCUMENT: 'badge', ADDRESS: 'location_on', NOTE: 'note' };
+async function chooseBlock(kind: string) { addOpen.value = false; await nextTick(); selectedKind.value = kind as ContentBlockKind; openBlock(); }
+async function chooseWallet(kind: WalletKind) { addOpen.value = false; await nextTick(); newWallet(kind); }
+function containKey(event: KeyboardEvent) {
+  event.stopPropagation();
+  if (event.key === 'Enter' && event.target instanceof HTMLInputElement && !event.isComposing) event.preventDefault();
+}
 </script>
 
 <template>
-  <section class="editor-section content-tools" style="order:-1" aria-label="添加和排列内容">
-    <m3e-expansion-panel><span slot="header">内容顺序</span><ContentOrderList :tokens="tokens" :label="tokenLabel" @move="reorder" /></m3e-expansion-panel>
-    <div class="content-add-row"><m3e-form-field variant="filled" v-field-label><label slot="label">添加内容类型</label><component :is="materialSelectTag" @input="selectedKind = ($event.target as HTMLSelectElement).value as ContentBlockKind"><component :is="materialOptionTag" v-for="kind in Object.keys(BLOCK_EDITABLE_KEYS)" :key="kind" :value="kind" :selected.prop="kind === selectedKind">{{ labels[kind] }}</component></component></m3e-form-field><m3e-button type="button" variant="tonal" @click="openBlock()">添加内容</m3e-button></div>
-    <m3e-expansion-panel><span slot="header">添加完整副本</span><div class="content-copy-options"><m3e-button v-for="kind in walletKinds" :key="kind" variant="text" type="button" @click="newWallet(kind)">{{ walletLabels[kind] }}</m3e-button></div><p class="editor-hint">副本独立保存，不会修改原银行卡、证件或笔记。已有卡面与附件引用会完整保留。</p></m3e-expansion-panel>
-    <p v-if="error && !activeBlock" role="alert" class="form-error">{{ error }}</p>
-  </section>
-  <section v-for="block in blocks" :key="block.token" class="editor-section content-entry" :style="{order:contentRank(fields,block.token)}">
-    <h3>{{ block.value ? block.value.title || labels[block.value.kind] : '不可编辑内容' }}</h3><p v-if="!block.value" role="status">{{ block.reason }} 原始分段保持不变。</p><template v-else><p class="editor-hint">{{ labels[block.value.kind] }} · 内容默认隐藏</p><div class="content-add-row"><m3e-button variant="tonal" type="button" @click="openBlock(block.value)">编辑内容</m3e-button><m3e-button variant="text" type="button" @click="removeBlock(block.token)">删除内容</m3e-button></div></template>
-  </section>
-  <section v-for="wallet in wallets" :key="wallet.token" class="editor-section content-entry" :style="{order:Math.max(0,contentRank(fields,wallet.token))}"><h3>{{ wallet.value ? wallet.value.title || walletLabels[wallet.value.kind] : '不可编辑副本' }}</h3><p v-if="!wallet.value">{{ wallet.reason }} 原始数据保持不变。</p><template v-else><p class="editor-hint">{{ walletLabels[wallet.value.kind] }} · {{ wallet.value.assets.length }} 个附件</p><m3e-button variant="tonal" type="button" @click="openWallet(wallet.value)">编辑完整副本</m3e-button><AttachmentPreview v-for="asset in wallet.value.assets" v-if="owner" :key="asset.name" :owner="owner!" :name="asset.name" :expected="asset" :label="asset.displayName"/><m3e-expansion-panel><span slot="header">添加副本附件或卡面</span><WalletAssetEditor :owner="owner" @added="addAsset(wallet.value!, $event)"/></m3e-expansion-panel></template></section>
-  <section v-for="token in tokens.filter(token => !BASE_CONTENT_ORDER.includes(token) && !token.startsWith('BLOCK:') && !credentialLabels?.[token])" :key="token" class="editor-section" :style="{order:contentRank(fields,token)}"><h3>未知内容 {{ token }}</h3><p>排序标记完整保留，不使用空表单覆盖。</p></section>
-  <div v-if="activeBlock" class="modal-backdrop content-sheet-backdrop" @mousedown.self="activeBlock = undefined"><section class="editor-dialog content-sheet" data-nested-dialog role="dialog" aria-modal="true" aria-labelledby="content-sheet-title"><header><h2 id="content-sheet-title">{{ labels[activeBlock.kind] }}</h2><m3e-icon-button type="button" data-dialog-close aria-label="取消内容编辑" @click="activeBlock=undefined"><m3e-icon name="close" /></m3e-icon-button></header><div class="editor-fields"><m3e-form-field v-field-label variant="filled"><label slot="label">内容名称</label><input v-model="blockTitle" autocomplete="off" /></m3e-form-field><m3e-button type="button" variant="text" @click="showSecrets=!showSecrets">{{ showSecrets ? '隐藏敏感内容' : '显示敏感内容' }}</m3e-button><m3e-form-field v-for="key in Object.keys(blockFields)" :key="key" v-field-label variant="filled"><label slot="label">{{ labels[key] || key }}</label><textarea v-model="blockFields[key]" :class="{'concealed-secret': !showSecrets && /^(key|token|privateKey|privateKeyOpenSsh|content)$/.test(key)}" :aria-label="labels[key] || key" rows="3" autocomplete="off" spellcheck="false" /></m3e-form-field><p v-if="activeBlock.kind==='QR_CODE'" class="editor-hint">literal 为普通内容；template 与版本 1 使用 %ACCOUNT%、%PASSWORD% 等字段占位符，查看时临时展开。</p><p v-if="error" role="alert" class="form-error">{{ error }}</p></div><footer><m3e-button type="button" variant="text" @click="activeBlock=undefined">取消</m3e-button><m3e-button type="button" variant="filled" :disabled="busy" @click="saveBlock">保存内容草稿</m3e-button></footer></section></div>
+  <EditorContentSection v-model:open="addOpen" :title="tr('添加内容')" icon="add" :summary="tr('添加内容类型')" :style="{order:10000}">
+    <div class="editor-content-list">
+      <EditorContentSection v-for="kind in Object.keys(BLOCK_EDITABLE_KEYS)" :key="kind" :title="tr(labels[kind])" :icon="icons[kind]" :summary="tr('添加内容')" @activate="chooseBlock(kind)" />
+      <EditorContentSection v-for="kind in walletKinds" :key="kind" :title="tr(walletLabels[kind])" :icon="icons[kind]" :summary="tr('添加完整副本')" @activate="chooseWallet(kind)" />
+    </div>
+    <p class="editor-hint">副本独立保存，不会修改原银行卡、证件或笔记。已有卡面与附件引用会完整保留。</p>
+  </EditorContentSection>
+  <EditorContentSection :title="tr('内容顺序')" icon="swap_vert" :summary="tr('拖动手柄调整顺序，也可使用上下方向键。')" :style="{order:10001}">
+    <ContentOrderList :tokens="tokens" :label="tokenLabel" @move="reorder" />
+  </EditorContentSection>
+  <p v-if="error && !activeBlock" role="alert" class="form-error" style="order:10002">{{ error }}</p>
+  <EditorContentSection v-for="block in blocks" :key="block.token" :style="{order:contentRank(fields,block.token)}"
+    :title="block.value ? block.value.title || tr(labels[block.value.kind]) : tr('不可编辑内容')" :icon="icons[block.value?.kind || ''] || 'info'"
+    :summary="block.value ? tr(labels[block.value.kind]) + ' · ' + tr('内容默认隐藏') : block.reason" :disabled="!block.value" @activate="block.value && openBlock(block.value)">
+    <template v-if="block.value" #actions><m3e-icon-button type="button" :aria-label="tr('删除内容')" @click="removeBlock(block.token)"><m3e-icon name="delete" /></m3e-icon-button></template>
+  </EditorContentSection>
+  <EditorContentSection v-for="wallet in wallets" :key="wallet.token" :style="{order:Math.max(0,contentRank(fields,wallet.token))}"
+    :title="wallet.value ? wallet.value.title || tr(walletLabels[wallet.value.kind]) : tr('不可编辑副本')" :icon="icons[wallet.value?.kind || ''] || 'info'"
+    :summary="wallet.value ? tr(walletLabels[wallet.value.kind]) : wallet.reason" :disabled="!wallet.value">
+    <template v-if="wallet.value">
+      <m3e-button variant="tonal" type="button" @click="openWallet(wallet.value)">{{ tr('编辑完整副本') }}</m3e-button>
+      <AttachmentPreview v-for="asset in wallet.value.assets" v-if="owner" :key="asset.name" :owner="owner!" :name="asset.name" :expected="asset" :label="asset.displayName"/>
+      <h3>{{ tr('添加副本附件或卡面') }}</h3><WalletAssetEditor :owner="owner" @added="addAsset(wallet.value!, $event)"/>
+    </template>
+  </EditorContentSection>
+  <EditorContentSection v-for="token in tokens.filter(token => !BASE_CONTENT_ORDER.includes(token) && !token.startsWith('BLOCK:') && !credentialLabels?.[token])" :key="token" :style="{order:contentRank(fields,token)}" :title="tr('未知内容')" icon="info" :summary="token" disabled />
+  <m3e-dialog v-if="activeBlock" v-material-dialog open dismissible class="material-dialog material-editor-dialog editor-content-dialog" :close-label="tr('取消内容编辑')" @keydown="containKey" @closed.self="activeBlock=undefined"><h2 slot="header">{{ tr(labels[activeBlock.kind]) }}</h2><div class="editor-fields structured-editor editor-content-fields"><m3e-form-field v-field-label variant="filled"><label slot="label">内容名称</label><input v-model="blockTitle" autocomplete="off" /></m3e-form-field><m3e-button type="button" variant="text" @click="showSecrets=!showSecrets">{{ showSecrets ? '隐藏敏感内容' : '显示敏感内容' }}</m3e-button><m3e-form-field v-for="key in Object.keys(blockFields)" :key="key" v-field-label variant="filled"><label slot="label">{{ labels[key] || key }}</label><textarea v-model="blockFields[key]" :class="{'concealed-secret': !showSecrets && /^(key|token|privateKey|privateKeyOpenSsh|content)$/.test(key)}" :aria-label="labels[key] || key" rows="3" autocomplete="off" spellcheck="false" /></m3e-form-field><p v-if="activeBlock.kind==='QR_CODE'" class="editor-hint">literal 为普通内容；template 与版本 1 使用 %ACCOUNT%、%PASSWORD% 等字段占位符，查看时临时展开。</p><p v-if="error" role="alert" class="form-error">{{ error }}</p></div><footer slot="actions" end><m3e-button type="button" variant="text" @click="activeBlock=undefined">取消</m3e-button><m3e-button type="button" variant="filled" :disabled="busy" @click="saveBlock">保存内容草稿</m3e-button></footer></m3e-dialog>
   <VaultItemEditor v-if="activeWallet && walletItem" :key="activeWallet.id" nested :item="walletItem" :initial-kind="walletItem.kind as any" :providers="providers" :save-item="saveWallet" @cancel="activeWallet=undefined;walletItem=undefined" />
 </template>
-
-<style scoped>
-.content-add-row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.content-add-row>m3e-form-field{flex:1;min-width:180px}.content-copy-options{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}.content-sheet-backdrop{z-index:1200}.content-sheet{max-height:90dvh;width:min(640px,calc(100vw - 24px));display:flex;flex-direction:column}.content-sheet header,.content-sheet footer{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:16px}.content-sheet .editor-fields{overflow:auto;display:grid;gap:16px;padding:16px}.content-sheet h2{margin:0}.content-entry h3{overflow-wrap:anywhere}
-</style>

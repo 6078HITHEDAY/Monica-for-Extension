@@ -81,6 +81,20 @@ it('enables remote KeePass member removal while retaining the local-file durabil
   expect(supportsProjectMemberRemoval(form, originals[0], [provider])).toBe(true);
   provider.config.sourceMode = 'onedrive'; expect(supportsProjectMemberRemoval(form, originals[0], [provider])).toBe(true);
   provider.config.sourceMode = 'local-file'; expect(supportsProjectMemberRemoval(form, originals[0], [provider])).toBe(false);
+  provider.config.localFileSourceSha256 = 'a'.repeat(64); expect(supportsProjectMemberRemoval(form, originals[0], [provider])).toBe(true);
+  provider.config.localFileSourceSha256 = 'invalid'; expect(supportsProjectMemberRemoval(form, originals[0], [provider])).toBe(false);
+});
+
+it('enables one Bitwarden account and rejects an unavailable or mixed source', () => {
+  const { form, originals } = fixture();
+  form.providerId = 'bw';
+  for (const row of originals) row.providerRefs = [{ providerId: 'bw' }];
+  for (const member of form.groupMembers) if (member.original) member.original.providerRefs = [{ providerId: 'bw' }];
+  const provider: ProviderAccount = { id: 'bw', kind: 'bitwarden', name: 'Synthetic', enabled: true, isDefaultSaveTarget: false, config: {} };
+  expect(supportsProjectMemberRemoval(form, originals[0], [provider])).toBe(true);
+  expect(supportsProjectMemberRemoval(form, originals[0], [{ ...provider, enabled: false }])).toBe(false);
+  form.groupMembers[0].original!.providerRefs.push({providerId: 'another'});
+  expect(supportsProjectMemberRemoval(form, originals[0], [provider, { ...provider, id: 'another' }])).toBe(false);
 });
 
 it('drops only unsaved rows, retains rich shared content and keeps original IDs/snapshots', () => {

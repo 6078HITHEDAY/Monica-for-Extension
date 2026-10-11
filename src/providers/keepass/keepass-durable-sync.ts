@@ -1,4 +1,4 @@
-import { isRemoteKeePassSource } from "./keepass-source";
+import { isRemoteKeePassSource, hasLocalKeePassWorkingCopy } from "./keepass-source";
 import type { PendingMutation, ProviderAccount, ProviderConflictInput, ProviderSourceRecord, VaultItem, VaultState } from "../../core/model";
 import type { ProviderAcknowledgedMutation, ProviderRequestedMutation, ProviderSyncGuard, ProviderSyncResult } from "../../core/provider";
 import { KeePassProvider } from "./keepass-provider";
@@ -27,19 +27,21 @@ export interface KeePassDurableSyncVault {
 }
 
 export type KeePassAccountConfigWriter = (account: ProviderAccount, config: Record<string, unknown>) => Promise<ProviderAccount>;
+export type KeePassDurableSyncPersistence = Pick<KeePassRemoteSessionService,
+  'publishWorkingCopy' | 'persistWorkingCopy' | 'readAnyDurableReceipt' | 'deleteDurableReceipt'>;
 
 export class KeePassDurableSyncCoordinator {
   private readonly projectedWorkingCopies = new Map<string, string>();
   clearProjectionCache(): void { this.projectedWorkingCopies.clear(); }
   constructor(
     private readonly provider: KeePassProvider,
-    private readonly remoteSessions: KeePassRemoteSessionService,
+    private readonly remoteSessions: KeePassDurableSyncPersistence,
     private readonly vault: KeePassDurableSyncVault,
     private readonly writeAccountConfig: KeePassAccountConfigWriter
   ) {}
 
   async synchronize(account: ProviderAccount, signal?: AbortSignal, options: { checkOnly?: boolean } = {}): Promise<ProviderSyncResult> {
-    if (account.kind !== "keepass" || !isRemoteKeePassSource(account.config.sourceMode)) {
+    if (account.kind !== "keepass" || !(isRemoteKeePassSource(account.config.sourceMode) || hasLocalKeePassWorkingCopy(account.config))) {
       throw new KeePassRemoteSessionError("remote-provider-invalid", "所选密码源不是远端 KeePass 数据库。");
     }
     await this.recoverPending(account, signal);

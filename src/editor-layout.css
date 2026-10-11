@@ -17,8 +17,15 @@
 #root .editor-extras > h3 { margin-bottom: 12px; }
 #root .editor-extras > .field { margin: 16px 0; }
 #root .editor-extras > .favorite-row { min-height: 44px; margin-bottom: 8px; }
+#root .editor-content-list { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+#root .editor-extras.editor-content-list { padding: 0; background: transparent; }
+#root .editor-extras.editor-content-list > h3 { padding: 8px 4px; margin: 0; }
+#root .editor-content-fields { padding: 0; gap: 16px; }
+#root .editor-content-fields .editor-section { padding: 0; background: transparent; }
 #root .structured-editor .custom-field-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) auto 44px; gap: 8px; }
 #root .structured-editor .custom-field-row > * { min-width: 0; }
+#root .wallet-content-fields .custom-field-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) minmax(100px, .8fr); }
+#root .wallet-content-fields .wallet-custom-actions { display: flex; justify-content: flex-end; grid-column: 1 / -1; }
 #root .editor-footer-status { flex: 1 0 100%; margin: 0 0 4px; }
 #root .concealed-secret { -webkit-text-security: disc; }
 #root .special-transfer img { max-width: 100%; justify-self: start; }

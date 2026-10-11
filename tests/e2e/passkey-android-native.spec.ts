@@ -8,6 +8,7 @@ import type { PasskeyItem, ProviderAccount } from "../../src/core/model";
 import { decodeMdbx2Object } from "../../src/providers/mdbx2/mdbx2-item-codec";
 
 const fixture = process.env.MONICA_317_PASSKEY_ANDROID_FIXTURE;
+const returning = process.env.MONICA_PASSKEY_NATIVE_PHASE === 'return';
 const rp = "passkey-interop.example.test";
 const password = "Synthetic Edge Android Passkey password";
 const databasePassword = "Synthetic transfer fixture password";
@@ -60,7 +61,7 @@ function verifyAssertion(assertion: any, record: Expected) {
     independentSignatureVerified: true, counterAcceptedForRecordedHistory: previousCount === 0 && count === 0 || count > previousCount };
 }
 
-test("actual Android MDBX Passkeys authenticate in Edge and RSA registration persists through Native Host and restart", async ({}, info) => {
+test(`actual Android MDBX Passkeys authenticate in Edge through Native Host and restart: ${returning ? 'Android return' : 'RSA creation'}`, async ({}, info) => {
   test.skip(!fixture, "Explicit actual Android instrumentation artifact directory required");
   test.setTimeout(240_000);
   const input = path.resolve(fixture!);
@@ -68,13 +69,14 @@ test("actual Android MDBX Passkeys authenticate in Edge and RSA registration per
   expect(proof.status).toBe("passed");
   for (const flag of ["androidSourcesUnchanged", "testSourcesUnchanged", "installedApplicationUnchanged", "installedTestApkUnchanged", "deviceBootUnchanged"]) expect(proof[flag], flag).toBe(true);
   for (const file of proof.outputs) expect(hash(await readFile(path.join(input, file.name)))).toBe(file.sha256);
-  const returnEvidence = JSON.parse(await readFile(path.join(input, "signature-return-evidence.json"), "utf8"));
+  const returnEvidence = JSON.parse(await readFile(path.join(input, returning ? "edge-return-evidence.json" : "signature-return-evidence.json"), "utf8"));
   expect(returnEvidence.status).toBe("passed");
   const source = path.join(input, "android-return-passkeys.mdbx");
   const sourceHash = hash(await readFile(source));
-  expect(sourceHash).toBe(returnEvidence.inputSha256);
+  expect(sourceHash).toBe(returning ? returnEvidence.androidReturnSha256 : returnEvidence.inputSha256);
   const expected: Expected[] = JSON.parse(await readFile(path.join(input, "extension-passkey-expected.json"), "utf8"));
-  expect(expected).toHaveLength(4);
+  expect(expected).toHaveLength(returning ? 5 : 4);
+  const initialCount = expected.length;
   const appData = info.outputPath("host-appdata"); await mkdir(appData, { recursive: true });
   const profile = info.outputPath("passkey-native");
   const options = { locale: "zh-CN", viewport: { width: 1280, height: 860 }, env: { ...process.env, LOCALAPPDATA: appData },
@@ -110,10 +112,14 @@ test("actual Android MDBX Passkeys authenticate in Edge and RSA registration per
     provider = (await send(manager, { type: "PROVIDER_LIST" }) as ProviderAccount[]).find(row => row.name === sourceName)!;
     expect(provider).toMatchObject({ kind: "mdbx2", isDefaultSaveTarget: true });
     const list = async () => await send(manager, { type: "VAULT_LIST_ITEMS" }) as PasskeyItem[];
-    await expect.poll(async () => (await list()).length).toBe(4);
+    await expect.poll(async () => (await list()).length).toBe(initialCount);
     for (const record of expected) {
       const item = (await list()).find(row => row.credentialId === record.credentialId)!;
-      expect(item).toMatchObject({ kind: "passkey", algorithm: record.algorithm, signCount: record.signCount, backupEligible: record.backupEligible, backupState: record.backupState, sourceMode: "browser-local" });
+      expect(item).toMatchObject({ kind: "passkey", algorithm: record.algorithm, signCount: record.signCount, sourceMode: "browser-local" });
+      // Newly created keys can omit the default true flags in their native record.
+      // Match the authenticator's effective defaults; explicit false still must survive.
+      expect(item.backupEligible !== false).toBe(record.backupEligible);
+      expect(item.backupEligible !== false && item.backupState !== false).toBe(record.backupState);
       expect(createHash("sha256").update(Buffer.from(item.privateKeyPkcs8!, "base64")).digest("base64")).toBe(record.keyMaterialSha256);
       expect(item.providerRefs.map(ref => ref.providerId)).toEqual([provider.id]);
     }
@@ -142,6 +148,7 @@ test("actual Android MDBX Passkeys authenticate in Edge and RSA registration per
     expect((await list()).map(row => [row.id, row.useCount])).toEqual(beforeCancel);
     evidence.discoveryAndCancel = true;
 
+    if (!returning) {
     await website.locator("#create").click(); await approve(context, website, "create", info.outputPath("mdbx-rsa-registration.png"));
     await expect(website.locator("#result")).toHaveText("registered");
     const registration = await website.evaluate(() => (window as any).registration);
@@ -171,6 +178,7 @@ test("actual Android MDBX Passkeys authenticate in Edge and RSA registration per
     expect(await list()).toHaveLength(5);
     await send(manager, { type: "PROVIDER_SYNC", providerId: provider.id });
     evidence.createdCredentialId = created.credentialId;
+    }
 
     await context.close(); context = await launchEdgeContext(profile, options); watch();
     const restartedWorker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");

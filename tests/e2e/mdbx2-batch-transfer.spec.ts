@@ -1,5 +1,6 @@
 import { dialogContent } from "./fixtures/material";
-import { chromium, expect, test, type BrowserContext, type Locator } from "@playwright/test";
+import { expect, test, type BrowserContext, type Locator } from "@playwright/test";
+import { launchEdgeContext } from './fixtures/edge';
 import path from "node:path";
 
 const OPERATION_ID = "66666666-6666-4666-8666-666666666666";
@@ -33,8 +34,7 @@ test("MDBX2 batch transfer provides safe M3E planning progress confirmation and 
   const extensionPath = path.resolve("dist");
   let context: BrowserContext | undefined;
   try {
-    context = await chromium.launchPersistentContext(testInfo.outputPath("mdbx2-batch-transfer-profile"), {
-      channel: "chromium",
+    context = await launchEdgeContext(testInfo.outputPath("mdbx2-batch-transfer-profile"), {
       headless: true, locale: "zh-CN",
       colorScheme: "dark",
       reducedMotion: "reduce",
@@ -170,13 +170,13 @@ test("MDBX2 batch transfer provides safe M3E planning progress confirmation and 
     const planButton = dialog.getByRole("button", { name: "检查并生成计划" });
     expect((await planButton.boundingBox())?.height).toBeGreaterThanOrEqual(44);
     await planButton.click();
-    await expect(dialog.getByRole("heading", { name: "兼容性计划" })).toBeVisible();
+    await expect(dialog.getByRole("heading", { name: "传输预览" })).toBeVisible();
     await expect(dialog.getByText("2 个可传输，1 个被阻断", { exact: true })).toBeVisible();
     await expect(dialog.getByText(/Android 元数据型 Passkey 不包含浏览器可用私钥/)).toBeVisible();
 
     const moveConfirmation = dialog.getByRole("checkbox", { name: /我确认执行移动/ });
     await moveConfirmation.check();
-    await dialog.getByRole("button", { name: "确认并移动" }).click();
+    await dialog.getByRole("button", { name: "跳过受限项并继续" }).click();
     await expect(dialog.getByRole("heading", { name: "正在传输" })).toBeVisible();
     await expect(dialog.locator("progress")).toBeVisible();
     await expect(dialog.getByText("1 个成功 · 1 个阻断 · 1 个失败", { exact: true })).toBeVisible();

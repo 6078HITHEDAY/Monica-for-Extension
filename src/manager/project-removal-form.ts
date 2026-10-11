@@ -4,7 +4,7 @@ import { reconcileProjectCredentialEdits } from '../core/project-credential-edit
 import { planPasswordProjectRemoval } from '../core/password-project-removal';
 import type { LoginForm } from './login-form';
 import { projectCredentialFormGroups } from './project-credential-form';
-import { isRemoteKeePassSource } from '../providers/keepass/keepass-source';
+import { isRemoteKeePassSource, hasLocalKeePassWorkingCopy } from '../providers/keepass/keepass-source';
 
 export function projectRemovalRows(form: LoginForm) {
   const selected = new Set(form.removedPasswordIds ?? []);
@@ -32,7 +32,8 @@ export function supportsProjectMemberRemoval(form: LoginForm, owner: LoginItem |
   const refs = [owner, ...form.groupMembers.map(row => row.original)].flatMap(row => row?.providerRefs ?? []);
   const ids = new Set([...refs.map(ref => ref.providerId), ...(form.providerId ? [form.providerId] : [])]);
   const accounts = [...ids].map(id => providers.find(p => p.id === id));
-  return accounts.every(p => p?.enabled && (['local', 'mdbx2'].includes(p.kind) || p.kind === 'keepass' && isRemoteKeePassSource(p.config.sourceMode)))
+  return accounts.every(p => p?.enabled && (['local', 'mdbx2', 'bitwarden'].includes(p.kind) || p.kind === 'keepass' &&
+    (isRemoteKeePassSource(p.config.sourceMode) || hasLocalKeePassWorkingCopy(p.config))))
     && accounts.filter(p => p?.kind !== 'local').length <= 1;
 }
 

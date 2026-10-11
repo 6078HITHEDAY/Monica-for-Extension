@@ -404,6 +404,17 @@ export class BitwardenClient {
     return this.authorizedJson(session, "/ciphers", { method: "POST", headers: jsonHeaders(), body: JSON.stringify(payload), signal }, "创建 Bitwarden 项目失败");
   }
 
+  /** A persisted preservation intent must reconcile unknown creation results
+   * before creating again; transport retries cannot make that decision. */
+  createCipherOnce(session: BitwardenSessionConfig, payload: Record<string, unknown>, signal?: AbortSignal): Promise<{ session: BitwardenSessionConfig; payload: Record<string, unknown> }> {
+    return this.authorizedRequest(session, '/ciphers', { method: 'POST', headers: jsonHeaders(), body: JSON.stringify(payload), signal },
+      '创建 Bitwarden 保留副本失败', async (response, requestSignal) => {
+        const result = await this.responseJson(response, this.limits().maxVaultResponseBytes, 'Bitwarden 创建响应', requestSignal);
+        if (!response.ok) throw bitwardenHttpError('创建 Bitwarden 保留副本失败', response, result);
+        return result;
+      }, false);
+  }
+
   updateCipher(session: BitwardenSessionConfig, cipherId: string, payload: Record<string, unknown>, signal?: AbortSignal): Promise<{ session: BitwardenSessionConfig; payload: Record<string, unknown> }> {
     return this.authorizedJson(session, `/ciphers/${encodeURIComponent(cipherId)}`, { method: "PUT", headers: jsonHeaders(), body: JSON.stringify(payload), signal }, "更新 Bitwarden 项目失败");
   }
@@ -432,11 +443,13 @@ export class BitwardenClient {
    */
   async softDeleteCipher(session: BitwardenSessionConfig, cipherId: string, signal?: AbortSignal): Promise<BitwardenSessionConfig> {
     const active = session.expiresAt <= Date.now() + 60_000 ? await this.refresh(session, signal) : session;
+    // Replaying after a lost response could delete a Cipher another device
+    // has already restored. The durable coordinator reconciles the next read.
     await this.request(`${active.apiUrl}/ciphers/${encodeURIComponent(cipherId)}/delete`, {
       method: "PUT",
       headers: authorizedHeaders(active.accessToken),
       signal
-    }, "Bitwarden 移入回收站", true, async (response, requestSignal) => {
+    }, "Bitwarden 移入回收站", false, async (response, requestSignal) => {
       if (!response.ok) throw bitwardenHttpError("将 Bitwarden 项目移入回收站失败", response, await this.responseJson(response, this.limits().maxAuthResponseBytes, "Bitwarden 回收站响应", requestSignal));
     });
     return active;
@@ -444,6 +457,19 @@ export class BitwardenClient {
 
   restoreCipher(session: BitwardenSessionConfig, cipherId: string, signal?: AbortSignal): Promise<{ session: BitwardenSessionConfig; payload: Record<string, unknown> }> {
     return this.authorizedJson(session, `/ciphers/${encodeURIComponent(cipherId)}/restore`, { method: "PUT", headers: jsonHeaders(), signal }, "恢复 Bitwarden 项目失败");
+  }
+
+  /** Compensation has its own durable receipt. An ambiguous restore must be
+   * read back before any further action, not replayed over another device's delete.
+   */
+  restoreCipherOnce(session: BitwardenSessionConfig, cipherId: string, signal?: AbortSignal): Promise<{ session: BitwardenSessionConfig; payload: Record<string, unknown> }> {
+    assertPathId(cipherId, 'Cipher');
+    return this.authorizedRequest(session, `/ciphers/${encodeURIComponent(cipherId)}/restore`, { method: 'PUT', headers: jsonHeaders(), signal },
+      '恢复 Bitwarden 项目失败', async (response, requestSignal) => {
+        const payload = await this.responseJson(response, this.limits().maxVaultResponseBytes, 'Bitwarden 恢复响应', requestSignal);
+        if (!response.ok) throw bitwardenHttpError('恢复 Bitwarden 项目失败', response, payload);
+        return payload;
+      }, false);
   }
 
   async attachmentDownloadInfo(
@@ -781,7 +807,8 @@ export class BitwardenClient {
     path: string,
     init: RequestInit,
     errorPrefix: string,
-    consume: ProviderResponseConsumer<T>
+    consume: ProviderResponseConsumer<T>,
+    idempotent?: boolean
   ): Promise<{ session: BitwardenSessionConfig; payload: T }> {
     let active = session.expiresAt <= Date.now() + 60_000 ? await this.refresh(session, init.signal || undefined) : session;
     const execute = async (current: BitwardenSessionConfig): Promise<T> => {
@@ -790,7 +817,7 @@ export class BitwardenClient {
       return this.request(`${current.apiUrl}${path}`, {
         ...init,
         headers
-      }, errorPrefix, undefined, consume);
+      }, errorPrefix, idempotent, consume);
     };
     try {
       return { session: active, payload: await execute(active) };

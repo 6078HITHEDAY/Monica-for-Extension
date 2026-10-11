@@ -6,6 +6,22 @@ const EMAIL = "alice@example.com";
 const PASSWORD = "correct horse battery staple";
 
 describe("Bitwarden auth client", () => {
+  it('does not replay a journaled Passkey copy creation after response loss', async () => {
+    const fetcher = vi.fn(async () => { throw new TypeError('Create response lost after commit'); });
+    await expect(new BitwardenClient(fetcher, fastTransport()).createCipherOnce(activeSession(), { type: 1, login: { fido2Credentials: [] } })).rejects.toThrow();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it('does not replay a trash request after network response loss', async () => {
+    const fetcher = vi.fn(async () => { throw new TypeError('Response lost after commit'); });
+    const client = new BitwardenClient(fetcher, fastTransport());
+    await expect(client.softDeleteCipher(activeSession(), 'cipher-1')).rejects.toThrow();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it('does not replay a journaled compensation restore after network response loss', async () => {
+    const fetcher = vi.fn(async () => { throw new TypeError('Restore response lost after commit'); });
+    await expect(new BitwardenClient(fetcher, fastTransport()).restoreCipherOnce(activeSession(), 'cipher-1')).rejects.toThrow();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
   it("maps official US/EU and self-hosted URLs without cross-origin discovery", () => {
     expect(inferBitwardenServerUrls("https://vault.bitwarden.com")).toEqual({ vault: "https://vault.bitwarden.com", api: "https://api.bitwarden.com", identity: "https://identity.bitwarden.com" });
     expect(inferBitwardenServerUrls("vault.bitwarden.eu")).toEqual({ vault: "https://vault.bitwarden.eu", api: "https://api.bitwarden.eu", identity: "https://identity.bitwarden.eu" });

@@ -14,6 +14,16 @@ const REVISION = "2026-07-15T03:00:00.000Z";
 const P256_PKCS8 = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgsloK6aKNvj0CZMYdBdSZs+AUAsFy1t66q4tq5SvyeJahRANCAASlCTbHlIcaKQ2lzoEFhtjkLEO++f3cYq6FMYG7eH3BmuLQPz71FAtWq4z+tIb7oequwhUJL3xos1nA8jFqpkDs";
 
 describe("Bitwarden Cipher codec", () => {
+  it.each(['deletedDate', 'archivedDate'] as const)('projects %s onto the login authenticator and removes the flag after restoration', async flag => {
+    const raw = { id: 'otp-lifecycle', type: 1, name: await encryptBitwardenString('OTP lifecycle', KEY), revisionDate: REVISION,
+      [flag]: REVISION, login: { totp: await encryptBitwardenString('otpauth://hotp/Synthetic?secret=JBSWY3DPEHPK3PXP&counter=17', KEY) } };
+    const property = flag === 'deletedDate' ? 'deletedAt' : 'archivedAt';
+    const changed = (await decodeBitwardenCipher(raw, 'bw', KEY)).items;
+    expect(changed.find(row => row.kind === 'totp')).toMatchObject({ [property]: REVISION, counter: 17 });
+    const restored = (await decodeBitwardenCipher({ ...raw, [flag]: null }, 'bw', KEY)).items;
+    expect(restored.find(row => row.kind === 'totp')?.[property]).toBeUndefined();
+  });
+
   it("maps login, TOTP, custom fields, and FIDO2 credentials", async () => {
     const enc = (value: string) => encryptBitwardenString(value, KEY);
     const raw = {

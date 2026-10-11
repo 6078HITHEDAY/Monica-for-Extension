@@ -105,10 +105,11 @@ test("editing an Android legacy binding preserves its selection and an explicit 
   await expect(detail.locator(".totp-code-cell")).toBeVisible();
   await detail.getByRole("button", { name: "编辑", exact: true }).click();
   const editor = dialogContent(manager, { name: "编辑密码", exact: true });
+  await editor.getByRole("button", { name: "两步验证", exact: true }).click();
   await expect(editor.getByRole("combobox", { name: "绑定独立验证器", exact: true })).toHaveJSProperty("value", authenticator.id);
   await chooseOption(editor.getByRole("combobox", { name: "绑定独立验证器", exact: true }), "");
   await expect(editor.getByLabel("内嵌验证码密钥", { exact: true })).toBeVisible();
-  await editor.getByRole("button", { name: /^两步验证/ }).click();
+  await manager.locator('.editor-content-dialog').getByRole("button", { name: "完成", exact: true }).click();
   await expect(editor).toBeVisible();
   await expect(editor.getByLabel("名称 *", { exact: true })).toHaveValue(login.title);
   await editor.getByRole("button", { name: "加密保存", exact: true }).click();
@@ -148,7 +149,10 @@ test("a linked authenticator takes priority and fits narrow translated details",
       range.selectNodeContents(el);
       return range.getClientRects().length;
     }), locale).toBe(1);
-    expect(await manager.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), locale).toBe(true);
+    const width = await manager.evaluate(() => ({ width: document.documentElement.clientWidth, scroll: document.documentElement.scrollWidth,
+      overflow: [...document.querySelectorAll('*')].filter(node => node.getBoundingClientRect().right > document.documentElement.clientWidth + 1)
+        .slice(0, 12).map(node => ({ tag: node.tagName, class: node.className, right: node.getBoundingClientRect().right })) }));
+    expect(width.scroll <= width.width, `${locale}: ${JSON.stringify(width)}`).toBe(true);
   }
   await manager.evaluate(() => { document.documentElement.style.fontSize = "100%"; return chrome.storage.local.set({ "monica.locale": "zh-CN" }); });
   await manager.setViewportSize({ width: 390, height: 844 });

@@ -59,7 +59,8 @@ body,
 #root {
   width: 100%;
   max-width: 100%;
-  min-width: 320px;
+  /* Native modal scrollbars can leave less than 320px in a 320px viewport. */
+  min-width: 0;
   min-height: 100vh;
 }
 
@@ -633,99 +634,7 @@ main {
   gap: 12px;
 }
 
-.settings-page {
-  grid-template-columns: minmax(0, 900px);
-  max-width: 920px;
-}
-
-.settings-page > m3e-card {
-  width: 100%;
-  --m3e-card-padding: 0;
-}
-
-.settings-page > .settings-list-card {
-  --m3e-card-padding: 0;
-}
-
-.settings-page > .windows-hello-card {
-  --m3e-card-padding: 0;
-}
-
-.settings-page .settings-disclosure-content {
-  padding: 16px;
-}
-
-.settings-page .settings-entry-icon {
-  grid-column: 1;
-  grid-row: 1;
-  width: 48px !important;
-  min-width: 48px;
-  max-width: 48px;
-  height: 48px !important;
-  min-height: 48px;
-  max-height: 48px;
-  aspect-ratio: 1;
-  box-sizing: border-box;
-  display: grid;
-  place-items: center;
-  border-radius: var(--app-shape-card);
-  color: var(--md-sys-color-on-primary-container, var(--app-text));
-  background: var(--md-sys-color-primary-container, var(--app-selected));
-}
-
-.settings-page .settings-entry-icon m3e-icon,
-.settings-page .settings-entry-chevron {
-  --m3e-icon-size: 24px;
-}
-
-.settings-page .settings-entry-icon m3e-icon {
-  display: grid;
-  width: 24px;
-  height: 24px;
-  place-items: center;
-  line-height: 1;
-  font-size: 24px;
-}
-
-.settings-page .settings-entry-chevron {
-  grid-column: 3;
-  grid-row: 1;
-}
-
-.settings-disclosure { min-width: 0; }
-.settings-page .settings-entry-chevron { --m3e-icon-size: 24px; }
-.settings-disclosure-content { display: grid; gap: 12px; padding: 16px 4px 4px; }
-.settings-modal { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 16px; background: rgb(0 0 0 / 48%); }
-.settings-modal-panel { width: min(520px, 100%); max-height: calc(100vh - 32px); overflow: auto; border: 1px solid var(--md-sys-color-outline-variant, var(--app-outline)); border-radius: 16px; color: var(--md-sys-color-on-surface, var(--app-text)); background: var(--md-sys-color-surface-container, var(--app-surface)); box-shadow: 0 24px 48px rgb(0 0 0 / 32%); }
-.settings-modal-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 20px 20px 12px; }
-.settings-modal-header h2, .settings-modal-header p { margin: 0; }
-.settings-modal-header p { margin-top: 4px; color: var(--md-sys-color-on-surface-variant, var(--app-muted)); }
-.settings-modal-close { width: 44px; height: 44px; display: grid; place-items: center; border: 0; border-radius: 50%; color: inherit; background: transparent; cursor: pointer; }
-.settings-modal-close:hover { background: var(--md-sys-color-secondary-container, var(--app-selected)); }
-.settings-modal-close m3e-icon { --m3e-icon-size: 20px; }
-.settings-modal-content { display: grid; gap: 12px; padding: 16px 20px 20px; }
-
-/* Settings follows the compact WebUI list rhythm instead of dashboard sizing. */
-.settings-main .page-heading {
-  min-height: 88px;
-  padding: 18px 0 14px;
-}
-
-.settings-main .page-heading h1 {
-  font-size: 2.15rem;
-}
-
-.settings-main .page-heading p {
-  font-size: .82rem;
-}
-
-.settings-main .settings-grid {
-  gap: 8px;
-}
-
-.settings-main .settings-page > m3e-card {
-  --m3e-card-shape: 8px;
-}
+#root .settings-main .page-appbar { min-height: 0; padding-block: 0; }
 
 .metric-card {
   --m3e-filled-card-container-color: color-mix(in srgb, var(--md-sys-color-tertiary-container, var(--app-selected)) 36%, var(--md-sys-color-surface-container, var(--app-surface)));

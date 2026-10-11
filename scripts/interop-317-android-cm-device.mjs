@@ -111,6 +111,7 @@ if (stage === 'install') {
     repairBatch ? 'takagi.ru.monica.credentialexchange.ExtensionPasskeyRepairAcceptanceTest#roundtripLegacyBitwardenAndSeedSystem'
       : backendBatch ? 'takagi.ru.monica.credentialexchange.ExtensionSystemBackendCredentialInteropTest#seedBackendKeysForSystemCredentialManager'
       : 'takagi.ru.monica.credentialexchange.ExtensionSystemCredentialInteropTest#importedKeysThroughSystemCredentialManager',
+    ...(process.env.MONICA_CM_SEED_ONLY === '1' ? ['-e', 'cmSeedOnly', 'true'] : []),
     'takagi.ru.monica.test/androidx.test.runner.AndroidJUnitRunner']);
   await writeFile(join(out, 'instrumentation.log'), result);
   console.log(result.toString());
@@ -179,11 +180,17 @@ if (stage === 'install') {
   const db = new DatabaseSync(join(destination, 'password_database'), { readOnly: true });
   const integrity = db.prepare('PRAGMA integrity_check').all();
   const backendColumns = backendBatch || repairBatch ? ',keepass_database_id,bitwarden_vault_id,bitwarden_cipher_id' : '';
-  const rows = db.prepare(`SELECT id,credential_id,rp_id,user_id,user_name,public_key_algorithm,sign_count,use_count,is_backed_up${backendColumns} FROM passkeys ORDER BY id`).all();
+  const backupColumns = process.env.MONICA_CM_BACKUP_FLAGS === '1' ? ',backup_eligible,backup_state' : '';
+  const schemaVersion = db.prepare('PRAGMA user_version').get().user_version;
+  const rows = db.prepare(`SELECT id,credential_id,rp_id,user_id,user_name,public_key_algorithm,sign_count,use_count,is_backed_up${backendColumns}${backupColumns} FROM passkeys ORDER BY id`).all();
+  if (process.env.MONICA_CM_KEY_HASHES === '1') {
+    const keys = db.prepare('SELECT id,private_key_alias FROM passkeys ORDER BY id').all();
+    for (const row of rows) row.protectedKeyReferenceSha256 = hash(Buffer.from(keys.find(key => key.id === row.id).private_key_alias));
+  }
   db.close();
   await writeFile(join(destination, 'storage-evidence.json'), JSON.stringify({ source: live
     ? 'actual Android Room DB/WAL stable across before/copy/after hashes; no signing or storage test helpers'
-    : 'actual force-stopped Android Room DB/WAL; no test helpers', files, integrity, rows }, null, 2));
+    : 'actual force-stopped Android Room DB/WAL; no test helpers', files, integrity, schemaVersion, rows }, null, 2));
   console.log(JSON.stringify(rows.map(row => ({ credentialId: row.credential_id, count: row.sign_count, useCount: row.use_count }))));
 } else if (stage === 'restore') {
   const baseline = JSON.parse(await readFile(join(out, 'device-baseline.json')));

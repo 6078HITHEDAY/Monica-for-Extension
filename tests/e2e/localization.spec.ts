@@ -1,11 +1,12 @@
+import { launchTestContext } from './fixtures/edge';
 import { chooseOption } from "./fixtures/material";
-import { chromium, expect, test, type BrowserContext } from "@playwright/test";
+import { expect, test, type BrowserContext } from "@playwright/test";
 import path from "node:path";
 
 const extensionPath = path.resolve("dist");
 
 test("browser language initializes the UI, system appearance follows changes, and language sync preserves vault data", async ({}, testInfo) => {
-  const context = await chromium.launchPersistentContext(testInfo.outputPath("language-profile"), {
+  const context = await launchTestContext(testInfo.outputPath("language-profile"), {
     channel: "chromium", headless: true, locale: "en-US", colorScheme: "light",
     args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
   });
@@ -69,7 +70,7 @@ for (const colorScheme of ["light", "dark"] as const) {
   test(`English pages and controls fit a narrow window at 200% text in ${colorScheme} mode`, async ({}, testInfo) => {
     let context: BrowserContext | undefined;
     try {
-      context = await chromium.launchPersistentContext(testInfo.outputPath("english-layout-profile"), {
+      context = await launchTestContext(testInfo.outputPath("english-layout-profile"), {
         channel: "chromium", headless: true, locale: "en-US", colorScheme, reducedMotion: "reduce",
         viewport: { width: 375, height: 1000 },
         args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
@@ -86,9 +87,6 @@ for (const colorScheme of ["light", "dark"] as const) {
       for (const section of sections) {
         await manager.getByRole("button", { name: "Open navigation", exact: true }).click();
         await manager.getByRole("button", { name: new RegExp(`^${section}`) }).first().click();
-        if (section === "Settings and backups") {
-          await manager.locator(".settings-disclosure").evaluateAll((elements) => elements.forEach((element) => { (element as HTMLDetailsElement).open = true; }));
-        }
         const current = await manager.locator("#main-content").evaluate((root) => {
           const problems: string[] = [];
           if (document.documentElement.scrollWidth > document.documentElement.clientWidth + 1) problems.push("Page scrolls horizontally");

@@ -1,6 +1,7 @@
 import { isLoginItem, createLoginItem, type BillingAddressItem, type CardItem, type IdentityItem, type LoginItem, type PasskeyItem, type PaymentAccountItem, type ProviderAccount, type ProviderConflict, type ProviderConflictSummary, type TotpItem, type VaultItem } from "../core/model";
 import { loginMatchScore, matchingLogins } from "../core/matching";
 import { customIconProjection } from '../core/custom-icon';
+import { readPasswordProjectRemovalJournal, isPasswordProjectRemovalPending } from '../core/password-project-removal-journal';
 import { KeePassProjectRemovalWorkflow } from './keepass-project-removal';
 import { KeePassProjectResolutionWorkflow } from './keepass-project-resolution';
 import { KeePassRecoveryDownloads } from './keepass-recovery-download';
@@ -57,12 +58,13 @@ import { Mdbx2SyncCoordinator, type Mdbx2CloudSyncInput, type Mdbx2WebDavSyncCon
 import { normalizeMdbx2RemotePath } from "../providers/mdbx2/mdbx2-sync-paths";
 import { KeePassProvider, type KeePassSessionSummary } from "../providers/keepass/keepass-provider";
 import { KeePassDurableSyncCoordinator } from "../providers/keepass/keepass-durable-sync";
-import { KEEPASS_CACHE_ENCRYPTION_KEY_CONFIG } from "../providers/keepass/keepass-receipt-crypto";
 import { KeePassGroupError, type KeePassGroupMutationResult } from "../providers/keepass/keepass-groups";
 import { KeePassHistoryError, type KeePassHistoryRestoreResult } from "../providers/keepass/keepass-history";
 import { keePassMutationIntentSha256, keePassRemoteFailureInfo, KeePassRemoteSessionError, KeePassRemoteSessionService, type KeePassRemoteFailureInfo } from "../providers/keepass/keepass-remote-session";
 import { KeePassWebDavError } from "../providers/keepass/keepass-webdav-client";
-import { isRemoteKeePassSource } from "../providers/keepass/keepass-source";
+import { isRemoteKeePassSource, hasLocalKeePassWorkingCopy } from "../providers/keepass/keepass-source";
+import { KeePassLocalWorkingCopyService, KEEPASS_LOCAL_SOURCE_HASH } from '../providers/keepass/keepass-local-working-copy';
+import { createKeePassCacheEncryptionKey, KEEPASS_CACHE_ENCRYPTION_KEY_CONFIG } from '../providers/keepass/keepass-receipt-crypto';
 import { OneDriveSessionService } from "../providers/onedrive/onedrive-session";
 import { OneDriveAuthorizationError } from "../providers/onedrive/onedrive-auth";
 import { OneDriveKeePassConnections } from "./onedrive-keepass-connection";
@@ -106,6 +108,8 @@ import { configureSessionStorageAccess } from "./startup";
 import { runtimeInfo } from "../runtime/version";
 import { AutomaticSyncScheduler, mdbx2AutomaticSyncEligible } from "./automatic-sync";
 import { BitwardenNotifications } from "../providers/bitwarden/bitwarden-notifications";
+import { BitwardenPasswordProjectRemovalCoordinator } from '../providers/bitwarden/bitwarden-project-removal';
+import { BitwardenProjectRemovalRuntime } from './bitwarden-project-removal-runtime';
 import { AUTO_SYNC_PREFERENCES_KEY, readAutomaticSyncEnabled } from "../providers/sync-preferences";
 
 const LEGACY_VAULT_KEY = "monica.extension.credentials.v1";
@@ -124,8 +128,6 @@ const mdbx2NativeClient = new Mdbx2NativeClient(createChromeMdbx2NativeRuntime()
 const mdbx2Restores = new Mdbx2RestoreCoordinator(mdbx2NativeClient, service);
 const mdbx2RestoreBatches = new Mdbx2RestoreBatchCoordinator(mdbx2NativeClient, service);
 const providerOperations = new ProviderOperationQueue();
-const passwordProjectRemovals = new PasswordProjectRemovalWorkflow(service,
-  new Mdbx2PasswordProjectRemovalCoordinator(mdbx2NativeClient, service), mdbx2Restores, providerOperations, () => publishVaultChanged());
 const passwordProjectRestores = new PasswordProjectRestoreWorkflow(service, mdbx2RestoreBatches, providerOperations, () => publishVaultChanged());
 const mdbx2LocalFileExports = new Mdbx2LocalFileExports(mdbx2NativeClient, async providerId => {
   const state = await service.readState(false);
@@ -161,17 +163,26 @@ const oneDriveSessions = new OneDriveSessionService({
 });
 const keePassRemoteSessions = new KeePassRemoteSessionService(keePassProvider, keePassWorkingCopies, undefined,
   (account, identity) => oneDriveSessions.fileClient(account, identity));
-const keePassProjectRemovals = new KeePassProjectRemovalWorkflow(service, keePassRemoteSessions, providerOperations,
+const keePassLocalCopies = new KeePassLocalWorkingCopyService(keePassProvider, keePassWorkingCopies);
+const keePassPersistenceFor = (account: ProviderAccount) => hasLocalKeePassWorkingCopy(account.config) ? keePassLocalCopies : keePassRemoteSessions;
+const keePassProjectRemovals = new KeePassProjectRemovalWorkflow(service, {
+  reconcileAccountConfig: account => keePassPersistenceFor(account).reconcileAccountConfig(account),
+  readDurableReceipt: (account, ...args) => keePassPersistenceFor(account).readDurableReceipt(account, ...args),
+  persistProjectRemoval: (account, input) => keePassPersistenceFor(account).persistProjectRemoval(account, input)
+}, providerOperations,
   () => publishVaultChanged(), {
     runMutationExclusive: runKeePassMutationExclusive,
     beforeCapture: async account => {
       await ensureKeePassSession(account, true);
       await flushKeePassPendingMutations(account);
-      const persisted = await keePassRemoteSessions.persistWorkingCopy(account);
+      const persisted = await keePassPersistenceFor(account).persistWorkingCopy(account);
       if (persisted) await applyKeePassRemoteAccountConfig(account, persisted.accountConfig);
     },
-    invalidateSession: providerId => {
-      keePassProvider.lockAccount(providerId);
+    invalidateSession: async providerId => {
+      const account = await service.getProvider(providerId);
+      if (account && hasLocalKeePassWorkingCopy(account.config) && keePassProvider.isUnlocked(providerId))
+        await keePassLocalCopies.reload(account);
+      else keePassProvider.lockAccount(providerId);
       clearKeePassPendingPersistence(providerId);
     }
   });
@@ -197,7 +208,12 @@ const oneDriveConnections = new OneDriveKeePassConnections(service, keePassProvi
   oneDriveSessions, flushKeePassPendingMutations);
 const keePassDurableSync = new KeePassDurableSyncCoordinator(
   keePassProvider,
-  keePassRemoteSessions,
+  {
+    publishWorkingCopy: (account, signal) => keePassPersistenceFor(account).publishWorkingCopy(account, signal),
+    persistWorkingCopy: (account, receipt) => keePassPersistenceFor(account).persistWorkingCopy(account, receipt),
+    readAnyDurableReceipt: (account, operationId) => keePassPersistenceFor(account).readAnyDurableReceipt(account, operationId),
+    deleteDurableReceipt: (account, operationId) => keePassPersistenceFor(account).deleteDurableReceipt(account, operationId)
+  },
   service,
   (account, config) => applyKeePassRemoteAccountConfig(account, config)
 );
@@ -231,6 +247,11 @@ const PROVIDER_ATTACHMENT_MAX_BASE64_CHUNK_LENGTH = Math.ceil(PROVIDER_ATTACHMEN
 const USERNAME_CONTEXT_TTL_MS = 2 * 60_000;
 const PASSKEY_COMPLETION_TTL_MS = 2 * 60_000;
 const activeProviderSyncs = new Map<string, AbortController>();
+const passwordProjectRemovals = new PasswordProjectRemovalWorkflow(service,
+  new Mdbx2PasswordProjectRemovalCoordinator(mdbx2NativeClient, service), mdbx2Restores, providerOperations, () => publishVaultChanged(),
+  new BitwardenProjectRemovalRuntime(service,
+    new BitwardenPasswordProjectRemovalCoordinator(service, bitwardenClient, bitwardenProvider, bitwardenAttachmentDownloads, bitwardenAttachmentMutations),
+    activeProviderSyncs, providerId => bitwardenProvider.lockAccount(providerId)));
 const providerSyncPromises = new Map<string, Promise<ProviderSyncResult>>();
 const automaticSyncControllers = new Set<AbortController>();
 const liveVaultPorts = new Map<chrome.runtime.Port, boolean>();
@@ -359,6 +380,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   const previous = change?.oldValue as { id?: unknown; rawKey?: unknown } | undefined;
   const next = change?.newValue as { id?: unknown; rawKey?: unknown } | undefined;
   if (area === "session" && change && (!next || previous?.rawKey !== next.rawKey || previous?.id !== next.id)) {
+    service.clearDecryptedState();
     keePassRecoveryDownloads.clear();
     oneDriveSessions.clear();
     void dismissInlineMenus();
@@ -781,8 +803,8 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
       if (!isSecureSensitivePageUrl(page.toString())) return [];
       if (await autofillBlocked(page.toString())) return [];
       const pageHost = normalizeRpId(page.hostname);
-      return (await service.listItems())
-        .filter((item): item is PasskeyItem => item.kind === "passkey" && !item.deletedAt && passkeyMatchesPageHost(item, pageHost))
+      return (await service.readPasskeyContext()).items
+        .filter((item) => !item.deletedAt && !item.archivedAt && passkeyMatchesPageHost(item, pageHost))
         .map((item): PasskeyMatchSummary => ({ id: item.id, title: item.title, userName: item.userName, userDisplayName: item.userDisplayName, sourceMode: item.sourceMode, availability: passkeyAvailability(item) as PasskeyMatchSummary["availability"], discoverable: item.discoverable, lastUsedAt: item.lastUsedAt, useCount: item.useCount || 0 }));
     }
     case "VAULT_FILL_LOGIN": {
@@ -929,7 +951,10 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
     case "PROVIDER_QUEUE_STATUS": {
       assertManagerPage(sender);
       const state = await service.readState();
+      const preparationRecoveries = readPasswordProjectRemovalJournal(state.passwordProjectRemovals)
+        .filter(record => isPasswordProjectRemovalPending(record) && record.bitwardenPreparationRecovery);
       const providerIds = new Set([
+        ...state.providers.map((provider) => provider.id),
         ...state.mutationQueue.map((item) => item.providerId),
         ...state.providerMutationReceipts.map((receipt) => receipt.providerId)
       ]);
@@ -941,7 +966,8 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
           providerId,
           pending: entries.length,
           failed: entries.filter((item) => item.lastError).length,
-          recovering: receipts.filter((receipt) => receipt.stage !== "prepared").length,
+          recovering: receipts.filter((receipt) => receipt.stage !== "prepared").length
+            + preparationRecoveries.filter(record => record.providerBindings.some(binding => binding.id === providerId)).length,
           maxAttempts: Math.max(0, ...entries.map((item) => item.attempts), ...receipts.map((receipt) => receipt.attemptCount)),
           lastError: lastError ? redactProviderMessage(lastError) : undefined
         };
@@ -1041,6 +1067,8 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
     }
     case "BITWARDEN_LOGOUT": {
       assertManagerPage(sender);
+      activeProviderSyncs.get(request.providerId)?.abort(new DOMException('Bitwarden 已退出登录', 'AbortError'));
+      bitwardenProvider.lockAccount(request.providerId);
       const account = await service.getProvider(request.providerId);
       if (!account || account.kind !== "bitwarden") throw new Error("所选密码源不是 Bitwarden。");
       if (typeof account.config.refreshToken === "string" && account.config.refreshToken) {
@@ -2117,6 +2145,7 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
       const existing = request.input.providerId ? await service.getProvider(request.input.providerId) : undefined;
       if (existing && existing.kind !== "keepass") throw new Error("所选密码源不是 KeePass 数据库。");
       if (existing?.config.sourceMode === "onedrive") throw new Error("请在 OneDrive 设置中重新连接原数据库；连接其他来源请新增密码源。");
+      if (existing && hasLocalKeePassWorkingCopy(existing.config)) throw new Error("此密码源保留了本地文件的修改。连接 WebDAV 请新增密码源。");
       const input = { ...request.input };
       if (existing?.config.sourceMode === "webdav") {
         if (!input.webDavPassword && typeof existing.config.webDavPassword === "string") input.webDavPassword = existing.config.webDavPassword;
@@ -2189,9 +2218,9 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
     }
     case "KEEPASS_OPEN": {
       assertManagerPage(sender);
-      const existing = request.input.providerId ? await service.getProvider(request.input.providerId) : undefined;
+      let existing = request.input.providerId ? await service.getProvider(request.input.providerId) : undefined;
       if (existing && existing.kind !== "keepass") throw new Error("所选密码源不是 KeePass 数据库。");
-      if (existing?.config.sourceMode === "onedrive") throw new Error("请在 OneDrive 设置中重新连接原数据库；连接其他来源请新增密码源。");
+      if (existing && isRemoteKeePassSource(existing.config.sourceMode)) throw new Error("请在原远端设置中重新连接数据库；打开本地文件请新增密码源。");
       const input = { ...request.input };
       request.input.password = "";
       request.input.keyFile = undefined;
@@ -2217,26 +2246,61 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
       };
       let fileBytes: Uint8Array | undefined;
       let keyFileBytes: Uint8Array | undefined;
-      try {
-        fileBytes = base64ToBytes(input.file);
-        keyFileBytes = input.keyFile ? base64ToBytes(input.keyFile) : undefined;
-        // Unlocking first means a wrong credential never leaves a half-configured password source behind.
-        const session = await keePassProvider.unlock(account, fileBytes, {
-          password: input.password,
-          keyFile: keyFileBytes,
-          sourceName: input.fileName,
-          sourceMode: "local-file"
-        });
-        const persisted = await service.upsertProvider(account);
-        if (existing?.config.sourceMode === "webdav") await keePassWorkingCopies.delete(account.id).catch(() => undefined);
-        return { account: persisted, session };
-      } finally {
-        input.password = "";
-        input.keyFile = undefined;
-        input.file = "";
-        fileBytes?.fill(0);
-        keyFileBytes?.fill(0);
-      }
+      let openedSessionGuard: (() => void) | undefined;
+      return providerOperations.run(account.id, () => runKeePassMutationExclusive(account.id, async () => {
+        const vaultSession = await service.passkeySessionId();
+        try {
+          if (!vaultSession) throw new Error("密码库已锁定，请重新解锁。");
+          if (existing) {
+            const latest = await service.getProvider(account.id);
+            if (!latest || !sameProviderBinding(existing, latest)) throw new Error("密码源已变化，请重新打开。");
+            existing = latest;
+            // Reopen must not discard a native mutation whose checkpoint failed.
+            if (hasLocalKeePassWorkingCopy(existing.config) && keePassProvider.isUnlocked(account.id))
+              await flushKeePassPendingMutations(existing);
+          }
+          fileBytes = base64ToBytes(input.file);
+          keyFileBytes = input.keyFile ? base64ToBytes(input.keyFile) : undefined;
+          // Unlocking first means a wrong credential never leaves a half-configured password source behind.
+          const credential = {
+            password: input.password,
+            keyFile: keyFileBytes,
+            sourceName: input.fileName,
+            sourceMode: "local-file" as const
+          };
+          let session: KeePassSessionSummary;
+          if (existing && hasLocalKeePassWorkingCopy(existing.config)) {
+            Object.assign(account.config, { [KEEPASS_LOCAL_SOURCE_HASH]: existing.config[KEEPASS_LOCAL_SOURCE_HASH],
+              [KEEPASS_CACHE_ENCRYPTION_KEY_CONFIG]: existing.config[KEEPASS_CACHE_ENCRYPTION_KEY_CONFIG],
+              workingSha256: existing.config.workingSha256,
+              localFileExportSha256: existing.config.localFileExportSha256 });
+            session = await keePassLocalCopies.openPickedFile(account, fileBytes, credential);
+            openedSessionGuard = keePassProvider.localSessionGuard(account);
+          } else {
+            session = await keePassProvider.unlock(account, fileBytes, credential);
+            openedSessionGuard = keePassProvider.localSessionGuard(account);
+            account.config[KEEPASS_LOCAL_SOURCE_HASH] = [...new Uint8Array(await crypto.subtle.digest('SHA-256', fileBytes.slice().buffer))]
+              .map(value => value.toString(16).padStart(2, '0')).join('');
+            account.config[KEEPASS_CACHE_ENCRYPTION_KEY_CONFIG] = createKeePassCacheEncryptionKey();
+            await keePassLocalCopies.initialize(account, fileBytes);
+          }
+          if (vaultSession !== await service.passkeySessionId()) throw new Error("密码库已锁定，请重新解锁。");
+          const persisted = await service.upsertProvider(account, true, existing, { sessionId: vaultSession });
+          return { account: persisted, session };
+        } catch (cause) {
+          // Only invalidate this open attempt, never a newer session after a vault lock.
+          if (openedSessionGuard) {
+            try { openedSessionGuard(); keePassProvider.lockAccount(account.id); } catch { /* already replaced or locked */ }
+          }
+          throw cause;
+        } finally {
+          input.password = "";
+          input.keyFile = undefined;
+          input.file = "";
+          fileBytes?.fill(0);
+          keyFileBytes?.fill(0);
+        }
+      }));
     }
     case "KEEPASS_STATUS": {
       assertManagerPage(sender);
@@ -2361,12 +2425,33 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
       assertManagerPage(sender);
       const account = await requireKeePassAccount(request.providerId);
       const fileName = typeof account.config.fileName === "string" && account.config.fileName ? account.config.fileName : "monica.kdbx";
+      if (hasLocalKeePassWorkingCopy(account.config)) {
+        return runKeePassMutationExclusive(account.id, async () => {
+          await keePassProjectRemovals.assertProviderReady(account.id);
+          await flushKeePassPendingMutations(account);
+          await keePassDurableSync.synchronize(account);
+          const state = await service.readState(false);
+          if (state.mutationQueue.some(row => row.providerId === account.id) || state.providerConflicts.some(row => row.providerId === account.id))
+            throw new Error("请先同步所有待写入修改并处理冲突，再导出 KeePass 数据库。");
+          const exported = await keePassLocalCopies.exportFile(account);
+          try {
+            await applyKeePassRemoteAccountConfig(account, exported.accountConfig);
+            keePassProvider.markLocalFileExported(account);
+            return { fileName, file: bytesToBase64(exported.bytes) };
+          } finally { exported.bytes.fill(0); }
+        });
+      }
       return { fileName, file: bytesToBase64(await keePassProvider.exportFile(account.id)) };
     }
     case "KEEPASS_LOCK": {
       assertManagerPage(sender);
       keePassRecoveryDownloads.clear();
       const ids = request.providerId ? [request.providerId] : (await service.readState(false)).providers.filter(account => account.kind === "keepass").map(account => account.id);
+      for (const id of ids) await runKeePassMutationExclusive(id, async () => {
+        const account = await service.getProvider(id);
+        if (account && hasLocalKeePassWorkingCopy(account.config) && keePassProvider.isUnlocked(id))
+          await flushKeePassPendingMutations(account);
+      });
       await setProviderAutoSyncPaused(ids, true);
       await Promise.allSettled(ids.map(id => keePassMutationQueues.get(id)));
       if (request.providerId) {
@@ -2473,7 +2558,8 @@ async function executeProviderSync(providerId: string, options: { allowEmptyRemo
       await keePassProjectRemovals.recoverProvider(account.id, controller.signal);
       result = await synchronizeKeePassProvider(account, controller.signal, options.syncHint?.type === "check-remote");
     } else if (account.kind === "bitwarden") {
-      result = await bitwardenDurableSync.synchronize(account, controller.signal, { allowEmptyRemote: options.allowEmptyRemote === true, syncHint: options.syncHint });
+      const recovered = await passwordProjectRemovals.recoverBeforeSync(account, controller.signal);
+      result = await bitwardenDurableSync.synchronize(recovered, controller.signal, { allowEmptyRemote: options.allowEmptyRemote === true, syncHint: options.syncHint });
     } else {
       // The adapter mutates its copy, so the snapshot is what `applyProviderSync` diffs a
       // concurrent local edit against. Both must be the same read of the vault.
@@ -2602,7 +2688,7 @@ function reconcileAutomaticSync(): Promise<void> {
         account.kind === "bitwarden" && typeof account.config.accessToken === "string" && Boolean(account.config.accessToken)
         || account.kind === "monica-webdav" && Boolean(account.config.baseUrl)
         || account.kind === "keepass" && isRemoteKeePassSource(account.config.sourceMode)
-        || account.kind === "mdbx2" && mdbx2AutomaticSyncEligible(account.config)
+        || account.kind === "mdbx2" && mdbx2AutomaticSyncEligible(account.config, state.mutationQueue.some(mutation => mutation.providerId === account.id))
       ));
       const visible = [...liveVaultPorts.values()].some(Boolean);
       automaticSync.configure(accounts.map(account => ({
@@ -3270,7 +3356,7 @@ async function beginPasskeyRequest(request: PasskeyRequest, sender: chrome.runti
     return { candidateId: id, operation: request.operation, rpId, rpName: request.operation === "create" ? request.rpName : rpId, origin: source.origin, userName: "", credentials: [], saveTargets: [], expiresAt, unlockRequired: true, userVerificationRequired: true, userVerificationMethod: method };
   }
   if (passkeyRequiresUserVerification(request)) await assertPasskeyUserVerificationAvailable();
-  let state = await service.readState();
+  let state = await service.readPasskeyContext();
   let passkeys = state.items.filter((item): item is PasskeyItem => item.kind === "passkey" && !item.deletedAt && passkeyRpIdsEqual(item.rpId, rpId));
   if (request.operation === "get") {
     const candidates = selectPasskeyCandidates(passkeys, rpId, request.allowCredentialIds);
@@ -3293,7 +3379,7 @@ async function beginPasskeyRequest(request: PasskeyRequest, sender: chrome.runti
       }
     }
     if (refreshAccounts.length) {
-      state = await service.readState();
+      state = await service.readPasskeyContext();
       passkeys = state.items.filter((item): item is PasskeyItem => item.kind === "passkey" && !item.deletedAt && passkeyRpIdsEqual(item.rpId, rpId));
     }
   }
@@ -3486,7 +3572,7 @@ async function acceptPasskeyRequest(candidateId: string, itemId: string | undefi
       const created = await createPasskey({ ...activePending.request, algorithms: [algorithm], origin: activePending.origin, rpId: activePending.rpId, userVerified,
         credentialIdFormat: target.kind === "bitwarden" ? "uuid" : undefined });
       if (cancelledPasskeyRequests.has(candidateId)) throw new PasskeyCancelledError("Passkey 请求已取消。");
-      const liveState = await service.readState();
+      const liveState = await service.readPasskeyContext();
       const liveTarget = liveState.providers.find((candidate) => candidate.id === target.providerId && candidate.enabled && candidate.kind === target.kind);
       if (!liveTarget) throw new Error("所选 Passkey 保存位置已变化，请重新发起注册。");
       const currentPasskeys = liveState.items.filter((item): item is PasskeyItem => item.kind === "passkey" && !item.deletedAt && passkeyRpIdsEqual(item.rpId, activePending.rpId));
@@ -3520,7 +3606,7 @@ async function acceptPasskeyRequest(candidateId: string, itemId: string | undefi
       await deletePendingPasskeyRequest(candidateId).catch(() => undefined);
       return result;
     }
-    const liveState = await service.readState();
+    const liveState = await service.readPasskeyContext();
     const livePasskeys = liveState.items.filter((candidate): candidate is PasskeyItem => candidate.kind === "passkey" && !candidate.deletedAt);
     const liveMatches = selectPasskeyCandidates(livePasskeys, activePending.rpId, activePending.request.allowCredentialIds)
       .filter((candidate) => activePending.matches.includes(candidate.id));
@@ -3533,12 +3619,13 @@ async function acceptPasskeyRequest(candidateId: string, itemId: string | undefi
     if (passkeyAvailability(item, activePending.rpId) !== "ready" || !item.privateKeyPkcs8) throw new Error("所选 Passkey 没有可用私钥或算法不受支持。");
     const userVerified = await verifyPasskeyUserIfRequired(activePending, item.userVerificationRequired, item.userName || item.userDisplayName);
     await assertPasskeyDocumentCurrent(activePending);
-    const currentItem = (await service.readState()).items.find(candidate => candidate.id === selectedId);
+    const currentContext = await service.readPasskeyContext();
+    const currentItem = currentContext.items.find(candidate => candidate.id === selectedId);
     if (!currentItem || currentItem.kind !== "passkey" || currentItem.deletedAt || currentItem.archivedAt || !samePasskeySigningIdentity(item, currentItem)) {
       throw new PasskeyCancelledError("身份验证期间 Passkey 已变化，请重新发起登录。");
     }
     item = currentItem;
-    const ownership = resolvePasskeyOwnership(item, (await service.readState()).providers);
+    const ownership = resolvePasskeyOwnership(item, currentContext.providers);
     let signatureCounter = 0;
     if (ownership.kind === "bitwarden") {
       assertPasskeyCounterNotRegressed(item);
@@ -4239,7 +4326,7 @@ async function executeKeePassDurableMutation<T>(input: {
   replay: (result: KeePassDurableMutationResult) => T | Promise<T>;
   mutate: () => { result: T; durableResult: KeePassDurableMutationResult } | Promise<{ result: T; durableResult: KeePassDurableMutationResult }>;
 }): Promise<T> {
-  if (input.account.kind !== "keepass" || !isRemoteKeePassSource(input.account.config.sourceMode)) {
+  if (input.account.kind !== "keepass" || !(isRemoteKeePassSource(input.account.config.sourceMode) || hasLocalKeePassWorkingCopy(input.account.config))) {
     return (await input.mutate()).result;
   }
   return runKeePassMutationExclusive(input.account.id, async () => {
@@ -4247,7 +4334,7 @@ async function executeKeePassDurableMutation<T>(input: {
     await keePassProjectResolutions.assertProviderReady(input.account.id);
     const account = await reconcileKeePassRemoteAccount(input.account);
     const intentSha256 = await keePassMutationIntentSha256(input.intent);
-    const durable = await keePassRemoteSessions.readDurableReceipt(account, input.operationId, input.kind, intentSha256);
+    const durable = await keePassPersistenceFor(account).readDurableReceipt(account, input.operationId, input.kind, intentSha256);
     if (durable) return input.replay(durable.result);
 
     const key = `${account.id}\u0000${input.operationId}`;
@@ -4277,7 +4364,7 @@ async function executeKeePassDurableMutation<T>(input: {
       completedAt: pending.completedAt,
       result: pending.durableResult
     };
-    const persisted = await keePassRemoteSessions.persistWorkingCopy(account, receipt);
+    const persisted = await keePassPersistenceFor(account).persistWorkingCopy(account, receipt);
     if (persisted) await applyKeePassRemoteAccountConfig(account, persisted.accountConfig);
     keePassPendingPersistence.delete(key);
     return structuredClone(pending.result) as T;
@@ -4303,7 +4390,7 @@ async function flushKeePassPendingMutations(account: ProviderAccount): Promise<v
   for (const [key, pending] of keePassPendingPersistence) {
     if (pending.providerId !== account.id) continue;
     const operationId = key.slice(account.id.length + 1);
-    const persisted = await keePassRemoteSessions.persistWorkingCopy(account, {
+    const persisted = await keePassPersistenceFor(account).persistWorkingCopy(account, {
       providerId: account.id, operationId, kind: pending.kind, intentSha256: pending.intentSha256,
       completedAt: pending.completedAt, result: pending.durableResult
     });
@@ -4376,7 +4463,7 @@ async function synchronizeKeePassProvider(account: ProviderAccount, signal: Abor
     signal.throwIfAborted();
     await ensureKeePassSession(account, true);
     signal.throwIfAborted();
-    if (isRemoteKeePassSource(account.config.sourceMode)) {
+    if (isRemoteKeePassSource(account.config.sourceMode) || hasLocalKeePassWorkingCopy(account.config)) {
       return keePassDurableSync.synchronize(await reconcileKeePassRemoteAccount(account), signal, { checkOnly });
     }
     signal.throwIfAborted();

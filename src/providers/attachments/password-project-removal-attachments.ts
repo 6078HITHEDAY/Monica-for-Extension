@@ -6,12 +6,16 @@ import { hashProviderAttachment, ProviderAttachmentTransferCoordinator, type Pro
 export interface PasswordProjectAttachmentBackend extends ProviderAttachmentTransferBackend {
   listAttachments(providerId: string, itemId: string, cursor?: string): Promise<ProviderAttachmentPage>;
 }
+export type PasswordProjectAttachmentReader = Pick<PasswordProjectAttachmentBackend, 'listAttachments' | 'beginRead' | 'readChunk' | 'releaseRead'>;
 
 export interface PasswordProjectRemovalInspector {
   inspectPasswordProjectRemoval(operationId: string): Promise<{ record: PasswordProjectRemovalRecord; items: LoginItem[] }>;
 }
 
-const changed = () => new Error('项目附件已变化或校验失败，原密码尚未移除。');
+export class PasswordProjectAttachmentChangedError extends Error {
+  constructor() { super('项目附件已变化或校验失败，原密码尚未移除。'); }
+}
+const changed = () => new PasswordProjectAttachmentChangedError();
 const metadata = (attachment: ProviderAttachmentSummary) => JSON.stringify([
   attachment.attachmentId, attachment.providerKind, attachment.fileName, attachment.mediaType ?? null, attachment.sizeBytes, attachment.protected
 ]);
@@ -72,7 +76,7 @@ export async function preparePasswordProjectRemovalAttachments(
 
 /** Fresh source manifest + both byte streams. This alone cannot authorize a later sync deletion. */
 export async function verifyPasswordProjectRemovalAttachments(
-  record: PasswordProjectRemovalRecord, proofs: PasswordProjectRemovalProof[], backend: PasswordProjectAttachmentBackend
+  record: PasswordProjectRemovalRecord, proofs: PasswordProjectRemovalProof[], backend: PasswordProjectAttachmentReader
 ): Promise<void> {
   readPasswordProjectRemovalJournal([{ ...record, status: 'deleting', proofs }]);
   for (const proof of proofs) {
@@ -83,8 +87,11 @@ export async function verifyPasswordProjectRemovalAttachments(
     for (const entry of proof.attachments) {
       const source = sources.find(attachment => attachment.attachmentId === entry.sourceAttachmentId);
       const target = targets.find(attachment => attachment.attachmentId === entry.targetAttachmentId);
+      // Bitwarden's list reports encrypted envelope length. The authenticated
+      // download below checks the exact plaintext length and digest on both sides.
       if (!source || !target || [source, target].some(attachment => attachment.fileName !== entry.fileName
-        || attachment.sizeBytes !== entry.sizeBytes || attachment.mediaType !== entry.mediaType) || source.protected !== target.protected) throw changed();
+        || account.kind !== 'bitwarden' && attachment.sizeBytes !== entry.sizeBytes
+        || attachment.mediaType !== entry.mediaType) || source.protected !== target.protected) throw changed();
       for (const [itemId, attachmentId] of [[proof.sourceItemId, entry.sourceAttachmentId], [proof.targetItemId, entry.targetAttachmentId]]) {
         if (await hashProviderAttachment(backend, account.id, itemId, attachmentId, entry.fileName, entry.sizeBytes) !== entry.sha256) throw changed();
       }
@@ -94,7 +101,7 @@ export async function verifyPasswordProjectRemovalAttachments(
   }
 }
 
-async function listAll(backend: PasswordProjectAttachmentBackend, account: ProviderAccount, itemId: string): Promise<ProviderAttachmentSummary[]> {
+async function listAll(backend: PasswordProjectAttachmentReader, account: ProviderAccount, itemId: string): Promise<ProviderAttachmentSummary[]> {
   const result: ProviderAttachmentSummary[] = [], seen = new Set<string>(), cursors = new Set<string>();
   let cursor: string | undefined;
   do {

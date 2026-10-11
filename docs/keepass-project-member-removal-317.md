@@ -1,8 +1,8 @@
 # KeePass password project member removal
 
-Status: planning, encrypted intents, isolated complete-file preparation and atomic working-copy/receipt persistence verified; user workflow remains unfinished.
+Current status (reconciled 2026-10-09): remote KeePass member-removal editor, source-token binding, retry and recovery panel are implemented. Actual Edge/Apache WebDAV acceptance covers normal owner removal, response loss, stale drafts, conflicts and restart recovery; see [the later acceptance record](keepass-member-removal-317.md). [Local encrypted working copies](keepass-local-working-copy-318.md) now also pass actual Edge KDBX3/4 removal, restart, original-file reopen, follow-up editing and export. The implementation chronology below describes earlier intermediate states and must not be read as the current open-work list.
 
-The extension already groups native KDBX password projects, but the member-removal editor is still limited to local/MDBX sources. The intended result is removal of selected passwords or credential groups while retaining all other passwords, native identities, history, project content and attachments, with durable restart/conflict recovery.
+The original implementation goal was removal of selected passwords or credential groups while retaining all other passwords, native identities, history, project content and attachments, with durable restart/conflict recovery. Full Android/cloud acceptance remains separate work.
 
 `planKeePassProjectRemoval` now validates the complete current active project against the original editor snapshot, including archived members. It detects content changes even when timestamps are unchanged, added/missing members, duplicate identities, switched sources, reused new-row IDs, native UUID changes and changed password IDs. Other databases and old trash are excluded by scope. Shared project/account edits are reconciled before choosing the new content owner. The returned plan preserves exact metadata strings and specifies owner transfer without modifying input data.
 

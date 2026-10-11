@@ -1,3 +1,4 @@
+import { passkeyKeyMaterialHint } from '../../passkey/private-key-portability';
 import { parseLosslessJson, jsonScalarText } from "../../core/lossless-json";
 import { capturePasswordHistory, assertPortablePasswordHistory } from '../../core/password-history';
 import { normalizeOtpCounter, otpCounterJson } from "../../core/otp-counter";
@@ -7,6 +8,7 @@ import type { BillingAddressItem, CardItem, IdentityItem, LoginItem, PasskeyItem
 import {
   firstString,
   readCardFaceConfig,
+  readWalletEditorSectionOrder,
   mergeMonicaItemData,
   normalizeCardType,
   normalizeDocumentType,
@@ -645,7 +647,7 @@ export function androidRecordToItem(path: string, raw: Record<string, unknown>, 
       passkeyMode: normalizePasskeyMode(raw.passkeyMode),
       ...(portablePasskeyKeyMatchesAlgorithm(portableKey, numberValue(raw.publicKeyAlgorithm, -7))
         ? { privateKeyPkcs8: portableKey.pkcs8Base64, sourceMode: "browser-local" as const }
-        : { sourceMode: "android-metadata-only" as const })
+        : { sourceMode: "android-metadata-only" as const, keyMaterialHint: passkeyKeyMaterialHint(raw.privateKeyAlias) })
     } satisfies PasskeyItem;
   }
 
@@ -674,6 +676,7 @@ export function androidRecordToItem(path: string, raw: Record<string, unknown>, 
       branchCode: optionalString(firstString(data, "branchCode")),
       currency: optionalString(firstString(data, "currency")),
       customerServicePhone: optionalString(firstString(data, "customerServicePhone")),
+      editorSectionOrder: readWalletEditorSectionOrder(data.editorSectionOrder),
       cardFace: readCardFaceConfig(data.cardFace),
       customFields: parseSecureCustomFields(data.customFields)
     } satisfies CardItem;
@@ -686,6 +689,7 @@ export function androidRecordToItem(path: string, raw: Record<string, unknown>, 
     return {
       ...base,
       kind: "identity",
+      editorSectionOrder: readWalletEditorSectionOrder(data.editorSectionOrder),
       documentType: normalizeDocumentType(firstString(data, "documentType", "type")),
       documentNumber: firstString(data, "documentNumber", "number", "passportNumber", "licenseNumber", "driverLicense", "ssn"),
       firstName,
@@ -1184,6 +1188,10 @@ function serializeAndroidItem(item: VaultItem, original?: Record<string, unknown
     return previous;
   };
   const applyNested = (updates: Record<string, unknown>) => {
+    if ((item.kind === 'card' || item.kind === 'identity') && item.editorSectionOrder !== undefined
+      && (!originalItem || JSON.stringify(item.editorSectionOrder) !== JSON.stringify((originalItem as CardItem | IdentityItem).editorSectionOrder))) {
+      updates.editorSectionOrder = readWalletEditorSectionOrder(item.editorSectionOrder);
+    }
     if ((item.kind === "card" || item.kind === "identity" || item.kind === "billing-address") && (!originalItem || JSON.stringify(item.cardFace) !== JSON.stringify((originalItem as CardItem).cardFace))) updates.cardFace = item.cardFace ?? null;
     if (item.kind === "identity" && (!originalItem || item.documentTitle !== (originalItem as IdentityItem).documentTitle)) updates.title = item.documentTitle || "";
     if (Object.keys(updates).length > 0) raw.itemData = mergeNestedItemData(original?.itemData, updates);

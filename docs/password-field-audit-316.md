@@ -1,5 +1,11 @@
 # Current password field audit — Android 1.0.317
 
+2026-10-09 local KDBX lifecycle follow-up: [durable local working copies](keepass-local-working-copy-318.md) enable project member removal and preserve saved file changes through lock/restart/reselect/export. Actual Edge KDBX3/4 and shared provider regressions pass; Android KDBX grouping and cloud account acceptance remain separate.
+
+2026-10-09 current ordinary Android `1.0.318` MDBX follow-up: [the rich project application chain](android-rich-project-fields-318.md) passes Android writer → actual Edge editor/restart → actual Android Compose editor/native reopen → fresh Edge/restart. Three passwords/two credential groups retain every native field, including duplicate protected fields and unknown credential metadata; local Room ID remaps are reported separately. Two Android and two Edge tests pass. This does not close other backends or lifecycle operations.
+
+2026-10-09 incremental update against ordinary Android `1.0.318`: [password custom-field occurrence preservation](document-field-parity-318.md#password-project-follow-up) fixes source-row loss when a sibling field is edited. Actual Edge project/edit/reopen/validation checks pass; this is extension UI evidence. The following model table and runtime records remain their original dated audits, not a current all-backend pass list. Android KDBX project grouping still awaits the [scoped repair proposal](android-kdbx-project-fix-proposal-318.md).
+
 2026-10-06 KeePass project update: [actual writer, fresh import and Edge acceptance](keepass-project-credentials-317.md). Explicit KDBX credential metadata now restores extension project membership and supports grouped editing/additions. Android fresh KDBX import retains every tested rich field but loses outer grouping (two projects become four); this is a recorded failure, not bidirectional completion.
 
 Source inspection started 2026-10-02 and continued against 1.0.317 on 2026-10-04. Android main remains read-only. This table describes

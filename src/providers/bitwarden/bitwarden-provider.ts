@@ -3,6 +3,7 @@ import type { ProviderAcknowledgedMutation, ProviderAdapter, ProviderSyncContext
 import { BitwardenClient, type BitwardenSessionConfig } from "./bitwarden-client";
 import { assertWritableSshKeyData } from "../../core/ssh-key-data";
 import { assertPortablePasswordHistory } from '../../core/password-history';
+import { preserveLocalWalletContentOrder } from '../../core/wallet-content-order';
 import { assertKnownBitwardenCipher, bitwardenSshComparableData, decodeBitwardenCipher, encodeBitwardenCipher, encodeBitwardenPasskeyCipher, mergeBitwardenCipherProjection, mergeBitwardenCustomFieldOccurrences, mergeBitwardenSshLocalMetadata, resolveBitwardenCipherKey } from "./bitwarden-cipher-codec";
 import { bitwardenOrganizationRecords, resolveBitwardenOrganizationKeys } from "./bitwarden-organization";
 import { decryptBitwardenString, encryptBitwardenString, type BitwardenSymmetricKey } from "./bitwarden-crypto";
@@ -27,7 +28,8 @@ export class BitwardenProvider implements ProviderAdapter {
 
   constructor(fetcher: typeof fetch = globalThis.fetch.bind(globalThis)) {
     this.client = new BitwardenClient(fetcher);
-    this.attachmentDownloads = new BitwardenAttachmentDownloadService({ fetcher });
+    this.attachmentDownloads = new BitwardenAttachmentDownloadService({ fetcher,
+      limits: { maxPlaintextBytes: STEAM_MAFILE_MAX_BYTES, maxRetainedPlaintextBytes: STEAM_MAFILE_MAX_BYTES } });
     this.syncCache = new BitwardenSyncCache(this.client);
   }
 
@@ -48,7 +50,11 @@ export class BitwardenProvider implements ProviderAdapter {
       && !localScoped.some(item => item.updatedAt !== providerReference(item, account.id)?.revision);
     const synced = await this.syncCache.read(account.id, session, context.syncHint, mayReuse, context.signal);
     session = synced.session;
-    if (synced.unchanged) return { items: context.localItems, conflicts: [], warnings: [], unchanged: true };
+    // An unchanged Cipher revision does not mean its attachment was readable on
+    // the previous attempt. Retry incomplete Steam projections from the snapshot.
+    const incompleteSteam = localScoped.some(item => item.kind === 'login' && isSteamMaFileLogin(item)
+      && !item.steamSharedSecretBase64);
+    if (synced.unchanged && !incompleteSteam) return { items: context.localItems, conflicts: [], warnings: [], unchanged: true };
     const rawCiphers = ciphersOf(synced.payload);
     const verifiedEmptyDelta = !rawCiphers.length && synced.deletedIds.size > 0 && localScoped.every(item => {
       const remoteId = baseCipherId(providerReference(item, account.id)?.remoteId);
@@ -124,7 +130,7 @@ export class BitwardenProvider implements ProviderAdapter {
           : await decodeBitwardenCipher(rawCipher, account.id, ownerKey, resolvedFolderNames.get(folderId));
         let hydrationFailed = false;
         const steamCarrier = decoded.items.find((item): item is LoginItem => item.kind === "login" && isSteamMaFileLogin(item));
-        if (steamCarrier && !reused) {
+        if (steamCarrier && (!reused || !steamCarrier.steamSharedSecretBase64)) {
           try {
             const hydrated = await hydrateBitwardenSteamMaFile(
               this.attachmentDownloads,
@@ -167,6 +173,7 @@ export class BitwardenProvider implements ProviderAdapter {
       return remoteId ? [baseCipherId(remoteId)!] : [];
     }));
     const blockedMutationIds = new Set<string>();
+    const uncertainDeletionCipherIds = new Set<string>();
     const recoveryConflicts: ProviderSyncResult["conflicts"] = [];
     const requestedMutations: NonNullable<ProviderSyncResult["requestedMutations"]> = [];
     const fingerprintCache = new Map<string, string>();
@@ -216,6 +223,13 @@ export class BitwardenProvider implements ProviderAdapter {
         const raw = remoteId ? rawByCipherId.get(remoteId) : undefined;
         if ((!raw || Boolean(stringValue(raw, "DeletedDate", "deletedDate"))) && receipt.remoteId) {
           await registerAcknowledgement(receipt, { mutationId: receipt.mutationId, itemId: receipt.itemId, operation: "delete", remoteId: receipt.remoteId });
+        } else if (raw && remoteId) {
+          // The previous request may have committed and then been restored on
+          // another device. A live Cipher is not permission to replay deletion.
+          uncertainDeletionCipherIds.add(remoteId);
+          recoveryConflicts.push({ itemId: receipt.itemId, local,
+            remote: remoteItems.find(item => baseCipherId(providerReference(item, account.id)?.remoteId) === remoteId && (!local || findEquivalent(local, [item]))),
+            reason: "Bitwarden 上次删除结果未确认，远端项目仍在使用或已被恢复；已停止再次删除，请比较两端内容后处理冲突。" });
         }
         continue;
       }
@@ -277,6 +291,10 @@ export class BitwardenProvider implements ProviderAdapter {
     for (const cipherId of cipherIds) {
       const remotes = remoteByCipher.get(cipherId) || [];
       const locals = [...(localByCipher.get(cipherId) || [])].filter(item => item.kind !== "opaque" || !remotes.length || remotes.some(remote => remote.kind === "opaque"));
+      if (uncertainDeletionCipherIds.has(cipherId)) {
+        merged.push(...locals, ...remotes.filter(remote => !locals.some(local => findEquivalent(local, [remote]))));
+        continue;
+      }
       if (skippedCipherIds.has(cipherId)) {
         const opaqueRemotes = remotes.filter(remote => remote.kind === "opaque");
         merged.push(...locals.filter(local => local.kind !== "opaque" || !opaqueRemotes.length), ...opaqueRemotes);
@@ -384,20 +402,36 @@ export class BitwardenProvider implements ProviderAdapter {
           // Monica's local delete is a recycle-bin tombstone, so the remote copy has to land in
           // Bitwarden's recycle bin as well. `DELETE /ciphers/{id}` purges it irreversibly.
           await markMutationsAttempted(context, changes, pendingByItemId);
+          let confirmedRaw = raw;
           if (!trashedRemotely) {
             session = await this.client.softDeleteCipher(session, cipherId, context.signal);
-            rawByCipherId.set(cipherId, withBitwardenDeletedDate(raw, context.now));
+            // The trash endpoint has no revision precondition. Another device
+            // can edit after /sync; only an authoritative read can tell us what
+            // was actually retained in the recycle bin. A 200 alone must not
+            // acknowledge a stale local snapshot or a concurrently restored item.
+            const confirmed = await this.client.getCipherDetails(session, cipherId, context.signal);
+            session = confirmed.session;
+            if (!confirmed.payload || !stringValue(confirmed.payload, "DeletedDate", "deletedDate")) {
+              throw new Error("Bitwarden 删除后未确认回收站内容，已保留待同步操作，请重新同步检查。");
+            }
+            confirmedRaw = confirmed.payload;
+            rawByCipherId.set(cipherId, confirmedRaw);
+          }
+          assertKnownBitwardenCipher(confirmedRaw);
+          const confirmedOwnerKey = requireCipherOwnerKey(confirmedRaw, vaultKey, organizations.keys);
+          const confirmed = await decodeBitwardenCipher(confirmedRaw, account.id, confirmedOwnerKey,
+            resolvedFolderNames.get(stringValue(confirmedRaw, "FolderId", "folderId")));
+          if (!confirmed.items.length || confirmed.warning || confirmed.historyWarning) {
+            throw new Error("Bitwarden 回收站内容未完整读取，已保留待同步操作。");
           }
           for (const change of changes) {
             const pending = pendingByItemId?.get(change.id);
             const remoteId = providerReference(change, account.id)?.remoteId;
             if (pending && remoteId) {
-              await registerAcknowledgement(receiptsByMutationId.get(pending.id), { mutationId: pending.id, itemId: change.id, operation: "delete", remoteId });
+              await registerAcknowledgement(receiptsByMutationId.get(pending.id), { mutationId: pending.id, itemId: change.id, operation: "delete", remoteId }, findEquivalent(change, confirmed.items));
             }
           }
-          const deletedAt = primary.deletedAt || context.now;
-          const tombstones = (remotes.length ? remotes : workingLocals).map((item) => ({ ...item, deletedAt })) as VaultItem[];
-          merged.push(...rebaseRemoteItems(tombstones, workingLocals, account.id));
+          merged.push(...rebaseRemoteItems(confirmed.items, workingLocals, account.id));
           continue;
         }
         // A live local item over a trashed Cipher means the item came back; Bitwarden rejects
@@ -424,7 +458,8 @@ export class BitwardenProvider implements ProviderAdapter {
         // Cipher or PascalCase nested values could shadow the update.
         const finalRaw = mergeBitwardenCipherProjection(payload, updated.payload);
         rawByCipherId.set(cipherId, finalRaw);
-        const decoded = await decodeBitwardenCipher(finalRaw, account.id, ownerKey);
+        const decoded = await decodeBitwardenCipher(finalRaw, account.id, ownerKey,
+          resolvedFolderNames.get(stringValue(finalRaw, "FolderId", "folderId")));
         if (!decoded.items.length) throw new Error("Bitwarden 更新响应无法映射回 Monica 项目。");
         merged.push(...rebaseRemoteItems(decoded.items, workingLocals, account.id));
         for (const change of changes) {
@@ -641,7 +676,7 @@ async function hydrateBitwardenSteamMaFile(
     cursor = page.nextCursor;
   } while (cursor);
   const candidates = attachments
-    .filter((attachment) => attachment.sizeBytes > 0 && attachment.sizeBytes <= STEAM_MAFILE_MAX_BYTES)
+    .filter((attachment) => attachment.sizeBytes <= STEAM_MAFILE_MAX_BYTES + 65)
     .sort((left, right) => Number(isSteamMaFileName(right.fileName)) - Number(isSteamMaFileName(left.fileName)) || right.sizeBytes - left.sizeBytes);
   if (!candidates.length) throw new Error("已标记 Steam 项目，但没有可读取的 maFile 附件。");
 
@@ -654,6 +689,7 @@ async function hydrateBitwardenSteamMaFile(
       const started = await downloads.beginDownload({ providerId, itemId: item.id, session, rawCipher, organizationKeys, attachmentId: attachment.attachmentId, signal });
       session = started.session;
       readHandle = started.readHandle;
+      if (started.sizeBytes > STEAM_MAFILE_MAX_BYTES) throw new Error('Steam maFile 超过 1 MiB 安全上限。');
       let offset = 0;
       while (offset < started.sizeBytes) {
         const chunk = downloads.readChunk(providerId, readHandle, offset, Math.min(PROVIDER_ATTACHMENT_CHUNK_BYTES, started.sizeBytes - offset));
@@ -848,7 +884,7 @@ function rebaseRemoteItems(remotes: VaultItem[], locals: VaultItem[], providerId
     if (local.kind === "login" && remote.kind === "login" && local.loginType === "SSH_KEY" && remote.loginType === "SSH_KEY") {
       return { ...remote, id: local.id, sshKeyData: mergeBitwardenSshLocalMetadata(local, remote) };
     }
-    return { ...remote, id: local.id } as VaultItem;
+    return { ...preserveLocalWalletContentOrder(local, remote), id: local.id } as VaultItem;
   });
 }
 
@@ -885,6 +921,10 @@ function sameVaultPayload(left: VaultItem, right: VaultItem): boolean {
 
 function comparableVaultPayload(item: VaultItem): Record<string, unknown> {
   const { providerRefs: _refs, updatedAt: _updated, deletedAt: _deleted, ...payload } = item;
+  if (payload.kind === 'card' || payload.kind === 'identity') {
+    const { editorSectionOrder: _localOrder, ...comparable } = payload;
+    return comparable;
+  }
   if (payload.kind !== "login") return payload;
   const { bitwardenCustomFieldsVersion: _version, bitwardenSshKeyMode: _sshMode, bitwardenCipherId: _cipherId, ...comparable } = payload;
   return comparable.loginType === "SSH_KEY"
@@ -995,13 +1035,6 @@ function requireBitwardenMutationRevision(response: Record<string, unknown>, pre
     throw new Error(`Bitwarden ${operation}响应仍是旧修订，未确认远端写入。`);
   }
   return revision;
-}
-
-function withBitwardenDeletedDate(raw: Record<string, unknown>, deletedAt: string): Record<string, unknown> {
-  const result = { ...raw };
-  if (Object.prototype.hasOwnProperty.call(raw, "DeletedDate")) result.DeletedDate = deletedAt;
-  else result.deletedDate = deletedAt;
-  return result;
 }
 
 function boundedPendingMutations(input: PendingMutation[], providerId: string): Map<string, PendingMutation> {

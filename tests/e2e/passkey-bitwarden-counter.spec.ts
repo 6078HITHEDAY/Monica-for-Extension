@@ -1,7 +1,7 @@
 import { launchEdgeContext } from "./fixtures/edge";
 import { createHash, createPublicKey, verify } from "node:crypto";
 import path from "node:path";
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { chromium, expect, test, type Page, type Route } from "@playwright/test";
 import { BitwardenClient } from "../../src/providers/bitwarden/bitwarden-client";
 import { decodeBitwardenCipher, encodeBitwardenPasskeyCipher } from "../../src/providers/bitwarden/bitwarden-cipher-codec";
 import { deriveBitwardenMasterKey, stretchBitwardenMasterKey, type BitwardenSymmetricKey } from "../../src/providers/bitwarden/bitwarden-crypto";
@@ -15,12 +15,13 @@ const PASSWORD = "synthetic Bitwarden password";
 const REVISION = "2026-09-14T00:00:00.000Z";
 const CHALLENGE = Buffer.alloc(32, 19).toString("base64url");
 
-async function server(initialCounter: number) {
+async function server(initialCounter: number, origin = ORIGIN) {
+  const rpId = new URL(origin).hostname;
   const key: BitwardenSymmetricKey = { encKey: new Uint8Array(32).fill(16), macKey: new Uint8Array(32).fill(24) };
   const stretched = await stretchBitwardenMasterKey(await deriveBitwardenMasterKey(PASSWORD, EMAIL, { type: 0, iterations: 10_000 }));
   const protectedKey = await new BitwardenClient().protectVaultKey(key, stretched, new Uint8Array(16));
-  const credential = await createPasskey({ origin: ORIGIN, challenge: CHALLENGE, rpName: "Counter test", userId: "dXNlcg", userName: "synthetic", userDisplayName: "Synthetic", algorithms: [-7], excludeCredentialIds: [] });
-  const item: PasskeyItem = { id: "fixture", kind: "passkey", title: "Counter test", favorite: false, notes: "", createdAt: REVISION, updatedAt: REVISION, providerRefs: [], credentialId: credential.credentialId, rpId: "counter.example.test", rpName: "Counter test", userHandle: "dXNlcg", userName: "synthetic", userDisplayName: "Synthetic", algorithm: -7, publicKey: credential.publicKeySpki, privateKeyPkcs8: credential.privateKeyPkcs8, signCount: initialCounter, discoverable: true, sourceMode: "bitwarden" };
+  const credential = await createPasskey({ origin, challenge: CHALLENGE, rpName: "Counter test", userId: "dXNlcg", userName: "synthetic", userDisplayName: "Synthetic", algorithms: [-7], excludeCredentialIds: [] });
+  const item: PasskeyItem = { id: "fixture", kind: "passkey", title: "Counter test", favorite: false, notes: "", createdAt: REVISION, updatedAt: REVISION, providerRefs: [], credentialId: credential.credentialId, rpId, rpName: "Counter test", userHandle: "dXNlcg", userName: "synthetic", userDisplayName: "Synthetic", algorithm: -7, publicKey: credential.publicKeySpki, privateKeyPkcs8: credential.privateKeyPkcs8, signCount: initialCounter, discoverable: true, sourceMode: "bitwarden" };
   let raw = { ...await encodeBitwardenPasskeyCipher(item, key), id: "counter-cipher", revisionDate: REVISION, creationDate: REVISION };
   const events: string[] = [];
   let revision = 0;
@@ -69,11 +70,14 @@ async function send(page: Page, request: object): Promise<any> {
 }
 function json(route: Route, body: unknown, status = 200) { return route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) }); }
 
-for (const mode of ["zero-offline", "positive", "during-sync", "failure", "cancel", "discover", "regression-zero", "regression-positive", "regression-resolved"] as const) {
+for (const mode of ["github-json", "zero-offline", "positive", "during-sync", "failure", "cancel", "discover", "regression-zero", "regression-positive", "regression-resolved"] as const) {
   test(`Bitwarden Passkey runtime: ${mode}`, async ({}, testInfo) => {
-    const mock = await server(mode === "zero-offline" || mode === "discover" ? 0 : 3);
+    const origin = mode === "github-json" ? "https://github.com" : ORIGIN;
+    const mock = await server(mode === "github-json" || mode === "zero-offline" || mode === "discover" ? 0 : 3, origin);
     const extensionPath = path.resolve("dist");
-    const context = await launchEdgeContext(testInfo.outputPath("profile"), { channel: "chromium", headless: true, locale: "zh-CN", args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`] });
+    const launch = mode === "github-json" ? chromium.launchPersistentContext.bind(chromium) : launchEdgeContext;
+    const profile = mode === "github-json" ? `D:/Monica-github-${Date.now()}` : testInfo.outputPath("profile");
+    const context = await launch(profile, { channel: "chromium", headless: true, locale: "zh-CN", args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`] });
     let concurrentSync: Promise<unknown> | undefined;
     try {
       await context.route(`${HOST}/**`, mock.route);
@@ -108,16 +112,33 @@ for (const mode of ["zero-offline", "positive", "during-sync", "failure", "cance
         concurrentSync = send(manager, { type: "PROVIDER_SYNC", providerId: login.providerId });
         await expect.poll(() => mock.events.includes("read")).toBe(true);
       }
-      await context.route(`${ORIGIN}/**`, route => route.fulfill({ contentType: "text/html", body: `<!doctype html><html><body><button id="login">Login</button><p id="result">idle</p><script>
+      await context.route(`${origin}/**`, route => route.fulfill({ contentType: "text/html", body: `<!doctype html><html><body>${mode === 'github-json' ? '<form><input autocomplete="username" value="synthetic"><input type="password" autocomplete="current-password" value="synthetic form password"></form>' : ''}<button id="login">Login</button><p id="result">idle</p><script>
+        'use strict';
+        const encode = bytes => btoa(String.fromCharCode(...new Uint8Array(bytes))).replaceAll('+','-').replaceAll('/','_').replace(/=+$/,'');
+        // The same assignment + binary projection used by @github/webauthn-json.
+        function githubJson(credential) {
+          credential.toJSON=()=>({id:credential.id,rawId:encode(credential.rawId),type:credential.type,
+            authenticatorAttachment:credential.authenticatorAttachment,clientExtensionResults:credential.getClientExtensionResults(),
+            response:{clientDataJSON:encode(credential.response.clientDataJSON),authenticatorData:encode(credential.response.authenticatorData),
+              signature:encode(credential.response.signature),userHandle:encode(credential.response.userHandle)}});
+          return JSON.parse(JSON.stringify(credential));
+        }
+
         const id=Uint8Array.from(atob('${mock.credential.credentialId}'.replace(/-/g,'+').replace(/_/g,'/')), c=>c.charCodeAt(0));
-        login.onclick=async()=>{window.controller=new AbortController();result.textContent='waiting';try{const credential=await navigator.credentials.get({signal:controller.signal,publicKey:{challenge:new Uint8Array(32).fill(19),rpId:'counter.example.test',allowCredentials:[{type:'public-key',id}],userVerification:'discouraged',timeout:60000}});window.assertion=credential.toJSON();result.textContent='authenticated';}catch(error){result.textContent='error:'+error.name;}};
+        login.onclick=async()=>{window.controller=new AbortController();result.textContent='waiting';try{const credential=await navigator.credentials.get({signal:controller.signal,publicKey:{challenge:new Uint8Array(32).fill(19),rpId:'${new URL(origin).hostname}',allowCredentials:[{type:'public-key',id}],userVerification:'${mode === 'github-json' ? 'required' : 'discouraged'}',timeout:60000}});window.assertion=${mode === 'github-json' ? 'githubJson(credential)' : 'credential.toJSON()'};result.textContent='authenticated';}catch(error){result.textContent='error:'+error.name;}};
         </script></body></html>` }));
       const website = await context.newPage();
-      await website.goto(`${ORIGIN}/login`);
+      await website.goto(`${origin}/login`);
       await website.getByRole("button", { name: "Login", exact: true }).click();
       await expect(website.locator("#monica-passkey-prompt-host")).toHaveCount(1);
       await expect.poll(() => website.evaluate(() => document.activeElement?.id)).toBe("monica-passkey-prompt-host");
+      const opened = mode === 'github-json' ? context.waitForEvent('page') : undefined;
       await website.keyboard.press("Tab"); await website.keyboard.press("Tab"); await website.keyboard.press("Enter");
+      if (opened) {
+        const verification = await opened;
+        await verification.getByLabel('Monica 主密码', { exact: true }).fill('synthetic browser vault password');
+        await verification.getByRole('button', { name: '确认', exact: true }).click();
+      }
       if (mode === "during-sync") {
         await website.waitForTimeout(250);
         expect(await website.evaluate(() => (window as any).assertion)).toBeUndefined();
@@ -162,6 +183,14 @@ for (const mode of ["zero-offline", "positive", "during-sync", "failure", "cance
         const authData = Buffer.from(assertion.response.authenticatorData, "base64url");
         const counter = mode === "positive" ? 9001 : mode === "during-sync" ? 4 : 0;
         expect(authData.readUInt32BE(33)).toBe(counter);
+        if (mode === 'github-json') {
+          expect(authData[32] & 0x1d).toBe(0x1d);
+          expect(authData.subarray(0, 32)).toEqual(createHash('sha256').update('github.com').digest());
+          expect(assertion.id).toBe(mock.credential.credentialId);
+          expect(assertion.response.userHandle).toBe('dXNlcg');
+          expect(JSON.parse(Buffer.from(assertion.response.clientDataJSON, 'base64url').toString())).toMatchObject({ origin, challenge: CHALLENGE, type: 'webauthn.get' });
+          expect(mock.events).toEqual([]);
+        }
         expect(await mock.counter()).toBe(counter);
         const signed = Buffer.concat([authData, createHash("sha256").update(Buffer.from(assertion.response.clientDataJSON, "base64url")).digest()]);
         expect(verify("sha256", signed, createPublicKey({ key: Buffer.from(mock.credential.publicKeySpki, "base64"), format: "der", type: "spki" }), Buffer.from(assertion.response.signature, "base64url"))).toBe(true);

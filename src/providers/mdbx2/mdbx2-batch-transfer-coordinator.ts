@@ -1,4 +1,6 @@
 import { parseLosslessJson } from "../../core/lossless-json";
+import { inspectPasskeyKey } from '../../passkey/capability';
+import { normalizeCredentialId } from '../../passkey/source-policy';
 import type { Mdbx2MoveAttachmentProof, Mdbx2MoveFinalizationRecord } from "../../core/mdbx2-move-journal";
 import { completeTransferComponents, mdbx2TransferDependencies } from "./mdbx2-transfer-dependencies";
 import { deleteMdbx2TransferSources } from "./mdbx2-transfer-source-delete";
@@ -671,9 +673,10 @@ export class Mdbx2BatchTransferCoordinator {
     if (selectedIds.length > MAX_TRANSFER_ITEMS) throw new Error("展开完整多密码项目后超过单次传输上限，请减少选择的项目。");
     const selectedItems = selectedIds.map(id => itemsById.get(id)!);
     const sourceAccounts = new Map<string, ProviderAccount>();
+    const sourceErrors = new Map<string, string>();
     for (const item of selectedItems) {
-      const account = await this.sourceAccount(item, input.targetProviderId);
-      sourceAccounts.set(item.id, account);
+      try { sourceAccounts.set(item.id, await this.sourceAccount(item, input.targetProviderId)); }
+      catch (error) { sourceErrors.set(item.id, error instanceof Error ? error.message : '来源密码源不可用。'); }
     }
 
     const sourceCollections: Mdbx2CollectionSummary[] = [];
@@ -684,7 +687,7 @@ export class Mdbx2BatchTransferCoordinator {
 
     const targetIds = new Map<string, string>();
     for (const item of selectedItems) {
-      if (item.kind === "passkey" || input.action === "move") targetIds.set(item.id, item.id);
+      if (input.action === "move") targetIds.set(item.id, item.id);
       else targetIds.set(item.id, await mdbx2TransferUuid(operationId, `item:${input.targetProviderId}:${item.id}`));
     }
     const plan = planMdbx2BatchTransfer(selectedItems, {
@@ -696,6 +699,31 @@ export class Mdbx2BatchTransferCoordinator {
       now: operationCreatedAt,
       idFactory: (item) => targetIds.get(item.id)!
     });
+    const targetPasskeys = selectedItems.some(item => item.kind === 'passkey')
+      ? await this.targetPasskeyRecords(targetAccount) : [];
+    const plannedCredentials = new Set<string>();
+    for (const row of plan.items) {
+      row.blockedReason ||= sourceErrors.get(row.sourceItemId);
+      const item = itemsById.get(row.sourceItemId)!;
+      if (!row.blockedReason && item.kind === 'passkey') {
+        const key = await inspectPasskeyKey(item.privateKeyPkcs8, item.algorithm);
+        if (key !== 'usable') row.blockedReason = '此 Passkey 的私钥不可导出或不可用，请保留原设备记录。';
+        const credential = normalizeCredentialId(item.credentialId);
+        const sourceRef = item.providerRefs.find(ref => ref.providerId === targetAccount.id);
+        const priorCopy = allItems.find(candidate => candidate.id === targetIds.get(item.id));
+        const priorRef = input.action === 'copy' ? priorCopy?.providerRefs.find(ref => ref.providerId === targetAccount.id) : undefined;
+        const copyIdentity = input.action === 'copy' ? JSON.stringify([operationId,item.id,targetIds.get(item.id)]) : undefined;
+        if (copyIdentity) row.payloadPatch = {...row.payloadPatch,monica_transfer_copy:copyIdentity};
+        if (targetPasskeys.some(record => record.credential === credential
+          && !(input.action === 'move' && sourceRef?.remoteId === record.objectId)
+          && !(priorRef?.remoteId === record.objectId)
+          && !(copyIdentity && record.copyIdentity === copyIdentity)) || plannedCredentials.has(credential)) {
+          row.blockedReason = '目标数据库已存在同一 Passkey 凭据，不能复制或覆盖；请选择其他数据库。';
+        }
+        if (!row.blockedReason) plannedCredentials.add(credential);
+      }
+      if (row.blockedReason) { row.targetItem = undefined; row.payloadPatch = undefined; }
+    }
     for (const component of components) {
       const related = plan.items.filter(item => component.includes(item.sourceItemId));
       if (!related.some(item => item.blockedReason)) continue;
@@ -758,6 +786,30 @@ export class Mdbx2BatchTransferCoordinator {
     if (!account || !account.enabled) throw new Error(`项目「${item.title || item.id}」的来源密码源不可用。`);
     if (account.id === targetProviderId && account.kind !== "mdbx2") throw new Error("目标密码源必须是 MDBX2。");
     return account;
+  }
+
+  private async targetPasskeyRecords(account: ProviderAccount): Promise<Array<{credential: string; objectId: string; copyIdentity?: string}>> {
+    const handle = vaultHandleOf(account), result: Array<{credential: string; objectId: string; copyIdentity?: string}> = [];
+    const collections = await listMdbx2TransferCollections(this.nativeClient, handle, false);
+    for (const collection of collections) {
+      let cursor: string | undefined;
+      const seen = new Set<string>();
+      do {
+        const page = await this.nativeClient.listObjects(handle, collection.collectionId, {objectTypeId:'passkey',deleted:false,pageSize:200,cursor});
+        for (const summary of page.items) {
+          const record = await this.nativeClient.revealObject(handle, summary.objectId);
+          if (record.deleted || record.objectTypeId !== 'passkey') continue;
+          const payload = parseLosslessJson(record.payloadJson) as Record<string, unknown>;
+          if (typeof payload.credential_id !== 'string' || !payload.credential_id) throw new Error('目标 Passkey 身份无法读取，已保留来源。');
+          result.push({credential:normalizeCredentialId(payload.credential_id),objectId:record.objectId,
+            copyIdentity:typeof payload.monica_transfer_copy === 'string' ? payload.monica_transfer_copy : undefined});
+        }
+        if (!page.nextCursor) break;
+        if (!page.items.length || seen.has(page.nextCursor)) throw new Error('MDBX2 Object 分页游标没有前进。');
+        seen.add(page.nextCursor); cursor = page.nextCursor;
+      } while (cursor);
+    }
+    return result;
   }
 
   private async prepareWork(context: PreparedContext, planItem: Mdbx2BatchTransferPlanItem): Promise<PreparedTransferWork> {

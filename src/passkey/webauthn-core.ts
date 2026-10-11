@@ -1,6 +1,8 @@
 import { parse as parseDomain } from "tldts";
 import { assertPasskeyCounter } from "./ownership-policy";
 import { selectPasskeyRegistrationAlgorithm, type PasskeyRegistrationAlgorithm } from "./registration-policy";
+import { importPasskeySigningKey } from './signing-key';
+import { assertPasskeyBackupFlags } from './backup-flags';
 
 export function supportsPasskeySigningAlgorithm(algorithm: number): boolean {
   return [-7, -257, -37, -8].includes(algorithm);
@@ -118,10 +120,8 @@ export async function createAssertion(input: PasskeyAssertionInput): Promise<{ r
   assertChallenge(input.challenge);
   const algorithm = input.algorithm ?? -7;
   if (!supportsPasskeySigningAlgorithm(algorithm)) throw new Error("不支持此 Passkey 签名算法。");
-  const keyAlgorithm = algorithm === -7 ? { name: "ECDSA", namedCurve: "P-256" }
-    : algorithm === -8 ? { name: "Ed25519" }
-      : { name: algorithm === -37 ? "RSA-PSS" : "RSASSA-PKCS1-v1_5", hash: "SHA-256" };
-  const privateKey = await crypto.subtle.importKey("pkcs8", arrayBuffer(fromBase64(input.privateKeyPkcs8)), keyAlgorithm, false, ["sign"]);
+  assertPasskeyBackupFlags(input);
+  const privateKey = await importPasskeySigningKey(input.privateKeyPkcs8, algorithm);
   // Counter policy and any required server commit happen before cryptographic signing.
   assertPasskeyCounter(input.signCount);
   const nextCount = input.signCount;
@@ -133,7 +133,7 @@ export async function createAssertion(input: PasskeyAssertionInput): Promise<{ r
   const clientDataJSON = clientData("webauthn.get", input.challenge, input.origin);
   const clientHash = new Uint8Array(await crypto.subtle.digest("SHA-256", arrayBuffer(clientDataJSON)));
   const signatureAlgorithm = algorithm === -7 ? { name: "ECDSA", hash: "SHA-256" }
-    : algorithm === -37 ? { name: "RSA-PSS", saltLength: 32 } : { name: keyAlgorithm.name };
+    : algorithm === -37 ? { name: "RSA-PSS", saltLength: 32 } : { name: privateKey.algorithm.name };
   const rawSignature = new Uint8Array(await crypto.subtle.sign(signatureAlgorithm, privateKey, arrayBuffer(concat(authenticatorData, clientHash))));
   return {
     response: {

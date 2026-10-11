@@ -1,4 +1,6 @@
 import { readProjectCredential } from '../../core/project-credentials';
+import { generateKeyPairSync } from 'node:crypto';
+import type { PasskeyItem } from '../../core/model';
 import { describe, expect, it } from "vitest";
 import { createLoginItem, type ProviderAccount, type VaultItem } from "../../core/model";
 import type { ProviderAdapter } from "../../core/provider";
@@ -207,6 +209,33 @@ const noAttachments: Mdbx2BatchTransferAttachmentBridge = {
 };
 
 describe("MDBX2 batch transfer coordinator", () => {
+  it.each([false,true])('copies a Passkey with its original key and credential, preserves the source, and replays without duplication (interrupted: %s)', async interrupted => {
+    const {service,target}=await setupVault(), native=new FakeNative();
+    const pair=generateKeyPairSync('ec',{namedCurve:'prime256v1'});
+    const source:PasskeyItem={id:crypto.randomUUID(),kind:'passkey',title:'Synthetic key',favorite:false,notes:'keep',createdAt:OPERATION_TIME,updatedAt:OPERATION_TIME,providerRefs:[],
+      credentialId:'AQIDBA',rpId:'example.com',rpName:'Example',userHandle:'AQID',userName:'user',userDisplayName:'User',algorithm:-7,
+      publicKey:pair.publicKey.export({format:'der',type:'spki'}).toString('base64'),privateKeyPkcs8:pair.privateKey.export({format:'der',type:'pkcs8'}).toString('base64'),signCount:0,discoverable:true,sourceMode:'browser-local'};
+    const original=await service.upsertItem(source);
+    const coordinator=new Mdbx2BatchTransferCoordinator(service,new EmptyRegistry(),new Mdbx2Provider(native),native,noAttachments);
+    const request={itemIds:[source.id],targetProviderId:target.id,targetCollectionId:TARGET_COLLECTION,action:'copy' as const,preserveCategories:false,operationId:OPERATION_ID,operationCreatedAt:OPERATION_TIME};
+    const plan=await coordinator.plan(request);expect(plan.requiresMoveConfirmation).toBe(false);expect(plan.transferableCount).toBe(1);
+    if (interrupted) {
+      const finalize=service.applyCompletedMdbx2Transfer.bind(service);
+      service.applyCompletedMdbx2Transfer=async()=>{throw new Error('Synthetic interruption after target write');};
+      const failed=await coordinator.execute(request);expect(failed.failedCount).toBe(1);
+      expect(native.records.size).toBe(1);expect(await service.listItems()).toHaveLength(1);
+      service.applyCompletedMdbx2Transfer=finalize;
+    }
+    const result=await coordinator.execute(request);expect(result.completedCount,JSON.stringify(result)).toBe(1);
+    expect(await service.getItem(source.id)).toEqual(original);
+    const copy=await service.getItem(result.items[0].targetItemId!);
+    expect(copy).toMatchObject({credentialId:source.credentialId,privateKeyPkcs8:source.privateKeyPkcs8,signCount:0});
+    expect(copy!.id).not.toBe(source.id);expect(native.deleted).toHaveLength(0);
+    expect((await coordinator.execute(request)).completedCount).toBe(1);
+    expect(await service.listItems()).toHaveLength(2);
+    const other=await coordinator.plan({...request,operationId:crypto.randomUUID()});
+    expect(other.blockedCount).toBe(1);expect(other.items[0].blockedReason).toContain('同一');
+  });
   it.each(['copy', 'move'] as const)("blocks %s of password history before creating target folders or deleting sources", async action => {
     const { service, target } = await setupVault();
     const first = await service.upsertItem({ ...createLoginItem({ title: 'History project' }), passwordGroupId: 'history-project' });

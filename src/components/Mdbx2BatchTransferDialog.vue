@@ -414,10 +414,10 @@ function errorMessage(cause: unknown): string {
         <p v-if="error" class="batch-error batch-dialog-error" role="alert">{{ error }}</p>
       </div>
       <footer class="mdbx2-batch-footer">
-        <m3e-button variant="text" type="button" :disabled="executing" @click="closeDialog">{{ tr('关闭') }}</m3e-button>
+        <m3e-button variant="text" type="button" :disabled="executing" @click="closeDialog">{{ hasPlan && !executeResult ? tr('取消') : tr('关闭') }}</m3e-button>
         <m3e-button v-if="retryableCount" variant="tonal" type="button" :disabled="executing" @click="retryFailed"><m3e-icon slot="icon" name="refresh"></m3e-icon>{{ tr('重试失败项目') }}</m3e-button>
         <m3e-button v-if="!hasPlan" variant="filled" type="button" :disabled="planning || executing || !selectedCount || !targetReady" @click="createPlan"><m3e-icon slot="icon" name="rule"></m3e-icon>{{ planning ? tr('检查兼容性…') : tr('检查并生成计划') }}</m3e-button>
-        <m3e-button v-else variant="filled" type="button" :disabled="planning || executing || !planCanExecute" @click="executePlan"><m3e-icon slot="icon" :name="executing ? 'progress_activity' : action === 'move' ? 'drive_file_move' : 'content_copy'"></m3e-icon>{{ executing ? tr('正在提交…') : planResult?.requiresMoveConfirmation ? tr('确认并移动') : tr('执行复制') }}</m3e-button>
+        <m3e-button v-else variant="filled" type="button" :disabled="planning || executing || !planCanExecute" @click="executePlan"><m3e-icon slot="icon" :name="executing ? 'progress_activity' : action === 'move' ? 'drive_file_move' : 'content_copy'"></m3e-icon>{{ executing ? tr('正在提交…') : planResult?.blockedCount ? tr('跳过受限项并继续') : planResult?.requiresMoveConfirmation ? tr('确认并移动') : tr('执行复制') }}</m3e-button>
       </footer>
     </section>
   </div>

@@ -42,20 +42,21 @@ async function toggle() {
 <template>
   <section class="inline-autofill-setting" aria-labelledby="inline-autofill-label">
     <div class="inline-autofill-setting-row">
-      <div><strong id="inline-autofill-label">{{ tr('表单旁自动填充') }}</strong><p id="inline-autofill-description">{{ tr('聚焦登录表单时，在输入框旁显示匹配的登录项。') }}</p></div>
-      <m3e-switch :checked.prop="enabled" @beforeinput.prevent="toggle" aria-labelledby="inline-autofill-label" aria-describedby="inline-autofill-description" :disabled="!ready" :aria-busy="saving"></m3e-switch>
+      <strong id="inline-autofill-label">{{ tr('表单旁自动填充') }}</strong>
+      <m3e-switch :checked.prop="enabled" @beforeinput.prevent="toggle" aria-labelledby="inline-autofill-label" aria-describedby="inline-autofill-description" :disabled="!ready || saving" :aria-busy="saving"></m3e-switch>
+      <p id="inline-autofill-description">{{ tr('聚焦登录表单时，在输入框旁显示匹配的登录项。') }}</p>
     </div>
-    <small>{{ tr('关闭后仍可从工具栏插件填写。') }}</small>
     <p v-if="error" class="form-error" role="alert">{{ tr('未能保存自动填充设置，请重试。') }}</p>
     <p v-else-if="saved" class="inline-autofill-saved" role="status">{{ tr('已保存') }}</p>
   </section>
 </template>
 
 <style scoped>
-.inline-autofill-setting { padding: 16px; border-bottom: 1px solid var(--app-outline); }
-.inline-autofill-setting-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: center; }
+.inline-autofill-setting { min-width: 0; }
+.inline-autofill-setting-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 16px; row-gap: 0; align-items: center; }
+.inline-autofill-setting-row > p { grid-column: 1 / -1; }
 .inline-autofill-setting strong { font-size: 1rem; font-weight: 600; overflow-wrap: anywhere; }
-.inline-autofill-setting p { margin: 6px 0; font-size: .875rem; line-height: 1.6; overflow-wrap: anywhere; }
+.inline-autofill-setting p { margin: 4px 0 0; font-size: .875rem; line-height: 1.5; overflow-wrap: anywhere; }
 .inline-autofill-setting p:not(.form-error), .inline-autofill-setting small { color: var(--app-muted); }
 .inline-autofill-setting small { display: block; font-size: .75rem; line-height: 1.6; margin-top: 8px; overflow-wrap: anywhere; }
 </style>

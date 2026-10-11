@@ -10,6 +10,41 @@ const PROVIDER_ID = "provider-1";
 const ITEM_ID = "item-1";
 
 describe("Bitwarden authenticated attachment download", () => {
+  it.each([1, 7, 64 * 1024])('reads standard format with fragmented %s-byte network chunks', async chunkSize => {
+    const fixture = await attachmentFixture({ plaintext: new Uint8Array(chunkSize === 1 ? 71 : 130_013).fill(7), independentAttachmentKey: true });
+    const body = concat(Uint8Array.of(2), fixture.body.slice(0, 16), fixture.body.slice(-32), fixture.body.slice(16, -32));
+    (fixture.rawCipher.Attachments as Record<string, unknown>[])[0].Size = String(body.length);
+    const fetcher: typeof fetch = async input => {
+      if (String(input).startsWith(API_URL)) return json({ id: 'attachment-1', url: SIGNED_URL });
+      let offset = 0;
+      return new Response(new ReadableStream({ pull(controller) {
+        if (offset === body.length) { controller.close(); return; }
+        const end = Math.min(body.length, offset + chunkSize); controller.enqueue(body.slice(offset, end)); offset = end;
+      } }));
+    };
+    const service = new BitwardenAttachmentDownloadService({ fetcher, transportPolicy: fastTransport() });
+    const begun = await service.beginDownload(context(fixture));
+    await expect(readAll(service, begun.readHandle, 64 * 1024)).resolves.toEqual(fixture.plaintext);
+  });
+
+  it.each(['iv', 'mac', 'ciphertext', 'type'] as const)('rejects a modified standard %s before exposing plaintext', async field => {
+    const fixture = await attachmentFixture({ independentAttachmentKey: true });
+    const body = concat(Uint8Array.of(2), fixture.body.slice(0, 16), fixture.body.slice(-32), fixture.body.slice(16, -32));
+    body[{ iv: 1, mac: 17, ciphertext: 49, type: 0 }[field]] ^= 1;
+    (fixture.rawCipher.Attachments as Record<string, unknown>[])[0].Size = String(body.length);
+    const service = new BitwardenAttachmentDownloadService({ fetcher: attachmentFetcher(body), transportPolicy: fastTransport() });
+    await expect(service.beginDownload(context(fixture))).rejects.toMatchObject({ code: field === 'type' ? 'bitwarden-attachment-metadata-invalid' : 'bitwarden-attachment-mac-invalid' });
+    expect(activeSessions(service)).toBe(0);
+  });
+
+  it('does not mistake a historical IV starting with 2 for a standard header', async () => {
+    const fixture = await attachmentFixture();
+    expect(fixture.body[0]).toBe(2);
+    const service = new BitwardenAttachmentDownloadService({ fetcher: attachmentFetcher(fixture.body), transportPolicy: fastTransport() });
+    const begun = await service.beginDownload(context(fixture));
+    await expect(readAll(service, begun.readHandle, 64)).resolves.toEqual(fixture.plaintext);
+  });
+
   it("decrypts a personal per-Cipher attachment and never forwards the bearer token", async () => {
     const fixture = await attachmentFixture({ perCipherKey: true, independentAttachmentKey: true, fileName: "机密.txt" });
     const fetcher = attachmentFetcher(fixture.body);
@@ -171,7 +206,7 @@ describe("Bitwarden authenticated attachment download", () => {
   it("rejects oversized metadata and counts streamed bytes instead of trusting Content-Length", async () => {
     const fixture = await attachmentFixture({ independentAttachmentKey: false });
     const rawAttachment = (fixture.rawCipher.Attachments as Array<Record<string, unknown>>)[0];
-    rawAttachment.Size = "97";
+    rawAttachment.Size = "98";
     const unusedFetcher = vi.fn() as unknown as typeof fetch;
     const metadataService = new BitwardenAttachmentDownloadService({
       fetcher: unusedFetcher,
@@ -182,7 +217,7 @@ describe("Bitwarden authenticated attachment download", () => {
     expect(unusedFetcher).not.toHaveBeenCalled();
 
     rawAttachment.Size = "0";
-    const oversized = new Uint8Array(97);
+    const oversized = new Uint8Array(98);
     const bodyFetcher = attachmentFetcher(oversized, {}, { "Content-Length": "1" });
     const bodyService = new BitwardenAttachmentDownloadService({
       fetcher: bodyFetcher,

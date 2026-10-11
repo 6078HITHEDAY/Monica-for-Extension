@@ -6,13 +6,14 @@ import { MemoryVaultSessionStore } from '../security/vault-session';
 import { MemoryVaultStorage } from '../security/vault-storage';
 import { PasswordProjectRemovalWorkflow, PasswordProjectRemovalNotStagedError } from './password-project-removal';
 import { ProviderOperationQueue } from './provider-operation-queue';
+import { BitwardenProjectRemovalRuntime } from './bitwarden-project-removal-runtime';
 
 function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>(done => { resolve = done; });
   return { promise, resolve };
 }
-async function fixture(kind: ProviderKind = 'mdbx2') {
+async function fixture(kind: ProviderKind = 'mdbx2', bitwardenEnabled = false) {
   const vault = new SecureVaultService(new MemoryVaultStorage(), new MemoryVaultSessionStore());
   const group = crypto.randomUUID(), credential = crypto.randomUUID();
   const rows: LoginItem[] = [0, 1, 2].map(index => ({ ...createLoginItem({ title: 'Project', username: 'private-account', password: `private-password-${index}` }),
@@ -27,8 +28,11 @@ async function fixture(kind: ProviderKind = 'mdbx2') {
   const queue = new ProviderOperationQueue(), changed = vi.fn();
   const removal = { resume: vi.fn(async () => (await vault.readPasswordProjectRemovals())[0]) };
   const restore = { restore: vi.fn() };
-  const workflow = new PasswordProjectRemovalWorkflow(vault, removal, restore, queue, changed);
-  return { vault, input, queue, removal, restore, workflow, changed };
+  const bitwarden = { resume: vi.fn(async (_id: string, _signal?: AbortSignal) => (await vault.readPasswordProjectRemovals())[0]) };
+  const active = new Map<string, AbortController>(), invalidate = vi.fn();
+  const runtime = new BitwardenProjectRemovalRuntime(vault, bitwarden, active, invalidate);
+  const workflow = new PasswordProjectRemovalWorkflow(vault, removal, restore, queue, changed, bitwardenEnabled ? runtime : undefined);
+  return { vault, input, queue, removal, restore, workflow, changed, bitwarden, active, invalidate, runtime };
 }
 
 it.each(['keepass', 'monica-webdav', 'bitwarden'] as const)('rejects unsupported %s before any draft/journal write even with incoming references omitted', async kind => {
@@ -114,4 +118,96 @@ it('runs local removal without any native coordinator call', async () => {
   expect(await f.vault.listDeletedItems()).toHaveLength(1);
   expect(f.removal.resume).not.toHaveBeenCalled();
   expect(await f.workflow.pending()).toEqual([]);
+});
+
+it('routes Bitwarden to its own abortable coordinator and invalidates only that source', async () => {
+  const f = await fixture('bitwarden', true);
+  expect((await f.workflow.stage(f.input)).supported).toBe(true);
+  expect(f.removal.resume).not.toHaveBeenCalled();
+  expect(f.bitwarden.resume).toHaveBeenCalledWith(f.input.operationId, expect.any(AbortSignal));
+  expect(f.invalidate.mock.calls).toEqual([['bitwarden'], ['bitwarden']]);
+  expect(f.active.size).toBe(0);
+  expect(JSON.stringify(await f.workflow.pending())).not.toContain('private-');
+});
+
+it('serializes Bitwarden removals behind ordinary sync without blocking other providers', async () => {
+  const f = await fixture('bitwarden', true), started = deferred(), release = deferred();
+  const sync = f.queue.run('bitwarden', async () => { started.resolve(); await release.promise; });
+  await started.promise;
+  const stage = f.workflow.stage(f.input);
+  await f.queue.run('independent', async () => undefined);
+  expect(f.bitwarden.resume).not.toHaveBeenCalled();
+  release.resolve(); await sync; await stage;
+  expect(f.bitwarden.resume).toHaveBeenCalledOnce();
+});
+
+it('aborts the same in-flight request on source lock while keeping the encrypted intent retryable', async () => {
+  const f = await fixture('bitwarden', true), started = deferred();
+  f.bitwarden.resume.mockImplementation(async (_id, signal) => {
+    started.resolve();
+    await new Promise<void>((_resolve, reject) => signal!.addEventListener('abort', () => reject(signal!.reason), {once: true}));
+    throw new Error('Unreachable');
+  });
+  const stage = f.workflow.stage(f.input), rejected = expect(stage).rejects.toThrow('Synthetic lock');
+  await started.promise;
+  f.active.get('bitwarden')!.abort(new DOMException('Synthetic lock', 'AbortError'));
+  await rejected;
+  expect(f.active.size).toBe(0);
+  expect(f.invalidate).toHaveBeenCalledTimes(2);
+  expect(await f.workflow.pending()).toEqual([expect.objectContaining({ status: 'preparing', canCancel: true })]);
+});
+
+it('does not overlap an active Passkey assertion and leaves a staged request recoverable', async () => {
+  const f = await fixture('bitwarden', true), assertion = new AbortController();
+  f.active.set('bitwarden', assertion);
+  await expect(f.workflow.stage(f.input)).rejects.toThrow('其他操作');
+  expect(f.bitwarden.resume).not.toHaveBeenCalled();
+  expect(f.active.get('bitwarden')).toBe(assertion);
+  expect(await f.workflow.pending()).toHaveLength(1);
+});
+
+it('allows Bitwarden preparation cancellation while holding the provider queue', async () => {
+  const f = await fixture('bitwarden', true), started = deferred(), release = deferred();
+  f.bitwarden.resume.mockImplementation(async () => { started.resolve(); await release.promise; return (await f.vault.readPasswordProjectRemovals())[0]; });
+  const stage = f.workflow.stage(f.input); await started.promise;
+  expect((await f.workflow.cancel(f.input.operationId)).status).toBe('cancelled');
+  release.resolve(); expect((await stage).status).toBe('cancelled');
+});
+
+it('recovers inside the existing sync slot and returns refreshed credentials before ordinary sync', async () => {
+  const f = await fixture('bitwarden', true);
+  await f.vault.stagePasswordProjectRemoval(f.input);
+  const old = (await f.vault.getProvider('bitwarden'))!, sync = new AbortController();
+  f.active.set('bitwarden', sync);
+  f.bitwarden.resume.mockImplementation(async () => {
+    await f.vault.upsertProvider({ ...old, config: { ...old.config, accessToken: 'synthetic-new-token' } }, false);
+    return f.vault.cancelPasswordProjectRemovalPreparation(f.input.operationId);
+  });
+  const current = await f.queue.run('bitwarden', () => f.workflow.recoverBeforeSync(old, sync.signal));
+  expect(current.config.accessToken).toBe('synthetic-new-token');
+  expect(f.active.get('bitwarden')).toBe(sync);
+  expect(f.invalidate.mock.calls).toEqual([['bitwarden'], ['bitwarden']]);
+});
+
+it('stops ordinary sync when recovery remains pending or its signal does not own the slot', async () => {
+  const f = await fixture('bitwarden', true);
+  await f.vault.stagePasswordProjectRemoval(f.input);
+  const account = (await f.vault.getProvider('bitwarden'))!, sync = new AbortController();
+  await expect(f.workflow.recoverBeforeSync(account, sync.signal)).rejects.toThrow('当前同步');
+  f.active.set('bitwarden', sync);
+  await expect(f.workflow.recoverBeforeSync(account, sync.signal)).rejects.toThrow('未处理');
+  sync.abort(new DOMException('Synthetic sync cancellation', 'AbortError'));
+  await expect(f.workflow.recoverBeforeSync(account, sync.signal)).rejects.toThrow('Synthetic sync cancellation');
+});
+
+it('rejects a queued operation across vault lock and unlock even with an unchanged source', async () => {
+  const f = await fixture('bitwarden', true), started = deferred(), release = deferred();
+  const sync = f.queue.run('bitwarden', async () => { started.resolve(); await release.promise; });
+  await started.promise;
+  const stage = f.workflow.stage(f.input), rejected = expect(stage).rejects.toThrow('解锁会话已变化');
+  await f.queue.run('independent', async () => undefined);
+  await f.vault.lock(); await f.vault.unlock('Synthetic workflow master password');
+  release.resolve(); await sync; await rejected;
+  expect(await f.workflow.pending()).toEqual([]);
+  expect(f.bitwarden.resume).not.toHaveBeenCalled();
 });

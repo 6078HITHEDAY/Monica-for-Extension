@@ -1,6 +1,18 @@
-# Android 当前 main（1.0.317）双向兼容：实施与分层验收
+# Android 双向兼容：实施与分层验收（历史任务 315）
 
-当前目标已按用户要求更新为 Android main 的 `1.0.317`。下方原始矩阵与版本表保留 2026-09-30 至 2026-10-01 的历史验收范围，不代表当前版本已全面互通，也不把后续新增的证据回填成旧版本通过。
+2026-10-09 当前目标基线为普通 Android `1.0.318` 未发布、F-Droid `1.0.318` 已发布。下方原始矩阵与版本表保留 2026-09-30 至 2026-10-01 的历史验收范围，不代表当前版本已全面互通，也不把后续新增的证据回填成旧版本通过。
+
+本地文件最新增量：[KDBX 加密工作副本与项目移除](keepass-local-working-copy-318.md)。真实 Edge 验证 KDBX3/4 移除、重启、重选原文件、普通编辑、锁定、错误文件／凭据拒绝及导出；786 项共享回归通过。原文件不自动改写，跨端使用仍需保存导出的 KDBX。本项不替代 Android KDBX 分组及真实云账号验收。
+
+Bitwarden 回收站最新增量：[并发密码保留与加密恢复](bitwarden-trash-recovery-318.md)。修复删除成功后使用旧密码快照，以及未知结果重试可能再次删除远端已恢复项目的问题。344 项相关回归、6 项真实服务复验和生产构建通过。实际服务确认删除接口不支持所探测的版本条件；项目成员移除仍需独立实现，未因此开放。
+
+Bitwarden 成员移除进行中：[分步事务与补偿恢复](bitwarden-project-removal-transaction-318.md)、[远端完整核验](bitwarden-project-removal-verification-318.md)及[准备协调与本地一致保存](bitwarden-project-removal-adoption-318.md)。最新批次完成内部准备/正常成功协调、共享附件复制恢复和一次加密采用父子项结果，426 项相关回归及 3 项真实服务场景通过。源 Passkey 保留、补偿后决策、运行时与界面尚待接入，入口仍关闭。
+
+后续增量：[补偿后的本地收尾](bitwarden-project-removal-restoration-318.md)。采用最新远端密码/备注/新增成员，将父子项、来源封装、删除队列和 cancelled 日志一致保存；丢失或签名身份冲突的 Passkey 保留为须明确处理的冲突，普通同步不能清除。496 项集中回归及构建审计通过。新增 4 项真实服务场景因启动命令被自动审批拒绝而未运行；运行时和 UI 仍未开放。
+
+Bitwarden 最新增量：[密码项目完整分批同步](bitwarden-project-batch-318.md)。实际 Vaultwarden 99＋2 边界、加密密码库重启及独立登录回读通过，避免扩展主动将项目拆到不同批次；服务器请求仍逐 Cipher 提交，不代表整组远端原子写入。301 项相关回归通过。
+
+当前增量证据：[GitHub Passkey / 性能及用户实机确认](github-passkey-performance-2026-10-09.md)、[待移除项目的来源解锁](project-removal-source-routing-318.md)、[M3E 圆角控件与钱包编辑](rounded-controls-and-wallet-editor-318.md)、[证件详情与自定义字段保留](document-field-parity-318.md)、[当前 Android 丰富密码字段实际双向往返](android-rich-project-fields-318.md)。新往返链的 2 项 Android / 2 项真实 Edge 检查通过，覆盖双组多密码、完整底层字段、双端编辑及浏览器重启。这些通过项不覆盖完整 Android / 后端 / 生命周期矩阵；OneDrive 真实账号验收和 [Android KDBX 密码项目导入](android-kdbx-project-fix-proposal-318.md)仍单独待处理。
 
 2026-10-04 的最新密码项目证据见 [当前字段审计](password-field-audit-316.md)、[Android 凭据组实际往返](project-credentials-317-interop.md)、[共享字段及排序](project-common-fields-and-order-317.md) 和 [Bitwarden 项目分组](bitwarden-project-credentials-317.md)。当前扩展完整回归为 195 个文件、1845 项测试通过；全目标仍未完成。Android 应用、真实浏览器、远端服务和源码推断的证据继续分开记录。
 
@@ -111,3 +123,23 @@
 本轮扩展实现及验证完成，整体互通仍为部分验收：不能将上述通过推定为所有类型的 Android 双向 UI、全部故障与官方云覆盖。
 
 最终快照补充：Android 工作树 HEAD 已是 `2117395ffbd47f32b8970cd0028f3ba15979566d`，与前述应用测试基线不同。本报告的 Android 错类、未知字段与 room_id 结果只归属于记录的 APK/源码快照；本轮未对新的 Android HEAD 重新执行全部应用测试，不能据旧失败断言新 main 仍未修复，也不能将其自动标通过。
+
+2026-10-09 后续：Bitwarden 项目移除的生产远端核验已完成一批实现及实际服务验证，含并发新增成员、真实附件字节、保留 Passkey 签名以及源 Passkey 删除前门禁。9 个 Vaultwarden 场景通过；完整准备协调器、凭据保留与本地一次性保存、运行时/UI 及 Android 往返仍未完成。详见 [远端核验报告](bitwarden-project-removal-verification-318.md)，不计作整体互通完成。
+
+2026-10-09 Passkey 保留准备：独立原生副本、复制事务、插件加密库日志和生产客户端适配器已实现；533 项相关回归、构建与运行时审计通过。未改变凭据 ID/私钥/零计数，尚未解除源 Passkey 删除门禁。实际服务、IndexedDB/Edge 和 Android 验收仍待完成，见 [保留准备报告](bitwarden-passkey-preservation-318.md)。
+
+2026-10-09 后续：源 Passkey 保留已接入内部完整移除协调器，原本地 ID、密钥/计数和其他来源引用保留；普通同步能够区分旧来源墓碑和活跃副本。547 项回归通过，并在真实 Edge IndexedDB 下验证两次关闭/重开浏览器、无重复请求及签名。HTTP 为合成响应；后台/MV3 UI、真实服务和 Android 尚未完成，见 [Passkey 引用迁移报告](bitwarden-passkey-adoption-318.md)。
+
+2026-10-09 后台/UI 接入：Bitwarden 项目移除现已接入来源队列、同步前恢复和管理页；267 项回归、构建及安全审计通过。最终构建在真实 Edge MV3 中完成 5 条流程（18.3s），含编辑器确认、响应丢失后继续、取消、重新登录路径；合成 HTTPS 响应，未使用真实 Bitwarden 服务。两枚保留 Passkey 的原本地 ID、0/23 计数和原公钥验签通过。并发本地使用/编辑、歧义结果恢复、实际服务/Android 与总体互通仍未完成，见 [运行时验收报告](bitwarden-project-removal-runtime-318.md)。
+
+2026-10-09 设置页整理：十个统一入口均进入二级页；14 个不同 Edge 场景与最终 4 项相关复验通过，覆盖焦点返回、320px/200% 字号、设置保存、主密码修改和加密备份恢复。六页本地 Canvas 与真实渲染已检查，dist 0.1.37 已更新。此项完成不改变跨端待验收状态，见 [设置页验收](settings-pages-318.md)。
+
+2026-10-10 当前 Android Bitwarden 原生快照验收：实际应用导入、编辑备注、上传及空库重建已执行，整体 **失败**。单个 Passkey 上传会替换整个父 Cipher；取消项目移除场景中，两把不同密钥最终只剩一把，父密码/项目等字段也被改写。三个独立字段保留回归均失败。11 份 Android 辅助方法签名有效，独立 direct 场景在真实 Edge 回传/重启前后可登录（准备及返回共 8 次断言）；这些通过项不覆盖共享 Cipher 的丢失。未修改零计数策略或 Android 产品，原测试包已恢复，运行 APK 未变。普通版/F-Droid 上传修复范围确认仍待回复，与 KDBX 范围问题独立；整体目标及待办 32、35 保持未完成。见 [当前运行报告](android-bitwarden-current-runtime-318.md)、[修复提案](android-bitwarden-upload-fix-proposal-318.md)，哈希索引 `.artifacts/bw-android-snapshot-manifest.json`。
+
+2026-10-10 更新：冻结删除意图后的本地编辑现可转为持久化补偿与显式冲突；新日志中的 Passkey 本机使用统计不再卡住恢复。325 项相关回归、构建/审计及 7 条不同 Edge 合成 HTTP 流程通过。两种冲突选择后同步和原凭据/副本签名通过。准备期编辑、来源/回执歧义、实际服务/Android 和整体互通仍未完成，见 [本地编辑恢复报告](bitwarden-project-local-recovery-318.md)。
+
+2026-10-10 当前 Android MDBX Passkey 往返：五把密钥经当前普通版受保护存储和签名辅助方法验证，其中一把由真实 Edge 创建；回传后新 Edge 配置及重启登录通过，两次浏览器流程共 20 次实际断言验签通过。三项 Android / 三项 Native 阶段通过，原测试包已恢复，产品代码与零计数策略未改。两项非默认备份标志差异仍保留；系统 Credential Manager、真实 Android 网站登录及其他后端不计通过。见 [当前版本 Passkey 验收](android-passkey-current-runtime-318.md)。
+
+2026-10-10 准备期编辑恢复：先持久化停止准备，再只读核对原项及已创建副本；保留初始未上传草稿和最新本地编辑为显式冲突，未知创建结果稍后发现后可以继续，不重复复制或删除。空队列显示同步修正。最终 196 项回归、构建及审计通过；共 9 条不同 Edge 合成 HTTP 流程通过，最终构建上的新增 3 条复验通过（12.3s），保留原凭据并独立验签。身份/回执歧义、保留副本管理、实际服务/Android 与整体互通仍未完成，见 [准备期恢复报告](bitwarden-preparation-recovery-318.md)。
+
+2026-10-10 目录与取消后副本生命周期：修复普通同步回执丢失目录名称导致项目准备误撤销，恢复副本与关联验证码保留目录。最终 5 文件 196 项回归、构建/审计及 9 条真实 Edge 合成 HTTP 流程通过；普通取消后两次同步、浏览器关闭重开再同步，原凭据/副本的 ID、私钥、0/23 计数和目录保留，重启前独立验签通过。实际服务/Android、专门副本管理与整体互通仍未完成，见 [目录与取消生命周期验收](bitwarden-copy-lifecycle-318.md)。

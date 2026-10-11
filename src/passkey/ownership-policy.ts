@@ -1,5 +1,6 @@
 import type { PasskeyItem, ProviderAccount, ProviderReference } from "../core/model";
 import { normalizeCredentialId, passkeyRpIdsEqual } from "./source-policy";
+import { mergePasskeyBackupFlags } from './backup-flags';
 
 export type PasskeyOwnership =
   | { kind: "local" }
@@ -53,6 +54,8 @@ export function assertPasskeyCounterNotRegressed(item: PasskeyItem, known: Passk
 
 /** A source refresh or conflict resolution cannot erase this installation's history. */
 export function preservePasskeyCounterHistory(local: PasskeyItem, incoming: PasskeyItem): PasskeyItem {
+  if (local.credentialId && normalizeCredentialId(local.credentialId) === normalizeCredentialId(incoming.credentialId)
+    && passkeyRpIdsEqual(local.rpId, incoming.rpId)) incoming = mergePasskeyBackupFlags(local, incoming);
   if (!samePasskeyCredential(local, incoming)) return incoming;
   const highest = Math.max(passkeyCounterHighWaterMark(local), passkeyCounterHighWaterMark(incoming));
   return highest > 0 ? { ...incoming, signCountHighWaterMark: highest } : incoming;

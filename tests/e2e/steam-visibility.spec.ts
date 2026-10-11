@@ -63,9 +63,10 @@ test('Android marked KDBX maFile is visible with a usable code after opening the
     outfile: helper, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent' });
   const { buildKeePassFixture } = createRequire(import.meta.url)(helper) as typeof import('../../src/providers/keepass/keepass-fixture');
   const raw = JSON.stringify({ account_name: 'synthetic', steamid: '76561198000000000', shared_secret: 'QUJDREVGR0hJSktMTU5PUFFSU1Q=', future_field: 'keep' });
-  const bytes = await buildKeePassFixture({ password: 'Synthetic Steam KDBX password', entries: [{ title: 'Android Steam maFile',
+  const bytes = await buildKeePassFixture({ password: 'Synthetic Steam KDBX password', entries: [{ title: 'Android Steam maFile', group:'Games/Steam',
     fields: { UserName: 'synthetic', 'Monica.Type': 'steam_mafile_v1', MonicaLoginType: 'STEAM_MAFILE', Notes: 'Original Steam note' },
-    binaries: { 'synthetic.maFile': new TextEncoder().encode(raw), 'unrelated.txt': Uint8Array.of(1, 2, 3) } }] });
+    binaries: { 'synthetic.maFile': new TextEncoder().encode(raw), 'unrelated.txt': Uint8Array.of(1, 2, 3) } },
+    {title:'Root Steam maFile',fields:{'Monica.Type':'steam_mafile_v1',MonicaLoginType:'STEAM_MAFILE'},binaries:{'root.maFile':new TextEncoder().encode(raw)}}] });
   const file = info.outputPath('steam.kdbx'); await writeFile(file, bytes);
   const digest = createHash('sha256').update(bytes).digest('hex');
   const extension = path.resolve('dist');
@@ -89,8 +90,17 @@ test('Android marked KDBX maFile is visible with a usable code after opening the
     const source = page.locator('.source-card').filter({ hasText: 'Synthetic Steam source' });
     await source.getByRole('button', { name: '立即同步', exact: true }).click();
     const steamNav = page.locator('.nav-item').filter({ hasText: 'Steam' });
-    await expect(steamNav.locator('.nav-count')).toHaveText('1', { timeout: 30_000 });
+    await expect(steamNav.locator('.nav-count')).toHaveText('2', { timeout: 30_000 });
     await steamNav.click();
+    await page.getByRole('button',{name:'筛选',exact:true}).click();
+    const filter=page.locator('.filter-dialog');
+    await filter.locator('.folder-scope-list button').filter({hasText:'Games'}).click();
+    await page.setViewportSize({width:320,height:900});
+    expect(await filter.evaluate(node=>node.scrollWidth<=node.clientWidth+1)).toBe(true);
+    await page.screenshot({path:info.outputPath('steam-folder-filter-320.png')});
+    await filter.getByRole('button',{name:'完成',exact:true}).click();
+    await page.setViewportSize({width:1180,height:900});
+    await expect(page.locator('.vault-tile').filter({hasText:'Root Steam maFile'})).toHaveCount(0);
     const tile = page.locator('.vault-tile').filter({ hasText: 'Android Steam maFile' });
     await expect(tile).toBeVisible();
     await expect.poll(async () => {
@@ -100,6 +110,13 @@ test('Android marked KDBX maFile is visible with a usable code after opening the
     await page.screenshot({ path: info.outputPath('steam-kdbx-desktop.png') });
     await page.reload(); await page.locator('.nav-item').filter({ hasText: 'Steam' }).click();
     await expect(tile).toBeVisible();
+    await expect(page.locator('.vault-tile').filter({hasText:'Root Steam maFile'})).toHaveCount(0);
+    await page.getByRole('button',{name:'筛选',exact:true}).click();
+    await expect(filter.locator('.folder-scope-list button').filter({hasText:'Games'})).toHaveAttribute('aria-pressed','true');
+    await filter.locator('.folder-scope-list button').filter({hasText:'未分类'}).click();
+    await filter.getByRole('button',{name:'完成',exact:true}).click();
+    await expect(page.locator('.vault-tile').filter({hasText:'Root Steam maFile'})).toBeVisible();
+    await expect(tile).toHaveCount(0);
     await page.setViewportSize({ width: 320, height: 900 });
     await page.screenshot({ path: info.outputPath('steam-kdbx-320.png') });
     const stored = await page.evaluate(() => chrome.runtime.sendMessage({ type: 'VAULT_LIST_ITEMS' }));

@@ -1,0 +1,142 @@
+import { expect, test, type Page } from '@playwright/test';
+import path from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { launchEdgeContext } from './fixtures/edge';
+import { chooseOption, dialogContent } from './fixtures/material';
+
+async function send(page: Page, request: object): Promise<any> {
+  const result = await page.evaluate(input => chrome.runtime.sendMessage(input), request);
+  expect(result.ok, result.error).toBe(true); return result.data;
+}
+async function setup(page: Page) {
+  await page.addInitScript(() => {
+    const original = chrome.runtime.sendMessage.bind(chrome.runtime);
+    chrome.runtime.sendMessage = (async (message: {type: string}) => message.type === 'VAULT_HELLO_STATUS' ? {
+      ok: true, data: {native: {available: false, supported: false, reason: 'Synthetic UI fixture'}, vaultEnrolled: false, bindingConsistent: true, protectionMode: 'device-key', unlockAvailable: false}
+    } : original(message)) as typeof chrome.runtime.sendMessage;
+  });
+  await send(page, {type: 'VAULT_SETUP', masterPassword: ''});
+  await page.reload();
+  await page.getByRole('button', {name: '设置与备份', exact: true}).click();
+}
+
+test('common settings act directly while grouped configuration pages retain focus and fit at 320px', async ({}, info) => {
+  const extension = path.resolve('dist');
+  const context = await launchEdgeContext(info.outputPath('profile'), {locale: 'zh-CN', colorScheme: 'dark', reducedMotion: 'reduce', viewport: {width: 1180, height: 1000},
+    args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`]});
+  try {
+    const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
+    const page = await context.newPage(); await page.goto(`chrome-extension://${new URL(worker.url()).host}/index.html`);
+    await setup(page);
+    const home = page.locator('[data-settings-page="home"]');
+    const ids = ['appearance', 'exclusions', 'protection', 'backup'];
+    await expect(home.locator('[data-settings-entry]')).toHaveCount(ids.length);
+    await expect(home.getByRole('combobox')).toHaveCount(2);
+    await expect(home.getByRole('switch')).toHaveCount(2);
+    await expect(home.locator('.settings-group')).toHaveCount(3);
+    await expect(home.locator('[data-settings-back]')).toHaveCount(0);
+    // Direct preferences have no navigation wrapper; the only arrows lead to multi-control pages.
+    await chooseOption(home.getByRole('combobox', {name: '显示模式', exact: true}), 'dark');
+    await expect(home).toBeVisible();
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+    await page.mouse.move(0, 0);
+    const groups = await home.locator('.settings-entry-list').evaluateAll(groups => groups.map(group => {
+      const first=getComputedStyle(group.firstElementChild!), last=getComputedStyle(group.lastElementChild!);
+      return [first.borderTopLeftRadius, last.borderBottomRightRadius, first.padding, last.padding, first.backgroundColor === last.backgroundColor];
+    }));
+    for (const group of groups) expect(group).toEqual(['24px', '24px', '8px 16px', '8px 16px', true]);
+    for (const row of await home.locator('.settings-group').first().locator('.settings-entry-list > *').all()) {
+      const box = await row.boundingBox();
+      expect(box!.height).toBeLessThanOrEqual(76);
+      expect(box!.height).toBeGreaterThanOrEqual(48);
+    }
+    await page.screenshot({path: info.outputPath('settings-dark-desktop.png'), fullPage: true});
+    for (const id of ids) {
+      await home.locator(`[data-settings-entry="${id}"]`).click();
+      const secondary = page.locator(`[data-settings-page="${id}"]`);
+      await expect(secondary).toBeVisible(); await expect(secondary.locator('h1')).toBeFocused();
+      await expect(secondary.locator('m3e-expansion-panel,m3e-dialog,[role="dialog"]')).toHaveCount(0);
+      await secondary.locator('[data-settings-back]').click();
+      await expect(home.locator(`[data-settings-entry="${id}"]`)).toBeFocused();
+    }
+    await page.setViewportSize({width: 320, height: 950});
+    await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
+    await home.screenshot({path: info.outputPath('settings-dark-320-200.png')});
+    await chooseOption(home.getByRole('combobox', {name: '显示模式', exact: true}), 'light');
+    await expect(home).toBeVisible();
+    await chooseOption(home.getByRole('combobox', {name: '显示模式', exact: true}), 'dark');
+    for (const id of ids) {
+      await home.locator(`[data-settings-entry="${id}"]`).click();
+      const secondary = page.locator(`[data-settings-page="${id}"]`);
+      expect(await secondary.evaluate(node => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
+      await expect(secondary.locator('h1')).toBeFocused();
+      const heading = await secondary.locator('h1').boundingBox();
+      const back = await secondary.locator('[data-settings-back]').boundingBox();
+      expect(heading!.y).toBeGreaterThanOrEqual(0);
+      expect(heading!.x).toBeGreaterThanOrEqual(0);
+      expect(heading!.x + heading!.width).toBeLessThanOrEqual(320);
+      expect(back!.y).toBeGreaterThanOrEqual(0);
+      await secondary.locator('[data-settings-back]').click({trial: true});
+      await page.screenshot({path: info.outputPath(`${id}-320-200-top.png`)});
+      if (id === 'protection') {
+        const labels = await secondary.locator('.settings-password-field > label').evaluateAll(nodes => nodes.map(node => node.scrollWidth <= node.clientWidth + 1 && node.scrollHeight <= node.clientHeight + 1));
+        expect(labels).toEqual([true, true, true]);
+        await secondary.getByRole('button', {name: '更改主密码', exact: true}).click({trial: true});
+        await page.screenshot({path: info.outputPath('protection-320-200-bottom.png')});
+      }
+      if (id === 'protection') await expect(secondary.getByRole('heading', {name: 'Windows Hello', exact: true})).toBeVisible();
+      if (id === 'backup') await expect(secondary.getByRole('heading', {name: '明文手动迁移', exact: true})).toBeVisible();
+      await secondary.locator('[data-settings-back]').click();
+    }
+    await page.evaluate(() => { document.documentElement.style.fontSize = ''; });
+    await home.locator('[data-settings-entry="appearance"]').click();
+    await page.getByRole('radio', {name: 'Monica', exact: true}).check();
+    await page.locator('[data-settings-back]').click();
+    await chooseOption(home.getByRole('combobox', {name: '显示模式', exact: true}), 'light');
+    await page.setViewportSize({width: 1180, height: 1000});
+    await page.screenshot({path: info.outputPath('settings-light-desktop.png'), fullPage: true});
+  } finally { await context.close(); }
+});
+
+test('secondary settings retain autofill exclusions, toggles, protection changes and portable backup export', async ({}, info) => {
+  const extension = path.resolve('dist');
+  const context = await launchEdgeContext(info.outputPath('profile'), {locale: 'zh-CN', reducedMotion: 'reduce', viewport: {width: 1180, height: 950},
+    args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`]});
+  try {
+    const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
+    const page = await context.newPage(); await page.goto(`chrome-extension://${new URL(worker.url()).host}/index.html`);
+    await setup(page);
+    const home = page.locator('[data-settings-page="home"]');
+    const open = (id: string) => home.locator(`[data-settings-entry="${id}"]`).click();
+    const back = () => page.locator('[data-settings-back]').click();
+    await page.getByRole('switch', {name: '自动同步', exact: true}).click();
+    await expect(page.getByRole('switch', {name: '自动同步', exact: true})).not.toBeChecked();
+    await page.getByRole('switch', {name: '表单旁自动填充', exact: true}).click();
+    await expect(page.getByRole('switch', {name: '表单旁自动填充', exact: true})).not.toBeChecked();
+    await open('exclusions'); await page.getByLabel('网站域名', {exact: true}).fill('settings.example.test');
+    await page.getByRole('button', {name: '添加', exact: true}).click(); await page.getByRole('button', {name: '保存', exact: true}).click();
+    await expect(home.locator('[data-settings-entry="exclusions"]')).toContainText('自动填充 1 个');
+    await open('exclusions'); await expect(page.locator('.site-policy-lists')).toContainText('settings.example.test');
+    await page.getByLabel('网站域名', {exact: true}).fill('cancelled.example.test');
+    await page.getByRole('button', {name: '添加', exact: true}).click(); await back(); await open('exclusions');
+    await expect(page.locator('.site-policy-lists')).not.toContainText('cancelled.example.test'); await back();
+    await open('protection');
+    const secret = 'Synthetic settings master password';
+    await page.getByLabel('新主密码（可选）', {exact: true}).fill(secret);
+    await page.getByLabel('确认新主密码', {exact: true}).fill(secret);
+    await page.getByRole('button', {name: '更改主密码', exact: true}).click();
+    await expect(home).toBeVisible(); await open('protection');
+    await expect(page.getByLabel('新主密码（可选）', {exact: true})).toHaveValue('');
+    await back(); await open('backup');
+    await page.getByRole('button', {name: '导出加密整库备份', exact: true}).click();
+    const dialog = dialogContent(page, {name: '导出加密整库备份', exact: true});
+    await dialog.getByLabel('备份密码 *', {exact: true}).fill('Synthetic portable backup password');
+    await dialog.getByLabel('确认备份密码 *', {exact: true}).fill('Synthetic portable backup password');
+    const downloading = page.waitForEvent('download');
+    await dialog.getByRole('button', {name: '加密导出', exact: true}).click();
+    const download = await downloading, output = info.outputPath('synthetic-settings-backup.json'); await download.saveAs(output);
+    const bytes = await readFile(output, 'utf8'); expect(bytes).not.toContain(secret); expect(JSON.parse(bytes).envelope).toBeDefined();
+    await expect(page.locator('[data-settings-page="backup"]')).toBeVisible();
+  } finally { await context.close(); }
+});

@@ -3,6 +3,7 @@ import { sameProviderBinding, type ProviderAcknowledgedMutation, type ProviderRe
 import { matchesBinding, oneDriveConnectionBinding, parseOneDriveConnection, validOneDriveTokens, type OneDriveConnection } from "../providers/onedrive/onedrive-token-manager";
 import type { OneDriveTokens } from "../providers/onedrive/onedrive-auth";
 import { capturePasswordHistory } from '../core/password-history';
+import { walletContentOrderOnlyChanged } from '../core/wallet-content-order';
 import { planKeePassProjectRemoval, type KeePassProjectRemovalDraft } from '../core/keepass-project-removal';
 import { keePassRemovalRequestKey, keePassRemovalFileRequestHash, readKeePassProjectRemovalIntents, type KeePassProjectRemovalIntent } from '../core/keepass-project-removal-journal';
 import { assertKeePassResolutionUnchanged, readKeePassProjectResolutionIntents, resolutionSnapshotKey, type KeePassProjectResolutionIntent } from '../core/keepass-project-resolution-journal';
@@ -12,11 +13,18 @@ import { assertKeePassRestoreProject, keePassRestoreProject, readKeePassProjectR
 import { mdbx2PasswordHistoryTransferBlockReason } from '../providers/mdbx2/mdbx2-batch-transfer';
 import { providerSourceRecordsFor, replaceProviderSourceRecords, validProviderMutationReceipt } from "../core/migrations";
 import { sourceRecordsBudgetError } from "../core/source-records";
+import { mergeBitwardenProjectRestoration, type BitwardenProjectRestorationReadback, type BitwardenProjectPreparationReadback } from '../providers/bitwarden/bitwarden-project-removal-restoration';
+import { adoptBitwardenPreparationCopies } from '../providers/bitwarden/bitwarden-preparation-recovery';
+import type { BitwardenPasskeyPreservationPlan } from '../providers/bitwarden/bitwarden-passkey-preservation';
+import { assertBitwardenPasskeyPreservationTransition, type BitwardenPasskeyPreservationJournal } from '../providers/bitwarden/bitwarden-passkey-preservation-transaction';
+import { bitwardenRemovalSnapshotSha256 } from '../providers/bitwarden/bitwarden-project-removal-transaction';
+import { parseLosslessJson } from '../core/lossless-json';
+import { adoptBitwardenPasskeyCopies } from '../providers/bitwarden/bitwarden-passkey-preservation-adoption';
 import { redactProviderDiagnostic, redactProviderMessage } from "../providers/provider-diagnostics";
 import { createDeviceVaultKey, decryptVaultState, deriveVaultKey, encryptVaultState, exportVaultKey, importVaultKey, vaultKdfNeedsUpgrade, type DeviceVaultKdfParameters, type VaultEnvelope, type VaultKdfParameters } from "./vault-crypto";
 import { validateMasterPassword } from "./master-password-policy";
 import { bytesToBase64, randomBytes } from "./encoding";
-import type { VaultSessionStore } from "./vault-session";
+import type { VaultSessionRecord, VaultSessionStore } from "./vault-session";
 import type { VaultEnvelopeStorage } from "./vault-storage";
 import { MemoryVaultDeviceKeyStore, type VaultDeviceKeyStore } from "./vault-device-key";
 import { LockedAutofillCache, supportsLockedAutofill } from "./locked-autofill";
@@ -32,6 +40,9 @@ import { readProjectCredential } from "../core/project-credentials";
 import { advanceHotpCounter, findBoundTotpItem, hotpSigningIdentity, hotpUsageFromItem, otpSourceBinding, parametersFromItem, type HotpUsage } from '../core/login-otp';
 import { normalizeOtpCounter } from '../core/otp-counter';
 import { planPasswordProjectRemoval } from '../core/password-project-removal';
+import { assertBitwardenProjectDeletionTransition, type BitwardenProjectDeletionJournal } from '../core/bitwarden-project-removal-journal';
+import { BitwardenProjectLocalChange, bitwardenProjectCipherId, sameBitwardenProjectChild, sameBitwardenProjectChildren, snapshotBitwardenProjectChildren } from '../core/bitwarden-project-removal-local';
+import { mergeBitwardenProjectRemovalReadback, type BitwardenProjectRemovalReadback } from '../providers/bitwarden/bitwarden-project-removal-readback';
 import { isPasswordProjectRemovalPending, retainPasswordProjectRemovalHistory, passwordProjectRemovalContent, readPasswordProjectRemovalJournal, type PasswordProjectNativeDeletionIntent, type PasswordProjectRemovalProof, type PasswordProjectRemovalRecord } from '../core/password-project-removal-journal';
 import { cancelPasswordProjectRemovalDraft, assertCancellationPreservesLaterEdits } from '../core/password-project-removal-cancel';
 import { assertPasswordProjectNativeDeletionScope } from '../core/password-project-removal-native';
@@ -95,6 +106,17 @@ export class VaultUnlockError extends Error {
 
 export class SecureVaultService {
   private operationTail: Promise<void> = Promise.resolve();
+  private decodedSnapshot?: { envelope: VaultEnvelope; sessionId?: string; rawKey: string; state: VaultState };
+  private snapshotTimer?: ReturnType<typeof setTimeout>;
+  private snapshotEpoch = 0;
+
+  /** Session invalidation may arrive from Chrome while a read is in flight. */
+  clearDecryptedState(): void {
+    this.snapshotEpoch++;
+    this.decodedSnapshot = undefined;
+    if (this.snapshotTimer !== undefined) clearTimeout(this.snapshotTimer);
+    this.snapshotTimer = undefined;
+  }
 
   constructor(
     private readonly storage: VaultEnvelopeStorage,
@@ -107,9 +129,10 @@ export class SecureVaultService {
   async status(): Promise<VaultLifecycleStatus> {
     return this.runExclusive(async () => {
     const envelope = await this.storage.read();
-    if (!envelope) return "uninitialized";
+    if (!envelope) { this.clearDecryptedState(); return "uninitialized"; }
     const session = await this.sessions.read();
     if (!session) {
+      this.clearDecryptedState();
       if (envelope.kdf.name !== "DEVICE-KEY" || await this.deviceKeys.isAutoUnlockSuspended()) return "locked";
       if (envelope.kdf.windowsHelloBindingId) return "locked";
       try {
@@ -126,6 +149,7 @@ export class SecureVaultService {
       }
     }
     if (session.expiresAt <= this.now()) {
+      this.clearDecryptedState();
       await this.sessions.clear();
       return "locked";
     }
@@ -171,6 +195,7 @@ export class SecureVaultService {
       key = envelope.kdf.name === "DEVICE-KEY" ? await this.deviceKey(envelope.kdf) : (await deriveVaultKey(masterPassword, envelope.kdf)).key;
       state = await decryptVaultState(envelope, key);
     } catch {
+      this.clearDecryptedState();
       await this.sessions.clear();
       throw new VaultUnlockError();
     }
@@ -200,6 +225,7 @@ export class SecureVaultService {
     return this.runExclusive(async () => {
       const envelope = await this.storage.read();
       if (envelope?.kdf.name === "DEVICE-KEY") await this.deviceKeys.setAutoUnlockSuspended(true);
+      this.clearDecryptedState();
       await this.sessions.clear();
     });
   }
@@ -222,6 +248,7 @@ export class SecureVaultService {
           key = await this.deviceKey(deviceKdf);
           state = await decryptVaultState(envelope, key);
         } catch {
+          this.clearDecryptedState();
           await this.sessions.clear();
           throw new VaultUnlockError();
         }
@@ -240,11 +267,13 @@ export class SecureVaultService {
         key ||= await this.deviceKey(deviceKdf);
         state ||= await decryptVaultState(envelope, key);
       } catch {
+        this.clearDecryptedState();
         await this.sessions.clear();
         throw new VaultUnlockError();
       }
       const binding = state.settings.windowsHello;
       if (!binding || binding.bindingId !== bindingId || binding.rpId !== "monica-extension.local") {
+        this.clearDecryptedState();
         await this.sessions.clear();
         throw new VaultHelloRequiredError("Windows Hello 本机绑定与加密密码库不一致，密码库保持锁定。");
       }
@@ -393,6 +422,7 @@ export class SecureVaultService {
       try {
         await this.startSession(newKey, state.settings.autoLockMinutes);
       } catch {
+        this.clearDecryptedState();
         await this.sessions.clear();
         throw new Error("主密码已更改，但无法继续当前会话；请使用新主密码重新解锁。");
       }
@@ -472,6 +502,7 @@ export class SecureVaultService {
         await this.startSession(backupKey, restoredState.settings.autoLockMinutes);
         await this.deviceKeys.setAutoUnlockSuspended(false);
       } catch {
+        this.clearDecryptedState();
         await this.sessions.clear();
         throw new Error("加密备份已恢复，但无法继续当前会话；请使用备份密码重新解锁。");
       }
@@ -483,11 +514,21 @@ export class SecureVaultService {
   }
 
   async readState(activity = false): Promise<VaultState> {
+    return this.readProjection(state => state, activity);
+  }
+
+  /** Ceremony reads do not need unrelated passwords, source envelopes or journals. */
+  async readPasskeyContext(): Promise<{ items: PasskeyItem[]; providers: ProviderAccount[]; settings: VaultState['settings'] }> {
+    return this.readProjection(state => ({ items: state.items.filter((item): item is PasskeyItem => item.kind === 'passkey'), providers: state.providers, settings: state.settings }));
+  }
+
+  private async readProjection<T>(select: (state: VaultState) => T, activity = false): Promise<T> {
     return this.runExclusive(async () => {
-    const { envelope, key } = await this.unlockedContext();
-    const state = await decryptVaultState(envelope, key);
+    const { envelope, key, session } = await this.unlockedContext();
+    const state = await this.readDecodedSnapshot(envelope, key, session);
     if (activity) await this.touchSession(state.settings.autoLockMinutes);
-    return state;
+    // Callers may edit their copy before staging a mutation. Never expose the cache.
+    return structuredClone(select(state));
     });
   }
 
@@ -503,21 +544,18 @@ export class SecureVaultService {
   }
 
   async getAutofillSitePolicy(): Promise<AutofillSitePolicy> {
-    const state = await this.readState();
-    return {
-      blockedHosts: [...state.settings.autofillBlockedHosts],
-      saveBlockedHosts: [...state.settings.saveBlockedHosts]
-    };
+    return this.readProjection(state => ({ blockedHosts: state.settings.autofillBlockedHosts, saveBlockedHosts: state.settings.saveBlockedHosts }));
   }
 
   async getHomePreferences(): Promise<HomePreferences> {
-    return normalizeHomePreferences((await this.readState()).settings.home);
+    return this.readProjection(state => normalizeHomePreferences(state.settings.home));
   }
 
   async setHomePreferences(input: Partial<HomePreferences>): Promise<HomePreferences> {
     return this.runExclusive(async () => {
       const { state, envelope, key } = await this.mutableContext();
-      const preferences = normalizeHomePreferences({ ...normalizeHomePreferences(state.settings.home), ...input });
+      const current = normalizeHomePreferences(state.settings.home);
+      const preferences = normalizeHomePreferences({ ...current, ...input, managerScopes: {...current.managerScopes,...input.managerScopes} });
       state.settings.home = preferences;
       state.updatedAt = new Date(this.now()).toISOString();
       await this.persist(state, key, envelope.kdf);
@@ -674,11 +712,11 @@ export class SecureVaultService {
   }
 
   async listItems(): Promise<VaultItem[]> {
-    return (await this.readState()).items.filter((item) => !item.deletedAt && !item.archivedAt);
+    return this.readProjection(state => state.items.filter((item) => !item.deletedAt && !item.archivedAt));
   }
 
   async listLockedAutofillItemIds(): Promise<string[]> {
-    return [...((await this.readState()).settings.lockedAutofillItemIds || [])];
+    return this.readProjection(state => state.settings.lockedAutofillItemIds || []);
   }
 
   async setLockedAutofill(itemId: string, enabled: boolean): Promise<void> {
@@ -696,14 +734,15 @@ export class SecureVaultService {
       const envelopeVersion = JSON.stringify(envelope);
       const session = await this.sessions.read();
       if (session && session.expiresAt > this.now()) {
-        const state = await decryptVaultState(envelope, await importVaultKey(session.rawKey));
+        const state = await this.readDecodedSnapshot(envelope, await importVaultKey(session.rawKey), session);
         return {
-          locked: false, envelopeVersion, items: state.items.filter((item) => !item.deletedAt && !item.archivedAt),
+          locked: false, envelopeVersion, items: structuredClone(state.items.filter((item) => !item.deletedAt && !item.archivedAt)),
           credentialIdentities: autofillCredentialIdentities(state.items),
-          allowedIds: state.settings.lockedAutofillItemIds || [], blockedHosts: state.settings.autofillBlockedHosts,
+          allowedIds: [...(state.settings.lockedAutofillItemIds || [])], blockedHosts: [...state.settings.autofillBlockedHosts],
           blockedFieldSignatures: state.settings.autofillBlockedFieldSignatures.map((record) => record.signature)
         };
       }
+      this.clearDecryptedState();
       const cached = await this.lockedAutofill.read(envelope);
       return { locked: true, envelopeVersion, items: cached?.logins || [], credentialIdentities: cached?.credentialIdentities || {}, allowedIds: cached?.logins.map((item) => item.id) || [], blockedHosts: cached?.blockedHosts || [], blockedFieldSignatures: cached?.blockedFieldSignatures || [] };
     });
@@ -725,23 +764,23 @@ export class SecureVaultService {
   }
 
   async listArchivedItems(): Promise<VaultItem[]> {
-    return (await this.readState()).items.filter((item) => !item.deletedAt && Boolean(item.archivedAt));
+    return this.readProjection(state => state.items.filter((item) => !item.deletedAt && Boolean(item.archivedAt)));
   }
 
   async listDeletedItems(): Promise<VaultItem[]> {
-    return (await this.readState()).items.filter((item) => Boolean(item.deletedAt));
+    return this.readProjection(state => state.items.filter((item) => Boolean(item.deletedAt)));
   }
 
   async getItem(itemId: string): Promise<VaultItem | undefined> {
-    return (await this.readState()).items.find((item) => item.id === itemId && !item.deletedAt);
+    return this.readProjection(state => state.items.find((item) => item.id === itemId && !item.deletedAt));
   }
 
   async listProviders(): Promise<ProviderAccount[]> {
-    return (await this.readState()).providers.map(publicProviderAccount);
+    return this.readProjection(state => state.providers.map(publicProviderAccount));
   }
 
   async getProvider(providerId: string): Promise<ProviderAccount | undefined> {
-    const provider = (await this.readState()).providers.find((candidate) => candidate.id === providerId);
+    const provider = await this.readProjection(state => state.providers.find(candidate => candidate.id === providerId));
     return provider ? safeProviderAccount(provider) : undefined;
   }
 
@@ -855,6 +894,11 @@ export class SecureVaultService {
     const provider = state.providers.find((candidate) => candidate.id === providerId);
     if (!provider) throw new Error("密码源不存在。");
     if (guard.expectedAccount && !sameProviderBinding(guard.expectedAccount, provider)) throw new Error("同步期间密码源配置已变化，请重新同步。");
+    if (state.providerConflicts.some(row => row.providerId === providerId && row.requiresExplicitResolution))
+      throw new Error('恢复保留的数据需要明确解决冲突，普通同步不能覆盖。');
+    if (readPasswordProjectRemovalJournal(state.passwordProjectRemovals).some(row => isPasswordProjectRemovalPending(row)
+      && (row.bitwardenPasskeyPreservation || row.bitwardenPreparationRecovery) && row.providerBindings.some(binding => binding.id === providerId)))
+      throw new Error('密码项目的 Passkey 保留尚未完成，普通同步不能覆盖恢复状态。');
     if (readMdbx2RestoreJournal(state.mdbx2Restores).some(record => record.status === 'prepared' && record.provider.id === providerId)
       || readMdbx2RestoreBatchJournal(state.mdbx2RestoreBatches).some(record => record.status === 'prepared' && record.members[0].provider.id === providerId))
       throw new Error('此密码源还有待确认的恢复操作，请先重试恢复。');
@@ -1059,7 +1103,7 @@ export class SecureVaultService {
         state.items = state.items.some((item) => item.id === resolved.id)
           ? state.items.map((item) => item.id === resolved.id ? resolved : item)
           : [resolved, ...state.items];
-        queueProviderMutations(state, resolved, conflict.remote ? "update" : "create", now);
+        queueProviderMutations(state, resolved, resolved.deletedAt ? "delete" : conflict.remote ? "update" : "create", now);
         state.mutationQueue = state.mutationQueue.map((mutation) => mutation.providerId === conflict.providerId && mutation.itemId === conflict.itemId
           ? { ...mutation, attempts: 0, lastError: undefined }
           : mutation);
@@ -1116,7 +1160,7 @@ export class SecureVaultService {
     if (existing?.kind === 'login' && normalized.kind === 'login') normalized = capturePasswordHistory(existing, normalized, now);
     state.items = existing ? state.items.map((candidate) => (candidate.id === item.id ? normalized : candidate)) : [normalized, ...state.items];
     if (allowLockedAutofill !== undefined) this.updateLockedAutofillGrant(state, normalized.id, allowLockedAutofill);
-    queueProviderMutations(state, normalized, existing ? "update" : "create", now);
+    queueProviderMutations(state, normalized, existing ? "update" : "create", now, walletContentOrderOnlyChanged(existing, normalized));
     state.updatedAt = now;
     await this.persist(state, key, envelope.kdf, allowLockedAutofill === true);
     return normalized;
@@ -1253,7 +1297,7 @@ export class SecureVaultService {
   }
 
   async readPasswordProjectRemovals(): Promise<PasswordProjectRemovalRecord[]> {
-    return readPasswordProjectRemovalJournal((await this.readState()).passwordProjectRemovals);
+    return readPasswordProjectRemovalJournal(await this.readProjection(state => state.passwordProjectRemovals));
   }
 
   /** Only preparation can be cancelled: no native delete request can yet exist. */
@@ -1264,7 +1308,7 @@ export class SecureVaultService {
       const record = journal.find(row => row.id === operationId);
       if (!record) throw new Error('找不到密码项目移除操作。');
       if (record.status === 'cancelled') return structuredClone(record);
-      if (record.status !== 'preparing' || record.nativeDeletion) throw new Error('删除请求已准备，必须先确认原操作结果，不能直接取消。');
+      if (record.status !== 'preparing' || record.nativeDeletion || record.bitwardenPreparationRecovery) throw new Error('删除或恢复请求已准备，必须先确认原操作结果，不能直接取消。');
       assertPasswordProjectRemovalBindings(state, record);
       const ids = new Set([...record.retained, ...record.removed].map(row => row.id));
       assertNoMdbx2RestoreBatchOverlap(state, ids);
@@ -1286,6 +1330,71 @@ export class SecureVaultService {
     });
   }
 
+  /** Persist the stop before read-only recovery. Later workers cannot resume copying/deletion. */
+  async beginBitwardenPreparationRecoveryIfChanged(operationId: string): Promise<PasswordProjectRemovalRecord | null> {
+    return this.runExclusive(async () => {
+      const { state, envelope, key } = await this.mutableContext();
+      const journal = readPasswordProjectRemovalJournal(state.passwordProjectRemovals);
+      const record = journal.find(row => row.id === operationId);
+      if (!record) throw new Error('找不到密码项目移除操作。');
+      if (record.status !== 'preparing') return null;
+      if (record.bitwardenPreparationRecovery) return structuredClone(record);
+      if (!(await passwordProjectBitwardenPreparationLocalChanges(state, record)).size) return null;
+      const next: PasswordProjectRemovalRecord = { ...record, updatedAt: new Date(this.now()).toISOString(),
+        bitwardenPreparationRecovery: { version: 1, reason: 'local-changed' } };
+      readPasswordProjectRemovalJournal([next]);
+      state.passwordProjectRemovals = journal.map(row => row.id === operationId ? next : row);
+      state.updatedAt = next.updatedAt; await this.persist(state, key, envelope.kdf);
+      return structuredClone(next);
+    });
+  }
+
+  /** Native readback, local edits, observed copies and cancelled intent share one encrypted save. */
+  async completeBitwardenPreparationRecovery(result: BitwardenProjectPreparationReadback): Promise<PasswordProjectRemovalRecord> {
+    return this.runExclusive(async () => {
+      const { state, envelope, key } = await this.mutableContext();
+      const journal = readPasswordProjectRemovalJournal(state.passwordProjectRemovals);
+      const record = journal.find(row => row.id === result.operationId);
+      if (!record?.bitwardenPreparationRecovery) throw new Error('没有待核对的 Bitwarden 准备恢复。');
+      if (record.status === 'cancelled') return structuredClone(record);
+      const changes = await passwordProjectBitwardenPreparationLocalChanges(state, record);
+      const providerId = record.providerBindings.find(row => row.kind === 'bitwarden')!.id;
+      const originalCiphers = new Set([...record.retained, ...record.removed].map(row => row.providerRefs.find(ref => ref.providerId === providerId)?.remoteId));
+      const incomingCiphers = new Set(result.sourceRecords.map(row => row.remoteId));
+      const affectedIds = new Set(state.items.filter(row => row.providerRefs.some(ref => ref.providerId === providerId && ref.remoteId
+        && incomingCiphers.has(bitwardenProjectCipherId(ref.remoteId)))).map(row => row.id));
+      for (const row of state.items) if (affectedIds.has(row.id) && row.providerRefs.some(ref => ref.providerId === providerId && ref.remoteId
+        && !originalCiphers.has(bitwardenProjectCipherId(ref.remoteId)))) changes.add(row.id);
+      // The original removal draft can itself contain unacknowledged edits.
+      // A later child edit must not make readback replace those staged values.
+      for (const mutation of state.mutationQueue) if (mutation.providerId === providerId && affectedIds.has(mutation.itemId)) changes.add(mutation.itemId);
+      if (state.providerConflicts.some(row => row.providerId === providerId && affectedIds.has(row.itemId))
+        || state.providerMutationReceipts.some(row => row.providerId === providerId && affectedIds.has(row.itemId))
+        || state.mutationQueue.some(row => row.providerId === providerId && affectedIds.has(row.itemId) && row.operation === 'delete'))
+        throw new Error('项目仍有冲突、删除或未确认的写入，请先核对恢复记录。');
+      const merged = await mergeBitwardenProjectRestoration(record, state.items, result, changes);
+      const adopted = await adoptBitwardenPreparationCopies(record, merged.items, result);
+      const sourceRecords = [...result.sourceRecords, ...result.passkeyCopies.map(row => row.sourceRecord)];
+      const sourceIds = new Set(sourceRecords.map(row => row.remoteId));
+      validateImportedItems(adopted.items.filter(row => row.providerRefs.some(ref => ref.providerId === providerId && ref.remoteId
+        && sourceIds.has(bitwardenProjectCipherId(ref.remoteId)))));
+      const now = new Date(this.now()).toISOString();
+      state.items = adopted.items;
+      state.sourceRecords = [...state.sourceRecords.filter(row => row.providerId !== providerId || !sourceIds.has(row.remoteId)), ...sourceRecords];
+      const budget = sourceRecordsBudgetError(state.sourceRecords); if (budget) throw new Error(budget);
+      state.mutationQueue = state.mutationQueue.filter(row => !(row.providerId === providerId && affectedIds.has(row.itemId)));
+      state.providerConflicts.push(...merged.conflicts.map(row => ({ ...row, id: crypto.randomUUID(), providerId, detectedAt: now })));
+      state.providers = state.providers.map(row => row.id === providerId ? { ...row, config: { ...row.config, ...result.account.config },
+        lastError: '项目移除期间本地内容已修改，移除已撤销；本地与远端版本均已保留，请核对后选择。' } : row);
+      const next: PasswordProjectRemovalRecord = { ...record, status: 'cancelled', updatedAt: now,
+        ...(adopted.preservation ? { bitwardenPasskeyPreservation: adopted.preservation } : {}) };
+      readPasswordProjectRemovalJournal([next]);
+      state.passwordProjectRemovals = journal.map(row => row.id === record.id ? next : row);
+      state.updatedAt = now; await this.persist(state, key, envelope.kdf);
+      return structuredClone(next);
+    });
+  }
+
   /** Reusable preflight before uploading attachments; finalization repeats it under the write lock. */
   async inspectPasswordProjectRemoval(operationId: string): Promise<{ record: PasswordProjectRemovalRecord; items: LoginItem[] }> {
     const state = await this.readState(false);
@@ -1295,8 +1404,62 @@ export class SecureVaultService {
     return { record, items: assertPasswordProjectRemovalReady(state, record) };
   }
 
+  /** Internal only: save immutable native-copy plans before any create request. */
+  async initializePasswordProjectBitwardenPasskeyPreservation(operationId: string, input: BitwardenPasskeyPreservationPlan[],
+    proofs?: PasswordProjectRemovalProof[]): Promise<PasswordProjectRemovalRecord> {
+    const plans = structuredClone(input);
+    const savedProofs = proofs === undefined ? undefined : structuredClone(proofs);
+    return this.runExclusive(async () => {
+      const { state, envelope, key } = await this.mutableContext();
+      const journal = readPasswordProjectRemovalJournal(state.passwordProjectRemovals);
+      const record = journal.find(row => row.id === operationId);
+      if (!record || record.status !== 'preparing' || record.bitwardenPasskeyPreservation) throw new Error('Passkey 保留准备已变化，请重新读取恢复记录。');
+      assertPasswordProjectRemovalReady(state, record);
+      const next = { ...record, ...(savedProofs === undefined ? {} : { proofs: savedProofs }), updatedAt: new Date(this.now()).toISOString(), bitwardenPasskeyPreservation: {
+        version: 1 as const, localChildren: await snapshotBitwardenProjectChildren(record, state.items),
+        sources: plans.map(plan => ({ version: 1 as const, revision: 1, plan, copies: plan.copies.map(copy => ({ copyId: copy.copyId, stage: 'ready' as const })) }))
+      } };
+      readPasswordProjectRemovalJournal([next]);
+      await assertPasswordProjectPasskeyPreservationReady(state, next);
+      state.passwordProjectRemovals = journal.map(row => row.id === operationId ? next : row);
+      readPasswordProjectRemovalJournal(state.passwordProjectRemovals);
+      state.updatedAt = next.updatedAt; await this.persist(state, key, envelope.kdf);
+      return structuredClone(next);
+    });
+  }
+
+  /** Internal copy worker preflight; includes local child use, edits and native baselines. */
+  async inspectPasswordProjectBitwardenPasskeyPreservation(operationId: string): Promise<PasswordProjectRemovalRecord> {
+    const state = await this.readState(false);
+    const record = readPasswordProjectRemovalJournal(state.passwordProjectRemovals).find(row => row.id === operationId);
+    if (!record) throw new Error('找不到 Passkey 保留记录。');
+    await assertPasswordProjectPasskeyPreservationReady(state, record);
+    return record;
+  }
+
+  async updatePasswordProjectBitwardenPasskeyPreservation(operationId: string, cipherId: string, expectedRevision: number,
+    input: BitwardenPasskeyPreservationJournal): Promise<void> {
+    const progress = structuredClone(input);
+    return this.runExclusive(async () => {
+      const { state, envelope, key } = await this.mutableContext();
+      const journal = readPasswordProjectRemovalJournal(state.passwordProjectRemovals);
+      const record = journal.find(row => row.id === operationId);
+      const saved = record?.bitwardenPasskeyPreservation?.sources.find(row => row.plan.sourceCipherId === cipherId);
+      if (!record || !saved || saved.revision !== expectedRevision) throw new Error('Passkey 保留进度已变化，请重新读取恢复记录。');
+      await assertPasswordProjectPasskeyPreservationReady(state, record);
+      assertBitwardenPasskeyPreservationTransition(saved, progress);
+      const next = { ...record, updatedAt: new Date(this.now()).toISOString(), bitwardenPasskeyPreservation: {
+        ...record.bitwardenPasskeyPreservation!, sources: record.bitwardenPasskeyPreservation!.sources.map(row => row.plan.sourceCipherId === cipherId ? progress : row)
+      } };
+      readPasswordProjectRemovalJournal([next]);
+      state.passwordProjectRemovals = journal.map(row => row.id === operationId ? next : row);
+      state.updatedAt = next.updatedAt; await this.persist(state, key, envelope.kdf);
+    });
+  }
+
   /** Internal only: callers must read back and verify attachment copies before invoking this. */
-  async finalizePasswordProjectRemoval(operationId: string, observed: LoginItem[], proofs: PasswordProjectRemovalProof[], nativeIntent?: PasswordProjectNativeDeletionIntent): Promise<PasswordProjectRemovalRecord> {
+  async finalizePasswordProjectRemoval(operationId: string, observed: LoginItem[], proofs: PasswordProjectRemovalProof[], nativeIntent?: PasswordProjectNativeDeletionIntent,
+    bitwardenIntent?: BitwardenProjectDeletionJournal): Promise<PasswordProjectRemovalRecord> {
     return this.runExclusive(async () => {
       const { state, envelope, key } = await this.mutableContext();
       const journal = readPasswordProjectRemovalJournal(state.passwordProjectRemovals);
@@ -1315,6 +1478,7 @@ export class SecureVaultService {
           || current.updatedAt !== checked.updatedAt || JSON.stringify(current.providerRefs) !== JSON.stringify(checked.providerRefs))
           throw new Error('密码项目在移除校验期间已变化，原密码尚未移除。');
       }
+      if (record.bitwardenPasskeyPreservation) await assertPasswordProjectPasskeyPreservationReady(state, record);
       const now = new Date(Math.max(this.now(), ...members.map(item => (Date.parse(item.updatedAt) || 0) + 1))).toISOString();
       const next: PasswordProjectRemovalRecord = { ...record, status: 'deleting', updatedAt: now, proofs,
         retained: record.retained.map(row => members.find(item => item.id === row.id)!),
@@ -1325,12 +1489,142 @@ export class SecureVaultService {
         next.nativeDeletion = { intent: structuredClone(nativeIntent), deletedAt: now,
           pendingMutations: structuredClone(state.mutationQueue.filter(mutation => removedIds.has(mutation.itemId))) };
       }
+      if (bitwardenIntent) {
+        if (nativeIntent || bitwardenIntent.revision !== 1 || bitwardenIntent.phase !== 'deleting'
+          || bitwardenIntent.reason || bitwardenIntent.localChildren !== undefined || bitwardenIntent.members.some(row => row.stage !== 'ready'))
+          throw new Error('Bitwarden 项目移除必须从尚未发送的请求开始。');
+        next.bitwardenDeletion = { ...structuredClone(bitwardenIntent), localChildren: await snapshotBitwardenProjectChildren(next, state.items) };
+        const childIds = new Set(next.bitwardenDeletion.localChildren!.map(row => row.itemId));
+        if (state.mutationQueue.some(row => childIds.has(row.itemId)) || state.providerConflicts.some(row => childIds.has(row.itemId))
+          || state.providerMutationReceipts.some(row => childIds.has(row.itemId)))
+          throw new Error('Bitwarden 关联凭据尚未完成同步或存在冲突，原密码尚未移除。');
+      }
       readPasswordProjectRemovalJournal([next]);
       if (nativeIntent) await assertPasswordProjectNativeDeletionScope(next);
       state.passwordProjectRemovals = journal.map(candidate => candidate.id === operationId ? next : candidate);
       state.updatedAt = now;
       await this.persist(state, key, envelope.kdf);
       return next;
+    });
+  }
+
+  /** Internal coordinator preflight, including a committed operation resumed
+   * after a worker restart. No remote writes occur here. */
+  async checkPasswordProjectBitwardenDeletionLocalState(operationId: string): Promise<void> {
+    const state = await this.readState(false);
+    const record = readPasswordProjectRemovalJournal(state.passwordProjectRemovals).find(row => row.id === operationId);
+    if (!record) throw new Error('找不到 Bitwarden 项目移除记录。');
+    await assertPasswordProjectBitwardenDeletionReady(state, record);
+  }
+
+  /** Internal-only durable step; the runtime never accepts journal state from UI.
+   * Local source identities, pending tombstones and provider binding are checked
+   * before every transition. This does not unlock ordinary sync deletion.
+   */
+  async updatePasswordProjectBitwardenDeletion(operationId: string, expectedRevision: number,
+    progress: BitwardenProjectDeletionJournal): Promise<PasswordProjectRemovalRecord> {
+    const nextProgress = structuredClone(progress);
+    return this.runExclusive(async () => {
+      const { state, envelope, key } = await this.mutableContext();
+      const journal = readPasswordProjectRemovalJournal(state.passwordProjectRemovals);
+      const record = journal.find(row => row.id === operationId);
+      if (!record || record.status !== 'deleting' || !record.bitwardenDeletion || record.bitwardenDeletion.revision !== expectedRevision)
+        throw new Error('Bitwarden 移除进度已变化，请重新读取恢复记录。');
+      // Recovery changes only the durable remote intent. Local edits must not
+      // prevent compensation, and are kept for explicit conflict resolution.
+      if (['restoring', 'restored'].includes(nextProgress.phase)) assertPasswordProjectRemovalBindings(state, record);
+      else await assertPasswordProjectBitwardenDeletionReady(state, record);
+      assertBitwardenProjectDeletionTransition(record.bitwardenDeletion, nextProgress);
+      const next = { ...record, bitwardenDeletion: nextProgress, updatedAt: new Date(this.now()).toISOString() };
+      readPasswordProjectRemovalJournal([next]);
+      state.passwordProjectRemovals = journal.map(row => row.id === operationId ? next : row);
+      state.updatedAt = next.updatedAt;
+      await this.persist(state, key, envelope.kdf);
+      return structuredClone(next);
+    });
+  }
+
+  /** Internal coordinator only: server projection, child state, source envelopes
+   * and deletion queue are adopted together in one encrypted write. No network
+   * request runs while holding the vault lock.
+   */
+  async completePasswordProjectBitwardenDeletion(input: BitwardenProjectRemovalReadback): Promise<PasswordProjectRemovalRecord> {
+    const result = structuredClone(input);
+    return this.runExclusive(async () => {
+      const { state, envelope, key } = await this.mutableContext();
+      const journal = readPasswordProjectRemovalJournal(state.passwordProjectRemovals);
+      const record = journal.find(row => row.id === result.operationId);
+      if (!record?.bitwardenDeletion || record.bitwardenDeletion.revision !== result.journalRevision || record.bitwardenDeletion.phase !== 'committed')
+        throw new Error('Bitwarden 项目尚未确认删除，恢复记录已保留。');
+      if (record.status === 'completed') return structuredClone(record);
+      await assertPasswordProjectBitwardenDeletionReady(state, record);
+      const providerId = record.providerBindings.find(row => row.kind === 'bitwarden')!.id;
+      const provider = state.providers.find(row => row.id === providerId)!;
+      if (!sameProviderBinding(provider, result.account)) throw new Error('Bitwarden 删除回读来源已变化。');
+      validateImportedItems(result.items);
+      const merged = await mergeBitwardenProjectRemovalReadback(record, state.items, result);
+      state.items = await adoptBitwardenPasskeyCopies(record, state.items, merged, result.account, result.passkeyCopies);
+      const mergedItems = new Set(merged);
+      const adopted = state.items.filter(row => !mergedItems.has(row));
+      if (adopted.length) validateImportedItems(adopted);
+      const removed = new Set(record.removed.map(row => row.id));
+      state.mutationQueue = state.mutationQueue.filter(row => !(row.providerId === providerId && removed.has(row.itemId)));
+      const sourceRecords = [...result.sourceRecords, ...(result.passkeyCopies?.sourceRecords || [])];
+      const remoteIds = new Set(sourceRecords.map(row => row.remoteId));
+      state.sourceRecords = [...state.sourceRecords.filter(row => row.providerId !== providerId || !remoteIds.has(row.remoteId)), ...sourceRecords];
+      const budget = sourceRecordsBudgetError(state.sourceRecords); if (budget) throw new Error(budget);
+      state.providers = state.providers.map(row => row.id === providerId ? { ...row, config: { ...row.config, ...result.account.config } } : row);
+      const next: PasswordProjectRemovalRecord = { ...record, status: 'completed', updatedAt: new Date(this.now()).toISOString() };
+      readPasswordProjectRemovalJournal([next]);
+      state.passwordProjectRemovals = journal.map(row => row.id === next.id ? next : row);
+      state.updatedAt = next.updatedAt;
+      await this.persist(state, key, envelope.kdf);
+      return structuredClone(next);
+    });
+  }
+
+  /** A confirmed remote rollback ends this removal without replaying the old
+   * draft. Latest remote bytes and the cancelled journal are saved together.
+   */
+  async completePasswordProjectBitwardenRestoration(input: BitwardenProjectRestorationReadback): Promise<PasswordProjectRemovalRecord> {
+    const result = structuredClone(input);
+    return this.runExclusive(async () => {
+      const { state, envelope, key } = await this.mutableContext();
+      const journal = readPasswordProjectRemovalJournal(state.passwordProjectRemovals);
+      const record = journal.find(row => row.id === result.operationId);
+      if (!record?.bitwardenDeletion || record.bitwardenDeletion.phase !== 'restored' || record.bitwardenDeletion.revision !== result.journalRevision)
+        throw new Error('Bitwarden 补偿尚未确认，恢复日志已保留。');
+      if (record.status === 'cancelled') return structuredClone(record);
+      assertPasswordProjectRemovalBindings(state, record);
+      const localChanges = await passwordProjectBitwardenLocalChanges(state, record);
+      const providerId = record.providerBindings.find(row => row.kind === 'bitwarden')!.id;
+      const provider = state.providers.find(row => row.id === providerId)!;
+      if (!sameProviderBinding(provider, result.account)) throw new Error('Bitwarden 补偿回读来源已变化。');
+      const remoteIds = new Set(result.sourceRecords.map(row => row.remoteId));
+      const affectedIds = new Set(state.items.filter(row => row.providerRefs.some(ref => ref.providerId === providerId
+        && ref.remoteId && remoteIds.has(bitwardenProjectCipherId(ref.remoteId)))).map(row => row.id));
+      const removed = new Set(record.removed.map(row => row.id));
+      if (state.mutationQueue.some(row => affectedIds.has(row.itemId) && row.providerId === providerId && !removed.has(row.itemId) && !localChanges.has(row.itemId))
+        || state.providerConflicts.some(row => affectedIds.has(row.itemId) && row.providerId === providerId)
+        || state.providerMutationReceipts.some(row => affectedIds.has(row.itemId) && row.providerId === providerId))
+        throw new Error('Bitwarden 补偿期间关联项目有本地修改或未确认请求，请先核对恢复记录。');
+      const merged = await mergeBitwardenProjectRestoration(record, state.items, result, localChanges);
+      validateImportedItems(merged.items.filter(row => row.providerRefs.some(ref => ref.providerId === providerId
+        && ref.remoteId && remoteIds.has(bitwardenProjectCipherId(ref.remoteId)))));
+      const now = new Date(this.now()).toISOString();
+      state.items = merged.items;
+      const conflictedIds = new Set(merged.conflicts.map(row => row.itemId));
+      state.mutationQueue = state.mutationQueue.filter(row => !(row.providerId === providerId && (removed.has(row.itemId) || conflictedIds.has(row.itemId))));
+      state.sourceRecords = [...state.sourceRecords.filter(row => row.providerId !== providerId || !remoteIds.has(row.remoteId)), ...result.sourceRecords];
+      const budget = sourceRecordsBudgetError(state.sourceRecords); if (budget) throw new Error(budget);
+      state.providerConflicts.push(...merged.conflicts.map(conflict => ({ ...conflict, id: crypto.randomUUID(), providerId, detectedAt: now })));
+      state.providers = state.providers.map(row => row.id === providerId ? { ...row, config: { ...row.config, ...result.account.config },
+        lastError: '项目移除已撤销，受本次操作影响的原密码已恢复；请核对当前项目后重新编辑。' } : row);
+      const next: PasswordProjectRemovalRecord = { ...record, status: 'cancelled', updatedAt: now };
+      readPasswordProjectRemovalJournal([next]);
+      state.passwordProjectRemovals = journal.map(row => row.id === next.id ? next : row);
+      state.updatedAt = now; await this.persist(state, key, envelope.kdf);
+      return structuredClone(next);
     });
   }
 
@@ -1471,6 +1765,7 @@ export class SecureVaultService {
       if (record.status === 'completed') return record;
       if (record.status !== 'deleting') throw new Error('密码项目尚未完成移除校验。');
       if (record.nativeDeletion) throw new Error('密码项目原生删除必须确认已保存请求的提交回执。');
+      if (record.bitwardenDeletion) throw new Error('Bitwarden 项目删除必须通过对应协调器确认已保存请求的结果。');
       assertPasswordProjectRemovalBindings(state, record);
       const ids = new Set(record.removed.map(item => item.id));
       if (state.items.some(item => ids.has(item.id) && !item.deletedAt)
@@ -1787,11 +2082,11 @@ export class SecureVaultService {
   }
 
   async readMdbx2Restores(): Promise<Mdbx2RestoreRecord[]> {
-    return readMdbx2RestoreJournal((await this.readState()).mdbx2Restores);
+    return readMdbx2RestoreJournal(await this.readProjection(state => state.mdbx2Restores));
   }
 
   async readMdbx2RestoreBatches(): Promise<Mdbx2RestoreBatchRecord[]> {
-    return readMdbx2RestoreBatchJournal((await this.readState()).mdbx2RestoreBatches);
+    return readMdbx2RestoreBatchJournal(await this.readProjection(state => state.mdbx2RestoreBatches));
   }
 
   async readMdbx2DeletionCancellations(): Promise<Mdbx2DeletionCancellation[]> {
@@ -2582,8 +2877,28 @@ export class SecureVaultService {
   }
 
   private async mutableContext(): Promise<{ state: VaultState; envelope: VaultEnvelope; key: CryptoKey }> {
-    const { envelope, key } = await this.unlockedContext();
-    return { state: await decryptVaultState(envelope, key), envelope, key };
+    const { envelope, key, session } = await this.unlockedContext();
+    return { state: structuredClone(await this.readDecodedSnapshot(envelope, key, session)), envelope, key };
+  }
+
+  /** Only a byte-identical authenticated envelope in the same live session can hit. */
+  private async readDecodedSnapshot(envelope: VaultEnvelope, key: CryptoKey, session: VaultSessionRecord): Promise<VaultState> {
+    const cached = this.decodedSnapshot;
+    const same = cached && cached.sessionId === session.id && cached.rawKey === session.rawKey
+      && cached.envelope.version === envelope.version && cached.envelope.cipher === envelope.cipher
+      && cached.envelope.iv === envelope.iv && cached.envelope.ciphertext === envelope.ciphertext
+      && cached.envelope.updatedAt === envelope.updatedAt && JSON.stringify(cached.envelope.kdf) === JSON.stringify(envelope.kdf);
+    if (!same) this.clearDecryptedState();
+    const epoch = this.snapshotEpoch;
+    const state = same ? cached.state : await decryptVaultState(envelope, key);
+    if (session.expiresAt <= this.now()) { this.clearDecryptedState(); throw new VaultLockedError(); }
+    if (epoch !== this.snapshotEpoch) throw new VaultLockedError();
+    this.decodedSnapshot = { envelope, sessionId: session.id, rawKey: session.rawKey, state };
+    if (this.snapshotTimer !== undefined) clearTimeout(this.snapshotTimer);
+    this.snapshotTimer = setTimeout(() => this.clearDecryptedState(), session.expiresAt - this.now());
+    // Node tests should not stay alive for the browser session's expiry timer.
+    if (typeof this.snapshotTimer === 'object') this.snapshotTimer.unref?.();
+    return state;
   }
 
   private updateLockedAutofillGrant(state: VaultState, itemId: string, enabled: boolean): void {
@@ -2610,6 +2925,7 @@ export class SecureVaultService {
     const envelope = await encryptVaultState(state, key, kdf);
     await this.refreshLockedAutofill(state, envelope, requireLockedAutofill);
     await this.storage.write(envelope);
+    this.clearDecryptedState();
     try {
       if (activity) await this.touchSession(state.settings.autoLockMinutes);
     } catch {
@@ -2621,7 +2937,7 @@ export class SecureVaultService {
 
   private async requireEnvelope(): Promise<VaultEnvelope> {
     const envelope = await this.storage.read();
-    if (!envelope) throw new Error("Vault is not initialized");
+    if (!envelope) { this.clearDecryptedState(); throw new Error("Vault is not initialized"); }
     return envelope;
   }
 
@@ -2631,17 +2947,20 @@ export class SecureVaultService {
     return importVaultKey(rawKey);
   }
 
-  private async unlockedContext(): Promise<{ envelope: VaultEnvelope; key: CryptoKey }> {
+  private async unlockedContext(): Promise<{ envelope: VaultEnvelope; key: CryptoKey; session: VaultSessionRecord }> {
     const envelope = await this.requireEnvelope();
     const session = await this.sessions.read();
     if (!session || session.expiresAt <= this.now()) {
+      this.clearDecryptedState();
       await this.sessions.clear();
       throw new VaultLockedError();
     }
-    return { envelope, key: await importVaultKey(session.rawKey) };
+    if (this.decodedSnapshot && (this.decodedSnapshot.rawKey !== session.rawKey || this.decodedSnapshot.sessionId !== session.id)) this.clearDecryptedState();
+    return { envelope, key: await importVaultKey(session.rawKey), session };
   }
 
   private async startSession(key: CryptoKey, autoLockMinutes: number): Promise<void> {
+    this.clearDecryptedState();
     const now = this.now();
     await this.sessions.write({
       id: crypto.randomUUID(),
@@ -2733,7 +3052,11 @@ function publicProviderAccount(provider: ProviderAccount): ProviderAccount {
           workingCopyAvailable: Number.isSafeInteger(provider.config.workingCopyRevision) && Number(provider.config.workingCopyRevision) > 0,
           remoteEtagAvailable: Boolean(stringConfig(provider, "remoteEtag")),
           ...publicKeePassRemoteFailure(provider)
-        } : sourceMode === "local-file" ? { sourceMode: "local-file" } : {})
+        } : sourceMode === "local-file" ? {
+          sourceMode: "local-file",
+          ...(/^[a-f0-9]{64}$/.test(stringConfig(provider, "localFileSourceSha256"))
+            ? { localFileSourceSha256: stringConfig(provider, "localFileSourceSha256") } : {})
+        } : {})
       }
     };
   }
@@ -2846,10 +3169,13 @@ function providerReferencesForEdit(item: VaultItem, existing: VaultItem | undefi
   return result;
 }
 
-function queueProviderMutations(state: VaultState, item: VaultItem, operation: PendingMutation["operation"], now: string): void {
+function queueProviderMutations(state: VaultState, item: VaultItem, operation: PendingMutation["operation"], now: string, layoutOnly = false): void {
   for (const reference of item.providerRefs) {
     const provider = state.providers.find((candidate) => candidate.id === reference.providerId);
     if (!provider || provider.kind === "local") continue;
+    // These formats do not carry wallet layout. Retain any pending content
+    // mutation, but do not create a remote write just to change local order.
+    if (layoutOnly && reference.remoteId && (provider.kind === 'bitwarden' || (provider.kind === 'keepass' && item.kind === 'card'))) continue;
     queueProviderMutation(state, item, provider.id, operation, now);
   }
 }
@@ -3173,6 +3499,77 @@ function assertPasswordProjectRemovalBindings(state: VaultState, record: Passwor
   })) throw new Error('密码源已变化或不可用，原密码尚未移除。');
 }
 
+async function passwordProjectBitwardenPreparationLocalChanges(state: VaultState, record: PasswordProjectRemovalRecord): Promise<Set<string>> {
+  if (record.status !== 'preparing' || record.bitwardenDeletion || record.nativeDeletion
+    || record.providerBindings.filter(row => row.kind !== 'local').length !== 1
+    || !record.providerBindings.some(row => row.kind === 'bitwarden')) throw new Error('Bitwarden 项目不在准备阶段。');
+  assertPasswordProjectRemovalBindings(state, record);
+  const changes = new Set<string>(), expected = [...record.retained, ...record.removed];
+  const providerId = record.providerBindings.find(row => row.kind === 'bitwarden')!.id;
+  const members = passwordGroupMembers(record.retained[0], state.items);
+  if (members.length !== expected.length || members.some(row => !expected.some(saved => saved.id === row.id)))
+    throw new Error('准备期间项目成员身份已变化，恢复记录已保留。');
+  for (const saved of expected) {
+    const current = members.find(row => row.id === saved.id)!;
+    if (current.deletedAt || current.providerRefs.length !== saved.providerRefs.length
+      || saved.providerRefs.some(ref => !current.providerRefs.some(actual => actual.providerId === ref.providerId
+        && (!ref.remoteId || actual.remoteId === ref.remoteId) && (!ref.remoteFolderId || actual.remoteFolderId === ref.remoteFolderId))))
+      throw new Error('准备期间项目来源身份已变化，恢复记录已保留。');
+    if (passwordProjectRemovalContent({ ...current, createdAt: saved.createdAt }) !== passwordProjectRemovalContent(saved)) changes.add(current.id);
+  }
+  const children = await snapshotBitwardenProjectChildren(record, state.items);
+  for (const saved of record.bitwardenPasskeyPreservation?.localChildren || []) {
+    const current = children.find(row => row.itemId === saved.itemId);
+    if (!current || current.kind !== saved.kind || current.remoteId !== saved.remoteId || current.cipherId !== saved.cipherId)
+      throw new Error('准备期间关联凭据身份已变化，恢复记录已保留。');
+    if (!sameBitwardenProjectChild(saved, current)) changes.add(current.itemId);
+  }
+  for (const child of children) if (state.mutationQueue.some(row => row.providerId === providerId && row.itemId === child.itemId)
+    || record.bitwardenPasskeyPreservation && !record.bitwardenPasskeyPreservation.localChildren.some(saved => saved.itemId === child.itemId)) changes.add(child.itemId);
+  return changes;
+}
+
+async function passwordProjectBitwardenLocalChanges(state: VaultState, record: PasswordProjectRemovalRecord): Promise<Set<string>> {
+  if (record.status !== 'deleting' || !record.bitwardenDeletion) throw new Error('Bitwarden 项目不在待确认删除阶段。');
+  assertPasswordProjectRemovalBindings(state, record);
+  const changes = new Set<string>();
+  const providerId = record.providerBindings.find(row => row.kind === 'bitwarden')!.id;
+  const removed = new Set(record.removed.map(row => row.id));
+  for (const expected of [...record.retained, ...record.removed]) {
+    const current = state.items.find(row => row.id === expected.id);
+    if (!current || current.kind !== 'login' || !sameRemovalObject(current, expected, providerId))
+      throw new Error('Bitwarden 移除期间本地项目身份已变化，恢复记录已保留。');
+    const { deletedAt: _deletedAt, ...live } = current;
+    if (Boolean(current.deletedAt) !== removed.has(current.id) || passwordProjectRemovalContent(live) !== passwordProjectRemovalContent(expected)
+      || JSON.stringify(current.providerRefs) !== JSON.stringify(expected.providerRefs))
+      changes.add(current.id);
+  }
+  if (record.bitwardenDeletion.localChildren !== undefined) {
+    const children = await snapshotBitwardenProjectChildren(record, state.items);
+    for (const saved of record.bitwardenDeletion.localChildren) {
+      const current = children.find(row => row.itemId === saved.itemId);
+      if (!current || current.kind !== saved.kind || current.remoteId !== saved.remoteId || current.cipherId !== saved.cipherId)
+        throw new Error('Bitwarden 移除期间关联凭据身份已变化，恢复记录已保留。');
+      if (!sameBitwardenProjectChild(saved, current)) changes.add(current.itemId);
+    }
+    for (const child of children) if (!record.bitwardenDeletion.localChildren.some(row => row.itemId === child.itemId)) changes.add(child.itemId);
+  }
+  return changes;
+}
+
+async function assertPasswordProjectBitwardenDeletionReady(state: VaultState, record: PasswordProjectRemovalRecord): Promise<void> {
+  if ((await passwordProjectBitwardenLocalChanges(state, record)).size) throw new BitwardenProjectLocalChange();
+  const ids = new Set([...record.retained, ...record.removed].map(row => row.id));
+  record.bitwardenDeletion!.localChildren?.forEach(row => ids.add(row.itemId));
+  const removed = new Set(record.removed.map(row => row.id));
+  const pending = state.mutationQueue.filter(row => ids.has(row.itemId));
+  const providerId = record.providerBindings.find(row => row.kind === 'bitwarden')!.id;
+  if (pending.length !== removed.size || new Set(pending.map(row => row.itemId)).size !== removed.size
+    || pending.some(row => !removed.has(row.itemId) || row.providerId !== providerId || row.operation !== 'delete')
+    || state.providerConflicts.some(row => ids.has(row.itemId)) || state.providerMutationReceipts.some(row => ids.has(row.itemId)))
+    throw new Error('Bitwarden 移除期间队列或冲突状态已变化。');
+}
+
 function sameRemovalMutation(current: PendingMutation, saved: PendingMutation): boolean {
   return current.id === saved.id && current.itemId === saved.itemId && current.providerId === saved.providerId
     && current.operation === saved.operation && current.createdAt === saved.createdAt;
@@ -3185,14 +3582,44 @@ function sameRemovalObject(current: VaultItem, original: VaultItem, providerId: 
     && actual.remoteFolderId === expected.remoteFolderId);
 }
 
+async function assertPasswordProjectPasskeyPreservationReady(state: VaultState, record: PasswordProjectRemovalRecord): Promise<void> {
+  if (record.status !== 'preparing' || !record.bitwardenPasskeyPreservation) throw new Error('项目不在 Passkey 保留准备阶段。');
+  assertPasswordProjectRemovalReady(state, record);
+  const preservation = record.bitwardenPasskeyPreservation;
+  const children = await snapshotBitwardenProjectChildren(record, state.items);
+  if (!sameBitwardenProjectChildren(preservation.localChildren, children)) throw new Error('Passkey 保留期间关联凭据已变化，原始凭据与副本均已保留。');
+  const childIds = new Set(children.map(row => row.itemId));
+  if (state.mutationQueue.some(row => childIds.has(row.itemId)) || state.providerConflicts.some(row => childIds.has(row.itemId))
+    || state.providerMutationReceipts.some(row => childIds.has(row.itemId) || [...record.retained, ...record.removed].some(parent => parent.id === row.itemId)))
+    throw new Error('关联凭据尚有本地修改、冲突或未确认请求，已停止复制。');
+  const providerId = record.providerBindings.find(row => row.kind === 'bitwarden')!.id;
+  for (const saved of preservation.sources) {
+    const sources = state.sourceRecords.filter(row => row.providerId === providerId && row.remoteId === saved.plan.sourceCipherId);
+    if (sources.length !== 1 || sources[0].format !== 'bitwarden-cipher' || sources[0].encoding !== 'json') throw new Error('Passkey 原始密文快照不可用。');
+    const raw = parseLosslessJson(sources[0].payload) as Record<string, unknown>;
+    if ((raw.id ?? raw.Id) !== saved.plan.sourceCipherId || raw.deletedDate || raw.DeletedDate
+      || await bitwardenRemovalSnapshotSha256(raw) !== saved.plan.sourceSha256) throw new Error('Passkey 原始密文已变化，已停止复制。');
+    const localRefs = children.filter(row => row.kind === 'passkey' && row.cipherId === saved.plan.sourceCipherId).map(row => row.remoteId).sort();
+    if (JSON.stringify(localRefs) !== JSON.stringify(saved.plan.copies.map(row => row.sourceRemoteId).sort()))
+      throw new Error('Passkey 保留计划未覆盖全部原始凭据。');
+  }
+}
+
 function assertPasswordProjectRemovalReady(state: VaultState, record: PasswordProjectRemovalRecord): LoginItem[] {
   assertPasswordProjectRemovalBindings(state, record);
+  if (record.bitwardenPreparationRecovery) throw new Error('正在核对取消准备的结果，不能继续复制或删除。');
   const expected = [...record.retained, ...record.removed], ids = new Set(expected.map(item => item.id));
   const members = passwordGroupMembers(record.retained[0], state.items);
+  // Bitwarden assigns Cipher creation time on the server. A retained-member
+  // update can adopt that authoritative timestamp after an earlier create ACK
+  // kept the local one; it is not an edit to the password/project content.
+  const dateProviders = record.providerBindings.filter(provider => provider.kind !== 'local');
+  const bitwardenDates = dateProviders.length === 1 && dateProviders[0].kind === 'bitwarden';
   if (members.length !== ids.size || members.some(item => !ids.has(item.id))) throw new Error('分组成员已变化，原密码尚未移除。');
   for (const snapshot of expected) {
     const current = members.find(item => item.id === snapshot.id)!;
-    if (passwordProjectRemovalContent(current) !== passwordProjectRemovalContent(snapshot)
+    const comparable = bitwardenDates ? { ...current, createdAt: snapshot.createdAt } : current;
+    if (passwordProjectRemovalContent(comparable) !== passwordProjectRemovalContent(snapshot)
       || current.providerRefs.length !== snapshot.providerRefs.length
       || snapshot.providerRefs.some(ref => !current.providerRefs.some(actual => actual.providerId === ref.providerId && (!ref.remoteId || actual.remoteId === ref.remoteId))))
       throw new Error('密码项目在移除校验期间已变化，原密码尚未移除。');

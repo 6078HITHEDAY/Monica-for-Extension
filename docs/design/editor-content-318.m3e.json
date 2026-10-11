@@ -1,0 +1,596 @@
+{
+  "title": "Monica · 新建页补充内容",
+  "brief": "参考 Android EntryContentPanel：主编辑页只显示一致的图标、名称、状态摘要与右箭头，点击进入独立编辑层，返回恢复入口焦点与草稿。沿用 Monica 青绿色、系统字体和既有主题；24px 圆角，8px 间距，16px 内边距。添加内容与排列内容使用同样入口，不混入常驻表单或折叠。备注与笔记关联合并，收藏与归档放入更多选项。密钥摘要不显示秘密。",
+  "frame": "phone",
+  "platform": "web",
+  "paletteKey": "teal",
+  "theme": {
+    "dark": true,
+    "bothModes": true,
+    "contrast": "standard",
+    "shape": "rounded",
+    "font": "system",
+    "emphasized": true,
+    "motion": "standard"
+  },
+  "frames": [
+    {
+      "id": "editorcontent318",
+      "name": "补充信息",
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 1000
+    },
+    {
+      "id": "editorpayment318",
+      "name": "银行卡与支付",
+      "x": 430,
+      "y": 0,
+      "w": 390,
+      "h": 800
+    },
+    {
+      "id": "editoradd318",
+      "name": "添加内容",
+      "x": 860,
+      "y": 0,
+      "w": 390,
+      "h": 912
+    }
+  ],
+  "groups": [
+    {
+      "id": "editorcontent318-0",
+      "frameId": "editorcontent318",
+      "x": 12,
+      "y": 12,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "editorcontent318-0-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "arrow_back",
+          "kind": "topAppBar",
+          "label": "补充信息"
+        }
+      ]
+    },
+    {
+      "id": "editorcontent318-1",
+      "frameId": "editorcontent318",
+      "x": 12,
+      "y": 100,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "editorcontent318-1-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "credit_card",
+          "kind": "listItem",
+          "label": "银行卡与支付",
+          "supporting": "可选",
+          "icon2": "chevron_right"
+        }
+      ]
+    },
+    {
+      "id": "editorcontent318-2",
+      "frameId": "editorcontent318",
+      "x": 12,
+      "y": 188,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "editorcontent318-2-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "person",
+          "kind": "listItem",
+          "label": "个人信息",
+          "supporting": "可选",
+          "icon2": "chevron_right"
+        }
+      ]
+    },
+    {
+      "id": "editorcontent318-3",
+      "frameId": "editorcontent318",
+      "x": 12,
+      "y": 276,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "editorcontent318-3-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "location_on",
+          "kind": "listItem",
+          "label": "地址",
+          "supporting": "可选",
+          "icon2": "chevron_right"
+        }
+      ]
+    },
+    {
+      "id": "editorcontent318-4",
+      "frameId": "editorcontent318",
+      "x": 12,
+      "y": 364,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "editorcontent318-4-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "verified_user",
+          "kind": "listItem",
+          "label": "两步验证",
+          "supporting": "可选",
+          "icon2": "chevron_right"
+        }
+      ]
+    },
+    {
+      "id": "editorcontent318-5",
+      "frameId": "editorcontent318",
+      "x": 12,
+      "y": 452,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "editorcontent318-5-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "login",
+          "kind": "listItem",
+          "label": "登录方式",
+          "supporting": "密码登录",
+          "icon2": "chevron_right"
+        }
+      ]
+    },
+    {
+      "id": "editorcontent318-6",
+      "frameId": "editorcontent318",
+      "x": 12,
+      "y": 540,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "editorcontent318-6-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "edit_note",
+          "kind": "listItem",
+          "label": "自定义字段",
+          "supporting": "可选",
+          "icon2": "chevron_right"
+        }
+      ]
+    },
+    {
+      "id": "editorcontent318-7",
+      "frameId": "editorcontent318",
+      "x": 12,
+      "y": 628,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "editorcontent318-7-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "note",
+          "kind": "listItem",
+          "label": "笔记与恢复备注",
+          "supporting": "可选",
+          "icon2": "chevron_right"
+        }
+      ]
+    },
+    {
+      "id": "editorcontent318-8",
+      "frameId": "editorcontent318",
+      "x": 12,
+      "y": 716,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "editorcontent318-8-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "tune",
+          "kind": "listItem",
+          "label": "更多选项",
+          "supporting": "收藏、归档与自动填充",
+          "icon2": "chevron_right"
+        }
+      ]
+    },
+    {
+      "id": "editorcontent318-9",
+      "frameId": "editorcontent318",
+      "x": 12,
+      "y": 804,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "editorcontent318-9-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "add",
+          "kind": "listItem",
+          "label": "添加内容",
+          "supporting": "API Key、SSH 密钥与完整副本",
+          "icon2": "chevron_right"
+        }
+      ]
+    },
+    {
+      "id": "editorcontent318-10",
+      "frameId": "editorcontent318",
+      "x": 12,
+      "y": 892,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "editorcontent318-10-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "swap_vert",
+          "kind": "listItem",
+          "label": "内容顺序",
+          "supporting": "排列项目中的补充内容",
+          "icon2": "chevron_right"
+        }
+      ]
+    },
+    {
+      "id": "editorpayment318-0",
+      "frameId": "editorpayment318",
+      "x": 442,
+      "y": 12,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "editorpayment318-0-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "arrow_back",
+          "kind": "topAppBar",
+          "label": "银行卡与支付"
+        }
+      ]
+    },
+    {
+      "id": "editorpayment318-1",
+      "frameId": "editorpayment318",
+      "x": 442,
+      "y": 100,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "editorpayment318-1-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": null,
+          "kind": "textField",
+          "label": "卡号"
+        }
+      ]
+    },
+    {
+      "id": "editorpayment318-2",
+      "frameId": "editorpayment318",
+      "x": 442,
+      "y": 188,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "editorpayment318-2-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": null,
+          "kind": "textField",
+          "label": "持卡人"
+        }
+      ]
+    },
+    {
+      "id": "editorpayment318-3",
+      "frameId": "editorpayment318",
+      "x": 442,
+      "y": 276,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "editorpayment318-3-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": null,
+          "kind": "textField",
+          "label": "有效期"
+        }
+      ]
+    },
+    {
+      "id": "editorpayment318-4",
+      "frameId": "editorpayment318",
+      "x": 442,
+      "y": 364,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "editorpayment318-4-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": null,
+          "kind": "textField",
+          "label": "安全码"
+        }
+      ]
+    },
+    {
+      "id": "editorpayment318-5",
+      "frameId": "editorpayment318",
+      "x": 442,
+      "y": 452,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "editorpayment318-5-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "check",
+          "kind": "button",
+          "label": "完成"
+        }
+      ]
+    },
+    {
+      "id": "editoradd318-0",
+      "frameId": "editoradd318",
+      "x": 872,
+      "y": 12,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "editoradd318-0-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "arrow_back",
+          "kind": "topAppBar",
+          "label": "添加内容"
+        }
+      ]
+    },
+    {
+      "id": "editoradd318-1",
+      "frameId": "editoradd318",
+      "x": 872,
+      "y": 100,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "editoradd318-1-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "key",
+          "kind": "listItem",
+          "label": "API Key",
+          "supporting": "添加内容",
+          "icon2": "chevron_right"
+        }
+      ]
+    },
+    {
+      "id": "editoradd318-2",
+      "frameId": "editoradd318",
+      "x": 872,
+      "y": 188,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "editoradd318-2-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "token",
+          "kind": "listItem",
+          "label": "API Token",
+          "supporting": "添加内容",
+          "icon2": "chevron_right"
+        }
+      ]
+    },
+    {
+      "id": "editoradd318-3",
+      "frameId": "editoradd318",
+      "x": 872,
+      "y": 276,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "editoradd318-3-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "terminal",
+          "kind": "listItem",
+          "label": "SSH 密钥",
+          "supporting": "添加内容",
+          "icon2": "chevron_right"
+        }
+      ]
+    },
+    {
+      "id": "editoradd318-4",
+      "frameId": "editoradd318",
+      "x": 872,
+      "y": 364,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "editoradd318-4-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "key",
+          "kind": "listItem",
+          "label": "GPG 密钥",
+          "supporting": "添加内容",
+          "icon2": "chevron_right"
+        }
+      ]
+    },
+    {
+      "id": "editoradd318-5",
+      "frameId": "editoradd318",
+      "x": 872,
+      "y": 452,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "editoradd318-5-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "qr_code_2",
+          "kind": "listItem",
+          "label": "二维码",
+          "supporting": "添加内容",
+          "icon2": "chevron_right"
+        }
+      ]
+    },
+    {
+      "id": "editoradd318-6",
+      "frameId": "editoradd318",
+      "x": 872,
+      "y": 540,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "editoradd318-6-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "credit_card",
+          "kind": "listItem",
+          "label": "银行卡副本",
+          "supporting": "独立保存",
+          "icon2": "chevron_right"
+        }
+      ]
+    },
+    {
+      "id": "editoradd318-7",
+      "frameId": "editoradd318",
+      "x": 872,
+      "y": 628,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "editoradd318-7-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "badge",
+          "kind": "listItem",
+          "label": "证件副本",
+          "supporting": "独立保存",
+          "icon2": "chevron_right"
+        }
+      ]
+    },
+    {
+      "id": "editoradd318-8",
+      "frameId": "editoradd318",
+      "x": 872,
+      "y": 716,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "editoradd318-8-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "location_on",
+          "kind": "listItem",
+          "label": "地址副本",
+          "supporting": "独立保存",
+          "icon2": "chevron_right"
+        }
+      ]
+    },
+    {
+      "id": "editoradd318-9",
+      "frameId": "editoradd318",
+      "x": 872,
+      "y": 804,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "editoradd318-9-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "note",
+          "kind": "listItem",
+          "label": "完整笔记副本",
+          "supporting": "独立保存",
+          "icon2": "chevron_right"
+        }
+      ]
+    }
+  ],
+  "dynamicColor": false
+}

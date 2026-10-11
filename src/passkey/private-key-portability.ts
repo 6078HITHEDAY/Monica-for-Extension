@@ -1,6 +1,10 @@
 const PEM_BEGIN = "-----BEGIN PRIVATE KEY-----";
 const PEM_END = "-----END PRIVATE KEY-----";
 
+export function passkeyKeyMaterialHint(value: unknown): "device-reference" | undefined {
+  return typeof value === 'string' && value.trim().startsWith('monica-passkey-key-ref-v1:') ? 'device-reference' : undefined;
+}
+
 export interface PortablePasskeyPrivateKey {
   pkcs8Base64: string;
   algorithm: -7 | -257 | -8;

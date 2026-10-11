@@ -1,11 +1,12 @@
-import { chromium, expect, test, type BrowserContext } from "@playwright/test";
+import { launchTestContext } from './fixtures/edge';
+import { expect, test, type BrowserContext } from "@playwright/test";
 import path from "node:path";
 
 test("Windows Hello remains manager-only and exposes a truthful device-key recovery UI", async ({}, testInfo) => {
   const extensionPath = path.resolve("dist");
   let context: BrowserContext | undefined;
   try {
-    context = await chromium.launchPersistentContext(testInfo.outputPath("windows-hello-profile"), {
+    context = await launchTestContext(testInfo.outputPath("windows-hello-profile"), {
       channel: "chromium",
       headless: true, locale: "zh-CN",
       args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
@@ -21,9 +22,9 @@ test("Windows Hello remains manager-only and exposes a truthful device-key recov
     await expect(manager.getByRole("heading", { name: "全部项目", exact: true })).toBeVisible();
 
     await manager.getByRole("button", { name: "设置与备份" }).click();
-    const helloDisclosure = manager.locator("m3e-expansion-panel.hello-disclosure");
-    await expect(helloDisclosure.locator("[slot=\"header\"]")).toContainText("设备不可用 · 设备密钥");
-    await helloDisclosure.locator("[slot=\"header\"]").click();
+    await expect(manager.locator('[data-settings-entry="protection"]')).toContainText("设备密钥 · Windows Hello 未注册");
+    await manager.locator('[data-settings-entry="protection"]').click();
+    const helloDisclosure = manager.locator('[data-settings-page="protection"]');
     await expect(helloDisclosure.getByText("使用 Windows Hello 保护设备密钥；私钥不离开本机。")).toBeVisible();
 
     const popup = await context.newPage();

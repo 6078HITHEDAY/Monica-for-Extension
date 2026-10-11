@@ -28,7 +28,8 @@ it.skipIf(!output || !edgeOutput)("actual Edge RSA registration returns through 
     const build = JSON.parse(await readFile(join(output, "build-evidence.json"), "utf8"));
     const source = JSON.parse(await readFile(join(output, "source-proof.json"), "utf8"));
     expect(build.status).toBe("passed"); expect(source.status).toBe("passed");
-    expect(android.installedApkSha256).toBe(build.builtAppApkSha256);
+    expect(android.installedApkSha256).toBe(build.reviewedRuntimeReuse?.runtimeApkSha256 ?? build.builtAppApkSha256);
+    if (build.reviewedRuntimeReuse) expect(android.reviewedRuntimeReuse).toEqual(build.reviewedRuntimeReuse);
     expect(android.installedTestApkSha256).toBe(build.builtTestApkSha256);
     expect(android.baseline).toEqual(build.baseline); expect(android.testSourceHashes).toEqual(build.testSourceHashes);
     expect(source.inputSha256).toBe(edge.exportSha256);
@@ -45,7 +46,7 @@ it.skipIf(!output || !edgeOutput)("actual Edge RSA registration returns through 
   expect(hash(await readFile(executable))).toBe(edge.nativeHost.sha256);
   const native = new Mdbx2NativeClient(new ProcessNativeRuntime(executable, await mkdtemp(join(output, "edge-return-host-"))));
   const evidence: Record<string, any> = { status: "failed", edgeOutput, edgeExportSha256: edge.exportSha256, androidAppSha256: android.installedApkSha256,
-    androidTestSha256: android.installedTestApkSha256, signatures: [], compatibilityGaps: [], interoperabilityComplete: false,
+    androidTestSha256: android.installedTestApkSha256, hostSha256: edge.nativeHost.sha256, signatures: [], compatibilityGaps: [], interoperabilityComplete: false,
     scope: "Actual Edge registration/Native file -> actual Android repository/private-store/projection/crypto helpers -> independent Native/Node verification. No Android Credential Manager or true Android UV." };
   try {
     const snapshots: Map<string, string>[] = [];

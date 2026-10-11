@@ -71,9 +71,9 @@ class ExtensionPasskeySignatureInteropTest {
 
     private fun signedProof(entry: PasskeyEntry): JSONObject {
         val activity = activity()
-        val auth = PasskeyAuthActivity::class.java.getDeclaredMethod("createAuthenticatorData", String::class.java, Int::class.javaPrimitiveType).apply {
+        val auth = PasskeyAuthActivity::class.java.getDeclaredMethod("createAuthenticatorData", String::class.java, Int::class.javaPrimitiveType, PasskeyEntry::class.java).apply {
             isAccessible = true
-        }.invoke(activity, entry.rpId, 0) as ByteArray
+        }.invoke(activity, entry.rpId, 0, entry) as ByteArray
         val client = JSONObject().put("type", "webauthn.get").put("challenge", url64(UUID.randomUUID().toString().toByteArray()))
             .put("origin", "https://${entry.rpId}").put("crossOrigin", false).toString().toByteArray()
         val data = auth + sha(client)
@@ -85,6 +85,7 @@ class ExtensionPasskeySignatureInteropTest {
             .put("rpId", entry.rpId).put("userHandle", entry.userId).put("authenticatorData", b64(auth))
             .put("clientDataJSON", b64(client)).put("signature", b64(signature))
             .put("storedSignCount", entry.signCount).put("storedIsBackedUp", entry.isBackedUp)
+            .put("storedBackupEligible", entry.backupEligible).put("storedBackupState", entry.backupState)
             .put("flags", auth[32].toInt() and 255).put("protectedRoomReference", PasskeyPrivateKeyStore.isProtectedReference(entry.privateKeyAlias))
             .put("keyMaterialSha256", b64(sha(checkNotNull(PasskeyPrivateKeySupport.decodeFlexiblePrivateKey(
                 PasskeyPrivateKeyStore.resolve(context, entry.privateKeyAlias))).pkcs8Bytes)))

@@ -180,7 +180,7 @@ function toggleConflicts() {
         <div class="bitwarden-conflict-heading"><div><strong>{{ tr('同步冲突') }}</strong><p>{{ tr('选择一个明确版本；敏感字段不会在此处显示。') }}</p></div><span class="state state-conflict">{{ tr('{0} 个', { 0: conflicts.length }) }}</span></div>
         <div class="bitwarden-conflict-list">
           <article v-for="conflict in visibleConflicts" :key="conflict.id" class="provider-conflict">
-            <div class="bitwarden-conflict-copy"><strong>{{ conflict.local?.title || conflict.remote?.title || tr('密码源级冲突') }}</strong><p>{{ conflict.reason }}</p><small>{{ tr('{0} · 检测于 {1}', { 0: conflictSides(conflict), 1: new Date(conflict.detectedAt).toLocaleString(locale) }) }}</small></div>
+            <div class="bitwarden-conflict-copy"><strong>{{ conflict.local?.title || conflict.remote?.title || tr('密码源级冲突') }}</strong><p>{{ tr(conflict.reason) }}</p><small>{{ tr('{0} · 检测于 {1}', { 0: conflictSides(conflict), 1: new Date(conflict.detectedAt).toLocaleString(locale) }) }}</small></div>
             <div v-if="conflict.local || conflict.remote" class="conflict-actions">
               <m3e-button v-if="conflict.local" variant="tonal" type="button" :disabled="busy || activeSync" @click="emit('resolveConflict', conflict, 'keep-local')">{{ tr('保留浏览器版本') }}</m3e-button>
               <m3e-button variant="text" type="button" :disabled="busy || activeSync" @click="emit('resolveConflict', conflict, 'use-remote')">{{ conflict.remote ? tr('采用 Bitwarden 版本') : tr('接受远端删除') }}</m3e-button>

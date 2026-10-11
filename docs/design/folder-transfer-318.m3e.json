@@ -1,0 +1,212 @@
+{
+  "title": "Monica · 数据库与文件夹",
+  "brief": "沿用青绿 M3E 和系统字体。数据库与文件夹连续列表，12px边距、24px外圆角、4px相邻圆角；完整路径与选中状态可见。复制保留源记录，受限项列出原因并允许取消或跳过。",
+  "frame": "phone",
+  "platform": "web",
+  "paletteKey": "teal",
+  "theme": {
+    "dark": true,
+    "bothModes": true,
+    "contrast": "standard",
+    "shape": "rounded",
+    "font": "system",
+    "emphasized": true,
+    "motion": "standard"
+  },
+  "frames": [
+    {
+      "id": "folderfilter318",
+      "name": "Steam · 筛选",
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 850
+    },
+    {
+      "id": "foldertransfer318",
+      "name": "Passkey · 复制",
+      "x": 430,
+      "y": 0,
+      "w": 390,
+      "h": 850
+    }
+  ],
+  "groups": [
+    {
+      "id": "folderfilter318header",
+      "frameId": "folderfilter318",
+      "x": 12,
+      "y": 12,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "folderfilter318bar",
+          "kind": "topAppBar",
+          "label": "Steam · 筛选",
+          "icon": "arrow_back",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled"
+        }
+      ]
+    },
+    {
+      "id": "folderfilter318rows",
+      "frameId": "folderfilter318",
+      "x": 12,
+      "y": 100,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "folderfilter3180",
+          "size": 366,
+          "icon": null,
+          "radius": 24,
+          "variant": "filled",
+          "kind": "select",
+          "label": "数据库",
+          "value": "游戏密码库"
+        },
+        {
+          "id": "folderfilter3181",
+          "size": 366,
+          "icon": "list",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "全部文件夹",
+          "supporting": "包含根目录与子文件夹"
+        },
+        {
+          "id": "folderfilter3182",
+          "size": 366,
+          "icon": "folder_off",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "根目录",
+          "supporting": "未放入文件夹"
+        },
+        {
+          "id": "folderfilter3183",
+          "size": 366,
+          "icon": "check",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "游戏 / Steam",
+          "supporting": "已选择 · 2 个项目"
+        },
+        {
+          "id": "folderfilter3184",
+          "size": 366,
+          "icon": "folder",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "游戏 / 其他",
+          "supporting": "1 个项目"
+        },
+        {
+          "id": "folderfilter3185",
+          "size": 366,
+          "icon": "check",
+          "radius": 24,
+          "variant": "filled",
+          "kind": "button",
+          "label": "完成"
+        }
+      ]
+    },
+    {
+      "id": "foldertransfer318header",
+      "frameId": "foldertransfer318",
+      "x": 442,
+      "y": 12,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "foldertransfer318bar",
+          "kind": "topAppBar",
+          "label": "Passkey · 复制",
+          "icon": "arrow_back",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled"
+        }
+      ]
+    },
+    {
+      "id": "foldertransfer318rows",
+      "frameId": "foldertransfer318",
+      "x": 442,
+      "y": 100,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "foldertransfer3180",
+          "size": 366,
+          "icon": null,
+          "radius": 24,
+          "variant": "filled",
+          "kind": "select",
+          "label": "目标数据库",
+          "value": "家庭 MDBX"
+        },
+        {
+          "id": "foldertransfer3181",
+          "size": 366,
+          "icon": "folder",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "家庭 / 登录",
+          "supporting": "目标文件夹"
+        },
+        {
+          "id": "foldertransfer3182",
+          "size": 366,
+          "icon": "key",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "GitHub",
+          "supporting": "可复制 · 保留源记录"
+        },
+        {
+          "id": "foldertransfer3183",
+          "size": 366,
+          "icon": "warning",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "设备密钥",
+          "supporting": "不能导出私钥 · 将跳过"
+        },
+        {
+          "id": "foldertransfer3184",
+          "size": 366,
+          "icon": "close",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "button",
+          "label": "取消"
+        },
+        {
+          "id": "foldertransfer3185",
+          "size": 366,
+          "icon": "content_copy",
+          "radius": 24,
+          "variant": "filled",
+          "kind": "button",
+          "label": "跳过受限项并继续"
+        }
+      ]
+    }
+  ],
+  "dynamicColor": false
+}

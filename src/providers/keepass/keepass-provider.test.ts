@@ -12,6 +12,36 @@ import { applySsoAccountChoice, resolveSsoAccount, ssoLogicalId } from "../../co
  */
 
 const PASSWORD = "fixture master password";
+
+it.each(['account-lock', 'vault-lock', 'replacement'] as const)('does not revive a session after %s during file unlock', async mode => {
+  const provider = new KeePassProvider(), target = account();
+  const bytes = await buildKeePassFixture({ password: PASSWORD });
+  // unlock reaches its first asynchronous KDF before a lock or newer unlock runs.
+  const opening = provider.unlock(target, bytes, { password: PASSWORD });
+  const rejected = expect(opening).rejects.toThrow(/锁定或替换/);
+  if (mode === 'account-lock') provider.lockAccount(target.id);
+  else if (mode === 'vault-lock') provider.lock();
+  else await provider.unlock(target, bytes, { password: PASSWORD, sourceName: 'Replacement' });
+  await rejected;
+  expect(provider.isUnlocked(target.id)).toBe(mode === 'replacement');
+});
+
+it('keeps card layout local and carries document layout through a fresh KDBX read', async () => {
+  const provider = new KeePassProvider();
+  const { target } = await unlock(provider, []);
+  const base = { id: 'wallet', title: 'Synthetic wallet', favorite: false, notes: '', createdAt: '2026-10-09', updatedAt: '2026-10-09',
+    providerRefs: [{ providerId: target.id }], editorSectionOrder: ['notes', 'custom', 'future'] };
+  const card = await provider.create(target, { ...base, kind: 'card', cardholderName: 'Holder', number: '4111111111111111', securityCode: '123', expiryMonth: '12', expiryYear: '2030' });
+  const document = await provider.create(target, { ...base, id: 'document', kind: 'identity', documentType: 'PASSPORT', documentNumber: 'Synthetic', firstName: 'A', middleName: '', lastName: 'B', fullName: 'A B' });
+  const cardLayout = { ...card, editorSectionOrder: ['custom', 'notes'] } as typeof card;
+  const result = await sync(provider, target, [cardLayout, document]);
+  expect(result.conflicts).toHaveLength(0);
+  expect(result.items.find(item => item.kind === 'card')).toMatchObject({ editorSectionOrder: ['custom', 'notes'] });
+  const reopened = new KeePassProvider();
+  await reopened.unlock(target, await provider.exportFile(target.id), { password: PASSWORD });
+  const fresh = await sync(reopened, target, []);
+  expect(fresh.items.find(item => item.kind === 'identity')).toMatchObject({ editorSectionOrder: base.editorSectionOrder });
+});
 const P256_PKCS8 = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgsloK6aKNvj0CZMYdBdSZs+AUAsFy1t66q4tq5SvyeJahRANCAASlCTbHlIcaKQ2lzoEFhtjkLEO++f3cYq6FMYG7eH3BmuLQPz71FAtWq4z+tIb7oequwhUJL3xos1nA8jFqpkDs";
 const ENTRIES: KeePassFixtureEntry[] = [
   {

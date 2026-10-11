@@ -1,3 +1,4 @@
+import { passkeyKeyMaterialHint } from '../../passkey/private-key-portability';
 import * as kdbxweb from "kdbxweb";
 import type { PasskeyItem } from "../../core/model";
 import { normalizeCredentialId } from "../../passkey/source-policy";
@@ -66,6 +67,7 @@ export interface KeePassPasskeyProjection {
   algorithm: number;
   publicKey: string;
   privateKeyPkcs8?: string;
+  keyMaterialHint?: PasskeyItem["keyMaterialHint"];
   signCount: number;
   backupEligible: boolean;
   backupState: boolean;
@@ -124,6 +126,7 @@ function readMonicaPasskeyPayload(fields: KeePassEntryFields): KeePassPasskeyPro
     algorithm: integer(payload.publicKeyAlgorithm) ?? -7,
     publicKey: text(payload.publicKey),
     privateKeyPkcs8,
+    keyMaterialHint: privateKeyPkcs8 ? undefined : passkeyKeyMaterialHint(payload.privateKeyAlias),
     signCount: integer(payload.signCount) ?? 0,
     // Monica registrations set BE/BS; old versions did not serialize these in their payload.
     backupEligible: payload.backupEligible !== false,
@@ -214,6 +217,7 @@ export function keePassPasskeyToVaultItem(
     algorithm: projection.algorithm,
     publicKey: projection.publicKey,
     privateKeyPkcs8: projection.privateKeyPkcs8,
+    keyMaterialHint: projection.keyMaterialHint,
     signCount: projection.signCount,
     backupEligible: projection.backupEligible,
     backupState: projection.backupState,

@@ -8,6 +8,7 @@ import ProjectCredentialEditor from "./ProjectCredentialEditor.vue";
 import { supportsProjectMemberRemoval } from '../manager/project-removal-form';
 import { projectCredentialFormGroups, startProjectCredentialGroups, projectCredentialContentTokens, updateProjectContentFields } from "../manager/project-credential-form";
 import PasswordContentEditor from "./PasswordContentEditor.vue";
+import EditorContentSection from "./EditorContentSection.vue";
 import PasskeyBindings from "./PasskeyBindings.vue";
 import CustomIconPicker from './CustomIconPicker.vue';
 import SsoAccountPicker from './SsoAccountPicker.vue';
@@ -56,8 +57,6 @@ function noteOptionLabel(note: SecureNoteItem) {
   return excerpt ? `${note.title} · ${excerpt.slice(0, 56)}${excerpt.length > 56 ? '…' : ''}` : note.title;
 }
 function chooseNote(value: string) { form.boundNoteEntryId = value; form.boundNoteEdited = true; }
-// Editing a binding must not collapse the fields while the user is replacing it.
-const twoFactorOpen = ref(Boolean(form.boundTotpItemId || form.totpSecret));
 const webLogin = computed(() => form.loginType === "PASSWORD" || form.loginType === "SSO");
 const entryType = computed({ get: () => webLogin.value ? "PASSWORD" : form.loginType, set: (value: LoginForm["loginType"]) => { form.loginType = value; reveal.value = false; emit("clearQr"); } });
 const matchTypes: LoginUriMatchType[] = ["base-domain", "domain", "starts-with", "exact", "regex", "never"];
@@ -151,32 +150,35 @@ const supplemental = [{ token: "PAYMENT", label: "银行卡与支付", fields: [
   <section v-else-if="form.loginType === 'BARCODE'" class="editor-section"><h3>{{ tr('条码内容') }}</h3><m3e-form-field v-field-label variant="filled" hide-required-marker class="field"><label slot="label">{{ tr('条码内容') }}</label><textarea v-model="form.barcodeContent" rows="4" autocomplete="off" spellcheck="false" /></m3e-form-field></section>
 
   <section v-if="webLogin && !projectGroups" class="editor-section"><h3>同一项目的其他账号</h3><p class="editor-hint">只关联在此明确添加的成员；同标题的独立密码不会自动合并。</p><div v-for="(member,index) in form.groupMembers" :key="member.id" class="editor-field-grid"><m3e-form-field v-field-label variant="filled"><label slot="label">账号 {{index+2}}</label><input v-model="member.username" autocomplete="off" /></m3e-form-field><m3e-form-field v-field-label variant="filled"><label slot="label">密码 {{index+2}}</label><input v-model="member.password" type="password" autocomplete="new-password" /></m3e-form-field><m3e-button v-if="!member.original" type="button" variant="text" @click="form.groupMembers.splice(index,1)">取消新增成员</m3e-button></div><m3e-button v-if="canEditProject" type="button" variant="tonal" @click="addGroupMember">{{ !editing &amp;&amp; form.loginType === 'PASSWORD' ? tr('添加凭据组') : tr('添加另一个账号') }}</m3e-button><p v-if="groupStartError" role="alert">{{ tr(groupStartError) }}</p></section>
-  <section class="editor-section editor-extras" style="display:flex;flex-direction:column" :aria-label="tr('补充信息')">
+  <section class="editor-section editor-extras editor-content-list" :aria-label="tr('补充信息')">
     <h3 style="order:-2">{{ tr('补充信息') }}</h3>
     <PasswordContentEditor :fields="form.customFields" :providers="providers" :provider-id="form.providerId" :owner="owner" :project-tokens="projectTokens" :credential-labels="credentialLabels" @update="updateContent" />
     <p v-if="projectContentError" role="alert" class="form-error" style="order:-1">{{ tr(projectContentError) }}</p>
-    <ProjectCredentialEditor v-for="group in projectGroups?.filter(group => !group.primary)" :key="group.id" class="editor-section" :style="{order:rank(`CREDENTIAL:${group.id}`)}" :form="form" :groups="[group]" :group-labels="credentialLabels" :can-add="canEditProject" :can-remove-original="canRemoveOriginal" :editing="editing" hide-add-group />
-    <m3e-expansion-panel v-for="section in supplemental" :key="section.token" :style="{order:rank(section.token)}" class="editor-disclosure"><span slot="header">{{ section.label }}</span><div class="editor-disclosure-body editor-field-grid"><m3e-form-field v-for="[key,label] in section.fields" :key="key" v-field-label variant="filled"><label slot="label">{{ label }}</label><input v-model="(form as any)[key]" :type="key==='creditCardCVV'||key==='creditCardNumber' ? 'password':'text'" autocomplete="off" /></m3e-form-field></div></m3e-expansion-panel>
-    <m3e-expansion-panel class="editor-disclosure" :style="{order:rank('AUTHENTICATOR')}" :open.prop="twoFactorOpen" @opened.self="twoFactorOpen = true" @closed.self="twoFactorOpen = false"><span slot="header"><span>{{ tr('两步验证') }}<small>{{ form.boundTotpItemId || form.totpSecret ? tr('已配置') : tr('可选') }}</small></span></span><div class="editor-disclosure-body editor-field-grid">
+    <EditorContentSection v-for="group in projectGroups?.filter(group => !group.primary)" :key="group.id" :style="{order:rank(`CREDENTIAL:${group.id}`)}" :title="credentialLabels[`CREDENTIAL:${group.id}`] || tr('凭据组')" icon="key" :summary="tr('账号信息')">
+    <ProjectCredentialEditor :form="form" :groups="[group]" :group-labels="credentialLabels" :can-add="canEditProject" :can-remove-original="canRemoveOriginal" :editing="editing" hide-add-group />
+    </EditorContentSection>
+    <EditorContentSection v-for="section in supplemental" :key="section.token" :style="{order:rank(section.token)}" :title="tr(section.label)" :icon="({PAYMENT: 'credit_card', CONTACT: 'person', ADDRESS: 'location_on'} as Record<string,string>)[section.token]" :summary="section.fields.some(([key]) => (form as any)[key]) ? tr('已配置') : tr('可选')"><div class="editor-disclosure-body editor-field-grid"><m3e-form-field v-for="[key,label] in section.fields" :key="key" v-field-label variant="filled"><label slot="label">{{ label }}</label><input v-model="(form as any)[key]" :type="key==='creditCardCVV'||key==='creditCardNumber' ? 'password':'text'" autocomplete="off" /></m3e-form-field></div></EditorContentSection>
+    <EditorContentSection :style="{order:rank('AUTHENTICATOR')}" :title="tr('两步验证')" icon="verified_user" :summary="form.boundTotpItemId || form.totpSecret || form.passkeyBindings ? tr('已配置') : tr('可选')"><div class="editor-disclosure-body editor-field-grid">
       <m3e-form-field v-field-label variant="filled" hide-required-marker class="field"><label slot="label">{{ tr('绑定独立验证器') }}</label><component :is="materialSelectTag" @input="form.boundTotpItemId = ($event.target as HTMLElement &amp; { value: string }).value" ><component :is="materialOptionTag" :selected.prop="String(form.boundTotpItemId ?? '') === String('')" value="">{{ tr('不绑定独立项目') }}</component><component :is="materialOptionTag" :selected.prop="String(form.boundTotpItemId ?? '') === String(item.id)" v-for="item in totpItems" :key="item.id" :value="item.id">{{ item.title }} · {{ item.otpType || 'TOTP' }}</component></component></m3e-form-field>
       <m3e-form-field v-if="!projectGroups" v-field-label variant="filled" hide-required-marker class="field"><label slot="label">{{ tr('内嵌验证码密钥') }}</label><input v-model="form.totpSecret" type="password" autocomplete="new-password" :placeholder="tr('Base32 或 otpauth URI')" /></m3e-form-field>
       <p class="editor-hint field-wide">独立验证器优先；内嵌密钥仍完整保留。Passkey 和恢复备注可与验证码共存。</p>
       <div class="field-wide"><h3>Passkey 绑定</h3><PasskeyBindings :raw="form.passkeyBindings" editable @update="form.passkeyBindings=$event" /></div>
-    </div></m3e-expansion-panel>
-    <m3e-expansion-panel v-if="webLogin" class="editor-disclosure" :open="form.loginType === 'SSO'"><span slot="header"><span>{{ tr('登录方式') }}<small>{{ form.loginType === 'SSO' ? tr('第三方登录') : tr('密码登录') }}</small></span></span><div class="editor-disclosure-body editor-field-grid">
+    </div></EditorContentSection>
+    <EditorContentSection v-if="webLogin" :style="{order:8000}" :title="tr('登录方式')" icon="login" :summary="form.loginType === 'SSO' ? tr('第三方登录') : tr('密码登录')"><div class="editor-disclosure-body editor-field-grid">
       <m3e-form-field v-field-label variant="filled" hide-required-marker class="field field-wide"><label slot="label">{{ tr('登录方式') }}</label><component :is="materialSelectTag" @input="form.loginType = ($event.target as HTMLElement &amp; { value: string }).value" ><component :is="materialOptionTag" :selected.prop="String(form.loginType ?? '') === String('PASSWORD')" value="PASSWORD">{{ tr('密码登录') }}</component><component :is="materialOptionTag" :selected.prop="String(form.loginType ?? '') === String('SSO')" value="SSO">{{ tr('第三方登录（SSO）') }}</component></component></m3e-form-field>
       <template v-if="form.loginType === 'SSO'"><m3e-form-field v-field-label variant="filled" hide-required-marker class="field"><label slot="label">{{ tr('SSO 提供商') }}</label><input v-model="form.ssoProvider" list="sso-providers" autocomplete="off" placeholder="GOOGLE" /><datalist id="sso-providers"><option v-for="provider in ssoProviders" :key="provider" :value="provider" /></datalist></m3e-form-field><SsoAccountPicker :form="form" :owner="owner" :items="items || []" :providers="providers" /><p class="editor-hint field-wide">{{ tr('用于记录通过 Google、Apple 等账号登录的网站，与 Android 的第三方登录设置一致。') }}</p></template>
-    </div></m3e-expansion-panel>
-    <m3e-expansion-panel class="editor-disclosure" :style="{order:rank('CUSTOM_FIELDS')}" :open="ordinaryFields.length > 0"><span slot="header"><span>{{ tr('自定义字段') }}<small>{{ ordinaryFields.length || tr('可选') }}</small></span></span><div class="editor-disclosure-body">
+    </div></EditorContentSection>
+    <EditorContentSection :style="{order:rank('CUSTOM_FIELDS')}" :title="tr('自定义字段')" icon="edit_note" :summary="ordinaryFields.length ? String(ordinaryFields.length) : tr('可选')"><div class="editor-disclosure-body">
       <div v-for="{field,index} in ordinaryFields" :key="index" class="custom-field-row"><m3e-form-field v-field-label variant="filled" hide-required-marker><label slot="label">{{ tr('自定义字段 {0} 名称', { 0: index + 1 }) }}</label><input v-model="field.name" :aria-label="tr('自定义字段 {0} 名称', { 0: index + 1 })" :placeholder="tr('字段名称')" /></m3e-form-field><m3e-form-field v-field-label variant="filled" hide-required-marker><label slot="label">{{ tr('自定义字段 {0} 值', { 0: index + 1 }) }}</label><input v-model="field.value" :type="field.protected ? 'password' : 'text'" :aria-label="tr('自定义字段 {0} 值', { 0: index + 1 })" :placeholder="tr('字段值')" autocomplete="off" /></m3e-form-field><label v-choice-label class="compact-check"><m3e-checkbox :checked.prop="field.protected" @input="field.protected = ($event.target as HTMLElement &amp; { checked: boolean }).checked"   /><span>{{ tr('隐藏') }}</span></label><m3e-icon-button type="button" :aria-label="tr('删除自定义字段 {0}', { 0: index + 1 })" @click="form.customFields.splice(index, 1)"><m3e-icon name="close" /></m3e-icon-button></div>
       <m3e-button variant="text" class="editor-text-action" type="button" @click="form.customFields.push({ name: '', value: '', protected: false })"><m3e-icon slot="icon" name="add" />{{ tr('添加字段') }}</m3e-button>
-    </div></m3e-expansion-panel>
-    <m3e-expansion-panel v-if="!webLogin" class="editor-disclosure"><span slot="header"><span>{{ form.loginType === 'BARCODE' ? tr('复制与条码') : tr('复制与二维码') }}</span></span><div class="editor-disclosure-body special-transfer">
+    </div></EditorContentSection>
+    <EditorContentSection v-if="!webLogin" :style="{order:8000}" :title="form.loginType === 'BARCODE' ? tr('复制与条码') : tr('复制与二维码')" icon="qr_code_2"><div class="editor-disclosure-body special-transfer">
       <m3e-radio-group v-if="form.loginType === 'BARCODE'" class="barcode-render-modes" :aria-label="tr('条码显示方式')"><label v-choice-label><m3e-radio :checked.prop="barcodeMode === 'qr'" @input="barcodeMode = 'qr'"   value="qr" @change="emit('clearQr')" /><span>QR</span></label><label v-choice-label><m3e-radio :checked.prop="barcodeMode === 'code128'" @input="barcodeMode = 'code128'"   value="code128" @change="emit('clearQr')" /><span>Code 128</span></label></m3e-radio-group>
       <div class="special-transfer-actions"><m3e-button variant="tonal" type="button" @click="emit('copyPayload')"><m3e-icon slot="icon" name="content_copy" />{{ tr('复制') }}</m3e-button><m3e-button variant="text" type="button" @click="emit('generateQr')"><m3e-icon slot="icon" name="qr_code_2" />{{ form.loginType === 'BARCODE' && barcodeMode === 'code128' ? tr('生成条码') : tr('生成二维码') }}</m3e-button></div>
       <img v-if="qrDataUrl" :class="{ 'barcode-linear-preview': form.loginType === 'BARCODE' && barcodeMode === 'code128' }" :src="qrDataUrl" :alt="form.loginType === 'BARCODE' ? `BARCODE ${barcodeMode === 'code128' ? tr('Code 128 条码') : tr('QR 二维码')}` : tr('{0} 二维码', { 0: form.loginType })" width="240" :height="form.loginType === 'BARCODE' && barcodeMode === 'code128' ? 96 : 240" />
       <p v-if="qrError" class="form-error" role="alert">{{ qrError }}</p>
-    </div></m3e-expansion-panel>
+    </div></EditorContentSection>
+    <EditorContentSection :style="{order:rank('NOTES')}" :title="tr('笔记与恢复备注')" icon="note" :summary="form.notes || form.boundNoteEntryId ? tr('已配置') : tr('可选')">
     <section v-if="noteLinkSupported || owner?.boundNoteEntryId || owner?.boundNoteId != null" class="editor-section bound-note-section" :style="{order:rank('NOTES')}">
       <h3>{{ tr('关联笔记') }}</h3>
       <m3e-form-field v-if="noteLinkSupported" v-field-label variant="filled"><label slot="label">{{ tr('选择关联笔记') }}</label><component :is="materialSelectTag" @input="chooseNote(($event.target as HTMLElement & {value:string}).value)">
@@ -194,11 +196,13 @@ const supplemental = [{ token: "PAYMENT", label: "银行卡与支付", fields: [
       <m3e-button v-if="noteLinkSupported && (form.boundNoteEntryId || owner?.boundNoteId != null)" type="button" variant="text" @click="chooseNote('')">{{ tr('解除笔记关联') }}</m3e-button>
       <p v-if="!noteLinkSupported">{{ tr('此来源暂不支持修改笔记关联，原有关联已保留。') }}</p>
     </section>
-    <m3e-form-field v-field-label variant="filled" hide-required-marker class="field editor-notes" :style="{order:rank('NOTES')}"><label slot="label">恢复备注与笔记</label><textarea v-model="form.notes" rows="3" :placeholder="tr('可选备注')" /></m3e-form-field>
+    <m3e-form-field v-field-label variant="filled" hide-required-marker class="field editor-notes"><label slot="label">恢复备注与笔记</label><textarea v-model="form.notes" rows="3" :placeholder="tr('可选备注')" /></m3e-form-field>
+    </EditorContentSection>
+
+    <EditorContentSection :style="{order:9000}" :title="tr('更多选项')" icon="tune" :summary="form.archived ? tr('归档并停止自动填充') : form.favorite ? tr('收藏并优先显示') : tr('可选')"><div class="editor-disclosure-body">
     <label v-choice-label class="favorite-row"><m3e-checkbox :checked.prop="form.favorite" @input="form.favorite = ($event.target as HTMLElement &amp; { checked: boolean }).checked"   /><span>{{ tr('收藏并优先显示') }}</span></label>
-    <m3e-expansion-panel class="editor-disclosure" :open="form.allowLockedAutofill || form.archived"><span slot="header"><span>{{ tr('更多选项') }}</span></span><div class="editor-disclosure-body">
       <label v-choice-label v-if="form.loginType === 'PASSWORD' && !form.archived" class="locked-autofill-option"><m3e-checkbox :checked.prop="form.allowLockedAutofill" @input="form.allowLockedAutofill = ($event.target as HTMLElement &amp; { checked: boolean }).checked"   /><span><strong>{{ tr('允许免解锁填写') }}</strong><small>{{ tr('在此浏览器保存独立加密副本。锁定后，使用此浏览器的人仍可点击填写该账号的用户名和密码；验证码和 Passkey 仍需解锁。') }}</small></span></label>
       <label v-choice-label class="favorite-row"><m3e-checkbox :checked.prop="form.archived" @input="form.archived = ($event.target as HTMLElement &amp; { checked: boolean }).checked"   /><span>{{ tr('归档并停止自动填充') }}</span></label>
-    </div></m3e-expansion-panel>
+    </div></EditorContentSection>
   </section>
 </template>

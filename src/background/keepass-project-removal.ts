@@ -3,7 +3,7 @@ import { planKeePassProjectRemoval } from '../core/keepass-project-removal';
 import { keePassRemovalFileRequestHash, type KeePassProjectRemovalIntent } from '../core/keepass-project-removal-journal';
 import type { SecureVaultService } from '../security/secure-vault-service';
 import type { KeePassRemoteSessionService } from '../providers/keepass/keepass-remote-session';
-import { isRemoteKeePassSource } from '../providers/keepass/keepass-source';
+import { isRemoteKeePassSource, hasLocalKeePassWorkingCopy } from '../providers/keepass/keepass-source';
 import { ProviderOperationQueue } from './provider-operation-queue';
 import { PasswordProjectRemovalNotStagedError } from './password-project-removal';
 import type { KeePassProjectRemovalDraft } from '../core/keepass-project-removal';
@@ -28,15 +28,18 @@ export interface KeePassProjectRemovalStatus {
 export interface KeePassRemovalLifecycle {
   runMutationExclusive<T>(providerId: string, task: () => Promise<T>): Promise<T>;
   beforeCapture(source: KeePassProjectRemovalIntent['source']): Promise<void>;
-  invalidateSession(providerId: string): void;
+  invalidateSession(providerId: string): void | Promise<void>;
 }
+
+export type KeePassRemovalPersistence = Pick<KeePassRemoteSessionService,
+  'reconcileAccountConfig' | 'readDurableReceipt' | 'persistProjectRemoval'>;
 
 /** Coordinates encrypted intent, native working-file commit and local adoption.
  * Production lifecycle hooks serialize native mutations, persist live edits
  * before capture and invalidate the old session after an attempted file commit.
  */
 export class KeePassProjectRemovalWorkflow {
-  constructor(private readonly vault: SecureVaultService, private readonly remote: KeePassRemoteSessionService,
+  constructor(private readonly vault: SecureVaultService, private readonly remote: KeePassRemovalPersistence,
     private readonly queue: ProviderOperationQueue, private readonly changed: () => void = () => undefined,
     private readonly lifecycle?: KeePassRemovalLifecycle) {}
 
@@ -61,7 +64,7 @@ export class KeePassProjectRemovalWorkflow {
     const sessionId = await this.vault.passkeySessionId();
     if (!sessionId) throw new Error('密码库已锁定，请重新打开编辑器。');
     const keys = ['sourceMode', 'databaseId', 'webDavBaseUrl', 'webDavUsername', 'webDavPassword', 'remotePath',
-      'databasePassword', 'keyFile', 'oneDriveDriveId', 'oneDriveItemId'];
+      'databasePassword', 'keyFile', 'oneDriveDriveId', 'oneDriveItemId', 'localFileSourceSha256'];
     const connection = source.config.oneDriveConnection as { id?: string; clientId?: string; profile?: { id?: string } } | undefined;
     const payload = JSON.stringify({ providerId: source.id, config: keys.map(key => [key, source.config[key]]),
       connection: [connection?.id, connection?.clientId, connection?.profile?.id] });
@@ -162,9 +165,9 @@ export class KeePassProjectRemovalWorkflow {
       if (state.mutationQueue.some(row => ids.has(row.itemId)) || state.providerConflicts.some(row => ids.has(row.itemId)))
         throw new Error('项目出现后续修改或同步冲突，原密码尚未移除。');
       try { receipt = await this.remote.persistProjectRemoval(source, request); }
-      finally { this.lifecycle?.invalidateSession(source.id); }
+      finally { await this.lifecycle?.invalidateSession(source.id); }
     } else {
-      this.lifecycle?.invalidateSession(source.id);
+      await this.lifecycle?.invalidateSession(source.id);
     }
     await this.currentSource(intent);
     const completed = await this.vault.completeKeePassProjectRemoval(operationId, receipt);
@@ -178,8 +181,9 @@ export class KeePassProjectRemovalWorkflow {
     return record;
   }
   private assertSupported(source: KeePassProjectRemovalIntent['source']) {
-    if (source.kind !== 'keepass' || !source.enabled || !isRemoteKeePassSource(source.config.sourceMode))
-      throw new Error('此移除恢复流程需要已连接的远端 KeePass 工作副本。');
+    if (source.kind !== 'keepass' || !source.enabled ||
+      !(isRemoteKeePassSource(source.config.sourceMode) || hasLocalKeePassWorkingCopy(source.config)))
+      throw new Error('此移除恢复流程需要已连接的 KeePass 工作副本。');
   }
   private async currentSource(intent: KeePassProjectRemovalIntent) {
     const current = await this.vault.getProvider(intent.source.id);

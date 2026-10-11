@@ -88,6 +88,22 @@ function setup(kind: ProviderAttachmentSummary['providerKind'] = 'mdbx2') {
 }
 
 describe('password project owner attachments', () => {
+  it.each(['size', 'bytes'] as const)('verifies Bitwarden ciphertext-sized listings by plaintext %s and releases authenticated reads', async change => {
+    const { operation, backend, prepare } = setup('bitwarden');
+    backend.put(id(1), 'a');
+    const result = await prepare();
+    const list = backend.listAttachments.bind(backend);
+    vi.spyOn(backend, 'listAttachments').mockImplementation(async (...args) => {
+      const page = await list(...args);
+      return { ...page, items: page.items.map(row => ({ ...row, sizeBytes: 48 + 16 * (Math.floor(row.sizeBytes / 16) + 1) })) };
+    });
+    await expect(verifyPasswordProjectRemovalAttachments(operation, result.proofs, backend)).resolves.toBeUndefined();
+    const target = result.proofs[0].attachments[0];
+    backend.put(id(2), target.targetAttachmentId, change === 'size' ? Uint8Array.of(1, 2) : Uint8Array.of(1, 2, 4), 'a.bin');
+    await expect(verifyPasswordProjectRemovalAttachments(operation, result.proofs, backend)).rejects.toThrow();
+    expect(backend.reads.size).toBe(0);
+  });
+
   it('copies through the actual WebDAV encrypted ZIP adapter and recovers its server-generated attachment ID', async () => {
     const operation = record('monica-webdav'), account = operation.providerBindings[0];
     account.config = { baseUrl: 'https://synthetic.invalid/dav', username: 'synthetic', password: 'synthetic', backupPassword: 'synthetic archive password' };

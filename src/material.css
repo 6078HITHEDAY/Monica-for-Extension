@@ -9,7 +9,7 @@
   --app-outline-strong: #728078;
   --app-on-primary: #fff;
   --app-shape-card: 20px;
-  --app-shape-field: 12px;
+  --app-shape-field: 24px;
   --app-shape-dialog: 28px;
   --app-content-max: 1440px;
   --app-elevation-menu: 0 4px 16px rgb(20 35 28 / 16%), 0 1px 3px rgb(20 35 28 / 12%);
@@ -130,7 +130,11 @@ m3e-menu {
 
 /* M3E components own control chrome. These resets only remove the legacy
    stylesheet rules that would otherwise override their slotted native inputs. */
-m3e-form-field { width: 100%; min-width: 0; max-width: 100%; }
+m3e-form-field {
+  width: 100%; min-width: 0; max-width: 100%;
+  --m3e-form-field-container-shape: var(--app-shape-field);
+  --m3e-outlined-form-field-container-shape: var(--app-shape-field);
+}
 m3e-form-field.field { display: inline-flex; gap: 0; }
 /* m3e-canvas textField uses a 16px outline shape. The M3E component owns its
    56px default height, floating label, validation and focus treatment. */
@@ -153,5 +157,12 @@ m3e-option-panel { --m3e-option-panel-max-height: min(28rem, 60dvh); }
 #root m3e-expansion-panel [slot='header'] small { margin-inline-start: 8px; color: var(--app-muted); }
 #root m3e-expansion-panel .editor-disclosure-body { padding: 0; }
 m3e-checkbox, m3e-radio { flex: 0 0 auto; }
-m3e-search-bar { width: 100%; min-width: 0; }
-m3e-search-bar > input { border: 0; outline: 0; background: transparent; min-width: 0; }
+m3e-search-bar { width: 100%; min-width: 0; border-radius: 999px; }
+/* The search component owns the whole capsule; a slotted input must not
+   inherit the global native-control focus rectangle. */
+#root m3e-search-bar > input,
+#popup-root m3e-search-bar > input {
+  border: 0; outline: 0; box-shadow: none; background: transparent; min-width: 0;
+}
+m3e-search-bar:focus-within { outline: 2px solid var(--app-primary); outline-offset: 2px; }
+@media (forced-colors: active) { m3e-search-bar:focus-within { outline-color: Highlight; } }

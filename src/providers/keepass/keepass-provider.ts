@@ -1,5 +1,6 @@
 import * as kdbxweb from "kdbxweb";
 import { preserveLocalPasswordHistory } from '../../core/password-history';
+import { preserveLocalWalletContentOrder } from '../../core/wallet-content-order';
 import { passwordGroupKey } from '../../core/password-groups';
 import { planKeePassProjectRemoval, type KeePassProjectRemovalDraft } from '../../core/keepass-project-removal';
 import { prepareKeePassProjectAttachmentHandoff } from './keepass-project-attachments';
@@ -135,6 +136,7 @@ interface KeePassGroupOperationReceipt {
 export class KeePassProvider implements ProviderAdapter {
   readonly kind = "keepass" as const;
   private readonly sessions = new Map<string, KeePassSession>();
+  private readonly pendingUnlocks = new Map<string, object>();
   private readonly attachmentHandles = new Map<string, KeePassAttachmentHandle>();
   private readonly attachmentHandleByKey = new Map<string, string>();
   private readonly groupHandles = new Map<string, KeePassGroupHandle>();
@@ -149,54 +151,62 @@ export class KeePassProvider implements ProviderAdapter {
     credential: KeePassUnlockCredential,
     preserveUnchangedAttachmentHandles = false
   ): Promise<KeePassSessionSummary> {
-    const snapshot = await openKeePassVault(bytes, {
-      password: credential.password,
-      keyFile: credential.keyFile,
-      sourceName: credential.sourceName,
-      databaseId: databaseIdOf(account),
-      providerId: account.id
-    });
+    const attempt = {};
+    this.pendingUnlocks.set(account.id, attempt);
+    try {
+      const snapshot = await openKeePassVault(bytes, {
+        password: credential.password,
+        keyFile: credential.keyFile,
+        sourceName: credential.sourceName,
+        databaseId: databaseIdOf(account),
+        providerId: account.id
+      });
+      if (this.pendingUnlocks.get(account.id) !== attempt)
+        throw new Error('KeePass 文件已锁定或替换，请重新解锁。');
 
-    // Remote publication reloads the same working copy. Keep a displayed handle
-    // only while its entry, name and exact bytes still match in that live session.
-    const retained = [...this.attachmentHandles].filter(([, handle]) => {
-      if (!preserveUnchangedAttachmentHandles || handle.providerId !== account.id) return false;
-      const before = this.sessions.get(account.id)?.entries.entriesByUuid.get(handle.entryUuid)?.binaries.get(handle.fileName);
-      const after = snapshot.entriesByUuid.get(handle.entryUuid)?.binaries.get(handle.fileName);
-      if (!before || !after || binarySize(before) !== binarySize(after)) return false;
-      const size = binarySize(before);
-      for (let offset = 0; offset < size; offset += PROVIDER_ATTACHMENT_CHUNK_BYTES) {
-        const end = Math.min(size, offset + PROVIDER_ATTACHMENT_CHUNK_BYTES);
-        const left = copyBinaryRange(before, offset, end);
-        const right = copyBinaryRange(after, offset, end);
-        const equal = left.every((value, index) => value === right[index]);
-        left.fill(0); right.fill(0);
-        if (!equal) return false;
+      // Remote publication reloads the same working copy. Keep a displayed handle
+      // only while its entry, name and exact bytes still match in that live session.
+      const retained = [...this.attachmentHandles].filter(([, handle]) => {
+        if (!preserveUnchangedAttachmentHandles || handle.providerId !== account.id) return false;
+        const before = this.sessions.get(account.id)?.entries.entriesByUuid.get(handle.entryUuid)?.binaries.get(handle.fileName);
+        const after = snapshot.entriesByUuid.get(handle.entryUuid)?.binaries.get(handle.fileName);
+        if (!before || !after || binarySize(before) !== binarySize(after)) return false;
+        const size = binarySize(before);
+        for (let offset = 0; offset < size; offset += PROVIDER_ATTACHMENT_CHUNK_BYTES) {
+          const end = Math.min(size, offset + PROVIDER_ATTACHMENT_CHUNK_BYTES);
+          const left = copyBinaryRange(before, offset, end);
+          const right = copyBinaryRange(after, offset, end);
+          const equal = left.every((value, index) => value === right[index]);
+          left.fill(0); right.fill(0);
+          if (!equal) return false;
+        }
+        return true;
+      });
+      this.lockAccount(account.id);
+      for (const [id, handle] of retained) {
+        this.attachmentHandles.set(id, handle);
+        this.attachmentHandleByKey.set(attachmentHandleKey(handle.providerId, handle.entryUuid, handle.fileName), id);
       }
-      return true;
-    });
-    this.lockAccount(account.id);
-    for (const [id, handle] of retained) {
-      this.attachmentHandles.set(id, handle);
-      this.attachmentHandleByKey.set(attachmentHandleKey(handle.providerId, handle.entryUuid, handle.fileName), id);
+      this.sessions.set(account.id, {
+        database: snapshot.database,
+        databaseId: databaseIdOf(account),
+        entries: { items: snapshot.items, skipped: snapshot.skipped, entriesByUuid: snapshot.entriesByUuid },
+        summary: {
+          providerId: account.id,
+          sourceMode: isRemoteKeePassSource(credential.sourceMode) ? credential.sourceMode : "local-file",
+          databaseName: snapshot.database.meta.name || credential.sourceName || "KeePass 数据库",
+          versionMajor: snapshot.versionMajor,
+          cipherName: snapshot.cipherName,
+          warnings: snapshot.warnings
+        },
+        dirty: Boolean(credential.dirty),
+        groupRevision: 0,
+        historyRevision: 0
+      });
+      return this.summarize(account.id);
+    } finally {
+      if (this.pendingUnlocks.get(account.id) === attempt) this.pendingUnlocks.delete(account.id);
     }
-    this.sessions.set(account.id, {
-      database: snapshot.database,
-      databaseId: databaseIdOf(account),
-      entries: { items: snapshot.items, skipped: snapshot.skipped, entriesByUuid: snapshot.entriesByUuid },
-      summary: {
-        providerId: account.id,
-        sourceMode: isRemoteKeePassSource(credential.sourceMode) ? credential.sourceMode : "local-file",
-        databaseName: snapshot.database.meta.name || credential.sourceName || "KeePass 数据库",
-        versionMajor: snapshot.versionMajor,
-        cipherName: snapshot.cipherName,
-        warnings: snapshot.warnings
-      },
-      dirty: Boolean(credential.dirty),
-      groupRevision: 0,
-      historyRevision: 0
-    });
-    return this.summarize(account.id);
   }
 
   isUnlocked(providerId: string): boolean {
@@ -237,8 +247,61 @@ export class KeePassProvider implements ProviderAdapter {
   async prepareProjectRemovalFile(account: ProviderAccount, draft: KeePassProjectRemovalDraft, input: {
     bytes: Uint8Array; expectedSha256: string; credential: KeePassUnlockCredential;
   }) {
+    const credential = structuredClone(input.credential);
+    try {
+      return await this.prepareProjectRemoval(account, draft, input,
+        (isolated, source, bytes) => isolated.unlock(source, bytes, credential), () => undefined);
+    } finally { credential.keyFile?.fill(0); }
+  }
+
+  /** Local files keep password/key-file credentials inside the live Kdbx session.
+   * Clone with its existing protected credentials rather than exposing or saving
+   * them in provider config. A lock or replacement cancels the preparation.
+   */
+  async prepareLocalProjectRemovalFile(account: ProviderAccount, draft: KeePassProjectRemovalDraft,
+    input: { bytes: Uint8Array; expectedSha256: string }) {
+    const live = this.requireKeePassAccountSession(account);
+    const assertCurrent = this.localSessionGuard(account);
+    return this.prepareProjectRemoval(account, draft, input, async (isolated, source, bytes) => {
+      const database = await kdbxweb.Kdbx.load(bytes.slice().buffer, live.database.credentials);
+      assertCurrent();
+      isolated.sessions.set(source.id, { database, databaseId: live.databaseId,
+        entries: readKeePassEntries(database, live.databaseId, source.id), summary: structuredClone(live.summary),
+        dirty: false, groupRevision: 0, historyRevision: 0 });
+    }, assertCurrent);
+  }
+
+  /** Internal persistence guard; contains no credential or serializable session state. */
+  localSessionGuard(account: ProviderAccount): () => void {
+    const live = this.requireKeePassAccountSession(account);
+    if (account.config.sourceMode !== 'local-file' || live.summary.sourceMode !== 'local-file' || live.databaseId !== databaseIdOf(account))
+      throw new Error('此操作需要已解锁的本地 KeePass 文件。');
+    return () => {
+      if (this.sessions.get(account.id) !== live) throw new Error('KeePass 文件已锁定或替换，原密码尚未移除。');
+    };
+  }
+
+  async reloadLocalFile(account: ProviderAccount, bytes: Uint8Array, dirty: boolean): Promise<KeePassSessionSummary> {
+    const assertCurrent = this.localSessionGuard(account), live = this.requireSession(account.id);
+    const database = await kdbxweb.Kdbx.load(bytes.slice().buffer, live.database.credentials);
+    assertCurrent();
+    const entries = readKeePassEntries(database, live.databaseId, account.id);
+    this.lockAccount(account.id);
+    this.sessions.set(account.id, { ...live, database, entries, dirty, groupRevision: 0, historyRevision: 0 });
+    return this.summarize(account.id);
+  }
+
+  markLocalFileExported(account: ProviderAccount): void {
+    this.localSessionGuard(account)();
+    this.requireSession(account.id).dirty = false;
+  }
+
+  private async prepareProjectRemoval(account: ProviderAccount, draft: KeePassProjectRemovalDraft,
+    input: { bytes: Uint8Array; expectedSha256: string },
+    open: (isolated: KeePassProvider, source: ProviderAccount, bytes: Uint8Array) => Promise<unknown>,
+    assertCurrent: () => void) {
     const source = structuredClone(account), request = structuredClone(draft);
-    const bytes = input.bytes.slice(), expected = input.expectedSha256, credential = structuredClone(input.credential);
+    const bytes = input.bytes.slice(), expected = input.expectedSha256;
     const digest = async (value: Uint8Array) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', value.slice().buffer))]
       .map(byte => byte.toString(16).padStart(2, '0')).join('');
     if (!/^[a-f0-9]{64}$/.test(expected) || await digest(bytes) !== expected) throw new Error('KeePass 文件版本已变化，原密码尚未移除。');
@@ -246,7 +309,8 @@ export class KeePassProvider implements ProviderAdapter {
     const isolated = new KeePassProvider();
     let handoff: ReturnType<typeof prepareKeePassProjectAttachmentHandoff> | undefined;
     try {
-      await isolated.unlock(source, bytes, credential);
+      await open(isolated, source, bytes);
+      assertCurrent();
       const session = isolated.requireSession(source.id);
       const native = session.entries.items.filter(item => item.kind === 'login' && !item.deletedAt && item.passwordGroupId === plan.projectId);
       const originalByUuid = new Map(request.originals.map(item => [referenceOf(item, source.id)!.remoteId!, item]));
@@ -280,11 +344,15 @@ export class KeePassProvider implements ProviderAdapter {
         .map(item => finalize(item, identityByUuid.get(remoteIdOf(item, source.id)), source.id));
       if (items.length !== identityByUuid.size) throw new Error('KeePass 项目文件写入不完整，原文件已保留。');
       const output = await isolated.snapshotFile(source.id);
-      return { inputSha256: expected, outputSha256: await digest(output), bytes: output, items };
+      try {
+        const outputSha256 = await digest(output);
+        assertCurrent();
+        return { inputSha256: expected, outputSha256, bytes: output, items };
+      } catch (cause) { output.fill(0); throw cause; }
     } finally {
       handoff?.dispose();
       isolated.lock();
-      credential.keyFile?.fill(0);
+      bytes.fill(0);
     }
   }
 
@@ -514,6 +582,7 @@ export class KeePassProvider implements ProviderAdapter {
   }
 
   lockAccount(providerId: string): void {
+    this.pendingUnlocks.delete(providerId);
     this.sessions.delete(providerId);
     this.removeProviderAttachmentHandles(providerId);
     this.removeProviderGroupState(providerId);
@@ -521,6 +590,7 @@ export class KeePassProvider implements ProviderAdapter {
   }
 
   lock(): void {
+    this.pendingUnlocks.clear();
     this.sessions.clear();
     this.attachmentHandles.clear();
     this.attachmentHandleByKey.clear();
@@ -1115,7 +1185,8 @@ function remoteIdOf(item: VaultItem, providerId: string): string {
 function finalize(remote: VaultItem, local: VaultItem | undefined, providerId: string): VaultItem {
   const content = local?.kind === "passkey" && remote.kind === "passkey" ? preserveLocalPasskeyUsage(local, remote)
     : local?.kind === 'login' && remote.kind === 'login' ? preserveLocalPasswordHistory(local, remote) : remote;
-  const merged = (local ? { ...content, id: local.id, favorite: local.favorite, archivedAt: local.archivedAt } : content) as VaultItem;
+  const ordered = preserveLocalWalletContentOrder(local, content);
+  const merged = (local ? { ...ordered, id: local.id, favorite: local.favorite, archivedAt: local.archivedAt } : ordered) as VaultItem;
   const reference: ProviderReference = {
     providerId,
     remoteId: remoteIdOf(remote, providerId),
@@ -1135,6 +1206,7 @@ function fingerprint(item: VaultItem): string {
   if (content.kind === "passkey") { delete content.useCount; delete content.lastUsedAt; delete content.signCountHighWaterMark; }
   // KDBX project identity is carried by the exact custom-field metadata. Projecting
   // it for display must not make pre-upgrade cached rows look locally edited.
+  if (content.kind === 'card') delete content.editorSectionOrder;
   if (content.kind === 'login') {
     delete content.passwordGroupId;
     if (content.totpSecret === '') delete content.totpSecret;
@@ -1149,6 +1221,10 @@ function storedFingerprint(value: string): string {
   const normalized = passkeyContentFingerprint(value);
   try {
     const content = JSON.parse(normalized);
+    if (content?.kind === 'card' && Object.prototype.hasOwnProperty.call(content, 'editorSectionOrder')) {
+      delete content.editorSectionOrder;
+      return JSON.stringify(content);
+    }
     if (content?.kind === 'login' && (Object.prototype.hasOwnProperty.call(content, 'passwordGroupId') || content.totpSecret === '')) {
       delete content.passwordGroupId;
       if (content.totpSecret === '') delete content.totpSecret;

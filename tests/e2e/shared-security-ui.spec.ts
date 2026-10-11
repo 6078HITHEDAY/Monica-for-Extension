@@ -1,5 +1,6 @@
+import { launchTestContext } from './fixtures/edge';
 import { dialogContent } from "./fixtures/material";
-import { chromium, expect, test, type BrowserContext, type Locator, type Page } from "@playwright/test";
+import { expect, test, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import path from "node:path";
 
 const PROVIDER_ID = "shared-webdav-provider";
@@ -9,7 +10,7 @@ test("shared provider and Windows Hello actions use secret-free retry-safe M3E c
   let context: BrowserContext | undefined;
   const nativeDialogs: string[] = [];
   try {
-    context = await chromium.launchPersistentContext(testInfo.outputPath("shared-security-ui-profile"), {
+    context = await launchTestContext(testInfo.outputPath("shared-security-ui-profile"), {
       channel: "chromium",
       headless: true, locale: "zh-CN",
       colorScheme: "dark",
@@ -151,10 +152,10 @@ test("shared provider and Windows Hello actions use secret-free retry-safe M3E c
     await expect(providerCard).toHaveCount(0);
 
     await openMobileSection(manager, "设置与备份");
+    await manager.locator('[data-settings-entry="protection"]').click();
     const helloCard = manager.locator(".windows-hello-card");
     await expectNoGradients(helloCard);
-    await helloCard.locator("[slot=\"header\"]").click();
-    const enrollButton = helloCard.getByRole("button", { name: "注册 Windows Hello" });
+    const enrollButton = helloCard.getByRole("button", { name: "注册 Windows Hello 本机凭据" });
     await expect(enrollButton).toBeEnabled();
     await enrollButton.click();
     const enrollDialog = dialogContent(manager, { name: "注册 Windows Hello？" });
@@ -192,7 +193,8 @@ test("shared provider and Windows Hello actions use secret-free retry-safe M3E c
 
 async function openMobileSection(page: Page, name: string): Promise<void> {
   const openNavigation = page.getByRole("button", { name: "打开导航" });
-  if (await openNavigation.isVisible()) await openNavigation.click();
+  await expect(openNavigation).toBeVisible();
+  await openNavigation.click();
   await page.getByRole("navigation", { name: "主导航" }).getByRole("button", { name }).click();
 }
 

@@ -201,7 +201,7 @@ describe("MDBX2 batch transfer planner", () => {
     });
   });
 
-  it("treats a usable Passkey copy as a move and blocks metadata-only credentials", () => {
+  it("copies a usable Passkey without changing its credential and blocks metadata-only or same-vault copies", () => {
     const usable: PasskeyItem = {
       id: "passkey-1",
       kind: "passkey",
@@ -225,8 +225,11 @@ describe("MDBX2 batch transfer planner", () => {
       sourceMode: "browser-local"
     };
     const plan = planMdbx2BatchTransfer([usable], { action: "copy", preserveCategories: false });
-    expect(plan.items[0]).toMatchObject({ effectiveAction: "move", targetItem: { id: usable.id } });
-    expect(plan.warnings.join(" ")).toContain("按移动处理");
+    expect(plan.items[0]).toMatchObject({ effectiveAction: "copy", targetItem: { credentialId: usable.credentialId, privateKeyPkcs8: usable.privateKeyPkcs8, signCount: 0 } });
+    expect(plan.items[0].targetItem?.id).not.toBe(usable.id);
+    expect(plan.warnings.join(" ")).not.toContain("按移动处理");
+    const same = planMdbx2BatchTransfer([{...usable,providerRefs:[{providerId:'target',remoteId:'original'}]}], {action:'copy',targetProviderId:'target',preserveCategories:false});
+    expect(same.items[0].blockedReason).toContain('同一');
 
     const blocked = planMdbx2BatchTransfer([{ ...usable, sourceMode: "android-metadata-only", privateKeyPkcs8: undefined }], {
       action: "move",

@@ -345,7 +345,7 @@ export class BitwardenAttachmentDownloadService {
   }
 
   private maximumCiphertextBytes(): number {
-    return this.limits.maxPlaintextBytes + ATTACHMENT_IV_BYTES + ATTACHMENT_MAC_BYTES + AES_BLOCK_BYTES;
+    return this.limits.maxPlaintextBytes + 1 + ATTACHMENT_IV_BYTES + ATTACHMENT_MAC_BYTES + AES_BLOCK_BYTES;
   }
 
   private pruneExpired(): void {
@@ -384,8 +384,31 @@ async function readAuthenticatedEnvelope(
   const hmac = await createHMAC(createSHA256(), macKey);
   hmac.init();
   const collector = new CiphertextCollector();
-  let tail = EMPTY_BYTES;
+  // Retain bounded encrypted chunks until the total length identifies the
+  // layout. A legacy IV can start with 2, so the first byte alone is ambiguous.
+  const chunks: Uint8Array[] = [];
+  let current: Uint8Array = new Uint8Array(PROVIDER_ATTACHMENT_CHUNK_BYTES);
+  let used = 0;
   let total = 0;
+  const consume = (value: Uint8Array) => {
+    total += value.length;
+    if (!Number.isSafeInteger(total) || total > maximumBytes) {
+      throw attachmentError('bitwarden-attachment-too-large', 'Bitwarden 附件密文超过安全上限。');
+    }
+    for (let offset = 0; offset < value.length;) {
+      const size = Math.min(current.length - used, value.length - offset);
+      current.set(value.subarray(offset, offset + size), used);
+      used += size; offset += size;
+      if (used === current.length) { chunks.push(current); current = new Uint8Array(PROVIDER_ATTACHMENT_CHUNK_BYTES); used = 0; }
+    }
+  };
+  const copyRange = (start: number, end: number) => {
+    const bytes = new Uint8Array(end - start);
+    for (let index = start; index < end; index++) bytes[index - start] = chunks[Math.floor(index / PROVIDER_ATTACHMENT_CHUNK_BYTES)][index % PROVIDER_ATTACHMENT_CHUNK_BYTES];
+    return bytes;
+  };
+  let expectedMac: Uint8Array = EMPTY_BYTES;
+  let iv: Uint8Array = EMPTY_BYTES;
   const reader = response.body?.getReader();
   const onAbort = () => { void reader?.cancel(signal.reason).catch(() => undefined); };
   if (signal.aborted) onAbort();
@@ -398,8 +421,7 @@ async function readAuthenticatedEnvelope(
       } catch (cause) {
         throw new ProviderBodyReadNetworkError(cause);
       }
-      ({ tail, total } = consumeDownloadedBytes(value, tail, total, maximumBytes, hmac, collector));
-      value.fill(0);
+      try { consume(value); } finally { value.fill(0); }
     } else {
       while (true) {
         let result: ReadableStreamReadResult<Uint8Array>;
@@ -410,57 +432,49 @@ async function readAuthenticatedEnvelope(
           throw new ProviderBodyReadNetworkError(cause);
         }
         if (result.done) break;
-        ({ tail, total } = consumeDownloadedBytes(result.value, tail, total, maximumBytes, hmac, collector));
+        consume(result.value);
       }
     }
     if (signal.aborted) throw signal.reason || new DOMException("Attachment download aborted", "AbortError");
-    if (total < ATTACHMENT_IV_BYTES + AES_BLOCK_BYTES + ATTACHMENT_MAC_BYTES || tail.length !== ATTACHMENT_MAC_BYTES) {
+    if (total < ATTACHMENT_IV_BYTES + AES_BLOCK_BYTES + ATTACHMENT_MAC_BYTES || (total % AES_BLOCK_BYTES !== 0 && total % AES_BLOCK_BYTES !== 1)) {
       throw attachmentError("bitwarden-attachment-truncated", "Bitwarden 附件密文不完整。");
     }
+    if (used) chunks.push(current.slice(0, used));
+    current.fill(0);
+    const standard = total % AES_BLOCK_BYTES === 1;
+    if (standard && chunks[0][0] !== 2) throw attachmentError('bitwarden-attachment-metadata-invalid', 'Bitwarden 附件加密格式不受支持。');
+    const ciphertextStart = standard ? 49 : 16;
+    const ciphertextEnd = standard ? total : total - 32;
+    iv = copyRange(standard ? 1 : 0, standard ? 17 : 16);
+    expectedMac = copyRange(standard ? 17 : total - 32, standard ? 49 : total);
+    hmac.update(iv);
+    collector.append(iv);
+    for (let index = 0; index < chunks.length; index++) {
+      const chunk = chunks[index], start = index * PROVIDER_ATTACHMENT_CHUNK_BYTES;
+      const from = Math.max(0, ciphertextStart - start), to = Math.min(chunk.length, ciphertextEnd - start);
+      if (to > from) { const bytes = chunk.subarray(from, to); hmac.update(bytes); collector.append(bytes); }
+      chunk.fill(0);
+      chunks[index] = EMPTY_BYTES;
+    }
     const digest = hmac.digest("binary");
-    if (!(digest instanceof Uint8Array) || !constantTimeEqual(digest, tail)) {
+    if (!(digest instanceof Uint8Array) || !constantTimeEqual(digest, expectedMac)) {
       if (digest instanceof Uint8Array) digest.fill(0);
       throw attachmentError("bitwarden-attachment-mac-invalid", "Bitwarden 附件完整性校验失败。");
     }
     digest.fill(0);
-    tail.fill(0);
-    tail = EMPTY_BYTES;
     return collector.finish();
   } catch (error) {
-    tail.fill(0);
+    void reader?.cancel().catch(() => undefined);
     collector.destroy();
     throw error;
   } finally {
+    current.fill(0);
+    clearChunks(chunks);
+    expectedMac.fill(0);
+    iv.fill(0);
     signal.removeEventListener("abort", onAbort);
     reader?.releaseLock();
   }
-}
-
-function consumeDownloadedBytes(
-  value: Uint8Array,
-  previousTail: Uint8Array,
-  previousTotal: number,
-  maximumBytes: number,
-  hmac: { update(data: Uint8Array): unknown },
-  collector: CiphertextCollector
-): { tail: Uint8Array; total: number } {
-  const total = previousTotal + value.length;
-  if (!Number.isSafeInteger(total) || total > maximumBytes) {
-    throw attachmentError("bitwarden-attachment-too-large", "Bitwarden 附件密文超过安全上限。");
-  }
-  const combined = new Uint8Array(previousTail.length + value.length);
-  combined.set(previousTail);
-  combined.set(value, previousTail.length);
-  previousTail.fill(0);
-  const releasedLength = Math.max(0, combined.length - ATTACHMENT_MAC_BYTES);
-  if (releasedLength) {
-    const released = combined.subarray(0, releasedLength);
-    hmac.update(released);
-    collector.append(released);
-  }
-  const tail = combined.slice(releasedLength);
-  combined.fill(0);
-  return { tail, total };
 }
 
 class CiphertextCollector {

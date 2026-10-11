@@ -1,9 +1,44 @@
-import "@m3e/web/form-field";
+import { M3eFormFieldElement } from "@m3e/web/form-field";
+import { css } from "lit";
 import "@m3e/web/select";
 import "@m3e/web/search";
 import type { M3eListActionElement } from "@m3e/web/list";
 import type { M3eOptionElement } from "@m3e/web/option";
 import type { App, ObjectDirective } from "vue";
+
+// @m3e/web 2.6.1 exposes shape/color tokens, but no part or token for its
+// filled underline. Keep its labels, validation and layout; draw one rounded
+// boundary in place of that underline, including the hover state layer.
+M3eFormFieldElement.elementStyles = [...M3eFormFieldElement.elementStyles, css`
+  :host([variant="filled"]) .base::before {
+    border-style: solid;
+    border-width: 2px;
+    border-color: transparent;
+    transition: border-color 160ms ease;
+  }
+  :host([variant="filled"]) .base::after {
+    border-radius: var(--m3e-form-field-container-shape, 24px);
+  }
+  /* Settings rows already provide horizontal padding. Avoid doubling it,
+   * particularly when enlarged text increases the library's rem margins. */
+  :host([data-settings-select]) .prefix { margin-inline-start: 0; }
+  :host([data-settings-select]) .suffix { margin-inline-end: 0; }
+  :host([variant="filled"]:not(:state(--disabled))) .base:hover::before,
+  :host([variant="filled"]:not(:state(--disabled)):focus-within) .base::before,
+  :host([variant="filled"]:not(:state(--disabled)):state(--pressed)) .base::before {
+    border-width: 2px;
+  }
+  :host([variant="filled"]:not(:state(--disabled)):focus-within) .base::before,
+  :host([variant="filled"]:not(:state(--disabled)):state(--pressed)) .base::before,
+  :host([variant="filled"]:not(:state(--disabled)):state(--invalid)) .base::before {
+    border-color: var(--_form-field-outline-color);
+  }
+  @media (forced-colors: active) {
+    :host([variant="filled"]) .base::before { border-color: CanvasText; }
+    :host([variant="filled"]:state(--disabled)) .base::before { border-color: GrayText; }
+    :host([variant="filled"]:focus-within) .base::before { border-color: Highlight; }
+  }
+`];
 
 // M3E's documented form-field composition uses native input/textarea controls.
 // Its select adds a Popover option panel; older browsers keep the native select
@@ -21,6 +56,9 @@ function associateLabel(field: HTMLElement) {
   const control = field.querySelector<HTMLElement>("input, textarea, select, m3e-select");
   const label = field.querySelector<HTMLLabelElement>(":scope > label[slot='label']");
   if (!control || !label) return;
+  // Choice controls already render their own selected value. Always reserve
+  // the label line, including while reordered options reconnect or text grows.
+  if (control.matches('select, m3e-select')) field.setAttribute('float-label', 'always');
   control.id ||= `monica-field-${++nextFieldId}`;
   label.htmlFor = control.id;
   label.id ||= `${control.id}-label`;

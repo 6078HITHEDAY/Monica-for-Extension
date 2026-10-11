@@ -2,22 +2,22 @@
 import { materialSelectTag, materialOptionTag } from "../lib/material-controls";
 import { tr } from '../i18n';
 
-import { ref, watch } from "vue";
+import { onMounted, onBeforeUnmount, ref, watch } from "vue";
 import { vaultClient } from "../runtime/client";
 import { normalizeSitePolicyHost, type AutofillSitePolicy } from "../autofill/site-policy";
 import type { BlockedFieldSignatureRecord } from "../autofill/field-policy";
 
-const props = defineProps<{ open: boolean }>();
-const emit = defineEmits<{ close: []; saved: [] }>();
+const emit = defineEmits<{ close: []; saved: []; busy: [value: boolean] }>();
 const policy = ref<AutofillSitePolicy>({ blockedHosts: [], saveBlockedHosts: [] });
 const input = ref("");
 const target = ref<"blockedHosts" | "saveBlockedHosts">("blockedHosts");
 const busy = ref(false);
+watch(busy, value => emit('busy', value), {flush: 'sync'});
+onBeforeUnmount(() => emit('busy', false));
 const error = ref("");
 const blockedFields = ref<BlockedFieldSignatureRecord[]>([]);
 
-watch(() => props.open, async (open) => {
-  if (!open) return;
+onMounted(async () => {
   error.value = "";
   input.value = "";
   try { [policy.value, blockedFields.value] = await Promise.all([vaultClient.getAutofillSitePolicy(), vaultClient.listAutofillBlockedFields()]); }
@@ -57,8 +57,7 @@ async function save() {
 </script>
 
 <template>
-  <m3e-dialog v-material-dialog v-if="open" open class="material-dialog" :disableClose.prop="busy" :dismissible="!busy" :close-label="tr('关闭')" @closed.self="emit('close')">
-        <h2 slot="header">{{ tr('自动填充排除项') }}</h2>
+  <section class="site-policy-page" :aria-busy="busy">
         <p>{{ tr('只保存网站域名，不保存路径或浏览记录。') }}</p>
         <div class="site-policy-form">
           <m3e-form-field v-field-label variant="filled" hide-required-marker><label slot="label">{{ tr('排除类型') }}</label><component :is="materialSelectTag" @input="target = ($event.target as HTMLElement &amp; { value: string }).value"  :aria-label="tr('排除类型')"><component :is="materialOptionTag" :selected.prop="String(target ?? '') === String('blockedHosts')" value="blockedHosts">{{ tr('禁止自动填充') }}</component><component :is="materialOptionTag" :selected.prop="String(target ?? '') === String('saveBlockedHosts')" value="saveBlockedHosts">{{ tr('禁止保存提示') }}</component></component></m3e-form-field>
@@ -71,13 +70,15 @@ async function save() {
           <div><strong>{{ tr('字段级排除') }}</strong><span v-if="!blockedFields.length" class="empty">{{ tr('暂无') }}</span><ul><li v-for="field in blockedFields" :key="field.signature"><span><b>{{ field.hostname }}</b><small>{{ roleLabel(field.role) }} · {{ field.frameScope === 'frame' ? tr('嵌入框') : tr('主页面') }}</small></span><m3e-icon-button :aria-label="tr('恢复 {0} 的{1}字段', { 0: field.hostname, 1: roleLabel(field.role) })" :disabled="busy" @click="removeField(field.signature)"><m3e-icon name="restart_alt"></m3e-icon></m3e-icon-button></li></ul></div>
         </div>
         <p v-if="error" class="form-error" role="alert">{{ error }}</p>
-        <footer slot="actions" end><m3e-button variant="text" type="button" :disabled="busy" @click="emit('close')">{{ tr('取消') }}</m3e-button><m3e-button variant="filled" type="button" :disabled="busy" @click="save">{{ busy ? tr('保存中…') : tr('保存') }}</m3e-button></footer>
-  </m3e-dialog>
+        <footer><m3e-button variant="text" type="button" :disabled="busy" @click="emit('close')">{{ tr('取消') }}</m3e-button><m3e-button variant="filled" type="button" :disabled="busy" @click="save">{{ busy ? tr('保存中…') : tr('保存') }}</m3e-button></footer>
+  </section>
 </template>
 
 <style scoped>
+.site-policy-page { min-width: 0; }
+footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
 .site-policy-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) auto; gap: 8px; margin: 20px 0 12px; }
 .site-policy-lists { display: grid; gap: 12px; }.site-policy-lists > div { border-radius: 16px; padding: 16px; background: var(--md-sys-color-surface-container-highest); }.site-policy-lists ul { display: grid; gap: 2px; margin: 6px 0 0; padding: 0; list-style: none; }.site-policy-lists li { min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }.site-policy-lists li > span { min-width: 0; overflow-wrap: anywhere; }.site-policy-lists li b, .site-policy-lists li small { display: block; }.site-policy-lists li small { margin-top: 2px; color: var(--app-muted); font-size: .75rem; }.empty { display: block; margin-top: 8px; color: var(--app-muted); font-size: .85rem; }
 .form-error { color: var(--app-error); }
-@media (max-width: 560px) { .site-policy-form { grid-template-columns: 1fr 1fr; }.site-policy-form m3e-button { grid-column: 1 / -1; } }
+@media (max-width: 560px) { .site-policy-form { grid-template-columns: minmax(0, 1fr); } }
 </style>

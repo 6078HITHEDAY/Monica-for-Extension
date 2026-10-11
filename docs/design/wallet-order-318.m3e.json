@@ -1,0 +1,568 @@
+{
+  "title": "Monica · 钱包内容顺序",
+  "brief": "基本资料直接编辑；分区摘要不展示秘密。点击编辑内容，上移/下移调整顺序。外侧24px、相邻4px圆角，左右12px。完成内容编辑后回到主表单统一保存；取消主表单丢弃草稿。",
+  "frame": "phone",
+  "platform": "web",
+  "paletteKey": "teal",
+  "theme": {
+    "dark": false,
+    "bothModes": true,
+    "contrast": "standard",
+    "shape": "rounded",
+    "font": "system",
+    "emphasized": true,
+    "motion": "standard"
+  },
+  "frames": [
+    {
+      "id": "walletorder318",
+      "name": "银行卡 · 内容顺序",
+      "x": 0,
+      "y": 0,
+      "w": 360,
+      "h": 950
+    },
+    {
+      "id": "walletextra318",
+      "name": "补充内容 · 独立编辑",
+      "x": 450,
+      "y": 0,
+      "w": 360,
+      "h": 760
+    },
+    {
+      "id": "walletcustom318",
+      "name": "自定义字段 · 保护与排序",
+      "x": 900,
+      "y": 0,
+      "w": 360,
+      "h": 760
+    }
+  ],
+  "groups": [
+    {
+      "id": "walletorder318-0",
+      "frameId": "walletorder318",
+      "x": 12,
+      "y": 12,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "walletorder318-0-control",
+          "icon": "close",
+          "size": 336,
+          "variant": "filled",
+          "radius": 24,
+          "kind": "topAppBar",
+          "label": "编辑银行卡"
+        }
+      ]
+    },
+    {
+      "id": "walletorder318-1",
+      "frameId": "walletorder318",
+      "x": 12,
+      "y": 100,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "walletorder318-1-control",
+          "icon": null,
+          "size": 336,
+          "variant": "filled",
+          "radius": 24,
+          "kind": "textField",
+          "label": "名称",
+          "value": "旅行卡"
+        }
+      ]
+    },
+    {
+      "id": "walletorder318-2",
+      "frameId": "walletorder318",
+      "x": 12,
+      "y": 186,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "walletorder318-2-control",
+          "icon": null,
+          "size": 336,
+          "variant": "filled",
+          "radius": 24,
+          "kind": "textField",
+          "label": "持卡人",
+          "value": "Synthetic Holder"
+        }
+      ]
+    },
+    {
+      "id": "walletorder318-3",
+      "frameId": "walletorder318",
+      "x": 12,
+      "y": 272,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "walletorder318-3-control",
+          "icon": null,
+          "size": 336,
+          "variant": "filled",
+          "radius": 24,
+          "kind": "textField",
+          "label": "卡号",
+          "value": "•••• 1111"
+        }
+      ]
+    },
+    {
+      "id": "walletorder318-4",
+      "frameId": "walletorder318",
+      "x": 12,
+      "y": 374,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "walletorder318-4-control",
+          "icon": "text_fields",
+          "size": 336,
+          "variant": "filled",
+          "radius": 4,
+          "kind": "listItem",
+          "label": "自定义字段",
+          "supporting": "点击编辑",
+          "icon2": "edit"
+        }
+      ]
+    },
+    {
+      "id": "walletorder318-5",
+      "frameId": "walletorder318",
+      "x": 12,
+      "y": 452,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "walletorder318-5-control",
+          "icon": "home",
+          "size": 336,
+          "variant": "filled",
+          "radius": 4,
+          "kind": "listItem",
+          "label": "账单地址",
+          "supporting": "点击编辑",
+          "icon2": "edit"
+        }
+      ]
+    },
+    {
+      "id": "walletorder318-6",
+      "frameId": "walletorder318",
+      "x": 12,
+      "y": 530,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "walletorder318-6-control",
+          "icon": "tune",
+          "size": 336,
+          "variant": "filled",
+          "radius": 4,
+          "kind": "listItem",
+          "label": "更多银行卡信息",
+          "supporting": "点击编辑",
+          "icon2": "edit"
+        }
+      ]
+    },
+    {
+      "id": "walletorder318-7",
+      "frameId": "walletorder318",
+      "x": 12,
+      "y": 608,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "walletorder318-7-control",
+          "icon": "notes",
+          "size": 336,
+          "variant": "filled",
+          "radius": 4,
+          "kind": "listItem",
+          "label": "备注",
+          "supporting": "点击编辑",
+          "icon2": "edit"
+        }
+      ]
+    },
+    {
+      "id": "walletorder318-8",
+      "frameId": "walletorder318",
+      "x": 12,
+      "y": 692,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "walletorder318-8-control",
+          "icon": "arrow_upward",
+          "size": 336,
+          "variant": "tonal",
+          "radius": 24,
+          "kind": "button",
+          "label": "上移账单地址"
+        }
+      ]
+    },
+    {
+      "id": "walletorder318-9",
+      "frameId": "walletorder318",
+      "x": 12,
+      "y": 762,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "walletorder318-9-control",
+          "icon": "arrow_downward",
+          "size": 336,
+          "variant": "tonal",
+          "radius": 24,
+          "kind": "button",
+          "label": "下移账单地址"
+        }
+      ]
+    },
+    {
+      "id": "walletorder318-10",
+      "frameId": "walletorder318",
+      "x": 12,
+      "y": 850,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "walletorder318-10-control",
+          "icon": "check",
+          "size": 336,
+          "variant": "filled",
+          "radius": 24,
+          "kind": "button",
+          "label": "加密保存"
+        }
+      ]
+    },
+    {
+      "id": "walletextra318-0",
+      "frameId": "walletextra318",
+      "x": 462,
+      "y": 12,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "walletextra318-0-control",
+          "icon": "arrow_back",
+          "size": 336,
+          "variant": "filled",
+          "radius": 24,
+          "kind": "topAppBar",
+          "label": "更多银行卡信息"
+        }
+      ]
+    },
+    {
+      "id": "walletextra318-1",
+      "frameId": "walletextra318",
+      "x": 462,
+      "y": 110,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "walletextra318-1-control",
+          "icon": null,
+          "size": 336,
+          "variant": "filled",
+          "radius": 24,
+          "kind": "textField",
+          "label": "银行",
+          "value": "Synthetic Bank"
+        }
+      ]
+    },
+    {
+      "id": "walletextra318-2",
+      "frameId": "walletextra318",
+      "x": 462,
+      "y": 204,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "walletextra318-2-control",
+          "icon": null,
+          "size": 336,
+          "variant": "filled",
+          "radius": 24,
+          "kind": "select",
+          "label": "卡类型",
+          "options": [
+            "信用卡",
+            "借记卡",
+            "预付卡"
+          ],
+          "value": "信用卡"
+        }
+      ]
+    },
+    {
+      "id": "walletextra318-3",
+      "frameId": "walletextra318",
+      "x": 462,
+      "y": 298,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "walletextra318-3-control",
+          "icon": null,
+          "size": 336,
+          "variant": "filled",
+          "radius": 24,
+          "kind": "textField",
+          "label": "昵称",
+          "value": "旅行"
+        }
+      ]
+    },
+    {
+      "id": "walletextra318-4",
+      "frameId": "walletextra318",
+      "x": 462,
+      "y": 392,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "walletextra318-4-control",
+          "icon": null,
+          "size": 336,
+          "variant": "filled",
+          "radius": 24,
+          "kind": "textField",
+          "label": "PIN",
+          "value": "••••"
+        }
+      ]
+    },
+    {
+      "id": "walletextra318-5",
+      "frameId": "walletextra318",
+      "x": 462,
+      "y": 486,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "walletextra318-5-control",
+          "icon": null,
+          "size": 336,
+          "variant": "filled",
+          "radius": 24,
+          "kind": "textField",
+          "label": "IBAN",
+          "value": "Synthetic account"
+        }
+      ]
+    },
+    {
+      "id": "walletextra318-6",
+      "frameId": "walletextra318",
+      "x": 462,
+      "y": 624,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "walletextra318-6-control",
+          "icon": "check",
+          "size": 336,
+          "variant": "filled",
+          "radius": 24,
+          "kind": "button",
+          "label": "完成"
+        }
+      ]
+    },
+    {
+      "id": "walletcustom318-0",
+      "frameId": "walletcustom318",
+      "x": 912,
+      "y": 12,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "walletcustom318-0-control",
+          "icon": "arrow_back",
+          "size": 336,
+          "variant": "filled",
+          "radius": 24,
+          "kind": "topAppBar",
+          "label": "自定义字段"
+        }
+      ]
+    },
+    {
+      "id": "walletcustom318-1",
+      "frameId": "walletcustom318",
+      "x": 912,
+      "y": 110,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "walletcustom318-1-control",
+          "icon": null,
+          "size": 336,
+          "variant": "filled",
+          "radius": 24,
+          "kind": "textField",
+          "label": "字段名称",
+          "value": "恢复说明"
+        }
+      ]
+    },
+    {
+      "id": "walletcustom318-2",
+      "frameId": "walletcustom318",
+      "x": 912,
+      "y": 204,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "walletcustom318-2-control",
+          "icon": null,
+          "size": 336,
+          "variant": "filled",
+          "radius": 24,
+          "kind": "textField",
+          "label": "字段值",
+          "value": "••••••••"
+        }
+      ]
+    },
+    {
+      "id": "walletcustom318-3",
+      "frameId": "walletcustom318",
+      "x": 912,
+      "y": 298,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "walletcustom318-3-control",
+          "icon": null,
+          "size": 336,
+          "variant": "filled",
+          "radius": 24,
+          "kind": "select",
+          "label": "字段类型",
+          "options": [
+            "文本",
+            "隐藏",
+            "布尔"
+          ],
+          "value": "隐藏"
+        }
+      ]
+    },
+    {
+      "id": "walletcustom318-4",
+      "frameId": "walletcustom318",
+      "x": 912,
+      "y": 398,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "walletcustom318-4-control",
+          "icon": "arrow_upward",
+          "size": 336,
+          "variant": "tonal",
+          "radius": 24,
+          "kind": "button",
+          "label": "上移字段"
+        }
+      ]
+    },
+    {
+      "id": "walletcustom318-5",
+      "frameId": "walletcustom318",
+      "x": 912,
+      "y": 468,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "walletcustom318-5-control",
+          "icon": "arrow_downward",
+          "size": 336,
+          "variant": "tonal",
+          "radius": 24,
+          "kind": "button",
+          "label": "下移字段"
+        }
+      ]
+    },
+    {
+      "id": "walletcustom318-6",
+      "frameId": "walletcustom318",
+      "x": 912,
+      "y": 546,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "walletcustom318-6-control",
+          "icon": "add",
+          "size": 336,
+          "variant": "text",
+          "radius": 24,
+          "kind": "button",
+          "label": "添加字段"
+        }
+      ]
+    },
+    {
+      "id": "walletcustom318-7",
+      "frameId": "walletcustom318",
+      "x": 912,
+      "y": 636,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "walletcustom318-7-control",
+          "icon": "check",
+          "size": 336,
+          "variant": "filled",
+          "radius": 24,
+          "kind": "button",
+          "label": "完成"
+        }
+      ]
+    }
+  ],
+  "dynamicColor": false
+}

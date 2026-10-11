@@ -1,3 +1,4 @@
+import { publicKeyCredential } from "./credential-response";
 import { OPEN_SHADOW_ROOT_EVENT } from "../content/shadow-bridge";
 import { requestedPasskeyExtensionNames, shouldInterceptPasskeyCreate, shouldInterceptPasskeyGet } from "./interception-policy";
 
@@ -133,28 +134,6 @@ function normalizeTimeout(value?: number): number {
   return Number.isFinite(value) ? Math.max(1_000, Math.min(120_000, Math.trunc(value!))) : 120_000;
 }
 
-function publicKeyCredential(result: Record<string, any>): Credential {
-  const responseData = result.response;
-  const responsePrototype = result.operation === "create" ? window.AuthenticatorAttestationResponse?.prototype : window.AuthenticatorAssertionResponse?.prototype;
-  const response = Object.create(responsePrototype || Object.prototype);
-  const binaryFields = result.operation === "create" ? ["clientDataJSON", "attestationObject"] : ["clientDataJSON", "authenticatorData", "signature", "userHandle"];
-  for (const key of binaryFields) Object.defineProperty(response, key, { enumerable: true, value: decode(responseData[key]) });
-  if (result.operation === "create") {
-    Object.defineProperties(response, {
-      getAuthenticatorData: { value: () => decode(responseData.authenticatorData) }, getPublicKey: { value: () => decode(responseData.publicKey) },
-      getPublicKeyAlgorithm: { value: () => responseData.publicKeyAlgorithm }, getTransports: { value: () => ["internal"] }
-    });
-  }
-  const credential = Object.create(window.PublicKeyCredential?.prototype || Object.prototype);
-  Object.defineProperties(credential, {
-    id: { enumerable: true, value: result.id }, rawId: { enumerable: true, value: decode(result.rawId) }, type: { enumerable: true, value: "public-key" },
-    response: { enumerable: true, value: response }, authenticatorAttachment: { enumerable: true, value: "platform" },
-    getClientExtensionResults: { value: () => result.clientExtensionResults || {} }, toJSON: { value: () => ({ id: result.id, rawId: result.rawId, type: "public-key", authenticatorAttachment: "platform", response: responseData, clientExtensionResults: result.clientExtensionResults || {} }) }
-  });
-  return credential as Credential;
-}
-
 function encode(value: BufferSource): string { const bytes = value instanceof ArrayBuffer ? new Uint8Array(value) : new Uint8Array(value.buffer, value.byteOffset, value.byteLength); let binary = ""; for (const byte of bytes) binary += String.fromCharCode(byte); return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
-function decode(value: string): ArrayBuffer { const normalized = value.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - value.length % 4) % 4); const binary = atob(normalized); return Uint8Array.from(binary, (char) => char.charCodeAt(0)).buffer; }
 
 export {};

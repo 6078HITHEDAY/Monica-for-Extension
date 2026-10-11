@@ -12,12 +12,14 @@ export type PasskeyAvailability =
   | "android-metadata-only"
   | "missing-private-key"
   | "unsupported-algorithm"
+  | "invalid-backup-flags"
   | "rp-mismatch";
 
 export function passkeyAvailability(item: PasskeyItem, rpId?: string): PasskeyAvailability {
   if (item.sourceMode === "android-metadata-only") return "android-metadata-only";
   if (!supportsPasskeySigningAlgorithm(item.algorithm)) return "unsupported-algorithm";
   if (!item.privateKeyPkcs8) return "missing-private-key";
+  if (item.backupEligible === false && item.backupState === true) return "invalid-backup-flags";
   if (rpId && !passkeyRpIdsEqual(item.rpId, rpId)) return "rp-mismatch";
   return "ready";
 }
@@ -115,6 +117,7 @@ export function passkeyAvailabilityLabel(availability: PasskeyAvailability): str
     "android-metadata-only": "Android 元数据，仅可查看",
     "unsupported-algorithm": "算法不受支持",
     "missing-private-key": "缺少私钥，仅可查看",
+    "invalid-backup-flags": "备份标志冲突，无法认证",
     "rp-mismatch": "与当前网站不匹配"
   } as const)[availability];
 }

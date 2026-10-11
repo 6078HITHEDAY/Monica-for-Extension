@@ -34,24 +34,22 @@ async function toggle(): Promise<void> {
 </script>
 
 <template>
-  <m3e-card variant="filled" class="automatic-sync-setting">
-    <section slot="content" aria-labelledby="automatic-sync-label">
+    <section class="automatic-sync-setting" aria-labelledby="automatic-sync-label">
       <div class="automatic-sync-row">
-        <div><strong id="automatic-sync-label">{{ tr('自动同步') }}</strong><p id="automatic-sync-description">{{ tr('自动接收其他设备的修改，并及时上传本机编辑。') }}</p></div>
+        <strong id="automatic-sync-label">{{ tr('自动同步') }}</strong>
         <m3e-switch :checked.prop="enabled" @beforeinput.prevent="toggle"    aria-labelledby="automatic-sync-label" aria-describedby="automatic-sync-description" :disabled="!ready || saving" ></m3e-switch>
+        <p id="automatic-sync-description">{{ tr('锁定密码库后暂停。关闭后仍可手动同步。') }}</p>
       </div>
-      <small>{{ tr('Bitwarden 接收变更通知；WebDAV 在页面打开时每 15 秒检查一次。') }}</small>
-      <small>{{ tr('锁定密码库后暂停。关闭后仍可手动同步。') }}</small>
       <p v-if="failed" class="form-error" role="alert">{{ tr('未能保存同步设置，请重试。') }}</p>
     </section>
-  </m3e-card>
 </template>
 
 <style scoped>
-section { padding: 16px; }
-.automatic-sync-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 16px; }
-strong { font-size: 1rem; font-weight: 500; }
-p { margin: 8px 0; font-size: .875rem; line-height: 1.6; color: var(--app-muted); }
+section { min-width: 0; }
+.automatic-sync-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 16px; row-gap: 0; }
+.automatic-sync-row > p { grid-column: 1 / -1; }
+strong { font-size: 1rem; font-weight: 600; }
+p { margin: 4px 0 0; font-size: .875rem; line-height: 1.5; color: var(--app-muted); }
 small { display: block; margin-top: 8px; color: var(--app-muted); font-size: .75rem; line-height: 1.6; }
 strong, p, small { overflow-wrap: anywhere; }
 </style>

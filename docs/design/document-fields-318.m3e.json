@@ -1,0 +1,191 @@
+{
+  "title": "Monica · 完整证件详情",
+  "brief": "称谓和用户名纳入更多信息。地址独立成组，保留三行地址、城市、省州、邮编和国家；不同的地址收件人和联系方式单独显示。秘密默认隐藏，每行保留复制操作。沿用圆润的连续列表。",
+  "frame": "phone",
+  "platform": "web",
+  "paletteKey": "teal",
+  "theme": {
+    "dark": true,
+    "bothModes": true,
+    "contrast": "standard",
+    "shape": "full",
+    "font": "system",
+    "emphasized": true,
+    "motion": "standard"
+  },
+  "frames": [
+    {
+      "id": "document-fields318",
+      "name": "证件详情",
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 1160
+    }
+  ],
+  "groups": [
+    {
+      "id": "document-title",
+      "frameId": "document-fields318",
+      "x": 12,
+      "y": 16,
+      "axis": "y",
+      "items": [
+        {
+          "id": "document-title-control",
+          "kind": "topAppBar",
+          "label": "Synthetic 证件",
+          "icon": "close",
+          "variant": "filled",
+          "size": 366
+        }
+      ]
+    },
+    {
+      "id": "document-main",
+      "frameId": "document-fields318",
+      "x": 12,
+      "y": 110,
+      "axis": "y",
+      "items": [
+        {
+          "id": "document-main-0",
+          "kind": "listItem",
+          "label": "证件号码",
+          "supporting": "•••••• 0042",
+          "icon": null,
+          "icon2": "content_copy",
+          "variant": "filled",
+          "size": 366
+        },
+        {
+          "id": "document-main-1",
+          "kind": "listItem",
+          "label": "人物称谓",
+          "supporting": "Dr.",
+          "icon": null,
+          "icon2": "content_copy",
+          "variant": "filled",
+          "size": 366
+        },
+        {
+          "id": "document-main-2",
+          "kind": "listItem",
+          "label": "用户名",
+          "supporting": "synthetic-account",
+          "icon": null,
+          "icon2": "content_copy",
+          "variant": "filled",
+          "size": 366
+        }
+      ]
+    },
+    {
+      "id": "document-address",
+      "frameId": "document-fields318",
+      "x": 12,
+      "y": 355,
+      "axis": "y",
+      "items": [
+        {
+          "id": "document-address-0",
+          "kind": "listItem",
+          "label": "街道地址",
+          "supporting": "42 Example Lane",
+          "icon": null,
+          "icon2": "content_copy",
+          "variant": "filled",
+          "size": 366
+        },
+        {
+          "id": "document-address-1",
+          "kind": "listItem",
+          "label": "公寓/单元",
+          "supporting": "Suite 42",
+          "icon": null,
+          "icon2": "content_copy",
+          "variant": "filled",
+          "size": 366
+        },
+        {
+          "id": "document-address-2",
+          "kind": "listItem",
+          "label": "地址第三行",
+          "supporting": "West entrance",
+          "icon": null,
+          "icon2": "content_copy",
+          "variant": "filled",
+          "size": 366
+        },
+        {
+          "id": "document-address-3",
+          "kind": "listItem",
+          "label": "城市",
+          "supporting": "Example City",
+          "icon": null,
+          "icon2": "content_copy",
+          "variant": "filled",
+          "size": 366
+        },
+        {
+          "id": "document-address-4",
+          "kind": "listItem",
+          "label": "省/州",
+          "supporting": "Example Province",
+          "icon": null,
+          "icon2": "content_copy",
+          "variant": "filled",
+          "size": 366
+        },
+        {
+          "id": "document-address-5",
+          "kind": "listItem",
+          "label": "邮编",
+          "supporting": "42000",
+          "icon": null,
+          "icon2": "content_copy",
+          "variant": "filled",
+          "size": 366
+        },
+        {
+          "id": "document-address-6",
+          "kind": "listItem",
+          "label": "国家/地区",
+          "supporting": "Example Country",
+          "icon": null,
+          "icon2": "content_copy",
+          "variant": "filled",
+          "size": 366
+        },
+        {
+          "id": "document-address-7",
+          "kind": "listItem",
+          "label": "地址 · 姓名",
+          "supporting": "Different addressee",
+          "icon": null,
+          "icon2": "content_copy",
+          "variant": "filled",
+          "size": 366
+        }
+      ]
+    },
+    {
+      "id": "document-edit",
+      "frameId": "document-fields318",
+      "x": 12,
+      "y": 1050,
+      "axis": "y",
+      "items": [
+        {
+          "id": "document-edit-control",
+          "kind": "button",
+          "label": "编辑",
+          "icon": "edit",
+          "size": 366,
+          "variant": "filled"
+        }
+      ]
+    }
+  ],
+  "dynamicColor": false
+}

@@ -1,14 +1,14 @@
 import { chooseOption, dialogContent } from "./fixtures/material";
 import { chromium, expect, test, type BrowserContext } from "@playwright/test";
 import path from "node:path";
+import { launchEdgeContext } from './fixtures/edge';
 
 test("wallet popup explicitly fills identity address card and payment fields while leaving generic fields untouched", async ({}, testInfo) => {
   const extensionPath = path.resolve("dist");
   let context: BrowserContext | undefined;
   try {
-    context = await chromium.launchPersistentContext(testInfo.outputPath("wallet-profile"), {
-      channel: "chromium",
-      headless: true, locale: "zh-CN",
+    context = await launchEdgeContext(testInfo.outputPath("wallet-profile"), {
+      locale: "zh-CN",
       args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
     });
     const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
@@ -108,9 +108,8 @@ test("manager preserves complete Android card fields and Markdown note metadata"
   const extensionPath = path.resolve("dist");
   let context: BrowserContext | undefined;
   try {
-    context = await chromium.launchPersistentContext(testInfo.outputPath("wallet-editor-profile"), {
-      channel: "chromium",
-      headless: true, locale: "zh-CN",
+    context = await launchEdgeContext(testInfo.outputPath("wallet-editor-profile"), {
+      locale: "zh-CN",
       args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
     });
     const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
@@ -128,7 +127,7 @@ test("manager preserves complete Android card fields and Markdown note metadata"
     await manager.getByLabel("到期月").fill("12");
     await manager.getByLabel("到期年").fill("2030");
     await manager.getByLabel("安全码").fill("123");
-    await manager.locator(".editor-disclosure [slot=\"header\"]").filter({ hasText: "更多银行卡信息" }).click();
+    await manager.getByRole('button', { name: '编辑更多银行卡信息', exact: true }).click();
     await manager.getByLabel("银行", { exact: true }).fill("Monica Bank");
     await manager.getByLabel("昵称", { exact: true }).fill("Travel");
     await manager.getByLabel("PIN", { exact: true }).fill("7890");
@@ -141,13 +140,17 @@ test("manager preserves complete Android card fields and Markdown note metadata"
     await manager.getByLabel("分行代码", { exact: true }).fill("001");
     await manager.getByLabel("币种", { exact: true }).fill("eur");
     await manager.getByLabel("客服电话", { exact: true }).fill("+4912345");
+    await manager.getByRole('button', { name: '完成', exact: true }).click();
+    await manager.getByRole('button', { name: '编辑账单地址', exact: true }).click();
     await manager.locator(".billing-address-fields [slot=header]").click();
     await manager.getByLabel("账单地址 JSON", { exact: true }).fill('{"city":"Berlin","future":true}');
-    await manager.locator(".editor-disclosure [slot=\"header\"]").filter({ hasText: "自定义字段" }).click();
+    await manager.getByRole('button', { name: '完成', exact: true }).click();
+    await manager.getByRole('button', { name: '编辑自定义字段', exact: true }).click();
     await manager.getByRole("button", { name: "添加字段" }).click();
     await manager.getByLabel("自定义字段 1 名称").fill("virtual");
     await manager.getByLabel("自定义字段 1 值").fill("true");
     await chooseOption(manager.getByLabel("自定义字段 1 类型"), "BOOLEAN");
+    await manager.getByRole('button', { name: '完成', exact: true }).click();
     await manager.getByRole("button", { name: "加密保存" }).click();
     await expect(dialogContent(manager)).toHaveCount(0);
     await expect(manager.locator(".vault-tile-open").getByText("Android Complete Card", { exact: true })).toBeVisible();

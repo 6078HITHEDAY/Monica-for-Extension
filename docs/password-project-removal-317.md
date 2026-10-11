@@ -111,6 +111,13 @@ fixed. Failure logs are retained; no assertion or timeout was weakened.
 4. Trace Bitwarden attachment/revision and deletion behavior with the actual
    service, then implement guarded deletion/recovery without bypassing durable
    mutation receipts.
+   2026-10-09 actual Vaultwarden contract and ordinary trash recovery are now
+   verified in [Bitwarden trash recovery](bitwarden-trash-recovery-318.md).
+   Deletion ignores stale revision/If-Match conditions; source-to-target project
+   removal still needs independent coordination and remains disabled.
+   The encrypted per-member transaction and compensation layer now has actual
+   HTTP acceptance; see [transaction progress](bitwarden-project-removal-transaction-318.md).
+   Production preparation, child credentials, local adoption and UI remain open.
 5. Background preparation, guarded deletion acknowledgements and restart
    recovery are wired and tested for MDBX2. WebDAV and Bitwarden coordination
    remains pending.
@@ -121,3 +128,15 @@ fixed. Failure logs are retained; no assertion or timeout was weakened.
 
 Android product sources were not changed. This slice starts no AVD or Docker
 service, publishes nothing and delivers no APK.
+
+2026-10-09 follow-up: the production Bitwarden remote verifier is implemented and tested. It checks complete live membership, immutable retained/source native snapshots and actual shared attachment bytes. Nine live Vaultwarden scenarios pass, including a concurrently added member, retained Passkey signing and pre-deletion gating of a source Passkey carrier. Full preparation orchestration, child preservation/local adoption and runtime/UI are still pending. See [the verification report](bitwarden-project-removal-verification-318.md); this does not mark full parity or Bitwarden project removal complete.
+
+2026-10-09 subsequent batch: the internal preparation/success coordinator and atomic local adoption are now implemented. The final 426 related regressions and three actual Vaultwarden scenarios pass, including upload-return loss and final encrypted-save failure with restart. Parent/child tombstones, stable local IDs, raw envelopes and queue cleanup are saved together; retained Passkey signing remains verified. Source Passkey preservation, compensated-result decisions, provider queue/runtime/UI and actual Edge/Android acceptance remain open. See [the adoption report](bitwarden-project-removal-adoption-318.md).
+
+2026-10-09 compensation follow-up: confirmed remote restoration now adopts current Cipher bytes and newly discovered members, clears this deletion queue and saves a cancelled journal atomically. Missing or conflicting Passkeys remain in an explicit-resolution conflict that ordinary sync cannot discard. 496 related regressions and the build/audit pass; four new real-service scenarios were not run because automatic approval rejected starting the existing local test container. Local edits during the transaction, source Passkey preservation, ambiguous recovery decisions and runtime/UI remain open. See [the restoration report](bitwarden-project-removal-restoration-318.md).
+
+2026-10-09 source-Passkey follow-up: native standalone copies, copy-only recovery transactions, encrypted application-vault preparation journals and the production client adapter are implemented. Final 533 related regressions and build/security audit pass; 51 dedicated preservation cases include generated ES256 signatures and encrypted restart. HTTP methods are mocked, not live-service or IndexedDB/Edge acceptance. Source-Passkey deletion stays gated until copy verification and local reference adoption are integrated into the full coordinator. See [the preservation report](bitwarden-passkey-preservation-318.md).
+
+2026-10-09 integration follow-up: source Passkey copies now feed the internal removal coordinator, independent copy verification and atomic local-reference adoption. Original live IDs/keys/counters/other-provider references survive; separate old-source tombstones remain for sync. 547 regressions and real Edge IndexedDB recovery across two browser restarts pass with synthetic HTTP. Runtime/MV3 UI, live services and Android remain pending. See [the Passkey adoption report](bitwarden-passkey-adoption-318.md).
+
+2026-10-09 runtime follow-up: the Bitwarden coordinator is now connected to the provider queue, manager removal commands and pending recovery UI. Final 267 regressions, build/security audit and 5 actual Edge MV3 flows pass (18.3s). Browser HTTPS responses are synthetic; original local Passkey IDs/counters and signatures are independently checked. Signed-out sources open Bitwarden login, cancellation warns about retained copies, and narrow recovery reads avoid full-vault cloning. Local concurrent usage/edits and ambiguous-result decisions, actual service/Android acceptance and copy management remain open. See [the runtime report](bitwarden-project-removal-runtime-318.md).

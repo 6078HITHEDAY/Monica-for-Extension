@@ -273,6 +273,9 @@ async function restorePendingPrompt(): Promise<void> {
 
 async function showPrompt(context: SavePromptContext): Promise<void> {
   await initializeUiLocale();
+  // Clicking Passkey on a populated login form can also trigger password capture.
+  // Its async result must not replace (and cancel) the active WebAuthn ceremony.
+  if (currentPasskeyRequestId) return;
   renderSavePrompt(context, {
     accept: (providerId, existingItemId) => sendRuntime<{ action: "saved" | "updated"; title: string; providerName: string; syncPending: boolean }>({ type: "CREDENTIAL_ACCEPT", candidateId: context.candidateId, providerId, existingItemId }),
     dismiss: () => sendRuntime({ type: "CREDENTIAL_DISMISS", candidateId: context.candidateId })

@@ -13,15 +13,19 @@ const operations = ref<RemovalRow[]>([]), busy = ref(''), loading = ref(false), 
 const root = ref<HTMLElement>();
 let disposed = false, loadToken = 0;
 onBeforeUnmount(() => { disposed = true; loadToken++; });
-const connectionState = computed(() => JSON.stringify([props.revision, props.providers.map(p => [p.id, p.enabled, props.runtimeStatuses[p.id]?.open])]));
+const connectionState = computed(() => JSON.stringify([props.revision, props.providers.map(p => [p.id, p.enabled, p.config.authenticated,
+  props.runtimeStatuses[p.id]?.open, props.runtimeStatuses[p.id]?.available])]));
 watch(connectionState, () => { void refresh(); }, { immediate: true });
 function source(row: RemovalRow) { return props.providers.find(p => p.id === row.providerId); }
 function locked(row: RemovalRow) {
+  if (source(row)?.kind === 'bitwarden') return !source(row)?.enabled || !source(row)?.config.authenticated;
   if (row.backend === 'keepass') return !source(row)?.enabled;
   return !!row.providerId && (!source(row)?.enabled || !props.runtimeStatuses[row.providerId]?.open || !props.runtimeStatuses[row.providerId]?.available);
 }
 function status(row: RemovalRow) {
+  if (row.preparationRecovery) return tr('正在核对操作结果…');
   if (row.backend === 'keepass') return tr('正在核对操作结果…');
+  if (row.status === 'preparing' && row.passkeyPreservation) return tr('正在保留 Passkey');
   return row.status === 'preparing' ? tr('正在保留共享内容与附件') : row.status === 'restoring' ? tr('正在恢复密码与附件') : tr('正在完成移除');
 }
 async function refresh() {
@@ -46,6 +50,9 @@ async function run(row: RemovalRow, cancel: boolean) {
       : cancel ? await vaultClient.cancelPasswordProjectRemoval(row.operationId) : await vaultClient.resumePasswordProjectRemoval(row.operationId);
     if (disposed) return;
     notice.value = result.status === 'cancelled' ? tr('已取消这次移除，其他编辑已保留。') : result.status === 'completed' ? tr('密码移除已完成。') : tr('操作尚未完成，可以继续重试。');
+    const copies = 'passkeyPreservation' in result ? result.passkeyPreservation : undefined;
+    if (result.status === 'cancelled' && copies && (copies.verified || copies.uncertain))
+      notice.value += ' ' + tr('已创建或尚未确认的独立 Passkey 副本会保留在 Bitwarden，请同步后检查。');
   } catch (cause) { if (!disposed) error.value = cause instanceof Error ? tr(cause.message) : tr('操作失败'); }
   finally {
     if (!disposed) {
@@ -63,11 +70,11 @@ async function run(row: RemovalRow, cancel: boolean) {
     <article v-for="row in operations" :key="row.operationId" :data-removal-operation="row.operationId">
       <div class="joined">
         <div class="pending-row"><m3e-icon name="key" /><div><strong>{{ row.title || tr('未命名项目') }}</strong><small>{{ row.providerId ? source(row)?.name || tr('密码源不可用') : tr('Monica 本地库') }} · {{ tr('移除 {0} 个密码', {0: row.removedItemIds.length}) }}</small></div></div>
-        <div class="pending-row"><m3e-icon :name="locked(row) ? 'lock' : 'pending_actions'" /><div><span>{{ status(row) }}</span><small v-if="locked(row)">{{ tr('请先解锁密码库以继续。') }}</small></div></div>
+        <div class="pending-row"><m3e-icon :name="locked(row) ? 'lock' : 'pending_actions'" /><div><span>{{ status(row) }}</span><small v-if="locked(row)">{{ source(row)?.kind === 'bitwarden' ? tr('请登录原 Bitwarden 账号后继续。') : tr('请先解锁密码库以继续。') }}</small><small v-if="row.passkeyPreservation">{{ tr('已核对 {0} / {1} 个独立 Passkey 副本', {0: row.passkeyPreservation.verified, 1: row.passkeyPreservation.total}) }}</small></div></div>
       </div>
       <p v-if="!row.supported">{{ tr('此来源的移除操作暂不受支持，原始内容已保留。') }}</p>
       <div class="actions">
-        <m3e-button v-if="locked(row)" variant="tonal" :disabled="Boolean(busy) || !source(row) || !row.supported" @click="emit('unlock', source(row)!)"><m3e-icon slot="icon" name="lock_open" />{{ tr('解锁并设置') }}</m3e-button>
+        <m3e-button v-if="locked(row)" variant="tonal" :disabled="Boolean(busy) || !source(row) || !row.supported" @click="emit('unlock', source(row)!)"><m3e-icon slot="icon" name="lock_open" />{{ source(row)?.kind === 'bitwarden' ? tr('重新登录') : tr('解锁并设置') }}</m3e-button>
         <m3e-button v-else variant="tonal" :disabled="Boolean(busy) || !row.supported" data-removal-resume @click="run(row, false)"><m3e-icon slot="icon" name="restore" />{{ tr('核对并继续') }}</m3e-button>
         <m3e-button v-if="row.canCancel" variant="text" :disabled="Boolean(busy)" data-removal-cancel @click="run(row, true)"><m3e-icon slot="icon" name="undo" />{{ tr('取消这次移除') }}</m3e-button>
       </div>
