@@ -261,6 +261,14 @@ describe('local transfer resources and identities', () => {
     await expect(applyLocalTransferBatch(state, tampered)).rejects.toThrow('不符合预览');
     expect(() => readLocalTransferReceipts([{ ...batch.receipt, intentHash: 'corrupt' }])).toThrow('回执无效');
     expect(() => readLocalTransferReceipts([batch.receipt, batch.receipt])).toThrow('回执无效');
+    const review = { requestHash: 'a'.repeat(64), warnings: [], items: [{ sourceItemId: state.items[0].id, title: 'Untampered', kind: 'login' as const }] };
+    expect(readLocalTransferReceipts([{ ...batch.receipt, review }])).toHaveLength(1);
+    for (const corrupt of [{ ...review, warnings: [null] }, { ...review, items: [] },
+      { ...review, items: [{ ...review.items[0], blockedReason: 'cannot copy' }] },
+      { ...review, items: [{ ...review.items[0], sourceItemId: 'not-copied' }] },
+      { ...review, items: [...review.items, ...review.items] }]) {
+      expect(() => readLocalTransferReceipts([{ ...batch.receipt, review: corrupt }])).toThrow('回执预览无效');
+    }
     const forgedReceipt = structuredClone(batch); forgedReceipt.receipt.entries[0].targetItemId = state.items[0].id;
     await expect(applyLocalTransferBatch(state, forgedReceipt)).rejects.toThrow('不符合预览');
   });

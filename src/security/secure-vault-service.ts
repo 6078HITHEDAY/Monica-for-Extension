@@ -14,6 +14,7 @@ import { mdbx2PasswordHistoryTransferBlockReason } from '../providers/mdbx2/mdbx
 import { providerSourceRecordsFor, replaceProviderSourceRecords, validProviderMutationReceipt } from "../core/migrations";
 import { sourceRecordsBudgetError } from "../core/source-records";
 import { applyLocalTransferBatch, prepareLocalTransferBatch, type LocalTransferBatch, type LocalTransferRequest, type LocalTransferResource } from '../core/local-transfer';
+import { applyLocalAttachmentMutation, localAttachmentOwner, type LocalAttachmentMutation } from '../core/local-attachments';
 import { mergeBitwardenProjectRestoration, type BitwardenProjectRestorationReadback, type BitwardenProjectPreparationReadback } from '../providers/bitwarden/bitwarden-project-removal-restoration';
 import { adoptBitwardenPreparationCopies } from '../providers/bitwarden/bitwarden-preparation-recovery';
 import type { BitwardenPasskeyPreservationPlan } from '../providers/bitwarden/bitwarden-passkey-preservation';
@@ -781,7 +782,8 @@ export class SecureVaultService {
   }
 
   async getProvider(providerId: string): Promise<ProviderAccount | undefined> {
-    const provider = await this.readProjection(state => state.providers.find(candidate => candidate.id === providerId));
+    const provider = await this.readProjection(state => state.providers.find(candidate => candidate.id === providerId)
+      || (providerId === 'local' && state.providers.filter(row => row.kind === 'local').length === 1 ? state.providers.find(row => row.kind === 'local') : undefined));
     return provider ? safeProviderAccount(provider) : undefined;
   }
 
@@ -2872,6 +2874,23 @@ export class SecureVaultService {
   }
 
   /** Background-only preparation. The batch contains secrets and must never be sent to a page. */
+  async readLocalAttachmentSnapshot(providerId: string, itemId: string) {
+    const { envelope, key, session } = await this.unlockedContext();
+    const state = await this.readDecodedSnapshot(envelope, key, session);
+    const item = localAttachmentOwner(state, providerId, itemId);
+    return { sessionId: session.id, item: structuredClone(item), files: structuredClone((state.localItemAttachments || []).filter(row => row.itemId === itemId)) };
+  }
+
+  async mutateLocalAttachment(input: LocalAttachmentMutation, sessionId: string) {
+    const request = structuredClone(input);
+    return this.runExclusive(async () => {
+      const { state, envelope, key } = await this.mutableContext();
+      const result = await applyLocalAttachmentMutation(state, request);
+      if (!result.replayed) await this.persist(state, key, envelope.kdf, false, true, () => this.assertLocalTransferSession(sessionId));
+      return result.result;
+    });
+  }
+
   async prepareLocalTransfer(request: LocalTransferRequest, resources: readonly LocalTransferResource[] = []): Promise<{ sessionId: string; batch: LocalTransferBatch }> {
     const input = structuredClone(request), readbacks = structuredClone([...resources]);
     return this.runExclusive(async () => {

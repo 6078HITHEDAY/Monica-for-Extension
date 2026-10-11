@@ -178,7 +178,7 @@ function validateIntent(input: ProviderAttachmentUploadIntent, maxBytes: number)
   if (input.sha256 !== undefined && !/^[a-f0-9]{64}$/.test(input.sha256)) {
     throw new ProviderAttachmentError("attachment-sha256-invalid", "附件 SHA-256 必须是 64 位小写十六进制。");
   }
-  if (input.providerKind !== "keepass" && input.providerKind !== "bitwarden" && input.providerKind !== "mdbx2" && input.providerKind !== "monica-webdav") {
+  if (input.providerKind !== "local" && input.providerKind !== "keepass" && input.providerKind !== "bitwarden" && input.providerKind !== "mdbx2" && input.providerKind !== "monica-webdav") {
     throw new ProviderAttachmentError("attachment-provider-invalid", "附件密码源类型无效。");
   }
   if (typeof input.providerId !== "string" || !input.providerId || typeof input.itemId !== "string" || !input.itemId) {

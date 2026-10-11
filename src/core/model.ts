@@ -494,6 +494,7 @@ export interface VaultState {
   localTransferFolders?: import('./local-transfer').LocalTransferFolder[];
   localItemAttachments?: import('./local-transfer').LocalItemAttachment[];
   localItemOrigins?: import('./local-transfer').LocalItemOrigin[];
+  localAttachmentReceipts?: import('./local-attachments').LocalAttachmentReceipt[];
   magic: "MONICA_EXTENSION_VAULT";
   schemaVersion: 2;
   createdAt: string;

@@ -22,6 +22,7 @@ import { ExtensionRuntimeError, vaultClient } from "../runtime/client";
 import type { ProviderAttachmentRecoveryStatus } from "../runtime/messages";
 
 interface PendingUpload {
+  expectedRevision?: string;
   providerId: string;
   file: File;
   operationId: string;
@@ -97,6 +98,7 @@ const regularAttachments = computed(() => {
   return attachments.value.filter((attachment) => !managedNames.has(attachment.fileName));
 });
 const providerDescription = computed(() => {
+  if (selectedProvider.value?.kind === 'local') return tr('附件随本地密码库加密保存。');
   if (selectedProvider.value?.kind === "mdbx2") return tr('MDBX2 外部附件会写入加密 Blob，并随现有增量同步发布。');
   if (selectedProvider.value?.kind === "bitwarden") return tr('Bitwarden 附件使用独立密钥加密；后台会先完成认证校验，再把明文交给管理页下载。');
   if (selectedProvider.value?.kind === "monica-webdav") return readOnlyProvider.value
@@ -192,6 +194,7 @@ async function handleFileSelection(event: Event) {
     fileName: selection.managedPhoto?.fileName || selection.attachment?.fileName || file.name,
     mediaType: selection.managedPhoto?.mediaType || (selection.attachment ? selection.attachment.mediaType : file.type || undefined),
     replaceExisting: Boolean(selection.attachment),
+    expectedRevision: selection.attachment?.revision,
     displayName: selection.managedPhoto?.label || selection.attachment?.fileName || file.name
   };
   uploadProgress.value = 0;
@@ -211,7 +214,8 @@ async function runPendingUpload() {
       sizeBytes: upload.file.size,
       replaceExisting: upload.replaceExisting,
       operationId: upload.operationId,
-      attachmentId: upload.attachmentId
+      attachmentId: upload.attachmentId,
+      expectedRevision: upload.expectedRevision
     });
     upload.transferId = begun.transferId;
     let offset = begun.nextOffset;
@@ -321,7 +325,7 @@ async function confirmDelete() {
   try {
     const operationId = deleteOperationIds.get(operationKey) || crypto.randomUUID();
     deleteOperationIds.set(operationKey, operationId);
-    await vaultClient.deleteProviderAttachment(providerId, props.item.id, attachment.attachmentId, operationId);
+    await vaultClient.deleteProviderAttachment(providerId, props.item.id, attachment.attachmentId, operationId, attachment.revision);
     deleteOperationIds.delete(operationKey);
     knownPlaintextSizes.value.delete(attachmentKey(providerId, attachment.attachmentId));
     pendingDelete.value = undefined;
@@ -465,6 +469,7 @@ function knownAttachmentSize(attachment: ProviderAttachmentSummary): number | un
 }
 
 function attachmentLimit(provider: ProviderAccount | undefined): number {
+  if (provider?.kind === 'local') return 16 * 1024 * 1024;
   if (provider?.kind === "mdbx2") return MDBX2_ATTACHMENT_MAX_BYTES;
   if (provider?.kind === "bitwarden") return BITWARDEN_ATTACHMENT_MAX_BYTES;
   return KEEPASS_ATTACHMENT_MAX_BYTES;
@@ -551,7 +556,6 @@ function transferErrorMessage(cause: unknown): string {
       <header>
         <div>
           <h2 id="provider-attachments-title">{{ tr('附件 · {0}', { 0: item.title }) }}</h2>
-          <p>{{ tr('附件内容只在管理页按需读取。Popup 与网页内容脚本无法调用此接口。') }}</p>
         </div>
         <m3e-icon-button data-dialog-close :aria-label="tr('关闭附件管理')" :disabled="interactionLocked" @click="closeDialog"><m3e-icon name="close"></m3e-icon></m3e-icon-button>
       </header>
@@ -565,7 +569,7 @@ function transferErrorMessage(cause: unknown): string {
         </m3e-form-field>
         <div v-else class="attachment-provider-summary">
           <m3e-icon :name="selectedProvider?.kind === 'mdbx2' ? 'database' : selectedProvider?.kind === 'bitwarden' ? 'shield_lock' : 'key'"></m3e-icon>
-          <span><strong>{{ selectedProvider?.name }}</strong><small>{{ selectedProvider?.kind === 'mdbx2' ? 'MDBX2' : selectedProvider?.kind === 'bitwarden' ? 'Bitwarden' : selectedProvider?.kind === 'monica-webdav' ? 'Monica Android WebDAV' : 'KeePass' }}</small></span>
+          <span><strong>{{ selectedProvider?.name }}</strong><small>{{ selectedProvider?.kind === 'local' ? tr('本地') : selectedProvider?.kind === 'mdbx2' ? 'MDBX2' : selectedProvider?.kind === 'bitwarden' ? 'Bitwarden' : selectedProvider?.kind === 'monica-webdav' ? 'Monica Android WebDAV' : 'KeePass' }}</small></span>
         </div>
         <m3e-button v-if="!readOnlyProvider" variant="filled" type="button" :disabled="interactionLocked" @click="chooseAttachmentFile()"><m3e-icon slot="icon" name="attach_file_add"></m3e-icon>{{ tr('添加附件') }}</m3e-button>
         <input ref="fileInput" class="attachment-file-input" type="file" :accept="fileInputAccept || undefined" :aria-label="tr('选择附件文件')" @change="handleFileSelection" />
@@ -684,7 +688,7 @@ function transferErrorMessage(cause: unknown): string {
             </div>
             <div v-if="pendingDelete?.attachmentId === attachment.attachmentId" class="attachment-delete-confirmation">
               <m3e-icon name="warning"></m3e-icon>
-               <span><strong>{{ tr('永久删除此附件？') }}</strong><small>{{ selectedProvider?.kind === 'mdbx2' ? tr('删除会写入 MDBX2，并在下次同步时传播 Tombstone。') : selectedProvider?.kind === 'bitwarden' ? tr('删除会先确认远端状态；响应中断时可使用同一操作标识重试。') : tr('删除会写入当前 KeePass 会话；请导出 KDBX 文件保存修改。') }}</small></span>
+               <span><strong>{{ tr('永久删除此附件？') }}</strong><small>{{ selectedProvider?.kind === 'local' ? tr('删除后无法恢复此附件。') : selectedProvider?.kind === 'mdbx2' ? tr('删除会写入 MDBX2，并在下次同步时传播 Tombstone。') : selectedProvider?.kind === 'bitwarden' ? tr('删除会先确认远端状态；响应中断时可使用同一操作标识重试。') : tr('删除会写入当前 KeePass 会话；请导出 KDBX 文件保存修改。') }}</small></span>
               <span class="attachment-confirm-actions">
                 <m3e-button variant="text" type="button" :disabled="Boolean(deletingAttachmentId)" @click="pendingDelete = undefined">{{ tr('取消') }}</m3e-button>
                 <m3e-button data-confirm-delete class="attachment-confirm-delete" variant="tonal" type="button" :disabled="Boolean(deletingAttachmentId)" @click="confirmDelete">{{ deletingAttachmentId ? tr('删除中…') : tr('确认删除') }}</m3e-button>

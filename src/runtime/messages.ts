@@ -444,6 +444,7 @@ export type ExtensionRequest =
   | { type: "MDBX2_OBJECT_UPSERT"; providerId: string; operationId: string; input: Mdbx2ObjectUpsertInput }
   | { type: "MDBX2_OBJECT_DELETE"; providerId: string; operationId: string; logicalObjectId: string; expectedHeadCommitId?: string }
   | { type: "MDBX2_BATCH_TRANSFER_PLAN"; input: Mdbx2BatchTransferRequest }
+  | { type: "LOCAL_TRANSFER_FOLDERS" }
   | { type: "MDBX2_PENDING_MOVES" }
   | { type: "MDBX2_BATCH_TRANSFER_EXECUTE"; input: Mdbx2BatchTransferRequest; confirmed?: true }
   | { type: "MDBX2_BATCH_TRANSFER_STATUS"; operationId: string }
@@ -465,11 +466,11 @@ export type ExtensionRequest =
   | { type: "PROVIDER_ATTACHMENT_READ_BEGIN"; providerId: string; itemId: string; attachmentId: string }
   | { type: "PROVIDER_ATTACHMENT_READ_CHUNK"; providerId: string; readHandle: string; offset: number; maxBytes?: number }
   | { type: "PROVIDER_ATTACHMENT_READ_RELEASE"; providerId: string; readHandle: string }
-  | { type: "PROVIDER_ATTACHMENT_UPLOAD_BEGIN"; providerId: string; itemId: string; fileName: string; mediaType?: string; sizeBytes: number; sha256?: string; replaceExisting?: boolean; operationId?: string; attachmentId?: string }
+  | { type: "PROVIDER_ATTACHMENT_UPLOAD_BEGIN"; providerId: string; itemId: string; fileName: string; mediaType?: string; sizeBytes: number; sha256?: string; replaceExisting?: boolean; operationId?: string; attachmentId?: string; expectedRevision?: string }
   | { type: "PROVIDER_ATTACHMENT_UPLOAD_CHUNK"; providerId: string; transferId: string; offset: number; dataBase64: string }
   | { type: "PROVIDER_ATTACHMENT_UPLOAD_FINISH"; providerId: string; itemId: string; transferId: string; operationId?: string }
   | { type: "PROVIDER_ATTACHMENT_UPLOAD_ABORT"; providerId: string; transferId: string }
-  | { type: "PROVIDER_ATTACHMENT_DELETE"; providerId: string; itemId: string; attachmentId: string; operationId: string; confirmed: boolean }
+  | { type: "PROVIDER_ATTACHMENT_DELETE"; providerId: string; itemId: string; attachmentId: string; operationId: string; confirmed: boolean; expectedRevision?: string }
   | { type: "ANDROID_TIMELINE_LIST"; providerId: string }
   | { type: "ANDROID_GENERATOR_HISTORY_LIST"; providerId: string }
   | { type: "ANDROID_GENERATOR_HISTORY_DELETE"; providerId: string; entryId: string; confirmed: true }

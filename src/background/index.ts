@@ -29,6 +29,11 @@ import {
 import { paginateProviderAttachments } from "../providers/attachments/attachment-pagination";
 import { ProviderAttachmentTransferCoordinator, type ProviderAttachmentTransferBackend } from "../providers/attachments/attachment-transfer";
 import { ProviderAttachmentUploadStore } from "../providers/attachments/attachment-upload-store";
+import { LocalAttachmentService } from '../providers/attachments/local-attachments';
+import { LocalTransferCoordinator } from '../providers/attachments/local-transfer-coordinator';
+import { readLocalTransferResource } from '../providers/attachments/local-transfer-resource';
+import { isLocalTransferItem, localTransferFolders, LOCAL_ATTACHMENT_MAX_BYTES } from '../core/local-transfer';
+import { listMdbx2TransferCollections } from '../providers/mdbx2/mdbx2-transfer-collections';
 import { BitwardenClient } from "../providers/bitwarden/bitwarden-client";
 import type { BitwardenSessionConfig } from "../providers/bitwarden/bitwarden-client";
 import { BitwardenAttachmentDownloadService } from "../providers/bitwarden/bitwarden-attachments";
@@ -219,14 +224,26 @@ const keePassDurableSync = new KeePassDurableSyncCoordinator(
   service,
   (account, config) => applyKeePassRemoteAccountConfig(account, config)
 );
+const localAttachments = new LocalAttachmentService(service);
 const mdbx2TransferAttachmentService = new Mdbx2TransferAttachmentService(
   mdbx2NativeClient,
   keePassProvider,
   {
     list: (account, item) => bitwardenTransferAttachmentSource.list(account, item),
     read: (account, item, attachment) => bitwardenTransferAttachmentSource.read(account, item, attachment)
+  }, localAttachments, {
+    list: async (account, item) => (await monicaWebDavProvider.listAttachments(account, item)).items,
+    read: async (account, item, attachment) => (await monicaWebDavProvider.readAttachment(account, item, attachment.attachmentId)).bytes
   }
 );
+const localTransfers = new LocalTransferCoordinator(service, (state, item) => readLocalTransferResource(state, item, {
+  files: mdbx2TransferAttachmentService,
+  prepare: async account => {
+    if (account.kind === 'keepass') await ensureKeePassSession(account, true);
+    if (account.kind === 'mdbx2') return listMdbx2TransferCollections(mdbx2NativeClient, stringAccountConfig(account, 'vaultHandle'), true);
+    return undefined;
+  }
+}));
 const mdbx2BatchTransferCoordinator = new Mdbx2BatchTransferCoordinator(
   service,
   providers,
@@ -465,7 +482,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
       if (status !== "unlocked") clearBitwardenAttachmentSessions();
       if (status !== "unlocked") providerAttachmentUploads.clear();
       if (status !== "unlocked") clearBitwardenSendUploads();
-      if (status !== "unlocked") mdbx2BatchTransferStatuses.clear();
+      if (status !== "unlocked") { mdbx2BatchTransferStatuses.clear(); localTransfers.clear(); localAttachments.clear(); }
     });
   }
 });
@@ -582,7 +599,7 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
       pendingCredentialCaptures.clear();
       await clearPendingUsernameContexts();
       await clearPendingPasskeyRequests();
-      mdbx2BatchTransferStatuses.clear();
+      mdbx2BatchTransferStatuses.clear(); localTransfers.clear(); localAttachments.clear();
       return service.lock();
     }
     case "VAULT_CHANGE_MASTER_PASSWORD":
@@ -593,6 +610,7 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
       return service.exportEncryptedBackup(request.backupPassword);
     case "VAULT_RESTORE_ENCRYPTED": {
       assertExtensionPage(sender);
+      localTransfers.clear(); localAttachments.clear();
       const replacedHelloBindingId = request.replaceExisting ? await service.windowsHelloBindingIdForRuntime() : undefined;
       abortProviderSyncs();
       void mdbx2LocalFileExports.clear();
@@ -1535,9 +1553,13 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
       const vaultHandle = await requireMdbx2VaultHandle(request.providerId);
       return mdbx2NativeClient.deleteObject(vaultHandle, request.operationId, request.logicalObjectId, request.expectedHeadCommitId);
     }
+    case "LOCAL_TRANSFER_FOLDERS":
+      assertManagerPage(sender);
+      return localTransferFolders(await service.readState(false));
     case "MDBX2_BATCH_TRANSFER_PLAN":
       assertManagerPage(sender);
-      return mdbx2BatchTransferCoordinator.plan(request.input);
+      return (await service.getProvider(request.input.targetProviderId))?.kind === 'local'
+        ? localTransfers.plan(request.input) : mdbx2BatchTransferCoordinator.plan(request.input);
     case "MDBX2_PENDING_MOVES":
       assertManagerPage(sender);
       return mdbx2BatchTransferCoordinator.pendingMoves();
@@ -1556,7 +1578,9 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
         failedCount: 0
       });
       try {
-        return await mdbx2BatchTransferCoordinator.execute(input, recordMdbx2BatchTransferProgress);
+        return (await service.getProvider(input.targetProviderId))?.kind === 'local'
+          ? await localTransfers.execute(input, recordMdbx2BatchTransferProgress)
+          : await mdbx2BatchTransferCoordinator.execute(input, recordMdbx2BatchTransferProgress);
       } catch (error) {
         const current = mdbx2BatchTransferStatuses.get(operationId);
         recordMdbx2BatchTransferProgress({
@@ -1642,6 +1666,7 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
     case "PROVIDER_ATTACHMENT_LIST": {
       assertManagerPage(sender);
       const { account, item } = await requireAttachmentTarget(request.providerId, request.itemId);
+      if (account.kind === 'local') return paginateProviderAttachments(await localAttachments.list(account, item), request);
       if (account.kind === "keepass") return paginateProviderAttachments(keePassProvider.listAttachments(account, item), request);
       if (account.kind === "mdbx2") {
         const target = requireMdbx2AttachmentTarget(account, item);
@@ -1698,6 +1723,7 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
     case "PROVIDER_ATTACHMENT_READ_BEGIN": {
       assertManagerPage(sender);
       const { account, item } = await requireAttachmentTarget(request.providerId, request.itemId);
+      if (account.kind === 'local') return localAttachments.begin(account.id, item.id, request.attachmentId);
       if (account.kind === "keepass") {
         pruneProviderAttachmentReads();
         if (providerAttachmentReads.size >= PROVIDER_ATTACHMENT_MAX_ACTIVE_UPLOADS) {
@@ -1755,6 +1781,7 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
       assertManagerPage(sender);
       const account = await service.getProvider(request.providerId);
       if (!account) throw new ProviderAttachmentError("attachment-provider-not-found", "附件密码源不存在。");
+      if (account.kind === 'local') return localAttachments.chunk(account.id, request.readHandle, request.offset, request.maxBytes);
       if (account.kind === "keepass") {
         pruneProviderAttachmentReads();
         const route = providerAttachmentReads.get(request.readHandle);
@@ -1824,6 +1851,7 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
       assertManagerPage(sender);
       const account = await service.getProvider(request.providerId);
       if (!account) return providerAttachmentReads.delete(request.readHandle);
+      if (account.kind === 'local') return localAttachments.release(account.id, request.readHandle);
       if (account.kind === "keepass") return providerAttachmentReads.delete(request.readHandle);
       if (account.kind === "mdbx2") return mdbx2NativeClient.releaseAttachmentRead(request.readHandle);
       if (account.kind === "bitwarden") {
@@ -1836,6 +1864,14 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
     case "PROVIDER_ATTACHMENT_UPLOAD_BEGIN": {
       assertManagerPage(sender);
       const { account, item } = await requireAttachmentTarget(request.providerId, request.itemId);
+      if (account.kind === 'local') {
+        const current = await service.readLocalAttachmentSnapshot(account.id, item.id);
+        if (!current.sessionId) throw new Error('密码库已锁定。');
+        return providerAttachmentUploads.begin({ providerId: account.id, itemId: item.id, providerKind: 'local',
+          fileName: request.fileName, mediaType: request.mediaType, sizeBytes: request.sizeBytes, sha256: request.sha256,
+          replaceExisting: request.replaceExisting === true, operationId: request.operationId || crypto.randomUUID(),
+          attachmentId: request.attachmentId || crypto.randomUUID(), expectedRevision: request.expectedRevision, sessionId: current.sessionId }, LOCAL_ATTACHMENT_MAX_BYTES);
+      }
       if (account.kind === "keepass") {
         keePassProvider.assertAttachmentTarget(account, item);
         if (request.replaceExisting) {
@@ -1933,6 +1969,11 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
       if (!account) throw new ProviderAttachmentError("attachment-provider-not-found", "附件密码源不存在。");
       const bytes = base64ToBytes(request.dataBase64);
       try {
+        if (account.kind === 'local') {
+          const intent = providerAttachmentUploads.intent(request.transferId);
+          if (!intent || intent.providerId !== account.id || intent.providerKind !== 'local') throw new Error('附件上传会话不匹配。');
+          return providerAttachmentUploads.write(request.transferId, request.offset, bytes);
+        }
         if (account.kind === "keepass") {
           const intent = providerAttachmentUploads.intent(request.transferId);
           if (intent && (intent.providerId !== account.id || intent.providerKind !== "keepass")) {
@@ -1961,6 +2002,17 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
     case "PROVIDER_ATTACHMENT_UPLOAD_FINISH": {
       assertManagerPage(sender);
       const { account, item } = await requireAttachmentTarget(request.providerId, request.itemId);
+      if (account.kind === 'local') {
+        const intent = providerAttachmentUploads.intent(request.transferId);
+        if (!intent || intent.providerId !== account.id || intent.itemId !== item.id || intent.providerKind !== 'local' || !intent.sessionId) throw new Error('附件上传目标不匹配。');
+        const old = providerAttachmentUploads.committedResult(request.transferId); if (old) return old;
+        const upload = await providerAttachmentUploads.complete(request.transferId);
+        const result = await service.mutateLocalAttachment({ operationId: intent.operationId!, providerId: account.id, itemId: item.id,
+          attachmentId: intent.attachmentId!, mode: intent.replaceExisting ? 'replace' : 'create', expectedRevision: intent.expectedRevision,
+          attachment: { itemId: item.id, attachmentId: intent.attachmentId!, fileName: intent.fileName, mediaType: intent.mediaType,
+            sizeBytes: upload.bytes.length, sha256: upload.sha256, dataBase64: bytesToBase64(upload.bytes) } }, intent.sessionId);
+        providerAttachmentUploads.markCommitted(request.transferId, result); return result;
+      }
       if (account.kind === "keepass") {
         const durableOperationId = request.operationId || request.transferId;
         const durableIntent = request.operationId
@@ -2044,6 +2096,11 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
     case "PROVIDER_ATTACHMENT_UPLOAD_ABORT": {
       assertManagerPage(sender);
       const account = await service.getProvider(request.providerId);
+      if (account?.kind === 'local') {
+        const intent = providerAttachmentUploads.intent(request.transferId);
+        if (intent && (intent.providerId !== account.id || intent.providerKind !== 'local')) throw new Error('附件上传会话不匹配。');
+        return providerAttachmentUploads.abort(request.transferId);
+      }
       if (!account) return providerAttachmentUploads.abort(request.transferId);
       if (account.kind === "keepass") {
         const intent = providerAttachmentUploads.intent(request.transferId);
@@ -2071,6 +2128,12 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
       assertManagerPage(sender);
       if (request.confirmed !== true) throw new ProviderAttachmentError("attachment-delete-confirmation-required", "删除附件需要明确确认。");
       const { account, item } = await requireAttachmentTarget(request.providerId, request.itemId);
+      if (account.kind === 'local') {
+        const current = await service.readLocalAttachmentSnapshot(account.id, item.id);
+        if (!current.sessionId) throw new Error('密码库已锁定。');
+        return service.mutateLocalAttachment({ operationId: request.operationId, providerId: account.id, itemId: item.id,
+          attachmentId: request.attachmentId, mode: 'delete', expectedRevision: request.expectedRevision }, current.sessionId);
+      }
       if (account.kind === "keepass") {
         return executeKeePassDurableMutation({
           account,
@@ -4020,7 +4083,7 @@ async function requireAttachmentTarget(providerId: string, itemId: string): Prom
   const [account, item] = await Promise.all([service.getProvider(providerId), service.getItem(itemId)]);
   if (!account) throw new ProviderAttachmentError("attachment-provider-not-found", "附件密码源不存在。");
   if (account.kind === "keepass") await ensureKeePassSession(account, true);
-  if (!item || !item.providerRefs.some((reference) => reference.providerId === providerId)) {
+  if (!item || !(account.kind === 'local' ? isLocalTransferItem(item, [account]) : item.providerRefs.some((reference) => reference.providerId === providerId))) {
     throw new ProviderAttachmentError("attachment-target-not-found", "附件项目不存在或不属于所选密码源。");
   }
   return { account, item };

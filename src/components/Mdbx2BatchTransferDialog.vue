@@ -39,6 +39,7 @@ const targetCollectionId = ref("");
 const preserveCategories = ref(true);
 const action = ref<Mdbx2BatchTransferRequest["action"]>("copy");
 const collections = ref<Mdbx2CollectionSummary[]>([]);
+const localFolders = ref<Array<{ key: string; categoryName: string }>>([]);
 const collectionsLoading = ref(false);
 const collectionsError = ref("");
 const selectionNotice = ref("");
@@ -54,10 +55,10 @@ const progress = ref<Mdbx2BatchTransferStatus | null>(null);
 let collectionRequestToken = 0;
 let progressTimer: ReturnType<typeof setTimeout> | undefined;
 
-const targetProviders = computed(() => props.providers.filter((provider) => provider.kind === "mdbx2" && provider.enabled));
+const targetProviders = computed(() => props.providers.filter((provider) => (provider.kind === 'local' || provider.kind === "mdbx2") && provider.enabled));
 const targetProvider = computed(() => targetProviders.value.find((provider) => provider.id === targetProviderId.value));
 const targetRuntime = computed(() => targetProviderId.value ? props.runtimeStatuses[targetProviderId.value] : undefined);
-const targetReady = computed(() => Boolean(targetRuntime.value?.open && targetRuntime.value.available));
+const targetReady = computed(() => targetProvider.value?.kind === 'local' || Boolean(targetRuntime.value?.open && targetRuntime.value.available));
 const activeItems = computed(() => {
   const scope = props.scopeItemIds ? new Set(props.scopeItemIds) : undefined;
   return props.items.filter(item => !item.deletedAt && (!scope || scope.has(item.id)));
@@ -123,6 +124,7 @@ watch(activeItems, items => {
 onBeforeUnmount(() => stopProgressPolling());
 
 function readyFor(providerId: string): boolean {
+  if (targetProviders.value.find(provider => provider.id === providerId)?.kind === 'local') return true;
   const status = props.runtimeStatuses[providerId];
   return Boolean(status?.open && status.available);
 }
@@ -176,10 +178,16 @@ async function loadCollections(): Promise<void> {
   const providerId = targetProviderId.value;
   const token = ++collectionRequestToken;
   collections.value = [];
+  localFolders.value = [];
   collectionsError.value = "";
   if (!providerId || !readyFor(providerId)) return;
   collectionsLoading.value = true;
   try {
+    if (targetProvider.value?.kind === 'local') {
+      const folders = await vaultClient.localTransferFolders();
+      if (token === collectionRequestToken) localFolders.value = folders;
+      return;
+    }
     const loaded: Mdbx2CollectionSummary[] = [];
     const seenCursors = new Set<string>();
     let cursor: string | undefined;
@@ -206,30 +214,23 @@ async function createPlan(): Promise<void> {
     return;
   }
   if (!targetProviderId.value || !targetReady.value) {
-    error.value = tr('请先解锁一个 MDBX2 目标密码源。');
+    error.value = tr('请先选择可用的目标密码库。');
     return;
   }
   planning.value = true;
-  const selection = selectedSignature.value;
+  const input: Mdbx2BatchTransferRequest = { itemIds: [...selectedIds.value], targetProviderId: targetProviderId.value,
+    targetCollectionId: targetCollectionId.value || undefined, preserveCategories: preserveCategories.value, action: action.value };
+  const signature = () => JSON.stringify([selectedSignature.value, targetProviderId.value, targetCollectionId.value, preserveCategories.value, action.value]);
+  const selection = signature();
   error.value = "";
   executeResult.value = null;
   moveConfirmed.value = false;
   try {
-    const result = await vaultClient.planMdbx2BatchTransfer({
-      itemIds: [...selectedIds.value],
-      targetProviderId: targetProviderId.value,
-      targetCollectionId: targetCollectionId.value || undefined,
-      preserveCategories: preserveCategories.value,
-      action: action.value
-    });
-    if (selection !== selectedSignature.value) return;
+    const result = await vaultClient.planMdbx2BatchTransfer(input);
+    if (selection !== signature()) return;
     planResult.value = result;
     preparedRequest.value = {
-      itemIds: [...selectedIds.value],
-      targetProviderId: targetProviderId.value,
-      targetCollectionId: targetCollectionId.value || undefined,
-      preserveCategories: preserveCategories.value,
-      action: action.value,
+      ...input,
       operationId: result.operationId,
       operationCreatedAt: result.operationCreatedAt
     };
@@ -332,7 +333,7 @@ function pathLabel(path: string[]): string {
 }
 
 function phaseLabel(phase: Mdbx2BatchTransferStatus["phase"]): string {
-  return ({ preparing: tr('准备数据'), writing: tr('写入 MDBX2'), attachments: tr('传输附件'), finalizing: tr('更新本地索引'), completed: tr('已完成'), failed: tr('需要重试') } as const)[phase];
+  return ({ preparing: tr('准备数据'), writing: tr('保存到目标密码库'), attachments: tr('传输附件'), finalizing: tr('更新本地索引'), completed: tr('已完成'), failed: tr('需要重试') } as const)[phase];
 }
 
 function resultIcon(status: "completed" | "blocked" | "failed"): string {
@@ -340,7 +341,7 @@ function resultIcon(status: "completed" | "blocked" | "failed"): string {
 }
 
 function errorMessage(cause: unknown): string {
-  return cause instanceof Error ? cause.message : tr('MDBX2 批量传输失败，请重试。');
+  return cause instanceof Error ? cause.message : tr('批量传输失败，请重试。');
 }
 </script>
 
@@ -349,7 +350,7 @@ function errorMessage(cause: unknown): string {
     <section class="editor-dialog mdbx2-batch-dialog" role="dialog" aria-modal="true" aria-labelledby="mdbx2-batch-title">
       <header class="mdbx2-batch-header">
         <div>
-          <span class="dialog-eyebrow"><m3e-icon name="database"></m3e-icon>{{ scopeLabel ? `${scopeLabel} · ` : '' }}{{ tr('MDBX2 批量传输') }}</span>
+          <span class="dialog-eyebrow"><m3e-icon name="database"></m3e-icon>{{ scopeLabel ? `${scopeLabel} · ` : '' }}{{ tr('批量传输') }}</span>
           <h2 id="mdbx2-batch-title">{{ tr('复制或移动项目') }}</h2>
 
         </div>
@@ -381,7 +382,7 @@ function errorMessage(cause: unknown): string {
 
         <section class="batch-panel batch-target-panel" aria-labelledby="batch-target-title">
           <div class="batch-panel-heading"><div><h3 id="batch-target-title">{{ tr('传输到') }}</h3></div></div>
-          <m3e-form-field v-field-label variant="filled" hide-required-marker class="batch-field"><label slot="label">{{ tr('目标密码源') }}</label><component :is="materialSelectTag" @input="targetProviderId = ($event.target as HTMLElement &amp; { value: string }).value"  :disabled="planning || executing"><component :is="materialOptionTag" :selected.prop="String(targetProviderId ?? '') === String('')" value="" disabled>{{ tr('选择 MDBX2 密码源') }}</component><component :is="materialOptionTag" :selected.prop="String(targetProviderId ?? '') === String(provider.id)" v-for="provider in targetProviders" :key="provider.id" :value="provider.id">{{ provider.name }}{{ readyFor(provider.id) ? '' : tr('（已锁定）') }}</component></component></m3e-form-field>
+          <m3e-form-field v-field-label variant="filled" hide-required-marker class="batch-field"><label slot="label">{{ tr('目标密码源') }}</label><component :is="materialSelectTag" @input="targetProviderId = ($event.target as HTMLElement &amp; { value: string }).value"  :disabled="planning || executing"><component :is="materialOptionTag" :selected.prop="String(targetProviderId ?? '') === String('')" value="" disabled>{{ tr('选择目标密码库') }}</component><component :is="materialOptionTag" :selected.prop="String(targetProviderId ?? '') === String(provider.id)" v-for="provider in targetProviders" :key="provider.id" :value="provider.id">{{ provider.name }}{{ readyFor(provider.id) ? '' : tr('（已锁定）') }}</component></component></m3e-form-field>
           <p v-if="targetProvider && !targetReady" class="batch-warning" role="status"><m3e-icon name="lock"></m3e-icon><span>{{ tr('请先在密码源页面解锁 {0}。', { 0: targetProvider.name }) }}</span></p>
 
           <fieldset class="batch-action-picker"><legend>{{ tr('操作') }}</legend><m3e-radio-group class="batch-action-segments" :aria-label="tr('操作')"><label v-choice-label><m3e-radio :checked.prop="action === 'copy'" @input="action = 'copy'"   value="copy" :disabled="planning || executing" /><span><m3e-icon name="content_copy"></m3e-icon><strong>{{ tr('复制') }}</strong><small>{{ tr('创建独立项目') }}</small></span></label><label v-choice-label><m3e-radio :checked.prop="action === 'move'" @input="action = 'move'"   value="move" :disabled="planning || executing" /><span><m3e-icon name="drive_file_move"></m3e-icon><strong>{{ tr('移动') }}</strong><small>{{ tr('完成后移除来源绑定') }}</small></span></label></m3e-radio-group></fieldset>
@@ -390,10 +391,11 @@ function errorMessage(cause: unknown): string {
             <div class="batch-subheading"><div><strong>{{ tr('目标文件夹') }}</strong></div><m3e-button variant="text" type="button" :disabled="collectionsLoading || planning || executing || !targetReady" @click="loadCollections"><m3e-icon slot="icon" name="refresh"></m3e-icon>{{ tr('刷新') }}</m3e-button></div>
             <div v-if="collectionsLoading" class="batch-folder-state" role="status"><m3e-icon name="progress_activity"></m3e-icon><span>{{ tr('正在读取文件夹…') }}</span></div>
             <p v-else-if="collectionsError" class="batch-error" role="alert">{{ collectionsError }}</p>
-            <m3e-radio-group v-else class="batch-folder-tree" :aria-label="tr('目标 MDBX2 文件夹')">
+            <m3e-radio-group v-else class="batch-folder-tree" :aria-label="tr('目标文件夹')">
               <label v-choice-label class="batch-folder-row" :class="{ selected: !targetCollectionId }"><m3e-radio :checked.prop="targetCollectionId === ''" @input="targetCollectionId = ''"   value="" :disabled="planning || executing" /><span class="batch-folder-icon"><m3e-icon name="folder_open"></m3e-icon></span><span><strong>{{ tr('根目录') }}</strong><small>{{ tr('未分类项目') }}</small></span></label>
               <label v-choice-label v-for="row in collectionRows" :key="row.item.collectionId" class="batch-folder-row" :class="{ selected: targetCollectionId === row.item.collectionId, incomplete: row.hierarchyState !== 'ready' }" :style="{ '--folder-depth': row.depth }"><m3e-radio :checked.prop="targetCollectionId === row.item.collectionId" @input="targetCollectionId = row.item.collectionId"   :value="row.item.collectionId" :disabled="planning || executing" /><span class="batch-folder-icon"><m3e-icon name="folder"></m3e-icon></span><span><strong>{{ folderLabel(row) }}</strong><small>{{ row.hierarchyState === 'ready' ? tr('{0} 个附件', { 0: row.item.attachmentCount }) : row.parentPath }}</small></span></label>
-              <p v-if="!collectionRows.length && targetReady" class="batch-folder-state"><m3e-icon name="folder_off"></m3e-icon><span>{{ tr('还没有自定义文件夹；项目会写入根目录。') }}</span></p>
+              <label v-choice-label v-for="folder in localFolders" :key="folder.key" class="batch-folder-row" :class="{ selected: targetCollectionId === folder.key }"><m3e-radio :checked.prop="targetCollectionId === folder.key" @input="targetCollectionId = folder.key" :value="folder.key" :disabled="planning || executing" /><span class="batch-folder-icon"><m3e-icon name="folder"></m3e-icon></span><span><strong>{{ folder.categoryName || tr('未命名文件夹') }}</strong><small>{{ tr('Monica 本地库') }}</small></span></label>
+              <p v-if="!collectionRows.length && !localFolders.length && targetReady" class="batch-folder-state"><m3e-icon name="folder_off"></m3e-icon><span>{{ tr('还没有自定义文件夹；项目会写入根目录。') }}</span></p>
             </m3e-radio-group>
           </div>
 
@@ -1018,6 +1020,12 @@ function errorMessage(cause: unknown): string {
   .mdbx2-batch-footer m3e-button {
     flex: 1 1 140px;
   }
+}
+
+@media (max-width: 420px) {
+  .mdbx2-batch-body { padding-inline: 8px; }
+  .batch-panel { padding: 12px; }
+  .batch-item-row { padding: 8px; gap: 8px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

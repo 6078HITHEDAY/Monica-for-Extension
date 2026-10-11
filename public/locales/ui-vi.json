@@ -3422,5 +3422,11 @@
   "编辑完整副本": "Sửa bản sao đầy đủ",
   "添加副本附件或卡面": "Thêm tệp đính kèm hoặc ảnh thẻ cho bản sao",
   "未知内容": "Nội dung không xác định",
-  "取消内容编辑": "Hủy sửa nội dung"
+  "取消内容编辑": "Hủy sửa nội dung",
+  "附件随本地密码库加密保存。": "Tệp đính kèm được mã hóa cùng kho cục bộ.",
+  "请先选择可用的目标密码库。": "Trước tiên hãy chọn kho đích khả dụng.",
+  "保存到目标密码库": "Đang lưu vào kho đích",
+  "批量传输失败，请重试。": "Truyền hàng loạt thất bại. Hãy thử lại.",
+  "选择目标密码库": "Chọn kho đích",
+  "删除后无法恢复此附件。": "Không thể khôi phục tệp đính kèm này sau khi xóa."
 }

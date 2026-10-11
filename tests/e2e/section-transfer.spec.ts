@@ -37,7 +37,7 @@ test('Passkey and Steam transfers retain the filtered scope including off-page i
     await expect(dialog.locator('.batch-item-row')).toHaveCount(135);
     await expect(dialog).not.toContainText('Unrelated');
     await expect(dialog.locator('.dialog-eyebrow')).toContainText('Passkey');
-    // The native target remains explicit; no hidden local or cloud write occurs.
+    // Local is available, but no write can start until the user selects items.
     await expect(dialog.getByRole('button', {name: '检查并生成计划', exact: true})).toBeDisabled();
     await dialog.getByRole('button', {name: '关闭批量传输', exact: true}).click();
     await page.locator('.nav-item').filter({hasText: 'Steam'}).click();
@@ -54,6 +54,7 @@ test('Passkey and Steam transfers retain the filtered scope including off-page i
     await expect(dialog.locator('.dialog-eyebrow')).toContainText('Steam');
     await dialog.getByRole('checkbox', {name: /选择当前结果/}).check();
     await expect(dialog.locator('.batch-item-row m3e-checkbox')).toBeChecked();
+    await expect(dialog.getByRole('button', {name: '检查并生成计划', exact: true})).toBeEnabled();
     // Refresh from another window removes vanished candidates and selection.
     await send(page, {type: 'VAULT_DELETE_ITEM', itemId: 'steam-visible'});
     await expect(dialog.locator('.batch-item-row')).toHaveCount(0);

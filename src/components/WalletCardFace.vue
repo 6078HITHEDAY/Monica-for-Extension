@@ -25,8 +25,7 @@ watch(() => [visible.value, props.owner || props.item, face.value?.imageAttachme
   clear(); failed.value = false; busy.value = false;
   const owner = props.owner || props.item, name = face.value?.imageAttachmentName;
   if (!visible.value || !name) return;
-  const providerId = owner.providerRefs[0]?.providerId;
-  if (!providerId) { failed.value = true; return; }
+  const providerId = owner.providerRefs[0]?.providerId || 'local';
   const current = request = new AbortController(); busy.value = true;
   try {
     const result = await readVerifiedAttachment(vaultClient, providerId, owner.id, name, undefined, current.signal);

@@ -11,7 +11,7 @@ import ProviderAttachmentsDialog from "./ProviderAttachmentsDialog.vue";
 const props = defineProps<{ owner?: VaultItem; providers: ProviderAccount[]; modelValue: string }>();
 const emit = defineEmits<{ 'update:modelValue': [name: string] }>();
 // Card-face references are scoped to the same provider used by artwork reads.
-const provider = computed(() => props.providers.find(p => p.id === props.owner?.providerRefs[0]?.providerId && ["mdbx2", "keepass", "bitwarden", "monica-webdav"].includes(p.kind)));
+const provider = computed(() => props.providers.find(p => (props.owner?.providerRefs.length ? p.id === props.owner.providerRefs[0]?.providerId : p.kind === 'local') && ["local", "mdbx2", "keepass", "bitwarden", "monica-webdav"].includes(p.kind)));
 const options = ref<string[]>([]), busy = ref(false), error = ref(""), managerOpen = ref(false);
 const managerButton = ref<HTMLElement>();
 let generation = 0;

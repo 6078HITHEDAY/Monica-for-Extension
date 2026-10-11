@@ -22,10 +22,14 @@ export class Mdbx2TransferAttachmentService implements Mdbx2BatchTransferAttachm
   constructor(
     private readonly nativeClient: Mdbx2BatchTransferNativeClient,
     private readonly keepassProvider: Pick<KeePassProvider, "listAttachments" | "readAttachment">,
-    private readonly bitwardenSource?: TransferAttachmentSource
+    private readonly bitwardenSource?: TransferAttachmentSource,
+    private readonly localSource?: TransferAttachmentSource,
+    private readonly portableSource?: TransferAttachmentSource
   ) {}
 
   async listSourceAttachments(account: ProviderAccount, item: VaultItem): Promise<readonly Mdbx2TransferAttachmentDescriptor[]> {
+    if (account.kind === 'local' && this.localSource) return this.localSource.list(account, item);
+    if (account.kind === 'monica-webdav' && this.portableSource) return this.portableSource.list(account, item);
     if (account.kind === "keepass") {
       return this.keepassProvider.listAttachments(account, item).map((attachment) => ({
         attachmentId: attachment.attachmentId,
@@ -134,11 +138,13 @@ export class Mdbx2TransferAttachmentService implements Mdbx2BatchTransferAttachm
     }
   }
 
-  private async readSourceAttachment(
+  async readSourceAttachment(
     account: ProviderAccount,
     item: VaultItem,
     attachment: Mdbx2TransferAttachmentDescriptor
   ): Promise<Uint8Array> {
+    if (account.kind === 'local' && this.localSource) return this.localSource.read(account, item, attachment);
+    if (account.kind === 'monica-webdav' && this.portableSource) return this.portableSource.read(account, item, attachment);
     if (account.kind === 'bitwarden') {
       if (!this.bitwardenSource) throw new Error('Bitwarden 附件读取能力尚未接入，来源项目已保留。');
       // Bitwarden catalog sizes are encrypted lengths, sometimes unknown (0).

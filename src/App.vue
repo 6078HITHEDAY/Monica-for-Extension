@@ -403,7 +403,7 @@ const mdbx2Providers = vaultDerived(() => providers.value.filter((provider) => p
 const editingMdbx2Provider = vaultDerived(() => providers.value.find((provider) => provider.id === editingMdbx2Id.value && provider.kind === "mdbx2"));
 const externalProviders = vaultDerived(() => providers.value.filter((provider) => provider.kind !== "local"));
 const attachmentProviderById = vaultDerived(() => new Map(providers.value
-  .filter((provider) => provider.kind === "keepass" || provider.kind === "mdbx2" || provider.kind === "bitwarden" || provider.kind === "monica-webdav")
+  .filter((provider) => provider.kind === 'local' || provider.kind === "keepass" || provider.kind === "mdbx2" || provider.kind === "bitwarden" || provider.kind === "monica-webdav")
   .map((provider) => [provider.id, provider])));
 const keePassHistoryProviderById = vaultDerived(() => new Map(keePassProviders.value
   .filter((provider) => Boolean(keePassSessions.value[provider.id]))
@@ -1133,6 +1133,7 @@ function credentialCompactSummary(item: LoginItem): string {
 }
 
 function attachmentProvidersFor(item: VaultItem): ProviderAccount[] {
+  if (!item.providerRefs.length) return [...attachmentProviderById.value.values()].filter(provider => provider.kind === 'local' && provider.enabled);
   const seen = new Set<string>();
   return item.providerRefs.flatMap((reference) => {
     const provider = attachmentProviderById.value.get(reference.providerId);
@@ -3108,7 +3109,7 @@ function errorCode(error: unknown): string | undefined {
               @logout="logoutBitwarden"
               @remove="removeProvider"
             />
-            <m3e-card variant="filled" class="motion-card source-card" data-home-provider-id="local" tabindex="-1"><div slot="content" class="stack"><div class="source-title"><span class="source-icon"><m3e-icon name="database"></m3e-icon></span><div><h2>{{ tr('Monica 本地库') }}</h2><p>{{ tr('加密 IndexedDB 信封') }}</p></div></div><p class="supporting">{{ externalProviders.length ? tr('可与外部密码源并存。') : tr('当前唯一的密码源。') }}</p><span class="state state-healthy">{{ tr('已连接') }}</span><div class="source-actions"><m3e-button variant="tonal" :disabled="diagnosticBusy" @click="exportProviderDiagnostics"><m3e-icon slot="icon" name="download"></m3e-icon>{{ diagnosticBusy ? tr('正在导出…') : tr('导出脱敏诊断') }}</m3e-button></div></div></m3e-card>
+            <m3e-card variant="filled" class="motion-card source-card" data-home-provider-id="local" tabindex="-1"><div slot="content" class="stack"><div class="source-title"><span class="source-icon"><m3e-icon name="database"></m3e-icon></span><div><h2>{{ tr('Monica 本地库') }}</h2><p>{{ tr('加密 IndexedDB 信封') }}</p></div></div><p class="supporting">{{ externalProviders.length ? tr('可与外部密码源并存。') : tr('当前唯一的密码源。') }}</p><span class="state state-healthy">{{ tr('已连接') }}</span><div class="source-actions"><m3e-button variant="tonal" @click="openMdbx2BatchTransfer()"><m3e-icon slot="icon" name="drive_file_move" />{{ tr('批量传输') }}</m3e-button><m3e-button variant="text" :disabled="diagnosticBusy" @click="exportProviderDiagnostics"><m3e-icon slot="icon" name="download"></m3e-icon>{{ diagnosticBusy ? tr('正在导出…') : tr('导出脱敏诊断') }}</m3e-button></div></div></m3e-card>
           </div>
         </section>
 

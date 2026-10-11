@@ -3422,5 +3422,11 @@
   "编辑完整副本": "Editar copia completa",
   "添加副本附件或卡面": "Añadir adjunto o imagen de tarjeta a la copia",
   "未知内容": "Contenido desconocido",
-  "取消内容编辑": "Cancelar edición del contenido"
+  "取消内容编辑": "Cancelar edición del contenido",
+  "附件随本地密码库加密保存。": "Los archivos adjuntos se cifran con la bóveda local.",
+  "请先选择可用的目标密码库。": "Selecciona primero una bóveda de destino disponible.",
+  "保存到目标密码库": "Guardando en la bóveda de destino",
+  "批量传输失败，请重试。": "La transferencia por lotes falló. Inténtalo de nuevo.",
+  "选择目标密码库": "Seleccionar bóveda de destino",
+  "删除后无法恢复此附件。": "Este archivo adjunto no se puede recuperar después de eliminarlo."
 }

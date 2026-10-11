@@ -9,9 +9,10 @@ export const KEEPASS_ATTACHMENT_MAX_BYTES = 256 * 1024 * 1024;
 export const BITWARDEN_ATTACHMENT_MAX_BYTES = 100 * 1024 * 1024;
 export const MDBX2_ATTACHMENT_MAX_BYTES = 64 * 1024 * 1024;
 
-export type ProviderAttachmentKind = "keepass" | "bitwarden" | "mdbx2" | "monica-webdav";
+export type ProviderAttachmentKind = "local" | "keepass" | "bitwarden" | "mdbx2" | "monica-webdav";
 
 export interface ProviderAttachmentSummary {
+  revision?: string;
   attachmentId: string;
   providerKind: ProviderAttachmentKind;
   fileName: string;
@@ -42,6 +43,8 @@ export interface ProviderAttachmentReadChunk {
 }
 
 export interface ProviderAttachmentUploadIntent {
+  expectedRevision?: string;
+  sessionId?: string;
   providerId: string;
   itemId: string;
   providerKind: ProviderAttachmentKind;

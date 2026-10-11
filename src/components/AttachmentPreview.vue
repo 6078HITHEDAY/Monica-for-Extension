@@ -10,7 +10,7 @@ let generation=0; let controller: AbortController | undefined;
 function close(){generation++; controller?.abort(); visible.value=false; if(url.value) URL.revokeObjectURL(url.value); url.value="";text.value="";}
 onBeforeUnmount(close);
 async function open(){ if(busy.value)return;close();busy.value=true;error.value=""; const current=++generation; const request=controller=new AbortController(); let providerId:string|undefined;
-  try { providerId=props.owner.providerRefs[0]?.providerId; if(!providerId)throw new Error("请先将项目保存到支持附件的密码源。");
+  try { providerId=props.owner.providerRefs[0]?.providerId || 'local';
     const result=await readVerifiedAttachment(vaultClient,providerId,props.owner.id,props.name,props.expected,request.signal); const bytes=result.bytes;
     if(current!==generation)return;
     mime.value=result.mediaType;

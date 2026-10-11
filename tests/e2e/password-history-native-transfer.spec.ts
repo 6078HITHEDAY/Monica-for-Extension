@@ -74,7 +74,7 @@ test('actual Edge and Native Host block history loss before MDBX transfer and pr
     const saved = await send<LoginItem>(page, { type: 'VAULT_GET_ITEM', itemId: item.id });
     expect(saved.passwordHistory?.map(row => row.password)).toEqual([item.password]);
     await page.getByRole('button', { name: '密码源', exact: true }).click();
-    await page.getByRole('button', { name: '批量传输', exact: true }).click();
+    await page.locator(`[data-home-provider-id="${target.id}"]`).getByRole('button', { name: '批量传输', exact: true }).click();
     const transfer = dialogContent(page, { name: '复制或移动项目', exact: true });
     await transfer.getByRole('checkbox', { name: new RegExp(item.title) }).check();
     await transfer.getByRole('button', { name: '检查并生成计划', exact: true }).click();

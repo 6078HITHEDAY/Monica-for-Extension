@@ -150,7 +150,7 @@ test("MDBX2 batch transfer provides safe M3E planning progress confirmation and 
     await manager.evaluate(() => { document.documentElement.style.fontSize = "200%"; });
     await manager.getByRole("button", { name: "打开导航" }).click();
     await manager.getByRole("button", { name: "密码源" }).click();
-    await manager.getByRole("button", { name: "批量传输" }).click();
+    await manager.locator('[data-home-provider-id="mdbx2-batch-target"]').getByRole("button", { name: "批量传输" }).click();
 
     const dialog = dialogContent(manager, { name: "复制或移动项目" });
     await expect(dialog).toBeVisible();
@@ -158,6 +158,8 @@ test("MDBX2 batch transfer provides safe M3E planning progress confirmation and 
     await expect(dialog).toHaveCSS("background-image", "none");
     await expect(dialog.locator(".batch-panel").first()).toHaveCSS("border-radius", "24px");
     await expect(dialog.locator(".batch-panel").first()).toHaveCSS("background-image", "none");
+    await dialog.getByRole('combobox', { name: '目标密码源' }).click();
+    await manager.getByRole('option', { name: '团队 MDBX2', exact: true }).click();
 
     await dialog.getByRole("checkbox", { name: /Work Login/ }).check();
     await dialog.getByRole("checkbox", { name: /Recovery Note/ }).check();

@@ -3422,5 +3422,11 @@
   "编辑完整副本": "Vollständige Kopie bearbeiten",
   "添加副本附件或卡面": "Anhang oder Kartenbild zur Kopie hinzufügen",
   "未知内容": "Unbekannter Inhalt",
-  "取消内容编辑": "Inhaltsbearbeitung abbrechen"
+  "取消内容编辑": "Inhaltsbearbeitung abbrechen",
+  "附件随本地密码库加密保存。": "Anhänge werden mit dem lokalen Tresor verschlüsselt gespeichert.",
+  "请先选择可用的目标密码库。": "Wählen Sie zuerst einen verfügbaren Zieltresor.",
+  "保存到目标密码库": "Im Zieltresor speichern",
+  "批量传输失败，请重试。": "Stapelübertragung fehlgeschlagen. Versuchen Sie es erneut.",
+  "选择目标密码库": "Zieltresor auswählen",
+  "删除后无法恢复此附件。": "Dieser Anhang kann nach dem Löschen nicht wiederhergestellt werden."
 }

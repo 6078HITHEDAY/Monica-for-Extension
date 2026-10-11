@@ -18,7 +18,8 @@ import { readMdbx2MoveJournal } from './mdbx2-move-journal';
 const MAX_ITEMS = 200;
 const MAX_RECEIPTS = 10_000;
 const MAX_ATTACHMENTS = 512;
-const MAX_ATTACHMENT_BYTES = 16 * 1024 * 1024;
+export const LOCAL_ATTACHMENT_MAX_BYTES = 16 * 1024 * 1024;
+const MAX_ATTACHMENT_BYTES = LOCAL_ATTACHMENT_MAX_BYTES;
 
 /** Stored only inside the encrypted local vault, with the owning item. */
 export interface LocalItemAttachment {
@@ -29,6 +30,7 @@ export interface LocalItemAttachment {
   sizeBytes: number;
   sha256: string;
   dataBase64: string;
+  protected?: boolean;
 }
 
 /** Original records are archival payloads, never live remote-provider bindings. */
@@ -53,6 +55,14 @@ export interface LocalTransferRequest {
   preserveCategories: boolean;
   /** Existing local category identity, as used by home-catalog. Omitted means root. */
   targetFolder?: string;
+  review?: LocalTransferReview;
+  sourceSnapshotHash?: string;
+}
+
+export interface LocalTransferReview {
+  requestHash: string;
+  items: Array<{ sourceItemId: string; title: string; kind: VaultItem['kind']; blockedReason?: string }>;
+  warnings: string[];
 }
 
 /** Internal readback from an authenticated backend; never accepted from a runtime message. */
@@ -70,6 +80,7 @@ export interface LocalTransferReceipt {
   intentHash: string;
   createdAt: string;
   entries: Array<{ sourceItemId: string; targetItemId: string }>;
+  review?: LocalTransferReview;
 }
 
 /** Contains secrets; keep in the background, clear on lock, never serialize to the manager. */
@@ -145,7 +156,7 @@ async function snapshotHash(state: VaultState, request: LocalTransferRequest): P
     queue: state.mutationQueue.filter(row => ids.has(row.itemId)) });
 }
 
-async function validateAttachments(rows: readonly LocalItemAttachment[], itemId: string): Promise<void> {
+export async function validateLocalAttachments(rows: readonly LocalItemAttachment[], itemId: string): Promise<void> {
   if (rows.length > MAX_ATTACHMENTS || new Set(rows.map(row => row.attachmentId)).size !== rows.length) throw new Error('附件清单重复或超过上限。');
   let total = 0;
   for (const row of rows) {
@@ -183,6 +194,7 @@ function detach(item: VaultItem, id: string, now: string, copy: boolean): VaultI
 export async function prepareLocalTransferBatch(state: VaultState, input: LocalTransferRequest,
   readbacks: readonly LocalTransferResource[] = []): Promise<LocalTransferBatch> {
   const request = structuredClone(input), sources = selectedItems(state, request);
+  if (request.sourceSnapshotHash && await hash(sources) !== request.sourceSnapshotHash) throw new Error('预览期间来源项目已变化，请重新选择。');
   const target = state.providers.find(p => p.id === request.targetProviderId);
   if (!target || target.kind !== 'local' || !target.enabled) throw new Error('本地目标密码库不可用。');
   const folders = localTransferFolders(state);
@@ -248,7 +260,7 @@ export async function prepareLocalTransferBatch(state: VaultState, input: LocalT
       }
     } else if (base) { next.categoryId = base.categoryId; next.categoryName = base.categoryName; }
     const files = local ? (state.localItemAttachments || []).filter(row => row.itemId === item.id) : resource!.attachments;
-    await validateAttachments(files, item.id);
+    await validateLocalAttachments(files, item.id);
     if (item.imagePaths?.length && !files.length) throw new Error('来源图片无法读取，不能生成丢失附件的副本。');
     for (const file of files) attachments.push({ ...file, itemId: next.id,
       attachmentId: request.action === 'move' ? file.attachmentId : await uuid(request.operationId, `local-attachment:${item.id}:${file.attachmentId}`) });
@@ -287,6 +299,7 @@ export async function prepareLocalTransferBatch(state: VaultState, input: LocalT
   if (attachments.reduce((sum, row) => sum + row.sizeBytes, 0) > MAX_ATTACHMENT_BYTES) throw new Error('本地传输附件合计超过 16 MiB 上限。');
   const batch = { request, snapshotHash: await snapshotHash(state, request), resources, items: [...targetBySource.values()], attachments, origins, folders: newFolders };
   return { ...batch, receipt: { version: 1, operationId: request.operationId, createdAt: request.createdAt,
+    ...(request.review ? { review: structuredClone(request.review) } : {}),
     requestHash: await hash(request), intentHash: await hash(batch),
     entries: sources.map(item => ({ sourceItemId: item.id, targetItemId: targetBySource.get(item.id)!.id })) } };
 }
@@ -332,6 +345,18 @@ export function readLocalTransferReceipts(value: unknown): LocalTransferReceipt[
       || new Set(row.entries.map(entry => entry.sourceItemId)).size !== row.entries.length
       || new Set(row.entries.map(entry => entry.targetItemId)).size !== row.entries.length) throw new Error('本地传输回执无效。');
     assertMdbx2TransferOperationId(row.operationId); ids.add(row.operationId);
+    if (row.review !== undefined) {
+      const review = row.review;
+      const kinds = ['login', 'secure-note', 'api-token', 'totp', 'card', 'identity', 'billing-address', 'payment-account', 'passkey', 'opaque'];
+      if (!review || !digest(review.requestHash) || !Array.isArray(review.items) || !review.items.length || review.items.length > MAX_ITEMS
+        || !Array.isArray(review.warnings) || review.warnings.length > MAX_ITEMS || review.warnings.some(warning => typeof warning !== 'string')
+        || review.items.some(item => !item || typeof item.sourceItemId !== 'string' || !item.sourceItemId || typeof item.title !== 'string'
+          || !kinds.includes(item.kind) || (item.blockedReason !== undefined && (typeof item.blockedReason !== 'string' || !item.blockedReason)))
+        || new Set(review.items.map(item => item.sourceItemId)).size !== review.items.length
+        || review.items.filter(item => !item.blockedReason).length !== row.entries.length
+        || row.entries.some(entry => !review.items.some(item => item.sourceItemId === entry.sourceItemId && !item.blockedReason)))
+        throw new Error('本地传输回执预览无效。');
+    }
   }
   return structuredClone(value);
 }

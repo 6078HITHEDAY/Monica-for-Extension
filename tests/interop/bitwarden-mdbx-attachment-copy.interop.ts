@@ -19,6 +19,9 @@ import type { VaultEnvelopeStorage } from '../../src/security/vault-storage';
 import type { VaultEnvelope } from '../../src/security/vault-crypto';
 import type { ProviderAccount } from '../../src/core/model';
 import { base64ToBytes } from '../../src/security/encoding';
+import { LocalAttachmentService } from '../../src/providers/attachments/local-attachments';
+import { LocalTransferCoordinator } from '../../src/providers/attachments/local-transfer-coordinator';
+import { readLocalTransferResource } from '../../src/providers/attachments/local-transfer-resource';
 
 const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 
@@ -66,7 +69,7 @@ it.skipIf(process.env.MONICA_TRANSFER_NATIVE !== '1')('copies authenticated Bitw
     await service.upsertProvider(fixture.account); await service.upsertProvider(target);
     await service.applyProviderSync(fixture.account.id, [fixture.item]);
     const original = (await service.getItem(fixture.item.id))!;
-    const makeBridge = () => new Mdbx2TransferAttachmentService(client, {} as never, source);
+    const makeBridge = () => new Mdbx2TransferAttachmentService(client, {} as never, source, new LocalAttachmentService(service));
     const coordinator = () => new Mdbx2BatchTransferCoordinator(service, { get() { throw new Error('Copy must never delete source'); } },
       new Mdbx2Provider(client), client, makeBridge());
     const request = { itemIds: [original.id], targetProviderId: target.id, action: 'copy' as const,
@@ -113,14 +116,36 @@ it.skipIf(process.env.MONICA_TRANSFER_NATIVE !== '1')('copies authenticated Bitw
     const repeated = await coordinator().execute(request); expect(repeated.completedCount).toBe(1);
     expect((await service.listItems()).filter(row => row.providerRefs.some(ref => ref.providerId === target.id))).toHaveLength(1);
     expect(await service.getItem(original.id)).toEqual(original);
+    // The same authenticated source also flows through a durable local copy and back to Native MDBX.
+    const localAccount = (await service.readState()).providers.find(row => row.kind === 'local')!;
+    const localCoordinator = new LocalTransferCoordinator(service, (state, selected) => readLocalTransferResource(state, selected,
+      { files: makeBridge(), prepare: async () => undefined }));
+    const localRequest = { itemIds: [original.id], targetProviderId: localAccount.id, action: 'copy' as const, preserveCategories: false };
+    const localPlan = await localCoordinator.plan(localRequest);
+    const localResult = await localCoordinator.execute({ ...localRequest, operationId: localPlan.operationId, operationCreatedAt: localPlan.operationCreatedAt });
+    localCoordinator.clear();
+    expect(localResult.completedCount).toBe(1); expect(localResult.failedCount).toBe(0);
+    const localItem = (await service.getItem(localResult.items[0].targetItemId!))!;
+    const localFile = (await makeBridge().listSourceAttachments(localAccount, localItem))[0];
+    const localBytes = await makeBridge().readSourceAttachment(localAccount, localItem, localFile);
+    expect(hash(localBytes)).toBe(hash(fixture.plaintext)); localBytes.fill(0);
+    const outboundRequest = { ...request, operationId: randomUUID(), itemIds: [localItem.id] };
+    const outbound = await coordinator().execute(outboundRequest);
+    expect(outbound.completedCount, JSON.stringify(outbound.items)).toBe(1); expect(outbound.failedCount).toBe(0);
+    const outboundItem = (await service.getItem(outbound.items[0].targetItemId!))!;
+    const outboundProof = await makeBridge().captureMoveAttachmentProofs(localAccount, localItem, target, outboundItem,
+      await mdbx2TransferUuid(outboundRequest.operationId, `attachment-transfer:${localItem.id}`));
+    expect(await service.getItem(localItem.id)).toEqual(localItem);
+    expect((await coordinator().execute(outboundRequest)).completedCount).toBe(1);
     await client.lockVault(opened.vaultHandle); client.close();
     client = new Mdbx2NativeClient(new ProcessNativeRuntime(executable, root));
     await client.openVault({ kind: 'vault', handle: opened.vaultHandle }, credential);
     await makeBridge().verifyMoveAttachmentProofs(target, item, proof);
+    await makeBridge().verifyMoveAttachmentProofs(target, outboundItem, outboundProof);
     expect(hash(await readFile(archive))).toBe(hash(archiveBytes));
     await writeFile(join(root, 'evidence.json'), JSON.stringify({ status: 'passed', executableSha256: hash(await readFile(executable)),
       originalFixtureSha256: hash(archiveBytes), attachmentSha256: hash(fixture.plaintext), plaintextBytes: fixture.plaintext.length,
-      requests, corruptedMacRejected: true, nativeAndLocalRestart: true, repeatedCopyCount: 1, sourceUnchanged: true,
+      requests, corruptedMacRejected: true, nativeAndLocalRestart: true, repeatedCopyCount: 1, sourceUnchanged: true, localCopyThenNativeReadback: true,
       scope: 'Actual loopback HTTP authenticated binary and real Native MDBX coordinator copy. Synthetic Bitwarden metadata; no real Bitwarden server or Android runtime.' }, null, 2));
   } finally {
     client.close(); downloads.clear(); server.closeAllConnections();
