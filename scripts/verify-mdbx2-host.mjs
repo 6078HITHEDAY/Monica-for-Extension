@@ -25,6 +25,14 @@ const provenance = JSON.parse(await readFile(resolve(hostRoot, "ENGINE-PROVENANC
 if (provenance.source.commit !== coreRevision || provenance.source.additional_overlays.length !== 3) throw new Error("MDBX2 Host runtime provenance does not match Android 1.0.315.");
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const normalize = (path, bytes) => /\.(rs|toml|lock|md|json)$/.test(path) || path === "LICENSE" ? Buffer.from(bytes.toString("utf8").replace(/\r\n/g, "\n")) : bytes;
+const lanProvenance = JSON.parse(await readFile(resolve(hostRoot, "LAN-PROVENANCE.json"), "utf8"));
+if (lanProvenance.source.commit !== "15b5ec7203c1ba51e19e298aebf2daca82fa55c2" || lanProvenance.source.directory !== "Monica for Android/rust-lan-sync") throw new Error("Nearby protocol source must match the reviewed Android snapshot.");
+if (!manifest.includes('monica-lan-sync = { path = "vendor/monica-lan-sync" }')) throw new Error("Nearby Host must use the pinned local Android protocol core.");
+if (Object.keys(lanProvenance.files).length !== 11) throw new Error("Nearby source inventory differs.");
+for (const [path, expected] of Object.entries(lanProvenance.files)) {
+  if (!/^(?:Cargo\.(?:toml|lock)|LICENSE|src\/[a-z_]+\.rs)$/.test(path)) throw new Error("Invalid nearby provenance path.");
+  if (sha256(normalize(path, await readFile(resolve(hostRoot, "vendor", "monica-lan-sync", path)))) !== expected) throw new Error(`Nearby source differs from Android: ${path}.`);
+}
 const extensionHashes = {};
 for (const overlay of provenance.extension_overlays || []) {
   if (!overlay.patch?.startsWith('runtime-patches/') || overlay.patch.includes('..')) throw new Error('Invalid extension overlay path.');

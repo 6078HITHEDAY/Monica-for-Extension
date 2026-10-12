@@ -574,6 +574,7 @@ pub struct HostRuntime {
     attachment_uploads: HashMap<String, AttachmentUploadSession>,
     windows_hello: WindowsHelloStore,
     pub(crate) local_exports: crate::local_export::LocalExports,
+    nearby: crate::nearby::Nearby,
 }
 
 impl HostRuntime {
@@ -614,6 +615,7 @@ impl HostRuntime {
         let conflict_resolutions = load_conflict_resolution_state(&root)?;
         let health_repairs = load_health_repair_state(&root)?;
         let hello_root = root.clone();
+        let nearby = crate::nearby::Nearby::new(&root)?;
         Ok(Self {
             root,
             device_id,
@@ -627,6 +629,7 @@ impl HostRuntime {
             attachment_uploads: HashMap::new(),
             windows_hello: WindowsHelloStore::new(hello_root),
             local_exports: crate::local_export::LocalExports::default(),
+            nearby,
         })
     }
 
@@ -690,6 +693,7 @@ impl HostRuntime {
             "hello.verify" => self.windows_hello.verify(params),
             "hello.revoke" => self.windows_hello.revoke(params),
             _ if cloud_sync::supports(method) => cloud_sync::handle(self, method, params),
+            _ if crate::nearby::supports(method) => self.nearby.handle(method, params),
             _ => Err(RpcFailure::new(
                 "method-unsupported",
                 "Native method is not supported by this Host version.",
@@ -728,6 +732,7 @@ impl HostRuntime {
             "supportsObjectBatchRestore": true,
             "supportsAtomicObjectAttachmentMove": true,
             "supportsLosslessJson": true,
+            "nearbyTransportVersion": 1,
             "supportsCompleteBackup": true,
             "mdbxRuntimeProfile": "android-1.0.315-90005c8-four-overlays",
             "maxBinaryChunkBytes": MAX_BINARY_CHUNK_BYTES,

@@ -4,6 +4,7 @@ mod cloud_sync;
 mod backup_scratch;
 mod local_export;
 mod runtime;
+mod nearby;
 mod windows_hello;
 
 use runtime::{HostRuntime, RpcFailure, PROTOCOL_VERSION};
@@ -120,8 +121,8 @@ fn run(mut reader: impl Read, mut writer: impl Write, runtime: &mut HostRuntime)
                 false,
             ),
         };
-        let encoded = serde_json::to_vec(&response)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        let encoded = zeroize::Zeroizing::new(serde_json::to_vec(&response)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?);
         write_frame(&mut writer, &encoded)?;
         writer.flush()?;
     }

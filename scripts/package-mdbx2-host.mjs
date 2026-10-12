@@ -26,6 +26,8 @@ const entries = new Map([
   ["README.md", new Uint8Array(await readFile(resolve(hostRoot, "README.md")))],
   ["Cargo.lock", new Uint8Array(await readFile(resolve(hostRoot, "Cargo.lock")))],
   ["ENGINE-PROVENANCE.json", new Uint8Array(await readFile(resolve(hostRoot, "ENGINE-PROVENANCE.json")))],
+  ["LAN-PROVENANCE.json", new Uint8Array(await readFile(resolve(hostRoot, "LAN-PROVENANCE.json")))],
+  ["LAN-SOURCE-LICENSE", new Uint8Array(await readFile(resolve(hostRoot, "vendor", "monica-lan-sync", "LICENSE")))],
   ["LICENSE", new Uint8Array(await readFile(resolve(root, "LICENSE")))]
 ]);
 const metadata = {
@@ -38,6 +40,8 @@ const metadata = {
   coreRevision: "90005c8c608c952093a4522ffa507a562e2e39a4",
   runtimeProfile: "android-1.0.315-90005c8-four-overlays",
   runtimeProvenanceSha256: sha256(entries.get("ENGINE-PROVENANCE.json")),
+  nearbyTransportVersion: 1,
+  nearbyProvenanceSha256: sha256(entries.get("LAN-PROVENANCE.json")),
   source: { commit: sourceCommit, trackedWorktreeClean: sourceTreeClean },
   executable: { file: executableName, size: executableBytes.length, sha256: sha256(executableBytes) },
   installScope: "current-user",

@@ -98,6 +98,13 @@ export const MDBX2_WINDOWS_HELLO_PROTOCOL_VERSION = 1;
 export const MDBX2_WINDOWS_HELLO_RP_ID = "monica-extension.local";
 
 export type Mdbx2NativeMethod =
+  | "nearby.call"
+  | "nearby.input.begin"
+  | "nearby.input.chunk"
+  | "nearby.input.finish"
+  | "nearby.input.release"
+  | "nearby.output.read"
+  | "nearby.output.release"
   | "host.hello"
   | "transfer.begin"
   | "transfer.chunk"
