@@ -5,6 +5,8 @@ import { BitwardenBatchTransferCoordinator } from '../providers/bitwarden/bitwar
 import { BitwardenBatchFoldersRemote } from '../providers/bitwarden/bitwarden-batch-folders';
 import { BitwardenTransferRemote } from '../providers/bitwarden/bitwarden-transfer-remote';
 import { readBitwardenBatchResource } from '../providers/bitwarden/bitwarden-batch-resource';
+import { readMdbxBitwardenSource } from '../providers/bitwarden/bitwarden-mdbx-source';
+import { MdbxBitwardenMembers } from '../providers/bitwarden/bitwarden-mdbx-members';
 import { readPasswordProjectRemovalJournal, isPasswordProjectRemovalPending } from '../core/password-project-removal-journal';
 import { KeePassProjectRemovalWorkflow } from './keepass-project-removal';
 import { KeePassProjectResolutionWorkflow } from './keepass-project-resolution';
@@ -292,6 +294,7 @@ const bitwardenAttachmentDownloads = new BitwardenAttachmentDownloadService();
 const bitwardenTransferAttachmentSource = new BitwardenTransferAttachmentSource(bitwardenAttachmentDownloads,
   loadBitwardenTransferAttachmentContext, persistBitwardenSession);
 const bitwardenAttachmentMutations = new BitwardenAttachmentMutationService();
+const mdbxBitwardenMembers = new MdbxBitwardenMembers();
 const bitwardenBatchTransfers = new BitwardenBatchTransferCoordinator(service, bitwardenProvider, {
   resource: async (state, items, preserveCategories) => {
     const sessionId = await service.passkeySessionId(); if (!sessionId) throw new Error('密码库已锁定。');
@@ -308,6 +311,18 @@ const bitwardenBatchTransfers = new BitwardenBatchTransferCoordinator(service, b
       previous = await service.saveBitwardenTransferSession(previous, session, sessionId);
     });
     return readBitwardenBatchResource(state, items, preserveCategories, { context,
+      portableSource: (account, item, preserveCategories) => {
+        if (account.kind !== 'mdbx2') throw new Error('此来源的原生扩展字段与历史尚不能完整转入 Bitwarden，请保留原库。');
+        return readMdbxBitwardenSource(state, account, item, preserveCategories, {
+          native: mdbx2NativeClient, files: mdbx2TransferAttachmentService, members: mdbxBitwardenMembers,
+          collections: account => listMdbx2TransferCollections(mdbx2NativeClient, stringAccountConfig(account, 'vaultHandle'), false),
+          assertCurrent: async () => {
+            const current = await service.getProvider(account.id);
+            if (!current?.enabled || !sameProviderBinding(account, current) || current.config.vaultHandle !== account.config.vaultHandle
+              || await service.passkeySessionId() !== sessionId) throw new Error('读取期间来源连接或解锁会话已变化。');
+          }
+        });
+      },
       files: async (state, item) => (await readLocalTransferResource(state, item, { prepare: async () => undefined,
         files: { listSourceAttachments: (account, row) => files.list(account, row), readSourceAttachment: (account, row, file) => files.read(account, row, file) }
       })).attachments });

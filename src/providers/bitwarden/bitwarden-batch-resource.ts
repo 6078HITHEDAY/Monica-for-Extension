@@ -22,32 +22,44 @@ export interface BitwardenBatchResource {
   dispose(): void;
 }
 
+export interface BitwardenPortableSource {
+  item: VaultItem;
+  files: LocalItemAttachment[];
+  path: string[];
+  fingerprint: string;
+}
+
 export async function readBitwardenBatchResource(state: VaultState, items: VaultItem[], preserveCategories: boolean, dependencies: {
   context(account: ProviderAccount, item: VaultItem): Promise<BitwardenAttachmentVaultContext>;
   files(state: VaultState, item: VaultItem): Promise<LocalItemAttachment[]>;
+  portableSource?(account: ProviderAccount, item: VaultItem, preserveCategories: boolean): Promise<BitwardenPortableSource>;
 }): Promise<BitwardenBatchResource> {
   const first = items[0]; if (!first || items.some(row => row.deletedAt || row.kind === 'opaque')) throw new Error('所选原生类型尚不能完整转入 Bitwarden。');
   let key: BitwardenSymmetricKey | undefined, context: BitwardenAttachmentVaultContext | undefined;
   const dispose = () => { key?.encKey.fill(0); key?.macKey.fill(0); for (const row of context?.organizationKeys?.values() || []) { row.encKey.fill(0); row.macKey.fill(0); } };
   try {
     let raw: Record<string, unknown>, files: LocalItemAttachment[], fingerprint: string;
-    if (isLocalTransferItem(first, state.providers)) {
-      if (items.length !== 1 || (state.localItemOrigins || []).some(row => row.itemId === first.id && row.records.length))
+    const local = isLocalTransferItem(first, state.providers);
+    const account = first.providerRefs.length === 1 ? state.providers.find(row => row.id === first.providerRefs[0].providerId) : undefined;
+    let foreign: BitwardenPortableSource | undefined;
+    if (!local && account?.enabled && account.kind !== 'bitwarden' && items.length === 1 && dependencies.portableSource)
+      foreign = await dependencies.portableSource(account, first, preserveCategories);
+    if (local || foreign) {
+      if (items.length !== 1 || local && (state.localItemOrigins || []).some(row => row.itemId === first.id && row.records.length))
         throw new Error('此本地项目保留了原生来源数据，尚不能完整写入 Bitwarden。');
       key = { encKey: crypto.getRandomValues(new Uint8Array(32)), macKey: crypto.getRandomValues(new Uint8Array(32)) };
-      const portable = structuredClone(first); portable.providerRefs = [];
+      const portable = structuredClone(foreign?.item || first); portable.providerRefs = [];
       raw = { ...await (portable.kind === 'passkey' ? encodeBitwardenPasskeyCipher(portable, key) : encodeBitwardenCipher(portable, key)), id: first.id, revisionDate: first.updatedAt };
       const decoded = await decodeBitwardenCipher(raw, 'transfer-source', key);
       const matches = decoded.items.filter(row => row.kind === first.kind && (row.kind !== 'passkey' || first.kind === 'passkey' && normalizeCredentialId(row.credentialId) === normalizeCredentialId(first.credentialId)));
       if (decoded.warning || decoded.historyWarning || decoded.unsupported || matches.length !== 1) throw new Error('Bitwarden 无法完整表示所选项目。');
-      await assertBitwardenPortableProjection(first, matches[0]);
-      files = structuredClone((state.localItemAttachments || []).filter(row => row.itemId === first.id)); await validateLocalAttachments(files, first.id);
+      await assertBitwardenPortableProjection(portable, matches[0]);
+      files = foreign?.files || structuredClone((state.localItemAttachments || []).filter(row => row.itemId === first.id)); await validateLocalAttachments(files, first.id);
       // The source attachment metadata is synthetic but authenticated, and binds
       // exactly the bytes staged in the encrypted journal.
       raw.attachments = await Promise.all(files.map(async file => ({ id: file.attachmentId, fileName: await encryptBitwardenString(file.fileName, key!) })));
-      fingerprint = await hash({ item: first, files });
+      fingerprint = await hash({ item: first, files, ...(foreign ? { native: foreign.fingerprint } : {}) });
     } else {
-      const account = first.providerRefs.length === 1 ? state.providers.find(row => row.id === first.providerRefs[0].providerId) : undefined;
       if (!account?.enabled || account.kind !== 'bitwarden') throw new Error('此来源的原生扩展字段与历史尚不能完整转入 Bitwarden，请保留原库。');
       const cipherId = bitwardenProjectCipherId(first.providerRefs[0].remoteId || '');
       if (!cipherId || items.some(row => row.providerRefs.length !== 1 || row.providerRefs[0].providerId !== account.id
@@ -75,9 +87,9 @@ export async function readBitwardenBatchResource(state: VaultState, items: Vault
       finally { for (const row of after.organizationKeys?.values() || []) { row.encKey.fill(0); row.macKey.fill(0); } }
       fingerprint = await hash({ native: await bitwardenTransferSourceSha256(raw), files });
     }
-    if (preserveCategories && !first.categoryName?.trim() && (first.categoryId != null || first.providerRefs.some(row => row.remoteFolderId)))
+    if (!foreign && preserveCategories && !first.categoryName?.trim() && (first.categoryId != null || first.providerRefs.some(row => row.remoteFolderId)))
       throw new Error('来源文件夹名称缺失，请先同步或取消保留分类。');
-    const path = preserveCategories && first.categoryName ? [first.categoryName] : [];
+    const path = foreign?.path || (preserveCategories && first.categoryName ? [first.categoryName] : []);
     return { raw, ownerKey: key, files, path, fingerprint: await hash({ fingerprint, path }), dispose };
   } catch (error) { dispose(); throw error; }
 }

@@ -239,6 +239,36 @@ describe("MDBX2 Android item codec", () => {
     expect(decoded.payload).toEqual({ monica_entry_id: "future:1", opaque: true });
     expect(decoded.unsupportedReason).toContain("future.secret/v9");
   });
+
+  it('preserves current Android Passkey preferences and metadata without changing its identity/key/counter', () => {
+    const payload = { kind: 'passkey', monica_entry_id: 'passkey:AQID', credential_id: 'AQID', private_key_alias: P256_PKCS8, public_key_algorithm: -7,
+      is_discoverable: false, is_user_verification_required: false, created_at: 1700000000000, last_used_at: 1710000000000,
+      use_count: 19, icon_url: 'https://example.test/icon', sign_count: 0, future: { keep: true } };
+    const record: Mdbx2ObjectRecord = { objectId: 'metadata', collectionId: 'vault', objectTypeId: 'passkey', title: 'Synthetic',
+      payloadSchemaVersion: 1, deleted: false, payloadJson: JSON.stringify(payload) };
+    const decoded = decodeMdbx2Object(record, META, 'mdbx-provider'), item = decoded.item as PasskeyItem;
+    expect(item).toMatchObject({ discoverable: false, userVerificationRequired: false, createdAt: new Date(payload.created_at).toISOString(),
+      lastUsedAt: new Date(payload.last_used_at).toISOString(), useCount: 19, iconUrl: payload.icon_url, signCount: 0, privateKeyPkcs8: P256_PKCS8 });
+    expect(JSON.parse(encodeMdbx2Object({ ...item, title: 'Renamed' }, decoded.payload, item)!.payloadJson)).toEqual(payload);
+    const edited = JSON.parse(encodeMdbx2Object({ ...item, discoverable: true, userVerificationRequired: true, iconUrl: undefined }, decoded.payload, item)!.payloadJson);
+    expect(edited).toEqual({ ...payload, is_discoverable: true, is_user_verification_required: true, icon_url: null });
+    const copied = JSON.parse(encodeMdbx2Object(item)!.payloadJson);
+    expect(copied).toMatchObject({ is_discoverable: false, is_user_verification_required: false, created_at: payload.created_at,
+      last_used_at: payload.last_used_at, use_count: 19, sign_count: 0, private_key_alias: P256_PKCS8 });
+    const cleared = JSON.parse(encodeMdbx2Object({ ...item, lastUsedAt: undefined, useCount: undefined }, decoded.payload, item)!.payloadJson);
+    expect(cleared).toEqual({ ...payload, last_used_at: null, use_count: null });
+    for (const patch of [{ createdAt: 'invalid' }, { lastUsedAt: 'invalid' }, { useCount: -1 }, { useCount: 0x80000000 }])
+      expect(encodeMdbx2Object({ ...item, ...patch })).toBeUndefined();
+  });
+
+  it.each([{ is_discoverable: 'false' }, { is_user_verification_required: 0 }, { created_at: 8.64e15 + 1 },
+    { last_used_at: -1 }, { use_count: 1.5 }, { use_count: 0x80000000 }, { icon_url: { unknown: true } }])
+    ('retains unfamiliar Passkey metadata without replacing its policy with defaults %#', patch => {
+      const payload = { kind: 'passkey', credential_id: 'AQID', private_key_alias: P256_PKCS8, ...patch };
+      const result = decodeMdbx2Object({ objectId: 'metadata', collectionId: 'vault', objectTypeId: 'passkey', title: 'Synthetic',
+        payloadSchemaVersion: 1, deleted: false, payloadJson: JSON.stringify(payload) }, META, 'source');
+      expect(result.item?.kind).toBe('opaque'); expect(JSON.stringify(result.payload)).toBe(JSON.stringify(payload));
+    });
 });
 
 function stubItem(kind: VaultItem["kind"], id: string): VaultItem {

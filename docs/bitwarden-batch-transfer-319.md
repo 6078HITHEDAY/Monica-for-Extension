@@ -8,6 +8,8 @@ Native Bitwarden sources retain the full Cipher, including password history, unk
 
 Follow-up local-source validation now accepts proven public/private-key equivalence and native default representations; normal browser-created Passkeys and rich supported password fields have fresh-client acceptance. Exact policy/field limits and verification are recorded in [Local records to Bitwarden](bitwarden-local-portable-319.md).
 
+The subsequent [MDBX source integration](bitwarden-mdbx-source-319.md) adds native revision, content, folder, attachment and project-membership verification for eligible MDBX copies. KeePass/legacy WebDAV native-source conversion and unrepresentable MDBX fields remain blocked.
+
 ## Persistence and recovery
 
 - The entire reviewed batch, source fingerprints, encrypted Cipher preparations and attachment bytes are staged in one encrypted vault transaction before any remote write. Selection is limited to 200 items and attachments to 16 MiB per batch. Four private previews expire after five minutes and are cleared on lock.
@@ -33,4 +35,4 @@ Initial testing caught an incomplete UI branch/API rename and missing new transl
 
 ## Remaining work
 
-This enables the Bitwarden destination workflow; it does not establish complete Android parity. Native conversion from KeePass/MDBX/legacy WebDAV, durable foreign-source moves, the complete rich-field/backend matrix, actual direct OneDrive acceptance with current Android/F-Droid and system Credential Manager, nearby transport and per-recipient Passkey consent remain open. No release, tag or push is included.
+This enables the Bitwarden destination workflow; it does not establish complete Android parity. Following the MDBX source integration linked above, native conversion from KeePass/legacy WebDAV, remaining unsupported MDBX fields, durable foreign-source moves, the complete rich-field/backend matrix, actual direct OneDrive acceptance with current Android/F-Droid and system Credential Manager, nearby transport and per-recipient Passkey consent remain open. No release, tag or push is included.

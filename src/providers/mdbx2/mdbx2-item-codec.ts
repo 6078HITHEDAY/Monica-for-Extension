@@ -43,6 +43,9 @@ export function decodeMdbx2Object(
   if (record.objectTypeId === "login" && !supportedPasswordEncoding(payload)) {
     return decodeOpaqueMdbxObject(record, metadata, providerId, "此密码使用未知编码，仅可安全查看。", payload);
   }
+  if (record.objectTypeId === 'passkey' && !supportedPasskeyMetadata(payload)) {
+    return decodeOpaqueMdbxObject(record, metadata, providerId, 'Passkey 设置或使用记录的字段格式未知，仅可安全查看。', payload);
+  }
   const logicalObjectId = stringValue(payload.monica_entry_id) || record.objectId;
   if (record.objectTypeId === "api-token") {
     const logicalId = `api-token:${record.objectId}`;
@@ -239,6 +242,14 @@ export function encodeMdbx2Object(
     payload.transports = (item.transports || []).join(",");
     payload.aaguid = item.aaguid || "";
     payload.sign_count = item.signCount;
+    payload.is_discoverable = item.discoverable;
+    payload.is_user_verification_required = item.userVerificationRequired !== false;
+    payload.created_at = Date.parse(item.createdAt);
+    if (item.lastUsedAt !== undefined || originalItem?.kind === 'passkey' && originalItem.lastUsedAt !== undefined)
+      payload.last_used_at = item.lastUsedAt === undefined ? null : Date.parse(item.lastUsedAt);
+    if (item.useCount !== undefined || originalItem?.kind === 'passkey' && originalItem.useCount !== undefined) payload.use_count = item.useCount ?? null;
+    if (item.iconUrl !== undefined || originalItem?.kind === 'passkey' && originalItem.iconUrl !== undefined) payload.icon_url = item.iconUrl ?? null;
+    if (!supportedPasskeyMetadata(payload)) return undefined;
     if (typeof item.backupEligible === "boolean") payload.backup_eligible = item.backupEligible;
     if (typeof item.backupState === "boolean") payload.backup_state = item.backupState;
     payload.passkey_mode = item.passkeyMode || "LEGACY";
@@ -289,6 +300,17 @@ export function mdbx2LogicalObjectId(item: VaultItem): string {
 function supportedPasswordEncoding(payload: Record<string, unknown>): boolean {
   const encoding = payload.monica_password_encoding;
   return encoding == null || encoding === "" || encoding === "plaintext-v1";
+}
+
+function supportedPasskeyMetadata(payload: Record<string, unknown>): boolean {
+  for (const key of ['is_discoverable', 'is_user_verification_required'])
+    if (payload[key] != null && typeof payload[key] !== 'boolean') return false;
+  for (const key of ['created_at', 'last_used_at', 'use_count']) {
+    const value = payload[key];
+    if (value != null && (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0
+      || value > (key === 'use_count' ? 0x7fffffff : 8.64e15))) return false;
+  }
+  return payload.icon_url == null || typeof payload.icon_url === 'string';
 }
 
 function androidRawRecord(
@@ -360,6 +382,12 @@ function androidRawRecord(
       transports: payload.transports ?? "internal",
       aaguid: payload.aaguid ?? "",
       signCount: payload.sign_count ?? 0,
+      createdAt: payload.created_at ?? updatedAt,
+      lastUsedAt: payload.last_used_at,
+      useCount: payload.use_count,
+      iconUrl: payload.icon_url,
+      isDiscoverable: payload.is_discoverable,
+      isUserVerificationRequired: payload.is_user_verification_required,
       backupEligible: payload.backup_eligible,
       backupState: payload.backup_state,
       notes: payload.notes ?? "",
