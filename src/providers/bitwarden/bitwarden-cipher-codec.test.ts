@@ -912,6 +912,31 @@ describe("Bitwarden Cipher codec", () => {
     await expect(encodeBitwardenPasskeyCipher(decoded.items.find((item): item is PasskeyItem => item.kind === "passkey")!, KEY, raw)).rejects.toThrow("ES256");
   });
 
+  it('refuses to upload a backup-ineligible Passkey without changing its existing data', async () => {
+    const item = { ...passkey('restricted-credential', 0), backupEligible: false, backupState: false };
+    const before = structuredClone(item);
+    await expect(encodeBitwardenPasskeyCipher(item, KEY)).rejects.toThrow('Bitwarden');
+    const parent = await encodeBitwardenPasskeyCipher(passkey('restricted-credential', 0), KEY);
+    const unchanged = structuredClone(parent);
+    await expect(encodeBitwardenPasskeyCipher(item, KEY, parent)).rejects.toThrow('Bitwarden');
+    expect(item).toEqual(before); expect(parent).toEqual(unchanged);
+    // Removal is still possible: it does not export the incompatible credential.
+    const removed = await encodeBitwardenPasskeyCipher(item, KEY, parent, 'delete');
+    expect((removed.login as Record<string, unknown>).fido2Credentials).toEqual([]);
+  });
+
+  it.each([-1, 0.5, 0x100000000, NaN, Infinity])('refuses invalid counter %s instead of silently rewriting it', async counter => {
+    await expect(encodeBitwardenPasskeyCipher(passkey('counter', counter), KEY)).rejects.toThrow('计数');
+  });
+
+  it.each([0, 23, 0xffffffff])('preserves valid counter %s and legacy implicit backup eligibility', async counter => {
+    const input = passkey('counter', counter), before = structuredClone(input);
+    const raw = await encodeBitwardenPasskeyCipher(input, KEY);
+    const decoded = await decodeBitwardenCipher({ ...raw, id: 'counter', revisionDate: REVISION }, 'provider-1', KEY);
+    expect(decoded.items.find(row => row.kind === 'passkey')).toMatchObject({ signCount: counter, privateKeyPkcs8: P256_PKCS8 });
+    expect(input).toEqual(before);
+  });
+
   it("preserves parent attachments history and future fields when updating a Passkey", async () => {
     const initial = await encodeBitwardenPasskeyCipher(passkey("preserved-parent", 1), KEY);
     const raw: Record<string, unknown> = {

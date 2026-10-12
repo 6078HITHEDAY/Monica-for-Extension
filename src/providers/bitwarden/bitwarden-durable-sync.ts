@@ -5,6 +5,8 @@ import type { BitwardenProvider } from "./bitwarden-provider";
 import { bitwardenSshComparableData } from "./bitwarden-cipher-codec";
 import { assertPasswordProjectRemovalSyncSafe } from "../../core/password-project-removal-sync";
 import { passwordGroupKey } from "../../core/password-groups";
+import { decodeBitwardenCredentialId, normalizeCredentialId } from '../../passkey/source-policy';
+import { parsePortablePasskeyPrivateKey } from '../../passkey/private-key-portability';
 
 export const BITWARDEN_ITEM_SYNC_BATCH_LIMIT = 100;
 
@@ -35,26 +37,27 @@ export interface BitwardenDurableSyncVault {
  * so a response received after a Service Worker restart can be recognized
  * without persisting plaintext in the durable receipt.
  */
-export async function bitwardenMutationFingerprint(item: VaultItem): Promise<string> {
+export async function bitwardenMutationFingerprint(item: VaultItem, version: 1 | 2 = 1): Promise<string> {
   const hasher = await createSHA256();
   hasher.init();
-  hasher.update(stableJson(bitwardenComparablePayload(item)));
+  hasher.update(stableJson(bitwardenComparablePayload(item, version)));
   return hasher.digest("hex");
 }
 
-export function bitwardenComparablePayload(item: VaultItem): Record<string, unknown> {
+export function bitwardenComparablePayload(item: VaultItem, version: 1 | 2 = 2): Record<string, unknown> {
   if (item.kind === "passkey") {
     return stableValue({
       kind: item.kind,
-      credentialId: item.credentialId,
+      credentialId: version === 1 ? item.credentialId : normalizeCredentialId(decodeBitwardenCredentialId(item.credentialId)),
       rpId: item.rpId,
       rpName: item.rpName || item.title,
       userHandle: item.userHandle,
       userName: item.userName,
       userDisplayName: item.userDisplayName,
       algorithm: item.algorithm,
-      keyAlgorithm: item.keyAlgorithm || (item.algorithm === -7 ? "ECDSA" : undefined),
-      privateKeyPkcs8: item.privateKeyPkcs8,
+      keyAlgorithm: version === 2 && item.algorithm === -7 ? 'ECDSA' : item.keyAlgorithm || (item.algorithm === -7 ? "ECDSA" : undefined),
+      privateKeyPkcs8: version === 1 ? item.privateKeyPkcs8 : parsePortablePasskeyPrivateKey(item.privateKeyPkcs8)?.pkcs8Base64 || item.privateKeyPkcs8,
+      ...(version === 2 ? { backupEligible: item.backupEligible !== false } : {}),
       signCount: Math.max(0, Math.floor(item.signCount)),
       discoverable: item.discoverable,
       archivedAt: item.archivedAt
@@ -135,12 +138,12 @@ export class BitwardenDurableSyncCoordinator {
       const item = snapshotById.get(mutation.itemId);
       if (!item) throw new Error("Bitwarden 持久同步批次引用的项目不存在。");
       const existing = receiptByMutationId.get(mutation.id);
-      const intentFingerprint = await bitwardenMutationFingerprint(item);
+      const intentFingerprint = await bitwardenMutationFingerprint(item, 2);
       if (existing) {
         if (existing.itemId !== mutation.itemId || existing.operation !== mutation.operation) {
           throw new Error("Bitwarden 持久同步回执与排队操作不一致。");
         }
-        if (existing.stage !== "prepared" || existing.intentFingerprint === intentFingerprint) continue;
+        if (existing.stage !== "prepared" || existing.intentFingerprint === intentFingerprint && existing.fingerprintVersion === 2) continue;
         refreshedPreparedIds.push(existing.mutationId);
       }
       newReceipts.push({
@@ -151,6 +154,7 @@ export class BitwardenDurableSyncCoordinator {
         operation: mutation.operation,
         stage: "prepared",
         intentFingerprint,
+        fingerprintVersion: 2,
         remoteId: item.providerRefs.find((reference) => reference.providerId === account.id)?.remoteId,
         baseRevision: item.providerRefs.find((reference) => reference.providerId === account.id)?.revision,
         attemptCount: 0,

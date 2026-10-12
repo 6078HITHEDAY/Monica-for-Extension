@@ -970,14 +970,23 @@ function optionalPositiveOrZeroInteger(value: string): number | undefined {
 }
 
 
+/** Bitwarden's native FIDO2 format has implicit BE=true and no field for BE=false. */
+export function assertWritableBitwardenPasskey(item: PasskeyItem): void {
+  if (item.backupEligible === false) throw new Error('此 Passkey 注册时不允许备份，Bitwarden 无法保留该注册标志；请保留在当前密码库。');
+  if (item.algorithm !== -7) throw new Error('当前只能把 ES256 Passkey 保存到 Bitwarden。');
+  if (!Number.isInteger(item.signCount) || item.signCount < 0 || item.signCount > 0xffffffff)
+    throw new Error('Bitwarden Passkey 签名计数无效，原始数据已保留。');
+  if (parsePortablePasskeyPrivateKey(item.privateKeyPkcs8)?.algorithm !== -7)
+    throw new Error('Bitwarden Passkey 私钥不是有效的 ES256 PKCS#8。');
+}
+
 export async function encodeBitwardenPasskeyCipher(
   item: PasskeyItem,
   encryptionKey: BitwardenSymmetricKey,
   preservedRaw?: Record<string, unknown>,
   operation: "upsert" | "delete" = "upsert"
 ): Promise<Record<string, unknown>> {
-  if (item.algorithm !== -7) throw new Error("当前只能把 ES256 Passkey 保存到 Bitwarden。");
-  if (operation === "upsert" && !item.privateKeyPkcs8) throw new Error("Bitwarden Passkey 缺少可同步的 PKCS#8 私钥。");
+  if (operation === 'upsert') assertWritableBitwardenPasskey(item);
   if (preservedRaw && numberValue(preservedRaw, "Type", "type") !== 1) throw new Error("Bitwarden Passkey 的父项目不是登录 Cipher。");
 
   const preservedLogin = recordValue(preservedRaw || {}, "Login", "login") || {};
@@ -1075,7 +1084,7 @@ async function encodeFido2Credential(item: PasskeyItem, key: BitwardenSymmetricK
     keyValue: await encryptBitwardenString(toBase64UrlText(privateKey.pkcs8Base64), key),
     rpId: await encryptBitwardenString(item.rpId, key),
     rpName: await encryptBitwardenString(item.rpName || item.title, key),
-    counter: await encryptBitwardenString(String(Math.max(0, Math.floor(item.signCount))), key),
+    counter: await encryptBitwardenString(String(item.signCount), key),
     userHandle: await encryptBitwardenString(item.userHandle, key),
     userName: await encryptBitwardenString(item.userName, key),
     userDisplayName: await encryptBitwardenString(item.userDisplayName, key),

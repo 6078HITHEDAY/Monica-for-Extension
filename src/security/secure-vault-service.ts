@@ -3330,6 +3330,7 @@ function sameProviderMutationIntent(left: ProviderMutationReceipt, right: Provid
     && left.itemId === right.itemId
     && left.operation === right.operation
     && left.intentFingerprint === right.intentFingerprint
+    && (left.fingerprintVersion || 1) === (right.fingerprintVersion || 1)
     && (left.remoteId || "") === (right.remoteId || "")
     && (left.baseRevision || "") === (right.baseRevision || "");
 }

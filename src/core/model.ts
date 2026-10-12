@@ -407,6 +407,8 @@ export interface ProviderMutationReceipt {
   operation: PendingMutation["operation"];
   stage: ProviderMutationReceiptStage;
   intentFingerprint: string;
+  /** Absent means the original string-based fingerprint. Never reinterpret an attempted receipt. */
+  fingerprintVersion?: 1 | 2;
   remoteId?: string;
   baseRevision?: string;
   attemptCount: number;

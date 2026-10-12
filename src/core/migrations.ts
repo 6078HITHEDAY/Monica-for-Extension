@@ -20,6 +20,11 @@ export function migrateVaultState(input: unknown): VaultState {
     : raw.settings;
   ({ providers, settings } = normalizeDefaultProvider(providers, settings));
   const sourceRecords = Array.isArray(raw.sourceRecords) ? raw.sourceRecords.filter(validSourceRecord).map((record) => ({ ...record })) : [];
+  // Discarding an unknown/corrupt receipt can turn a committed remote create
+  // back into a new queued create. Keep the encrypted vault intact and stop.
+  if (raw.providerMutationReceipts !== undefined && (!Array.isArray(raw.providerMutationReceipts)
+    || raw.providerMutationReceipts.some(receipt => !validProviderMutationReceipt(receipt))))
+    throw new Error('密码源持久同步回执无效或版本不受支持，已停止读取以保留恢复记录。');
 
   return {
     ...raw,
@@ -28,7 +33,7 @@ export function migrateVaultState(input: unknown): VaultState {
     providers,
     settings,
     providerMutationReceipts: Array.isArray(raw.providerMutationReceipts)
-      ? raw.providerMutationReceipts.filter(validProviderMutationReceipt).map((receipt) => ({ ...receipt }))
+      ? raw.providerMutationReceipts.map((receipt) => ({ ...receipt }))
       : [],
     providerConflicts: Array.isArray(raw.providerConflicts) ? raw.providerConflicts : [],
     providerDiagnostics: Array.isArray(raw.providerDiagnostics) ? raw.providerDiagnostics : [],
@@ -160,6 +165,7 @@ export function validProviderMutationReceipt(value: unknown): value is ProviderM
   if (receipt.operation !== "create" && receipt.operation !== "update" && receipt.operation !== "delete") return false;
   if (receipt.stage !== "prepared" && receipt.stage !== "attempted" && receipt.stage !== "committed") return false;
   if (typeof receipt.intentFingerprint !== "string" || !/^[a-f0-9]{64}$/.test(receipt.intentFingerprint)) return false;
+  if (receipt.fingerprintVersion !== undefined && receipt.fingerprintVersion !== 1 && receipt.fingerprintVersion !== 2) return false;
   if (receipt.remoteId !== undefined && !bounded(receipt.remoteId, 4096)) return false;
   if (receipt.baseRevision !== undefined && !bounded(receipt.baseRevision, 1024)) return false;
   if (!Number.isSafeInteger(receipt.attemptCount) || Number(receipt.attemptCount) < 0 || Number(receipt.attemptCount) > 16) return false;

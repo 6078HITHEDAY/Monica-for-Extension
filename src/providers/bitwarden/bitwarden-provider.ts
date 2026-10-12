@@ -19,6 +19,7 @@ import { normalizeCredentialId } from "../../passkey/source-policy";
 import { assertPasskeyCounterNotRegressed, preservePasskeyCounterHistory, samePasskeyCredential } from "../../passkey/ownership-policy";
 import { BitwardenSyncCache, ciphersOf } from "./bitwarden-sync-cache";
 import { assertPasswordProjectRemovalSyncSafe } from "../../core/password-project-removal-sync";
+import { assertWritableBitwardenPasskey } from './bitwarden-cipher-codec';
 
 export class BitwardenProvider implements ProviderAdapter {
   readonly kind = "bitwarden" as const;
@@ -177,13 +178,22 @@ export class BitwardenProvider implements ProviderAdapter {
     const recoveryConflicts: ProviderSyncResult["conflicts"] = [];
     const requestedMutations: NonNullable<ProviderSyncResult["requestedMutations"]> = [];
     const fingerprintCache = new Map<string, string>();
-    const remoteFingerprint = async (item: VaultItem): Promise<string> => {
-      const key = `${item.id}:${item.updatedAt}`;
+    const remoteFingerprint = async (item: VaultItem, version: 1 | 2): Promise<string> => {
+      const key = `${version}:${item.id}:${item.updatedAt}`;
       const cached = fingerprintCache.get(key);
       if (cached) return cached;
-      const value = await bitwardenMutationFingerprint(item);
+      const value = await bitwardenMutationFingerprint(item, version);
       fingerprintCache.set(key, value);
       return value;
+    };
+    const matchesReceipt = async (candidate: VaultItem, receipt: ProviderMutationReceipt, local?: VaultItem): Promise<boolean> => {
+      if (local?.kind === 'passkey' && local.backupEligible === false) return false;
+      if (await remoteFingerprint(candidate, receipt.fingerprintVersion || 1) === receipt.intentFingerprint) return true;
+      // Recover old receipts only when the still-present original content proves
+      // the old digest. Never substitute a later local edit for the original intent.
+      return (receipt.fingerprintVersion || 1) === 1 && local?.kind === 'passkey' && candidate.kind === 'passkey'
+        && await bitwardenMutationFingerprint(local, 1) === receipt.intentFingerprint
+        && await bitwardenMutationFingerprint(local, 2) === await remoteFingerprint(candidate, 2);
     };
     const registerAcknowledgement = async (
       receipt: ProviderMutationReceipt | undefined,
@@ -194,7 +204,7 @@ export class BitwardenProvider implements ProviderAdapter {
       const local = localScoped.find((item) => item.id === mutation.itemId);
       const followUp = Boolean(receipt && local && (
         (receipt.operation === "delete" && !local.deletedAt)
-        || (await bitwardenMutationFingerprint(local)) !== receipt.intentFingerprint
+        || (await bitwardenMutationFingerprint(local, receipt.fingerprintVersion || 1)) !== receipt.intentFingerprint
       ));
       const acknowledged = followUp ? { ...mutation, followUp: true } : mutation;
       acknowledgedMutations.push(acknowledged);
@@ -235,7 +245,7 @@ export class BitwardenProvider implements ProviderAdapter {
       }
       if (receipt.operation === "update" && remoteId) {
         const candidate = remoteItems.find((item) => baseCipherId(providerReference(item, account.id)?.remoteId) === remoteId && (!local || findEquivalent(local, [item])));
-        if (candidate && await remoteFingerprint(candidate) === receipt.intentFingerprint) {
+        if (candidate && await matchesReceipt(candidate, receipt, local)) {
           await registerAcknowledgement(receipt, { mutationId: receipt.mutationId, itemId: receipt.itemId, operation: "update", remoteId: providerReference(candidate, account.id)?.remoteId || receipt.remoteId! }, candidate);
         }
         continue;
@@ -246,7 +256,7 @@ export class BitwardenProvider implements ProviderAdapter {
           if (local && candidate.kind !== local.kind) continue;
           const candidateRemoteId = providerReference(candidate, account.id)?.remoteId;
           if (!candidateRemoteId || (claimedRemoteIds.has(baseCipherId(candidateRemoteId)!) && baseCipherId(candidateRemoteId) !== remoteId)) continue;
-          if (await remoteFingerprint(candidate) === receipt.intentFingerprint) matches.push(candidate);
+          if (await matchesReceipt(candidate, receipt, local)) matches.push(candidate);
           if (matches.length > 1) break;
         }
         if (matches.length === 1) {
@@ -436,6 +446,7 @@ export class BitwardenProvider implements ProviderAdapter {
         }
         // A live local item over a trashed Cipher means the item came back; Bitwarden rejects
         // edits to trashed Ciphers, so restore before writing rather than silently dropping.
+        for (const change of changes) if (change.kind === 'passkey' && !change.deletedAt) assertWritableBitwardenPasskey(change);
         const current = trashedRemotely ? await this.restoreCipher(session, cipherId, raw, context.signal) : { session, raw };
         session = current.session;
         rawByCipherId.set(cipherId, current.raw);
@@ -478,10 +489,12 @@ export class BitwardenProvider implements ProviderAdapter {
 
     for (const local of localNew) {
       if (local.deletedAt || blockedMutationIds.has(pendingByItemId?.get(local.id)?.id || "")) {
-        if (local.deletedAt) merged.push(local);
+        // A blocked create is still local data, not a confirmed remote deletion.
+        merged.push(local);
         continue;
       }
       try {
+        if (local.kind === 'passkey') assertWritableBitwardenPasskey(local);
         await markMutationsAttempted(context, [local], pendingByItemId);
         const created = await this.createWithSession(session, account.id, local, context.signal);
         session = created.session;
@@ -529,6 +542,7 @@ export class BitwardenProvider implements ProviderAdapter {
 
   async update(account: ProviderAccount, item: VaultItem, signal?: AbortSignal): Promise<VaultItem> {
     assertWritableBitwardenItem(item);
+    if (item.kind === 'passkey') assertWritableBitwardenPasskey(item);
     if (item.kind === 'login') assertWritableSshKeyData(item.sshKeyData);
     let session = readSession(account);
     const reference = providerReference(item, account.id);
@@ -594,6 +608,7 @@ export class BitwardenProvider implements ProviderAdapter {
 
   private async createWithSession(session: BitwardenSessionConfig, providerId: string, item: VaultItem, signal?: AbortSignal): Promise<{ session: BitwardenSessionConfig; item: VaultItem; items: VaultItem[]; raw: Record<string, unknown> }> {
     assertWritableBitwardenItem(item);
+    if (item.kind === 'passkey') assertWritableBitwardenPasskey(item);
     if (item.kind === 'login') assertPortablePasswordHistory(item);
     if (item.kind === 'login') assertWritableSshKeyData(item.sshKeyData);
     const routed = await this.ensureCategoryFolder(session, providerId, item, signal);
@@ -1057,6 +1072,8 @@ function boundedMutationReceipts(input: ProviderMutationReceipt[], providerId: s
       throw new Error("Bitwarden 持久同步回执无效或重复。");
     }
     if (!/^[a-f0-9]{64}$/.test(receipt.intentFingerprint)) throw new Error("Bitwarden 持久同步指纹无效。");
+    if (receipt.fingerprintVersion !== undefined && receipt.fingerprintVersion !== 1 && receipt.fingerprintVersion !== 2)
+      throw new Error('Bitwarden 持久同步指纹版本无效。');
     result.set(receipt.mutationId, structuredClone(receipt));
   }
   return result;

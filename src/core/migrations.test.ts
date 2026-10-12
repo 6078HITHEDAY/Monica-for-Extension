@@ -3,6 +3,23 @@ import { createEmptyVaultState, createLoginItem } from "./model";
 import { migrateVaultState } from "./migrations";
 
 describe("vault schema migrations", () => {
+  it.each([undefined, 1, 2])('preserves durable fingerprint version %s without rewriting its digest', fingerprintVersion => {
+    const state = createEmptyVaultState('2026-10-12T00:00:00Z');
+    const receipt = { version: 1, providerId: 'bw', itemId: 'passkey', mutationId: 'create', operation: 'create',
+      stage: 'attempted', intentFingerprint: 'a'.repeat(64), fingerprintVersion, attemptCount: 1,
+      createdAt: state.createdAt, updatedAt: state.updatedAt, attemptedAt: state.createdAt };
+    expect(migrateVaultState({ ...state, providerMutationReceipts: [receipt] }).providerMutationReceipts).toEqual([receipt]);
+  });
+
+  it.each([3, null, '2'])('refuses unknown fingerprint version %s without discarding the recovery receipt', fingerprintVersion => {
+    const state = createEmptyVaultState('2026-10-12T00:00:00Z');
+    const input = { ...state, providerMutationReceipts: [{ version: 1, providerId: 'bw', itemId: 'passkey', mutationId: 'create',
+      operation: 'create', stage: 'attempted', intentFingerprint: 'a'.repeat(64), fingerprintVersion, attemptCount: 1,
+      createdAt: state.createdAt, updatedAt: state.updatedAt, attemptedAt: state.createdAt }] };
+    const before = structuredClone(input);
+    expect(() => migrateVaultState(input)).toThrow('回执'); expect(input).toEqual(before);
+  });
+
   it("migrates v1 URI strings and defaults idempotently", () => {
     const current = createEmptyVaultState("2026-07-18T00:00:00.000Z");
     const login = createLoginItem({ title: "Legacy", password: "", uris: ["example.com", "https://login.example.com"] });
