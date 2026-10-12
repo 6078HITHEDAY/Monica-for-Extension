@@ -91,6 +91,11 @@ it('refuses a queued local edit before reading attachments', async () => {
   await expect(f.resource()).rejects.toThrow('password'); expect(f.dependencies.files.readSourceAttachment).not.toHaveBeenCalled();
 });
 
+it('refuses a queued removal of an optional native field before reading attachments', async () => {
+  const f = await fixture(); if (f.item.kind === 'login') delete f.item.email;
+  await expect(f.resource()).rejects.toThrow('email'); expect(f.dependencies.files.readSourceAttachment).not.toHaveBeenCalled();
+});
+
 it.each(['record','folder','binding','lock','revision'] as const)('refuses %s changes during attachment reads', async mode => {
   const f = await fixture(), read = f.dependencies.files.readSourceAttachment.getMockImplementation()!;
   f.dependencies.files.readSourceAttachment.mockImplementationOnce(async () => {

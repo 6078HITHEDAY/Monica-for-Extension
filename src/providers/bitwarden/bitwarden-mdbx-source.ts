@@ -43,6 +43,7 @@ export async function readMdbxBitwardenSource(state: VaultState, account: Provid
   if (!decoded.item || decoded.item.kind === 'opaque' || decoded.item.kind !== item.kind) throw new Error('MDBX 来源类型或字段版本尚不能完整转换。');
   const portable = portableMdbxItem(item);
   await assertBitwardenPortableProjection(portable, portableMdbxItem(decoded.item));
+  await assertBitwardenPortableProjection(portableMdbxItem(decoded.item), portable);
   assertMdbxPayloadRepresented(record, decoded.item, decoded.payload);
   const collections = await dependencies.collections(account);
   if (item.kind === 'login') await dependencies.members.verify(state, account, item, dependencies.native, collections, revision);

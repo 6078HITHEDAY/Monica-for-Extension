@@ -7,6 +7,7 @@ import { BitwardenTransferRemote } from '../providers/bitwarden/bitwarden-transf
 import { readBitwardenBatchResource } from '../providers/bitwarden/bitwarden-batch-resource';
 import { readMdbxBitwardenSource } from '../providers/bitwarden/bitwarden-mdbx-source';
 import { MdbxBitwardenMembers } from '../providers/bitwarden/bitwarden-mdbx-members';
+import { readKeePassBitwardenSource } from '../providers/bitwarden/bitwarden-keepass-source';
 import { readPasswordProjectRemovalJournal, isPasswordProjectRemovalPending } from '../core/password-project-removal-journal';
 import { KeePassProjectRemovalWorkflow } from './keepass-project-removal';
 import { KeePassProjectResolutionWorkflow } from './keepass-project-resolution';
@@ -312,6 +313,15 @@ const bitwardenBatchTransfers = new BitwardenBatchTransferCoordinator(service, b
     });
     return readBitwardenBatchResource(state, items, preserveCategories, { context,
       portableSource: (account, item, preserveCategories) => {
+        if (account.kind === 'keepass') return readKeePassBitwardenSource(state, account, item, preserveCategories, {
+          provider: keePassProvider, files: mdbx2TransferAttachmentService,
+          prepare: async () => { await ensureKeePassSession(account, true); },
+          assertCurrent: async () => {
+            const current = await service.getProvider(account.id);
+            if (!current?.enabled || !sameProviderBinding(account, current) || await service.passkeySessionId() !== sessionId)
+              throw new Error('读取期间 KeePass 来源连接或解锁会话已变化。');
+          }
+        });
         if (account.kind !== 'mdbx2') throw new Error('此来源的原生扩展字段与历史尚不能完整转入 Bitwarden，请保留原库。');
         return readMdbxBitwardenSource(state, account, item, preserveCategories, {
           native: mdbx2NativeClient, files: mdbx2TransferAttachmentService, members: mdbxBitwardenMembers,

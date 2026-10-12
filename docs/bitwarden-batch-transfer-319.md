@@ -8,7 +8,7 @@ Native Bitwarden sources retain the full Cipher, including password history, unk
 
 Follow-up local-source validation now accepts proven public/private-key equivalence and native default representations; normal browser-created Passkeys and rich supported password fields have fresh-client acceptance. Exact policy/field limits and verification are recorded in [Local records to Bitwarden](bitwarden-local-portable-319.md).
 
-The subsequent [MDBX source integration](bitwarden-mdbx-source-319.md) adds native revision, content, folder, attachment and project-membership verification for eligible MDBX copies. KeePass/legacy WebDAV native-source conversion and unrepresentable MDBX fields remain blocked.
+The subsequent [MDBX source integration](bitwarden-mdbx-source-319.md) adds native revision, content, folder, attachment and project-membership verification for eligible MDBX copies. [KeePass source integration](bitwarden-keepass-source-319.md) adds native field/history/file verification and fresh-client acceptance. Legacy WebDAV native-source conversion and unrepresentable native content remain blocked.
 
 ## Persistence and recovery
 
@@ -35,4 +35,4 @@ Initial testing caught an incomplete UI branch/API rename and missing new transl
 
 ## Remaining work
 
-This enables the Bitwarden destination workflow; it does not establish complete Android parity. Following the MDBX source integration linked above, native conversion from KeePass/legacy WebDAV, remaining unsupported MDBX fields, durable foreign-source moves, the complete rich-field/backend matrix, actual direct OneDrive acceptance with current Android/F-Droid and system Credential Manager, nearby transport and per-recipient Passkey consent remain open. No release, tag or push is included.
+This enables the Bitwarden destination workflow; it does not establish complete Android parity. Following the MDBX and KeePass source integrations linked above, native conversion from legacy WebDAV, remaining unsupported native fields/history, durable foreign-source moves, the complete rich-field/backend matrix, actual direct OneDrive acceptance with current Android/F-Droid and system Credential Manager, nearby transport and per-recipient Passkey consent remain open. No release, tag or push is included.

@@ -363,6 +363,54 @@ export class KeePassProvider implements ProviderAdapter {
     return value;
   }
 
+  /** Internal native export evidence; never returned by a runtime command. */
+  readTransferSource(account: ProviderAccount, item: VaultItem, indexedItems: VaultItem[]): KeePassTransferNativeSource {
+    const live = this.requireKeePassAccountSession(account), ref = item.providerRefs[0];
+    if (!account.enabled || live.databaseId !== databaseIdOf(account) || item.providerRefs.length !== 1
+      || ref.providerId !== account.id || !item.keepassEntryUuid || ref.remoteId !== item.keepassEntryUuid)
+      throw new Error('KeePass 来源身份不唯一或数据库已变化。');
+    const entry = live.entries.entriesByUuid.get(item.keepassEntryUuid), original = live.entries.items.find(row => row.keepassEntryUuid === item.keepassEntryUuid);
+    const baseline = restoreContentFingerprint(ref.etag || '');
+    if (!entry || !original || original.deletedAt || item.deletedAt || !baseline)
+      throw new Error('KeePass 来源内容已变化或有未保存修改，请先同步。');
+    for (const [label, row] of [['native', original], ['index', item]] as const) {
+      // Older locally-created rows may have only the authenticated provider/entry
+      // binding, without the redundant numeric database scope. Never accept a
+      // different explicit scope. Derived labels and empty AAGUIDs are not edits.
+      const actual = restoreContentFingerprint(fingerprint({ ...row, keepassDatabaseId: row.keepassDatabaseId ?? live.databaseId }));
+      if (baseline !== actual) {
+        const expectedFields = JSON.parse(baseline) as Record<string, unknown>, actualFields = actual ? JSON.parse(actual) as Record<string, unknown> : {};
+        if (row.kind === 'passkey') for (const fields of [expectedFields, actualFields]) {
+          if (fields.aaguid === '') delete fields.aaguid;
+          const derived = row.algorithm === -7 ? 'ECDSA' : row.algorithm === -257 ? 'RSA' : row.algorithm === -8 ? 'EdDSA' : undefined;
+          if (derived && fields.keyAlgorithm === derived) delete fields.keyAlgorithm;
+        }
+        for (const fields of [expectedFields, actualFields]) if (Array.isArray(fields.customFields)) {
+          fields.customFields = fields.customFields.map(({ id: _id, fieldType, ...field }) => ({ ...field,
+            protected: field.protected === true || fieldType === 'HIDDEN',
+            ...(fieldType !== undefined && fieldType !== 'TEXT' && fieldType !== 'HIDDEN' ? { fieldType } : {}) }));
+        }
+        const names = [...new Set([...Object.keys(expectedFields), ...Object.keys(actualFields)])]
+          .filter(key => JSON.stringify(expectedFields[key]) !== JSON.stringify(actualFields[key]));
+        if (names.length) throw new Error(`KeePass 来源 ${label} 字段已变化（${names.join(', ')}），请先同步。`);
+      }
+    }
+    if (original.kind === 'login' && item.kind === 'login' && original.passwordGroupId !== item.passwordGroupId)
+      throw new Error('KeePass 密码项目成员不完整，请先同步。');
+    if (item.kind === 'login' && item.passwordGroupId) {
+      const native = live.entries.items.filter(row => row.kind === 'login' && !row.deletedAt && row.passwordGroupId === item.passwordGroupId);
+      const expected = indexedItems.filter(row => row.kind === 'login' && !row.deletedAt && passwordGroupKey(row) === passwordGroupKey(item));
+      if (native.length !== expected.length || new Set(expected.map(row => row.keepassEntryUuid)).size !== expected.length
+        || native.some(row => !expected.some(other => other.keepassEntryUuid === row.keepassEntryUuid)))
+        throw new Error('KeePass 密码项目成员不完整，请先同步。');
+    }
+    const groupRevision = live.groupRevision, historyRevision = live.historyRevision;
+    return { database: live.database, entry, assertCurrent: () => {
+      if (this.sessions.get(account.id) !== live || live.groupRevision !== groupRevision || live.historyRevision !== historyRevision)
+        throw new Error('读取期间 KeePass 来源已锁定或变化。');
+    } };
+  }
+
   transferSourceFolder(account: ProviderAccount, item: VaultItem) {
     const session = this.requireKeePassAccountSession(account);
     const entry = session.entries.entriesByUuid.get(item.keepassEntryUuid || '');

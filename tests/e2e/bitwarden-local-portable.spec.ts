@@ -13,6 +13,8 @@ import { temporaryNativeHost } from './fixtures/native-host';
 import { resolveBitwardenCipherKey } from '../../src/providers/bitwarden/bitwarden-cipher-codec';
 import { decryptBitwardenSymmetricKey } from '../../src/providers/bitwarden/bitwarden-crypto';
 import { PROJECT_CREDENTIAL_FIELD, readProjectCredential } from '../../src/core/project-credentials';
+import { createRequire } from 'node:module';
+import { build } from 'esbuild';
 
 const stamp = '2026-10-12T00:00:00.000Z', password = 'Synthetic portable password', email = 'portable@example.invalid';
 const origin = 'https://portable.example.test', challenge = Buffer.alloc(32, 41).toString('base64url');
@@ -21,7 +23,7 @@ const options = { locale: 'zh-CN', colorScheme: 'dark' as const, viewport: { wid
 async function send(page: Page, request: object): Promise<any> { const response = await page.evaluate(input => chrome.runtime.sendMessage(input), request);
   expect(response.ok, response.error).toBe(true); return response.data; }
 
-for (const sourceKind of ['local', 'mdbx'] as const) test(`a browser-created ${sourceKind} Passkey survives Bitwarden copy interruption and authenticates on a fresh Edge client`, async ({}, info) => {
+for (const sourceKind of ['local', 'mdbx', 'keepass'] as const) test(`a browser-created ${sourceKind} Passkey survives Bitwarden copy interruption and authenticates on a fresh Edge client`, async ({}, info) => {
   test.skip(sourceKind === 'mdbx' && !process.env.MONICA_317_NATIVE_PASSKEY_FIXTURE, 'Requires an explicitly selected verified synthetic MDBX fixture');
   test.setTimeout(180_000);
   let nativeHost: Awaited<ReturnType<typeof temporaryNativeHost>> | undefined, sourceProviderId: string | undefined;
@@ -32,7 +34,8 @@ for (const sourceKind of ['local', 'mdbx'] as const) test(`a browser-created ${s
   const protectedKey = await new BitwardenClient().protectVaultKey(key,
     await stretchBitwardenMasterKey(await deriveBitwardenMasterKey(password, email, { type: 0, iterations: 10_000 })), new Uint8Array(16));
   const rows: Record<string, unknown>[] = [], unexpected: string[] = []; let posts = 0;
-  const projectId = randomUUID(), credentialGroupId = randomUUID(), expectedCopies = sourceKind === 'mdbx' ? 3 : 2;
+  const projectId = randomUUID(), credentialGroupId = randomUUID(), expectedCopies = sourceKind === 'local' ? 2 : 3;
+  const secondRecovery = sourceKind === 'keepass' ? 'Second recovery' : 'Recovery';
   const projectField = (index: number) => ({ name: PROJECT_CREDENTIAL_FIELD, protected: true, value: JSON.stringify({ version: 1,
     projectId, groupId: credentialGroupId, passwordId: randomUUID(), label: `Account ${index}`, primary: index === 0, groupOrder: 0, passwordOrder: index }) });
   const server = createServer(async (request, response) => {
@@ -82,7 +85,7 @@ for (const sourceKind of ['local', 'mdbx'] as const) test(`a browser-created ${s
       <button id="register">Register</button><button id="login">Sign in</button><output id="result"></output><script>
       window.credentialId='';register.onclick=async()=>{try{const c=await navigator.credentials.create({publicKey:PublicKeyCredential.parseCreationOptionsFromJSON({
         challenge:'${challenge}',rp:{id:'portable.example.test',name:'Portable passkey'},user:{id:'dXNlcg',name:'synthetic',displayName:'Synthetic'},
-        pubKeyCredParams:[{type:'public-key',alg:-7}],authenticatorSelection:{residentKey:'${sourceKind === 'mdbx' ? 'discouraged' : 'required'}',userVerification:'required'}})});
+        pubKeyCredParams:[{type:'public-key',alg:-7}],authenticatorSelection:{residentKey:'${sourceKind === 'local' ? 'required' : 'discouraged'}',userVerification:'required'}})});
         window.registration=c.toJSON();result.textContent='registered';}catch(e){result.textContent=e.name+':'+e.message;}};
       login.onclick=async()=>{try{const c=await navigator.credentials.get({publicKey:PublicKeyCredential.parseRequestOptionsFromJSON({challenge:'${challenge}',
         rpId:'portable.example.test',allowCredentials:[{type:'public-key',id:credentialId}],userVerification:'discouraged'})});
@@ -122,6 +125,23 @@ for (const sourceKind of ['local', 'mdbx'] as const) test(`a browser-created ${s
       const source = (await send(page, { type: 'PROVIDER_LIST' })).find((row: any) => row.name === 'Synthetic MDBX source');
       expect(source.isDefaultSaveTarget).toBe(true); sourceProviderId = source.id;
     }
+    if (sourceKind === 'keepass') {
+      const helper = info.outputPath('keepass-fixture.cjs');
+      await build({ stdin: { contents: "export {buildKeePassFixture} from './src/providers/keepass/keepass-fixture';", resolveDir: process.cwd() },
+        outfile: helper, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent' });
+      const api = createRequire(import.meta.url)(helper) as typeof import('../../src/providers/keepass/keepass-fixture');
+      const bytes = await api.buildKeePassFixture({ password: 'Synthetic source KDBX', entries: [] });
+      await page.reload(); await page.getByRole('button', { name: '密码源', exact: true }).click();
+      await page.locator('m3e-list-action').filter({ hasText: '连接 KeePass' }).click();
+      const connect = dialogContent(page, { name: /KeePass/ });
+      await connect.getByLabel('显示名称', { exact: true }).fill('Synthetic KeePass source');
+      await connect.getByLabel('KeePass 数据库文件', { exact: true }).setInputFiles({ name: 'synthetic.kdbx', mimeType: 'application/octet-stream', buffer: Buffer.from(bytes) });
+      await connect.getByLabel('数据库密码（可留空）', { exact: true }).fill('Synthetic source KDBX');
+      await connect.locator('label').filter({ hasText: '设为新项目的默认保存目标' }).click();
+      await connect.getByRole('button', { name: '解锁并连接', exact: true }).click(); await expect(connect).toHaveCount(0);
+      const source = (await send(page, { type: 'PROVIDER_LIST' })).find((row: any) => row.name === 'Synthetic KeePass source');
+      expect(source.isDefaultSaveTarget).toBe(true); sourceProviderId = source.id;
+    }
     let website = await context!.newPage(); await website.goto(origin);
     await website.locator('#register').click(); await confirm(website, true); await expect(website.locator('#result')).toHaveText('registered');
     const original = (await send(page, { type: 'VAULT_LIST_ITEMS' }) as VaultItem[]).find(row => row.kind === 'passkey' && row.rpId === 'portable.example.test') as PasskeyItem;
@@ -130,7 +150,7 @@ for (const sourceKind of ['local', 'mdbx'] as const) test(`a browser-created ${s
     const rich: LoginItem = { ...createLoginItem({ title: 'Rich portable password', username: 'synthetic', password: 'synthetic-secret', uris: [origin] }),
       loginType: 'PASSWORD', appPackageName: 'test.portable', appName: 'Portable', email: 'user@example.test', phone: '+000123',
       addressLine: 'Synthetic street', city: 'City', state: 'State', zipCode: '1234', country: 'XX',
-      customFields: [{ name: 'Recovery', value: 'first', protected: true }, { name: 'Recovery', value: 'second', protected: true, fieldType: 'HIDDEN' }],
+      customFields: [{ name: 'Recovery', value: 'first', protected: true }, { name: secondRecovery, value: 'second', protected: true, fieldType: 'HIDDEN' }],
       passwordHistory: sourceKind === 'local' ? [{ password: 'synthetic-older', lastUsedAt: stamp }] : undefined,
       providerRefs: sourceProviderId ? [{ providerId: sourceProviderId }] : [], mdbxFolderId: original.mdbxFolderId };
     if (sourceProviderId) { rich.passwordGroupId = projectId; rich.customFields.push(projectField(0)); }
@@ -148,6 +168,12 @@ for (const sourceKind of ['local', 'mdbx'] as const) test(`a browser-created ${s
     // Native sync adds committed remote identity and revision. Compare against
     // that committed source snapshot, while original key bytes stay anchored to registration.
     const sourcesBeforeCopy = await send(page, { type: 'VAULT_LIST_ITEMS' }) as VaultItem[];
+    if (sourceKind === 'keepass') await info.attach('source-shape', { contentType: 'application/json', body: JSON.stringify(sourcesBeforeCopy.map(row => {
+      const base = JSON.parse(row.providerRefs[0]?.etag || '{}');
+      return { kind: row.kind, database: row.keepassDatabaseId, baselineDatabase: base.keepassDatabaseId,
+        algorithm: row.kind === 'passkey' ? row.keyAlgorithm : undefined, baselineAlgorithm: base.keyAlgorithm,
+        aaguid: row.kind === 'passkey' ? row.aaguid : undefined, baselineAaguid: base.aaguid };
+    })) });
     const { providerId } = await login(page); await page.reload(); await page.getByRole('button', { name: '密码源', exact: true }).click();
     await page.locator('[data-home-provider-id]').filter({ has: page.getByRole('heading', { name: 'Synthetic portable target', exact: true }) })
       .getByRole('button', { name: '批量传输', exact: true }).click();
@@ -175,8 +201,9 @@ for (const sourceKind of ['local', 'mdbx'] as const) test(`a browser-created ${s
     expect(Buffer.from(passkey.privateKeyPkcs8!, 'base64')).toEqual(Buffer.from(original.privateKeyPkcs8!, 'base64'));
     const passwordItem = imported.find(row => row.title === rich.title) as LoginItem;
     for (const field of ['username','password','uris','passwordHistory','appPackageName','appName','email','phone','addressLine','city','state','zipCode','country'] as const)
-      expect(passwordItem[field], field).toEqual(rich[field]);
-    expect(passwordItem.customFields.filter(row => row.name !== PROJECT_CREDENTIAL_FIELD)).toEqual([{ name: 'Recovery', value: 'first', protected: true }, { name: 'Recovery', value: 'second', protected: true },
+      if (!(sourceKind === 'keepass' && field === 'passwordHistory')) expect(passwordItem[field], field).toEqual(rich[field]);
+    if (sourceKind === 'keepass') expect(passwordItem.passwordHistory).toEqual([{ password: rich.password, lastUsedAt: expect.any(String) }]);
+    expect(passwordItem.customFields.filter(row => row.name !== PROJECT_CREDENTIAL_FIELD)).toEqual([{ name: 'Recovery', value: 'first', protected: true }, { name: secondRecovery, value: 'second', protected: true },
       { name: BITWARDEN_TRANSFER_MARKER, value: expect.any(String), protected: true }]);
     expect(JSON.parse(passwordItem.customFields.find(row => row.name === BITWARDEN_TRANSFER_MARKER)!.value)).toMatchObject({ version: 1, operationId: pending[0].request.operationId });
     if (sourceProviderId) {
