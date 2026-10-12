@@ -4,6 +4,7 @@
 
 ## 中文
 
+- 为 Bitwarden 批量目标补齐完整记录复制与加密恢复基础：密码、验证码、同条记录中的全部 Passkey、历史、原生字段和附件共同校验；断网或重启后先核对已有副本与附件，结果不明时停止重复创建，保留来源及原凭据字节、计数。该批量目标的界面、关联重建和最终入库仍待接入，尚未开放为可用入口。
 - Bitwarden 上传 Passkey 现与 Android 一致：注册时不允许备份的凭据会明确提示并保留来源，避免丢失不可改变的注册标志；零计数和已有私钥不变，无效计数不再被静默修正。修复 UUID／Base64URL 表示导致上传中断后无法识别已保存凭据的问题；兼容旧恢复记录，重复匹配时保留冲突且不再上传，消除误报“远端已删除”。损坏或未知版本的同步回执会停止读取并保留加密原库，避免丢弃恢复信息后重复写入。
 - 批量传输现可选择 KeePass 本地文件、WebDAV 或 OneDrive 数据库及原生文件夹，复制完整密码项目、可用 Passkey 与附件；同库移动保留原项目身份。文件保存后即使浏览器中断，也可从目标下方恢复，保留后续编辑及删除；只有尚未写入文件的操作可以取消。本地文件完成后需导出并保存 KDBX，云端在带版本检查的上传完成后确认成功；不覆盖另一端的冲突修改。
 - 修复真实 KDBX 条目使用 Base64 身份、字段引用使用十六进制身份时无法匹配的问题，用户名与密码引用可正确解析。整组传输保留原生字段、历史及附件，复制时重建项目及内部引用；原 Passkey 凭据、私钥字节与零计数不变。修复 Base64URL 私钥被误报为无法完整保存、旧格式 KDBX 已保存的移动被误报为未保存的问题。锁定会中止待发上传，目标变化会停止恢复，完成迁移不会覆盖刚刷新的 OneDrive 登录令牌。
@@ -28,6 +29,7 @@
 
 ## English
 
+- Added the encrypted preparation and recovery foundation for full-Cipher Bitwarden batch copies, covering passwords, OTPs, every Passkey sibling, history, native fields and attachments. Recovery checks existing copies and files before further writes; unknown results stop another create while retaining the source, original credential bytes and counters. Destination UI, graph rebinding and final batch adoption remain unfinished, so this destination is not yet exposed as a usable workflow.
 - Bitwarden Passkey uploads now follow Android's restriction on credentials registered without backup eligibility: the source is retained with an explicit explanation instead of losing an immutable registration flag. Existing keys and zero counters are preserved; invalid counters are rejected rather than silently changed. Interrupted uploads now recognize equivalent UUID/Base64URL representations and retain compatibility with old recovery receipts. Ambiguous matches remain conflicts without another upload or a misleading remote-deletion warning. Invalid or unknown-version receipts stop vault loading while retaining the encrypted original, preventing recovery information from being discarded and a write from being repeated.
 - Batch transfer now supports KeePass local files, WebDAV and OneDrive destinations with native folder selection. Copy complete password projects, usable Passkeys and attachments, or move native entries within the same database while retaining their identities. Resume committed files after browser interruption without overwriting later edits or deletions; only unwritten operations can be cancelled. Local files still require exporting and saving the KDBX. Cloud transfers complete after version-checked publication and stop on conflicting peer changes.
 - Fixed native KDBX field references failing to match base64 entry identities against hexadecimal reference UUIDs. Batch transfers preserve native fields, history and attachments, rebasing copied project/reference identities while retaining Passkey credential IDs, private-key bytes and zero counters. Fixed false preservation failures for Base64URL private keys and false unsaved-change warnings after moves in older KDBX formats. Locking aborts pending uploads, changed destinations stop recovery, and transfer completion retains freshly rotated OneDrive tokens.

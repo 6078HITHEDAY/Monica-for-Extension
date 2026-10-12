@@ -494,6 +494,7 @@ export interface VaultState {
   mdbx2MoveFinalizations?: import("./mdbx2-move-journal").Mdbx2MoveFinalizationRecord[];
   localTransferReceipts?: import('./local-transfer').LocalTransferReceipt[];
   keepassTransfers?: import('./keepass-transfer-journal').KeePassTransferIntent[];
+  bitwardenCipherCopies?: import('./bitwarden-transfer-journal').BitwardenCipherCopyRecord[];
   localTransferFolders?: import('./local-transfer').LocalTransferFolder[];
   localItemAttachments?: import('./local-transfer').LocalItemAttachment[];
   localItemOrigins?: import('./local-transfer').LocalItemOrigin[];

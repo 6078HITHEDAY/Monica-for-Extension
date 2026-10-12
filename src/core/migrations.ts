@@ -2,6 +2,7 @@ import type { LoginItem, LoginUriMatchType, ProviderMutationReceipt, ProviderSou
 import { normalizeSitePolicy } from "../autofill/site-policy";
 import { normalizeBlockedFieldSignatures } from "../autofill/field-policy";
 import { normalizeHomePreferences } from "./home-preferences";
+import { readBitwardenCipherCopies } from './bitwarden-transfer-journal';
 
 const URI_MATCH_TYPES = new Set<LoginUriMatchType>(["base-domain", "domain", "starts-with", "exact", "regex", "never"]);
 const LEGACY_MDBX_MESSAGE = "此密码源使用 Monica Extension 已停用的 MDBX1 实现。请使用 Monica Android 或桌面端升级为 MDBX2 后重新连接。";
@@ -28,6 +29,7 @@ export function migrateVaultState(input: unknown): VaultState {
 
   return {
     ...raw,
+    ...(raw.bitwardenCipherCopies === undefined ? {} : { bitwardenCipherCopies: readBitwardenCipherCopies(raw.bitwardenCipherCopies) }),
     schemaVersion: 2,
     items,
     providers,
