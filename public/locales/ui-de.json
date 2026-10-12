@@ -1,4 +1,5 @@
 {
+  "KeePass 来源完整条目保留在原生回收站；云端发布确认后才完成移动。本地文件仍需导出 KDBX 并自行保存。": "Vollständige KeePass-Einträge bleiben im ursprünglichen Papierkorb erhalten. Cloud-Vorgänge werden erst nach bestätigtem Upload abgeschlossen. Lokale Dateien müssen als KDBX exportiert und selbst gespeichert werden.",
   "地址与其他信息": "Adresse und weitere Informationen",
   "上移自定义字段 {0}": "Benutzerdefiniertes Feld {0} nach oben verschieben",
   "下移自定义字段 {0}": "Benutzerdefiniertes Feld {0} nach unten verschieben",
@@ -3434,7 +3435,7 @@
   "取消未写入操作": "Ungeschriebenen Vorgang abbrechen",
   "在同一数据库中移动": "Innerhalb dieser Datenbank verschieben",
   "文件夹分页未完成，请减少目录数量后重试。": "Die Ordnerliste überschreitet das unterstützte Limit. Reduzieren Sie die Ordnerzahl und versuchen Sie es erneut.",
-  "本地及 MDBX 项目可移入 Bitwarden；其他来源请使用复制。目标和附件完整校验后才会移除来源，中断后可恢复。": "Lokale und MDBX-Einträge können nach Bitwarden verschoben werden. Nutzen Sie für andere Quellen Kopieren. Originale werden erst nach vollständiger Prüfung des Ziels und der Anhänge entfernt. Unterbrochene Vorgänge können fortgesetzt werden.",
+  "本地、MDBX 及 KeePass 项目可移入 Bitwarden；其他来源请使用复制。目标和附件完整校验后才会移除来源，中断后可恢复。": "Lokale, MDBX- und KeePass-Einträge können nach Bitwarden verschoben werden. Nutzen Sie für andere Quellen Kopieren. Originale werden erst nach vollständiger Prüfung des Ziels und der Anhänge entfernt. Unterbrochene Vorgänge können fortgesetzt werden.",
   "Bitwarden 暂支持复制；无法完整保存的项目会在预览中说明原因。": "Bitwarden unterstützt derzeit das Kopieren. Die Vorschau erklärt, welche Einträge nicht vollständig erhalten werden können.",
   "MDBX 原生提交历史保留在来源库中；目标校验完成后，当前项目才会从来源移除。": "Der native MDBX-Commitverlauf bleibt im Quelltresor. Aktuelle Einträge werden erst nach Prüfung des Ziels aus der Quelle entfernt.",
   "已选择保留来源；继续完成预览版本的复制。": "Die Quelle bleibt erhalten. Kopieren der Vorschauversion fortsetzen.",

@@ -1,4 +1,5 @@
 {
+  "KeePass 来源完整条目保留在原生回收站；云端发布确认后才完成移动。本地文件仍需导出 KDBX 并自行保存。": "Toàn bộ mục KeePass gốc được giữ trong thùng rác của cơ sở dữ liệu. Việc chuyển qua đám mây chỉ hoàn tất sau khi xác nhận tải lên. Tệp cục bộ vẫn cần được xuất thành KDBX và tự lưu.",
   "地址与其他信息": "Địa chỉ và thông tin khác",
   "上移自定义字段 {0}": "Di chuyển trường tùy chỉnh {0} lên",
   "下移自定义字段 {0}": "Di chuyển trường tùy chỉnh {0} xuống",
@@ -3434,7 +3435,7 @@
   "取消未写入操作": "Hủy thao tác chưa ghi",
   "在同一数据库中移动": "Di chuyển trong cùng cơ sở dữ liệu",
   "文件夹分页未完成，请减少目录数量后重试。": "Danh sách thư mục vượt quá giới hạn hỗ trợ. Hãy giảm số thư mục rồi thử lại.",
-  "本地及 MDBX 项目可移入 Bitwarden；其他来源请使用复制。目标和附件完整校验后才会移除来源，中断后可恢复。": "Có thể chuyển các mục cục bộ và MDBX vào Bitwarden. Với nguồn khác, hãy dùng Sao chép. Chỉ xóa bản gốc sau khi xác minh đầy đủ đích và tệp đính kèm; có thể tiếp tục nếu quá trình bị gián đoạn.",
+  "本地、MDBX 及 KeePass 项目可移入 Bitwarden；其他来源请使用复制。目标和附件完整校验后才会移除来源，中断后可恢复。": "Có thể chuyển các mục cục bộ, MDBX và KeePass vào Bitwarden. Với nguồn khác, hãy dùng Sao chép. Chỉ xóa bản gốc sau khi xác minh đầy đủ đích và tệp đính kèm; có thể tiếp tục nếu quá trình bị gián đoạn.",
   "Bitwarden 暂支持复制；无法完整保存的项目会在预览中说明原因。": "Bitwarden hiện hỗ trợ sao chép. Bản xem trước giải thích những mục không thể được bảo toàn đầy đủ.",
   "MDBX 原生提交历史保留在来源库中；目标校验完成后，当前项目才会从来源移除。": "Lịch sử commit gốc của MDBX vẫn nằm trong kho nguồn. Chỉ xóa các mục hiện tại khỏi nguồn sau khi xác minh đích.",
   "已选择保留来源；继续完成预览版本的复制。": "Đã chọn giữ nguồn; tiếp tục sao chép phiên bản đã xem trước.",

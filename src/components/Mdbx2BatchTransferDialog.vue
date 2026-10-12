@@ -489,7 +489,7 @@ function errorMessage(cause: unknown): string {
 
           <fieldset class="batch-action-picker"><legend>{{ tr('操作') }}</legend><m3e-radio-group class="batch-action-segments" :aria-label="tr('操作')"><label v-choice-label><m3e-radio :checked.prop="action === 'copy'" @input="action = 'copy'"   value="copy" :disabled="planning || executing" /><span><m3e-icon name="content_copy"></m3e-icon><strong>{{ tr('复制') }}</strong><small>{{ tr('创建独立项目') }}</small></span></label><label v-choice-label><m3e-radio :checked.prop="action === 'move'" @input="action = 'move'"   value="move" :disabled="planning || executing" /><span><m3e-icon name="drive_file_move"></m3e-icon><strong>{{ tr('移动') }}</strong><small>{{ targetProvider?.kind === 'keepass' ? tr('在同一数据库中移动') : tr('完成后移除来源绑定') }}</small></span></label></m3e-radio-group></fieldset>
 
-          <p v-if="targetProvider?.kind === 'bitwarden'" class="batch-inline-note">{{ tr('本地及 MDBX 项目可移入 Bitwarden；其他来源请使用复制。目标和附件完整校验后才会移除来源，中断后可恢复。') }}</p>
+          <p v-if="targetProvider?.kind === 'bitwarden'" class="batch-inline-note">{{ tr('本地、MDBX 及 KeePass 项目可移入 Bitwarden；其他来源请使用复制。目标和附件完整校验后才会移除来源，中断后可恢复。') }}</p>
 
           <div class="batch-folder-section">
             <div class="batch-subheading"><div><strong>{{ tr('目标文件夹') }}</strong></div><m3e-button variant="text" type="button" :disabled="collectionsLoading || planning || executing || !targetReady" @click="loadCollections"><m3e-icon slot="icon" name="refresh"></m3e-icon>{{ tr('刷新') }}</m3e-button></div>

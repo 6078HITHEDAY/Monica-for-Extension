@@ -555,7 +555,7 @@ export class KeePassRemoteSessionService {
    * file is rebased from the stored base KDBX; only independent fields/categories are applied. The
    * working copy is replaced with the verified remote bytes before the provider session is reloaded.
    */
-  async publishWorkingCopy(account: ProviderAccount, signal?: AbortSignal): Promise<KeePassRemotePublishResult | undefined> {
+  async publishWorkingCopy(account: ProviderAccount, signal?: AbortSignal, allowRebase = true): Promise<KeePassRemotePublishResult | undefined> {
     if (account.kind !== "keepass" || !isRemoteKeePassSource(account.config.sourceMode)) return undefined;
     return this.runPersistenceExclusive(account.id, async () => {
       const record = await this.storage.read(account.id);
@@ -582,6 +582,8 @@ export class KeePassRemoteSessionService {
               accountConfig: await this.accountConfigForRecord(account, record)
             };
           }
+          if (!allowRebase) throw new ProviderTransportError('conflict', 'KeePass 远端文件已变化，移动恢复副本已保留。',
+            { retryable: false, operation: 'KeePass 来源移动发布', attempts: 1 });
           remoteSnapshot = await client.read(signal);
           const refreshed = await this.replaceWorkingCopyWithRemote(account, record, remoteSnapshot, password, keyFile);
           return {
@@ -597,7 +599,7 @@ export class KeePassRemoteSessionService {
         try {
           writeResult = await client.write(record.workingBytes, expectedEtag, signal);
         } catch (cause) {
-          if (!(cause instanceof ProviderTransportError) || cause.code !== "conflict") throw cause;
+          if (!allowRebase || !(cause instanceof ProviderTransportError) || cause.code !== "conflict") throw cause;
           remoteSnapshot = await client.read(signal);
           const baseVault = await openRemoteVault(record.baseBytes, password, keyFile, account);
           const workingVault = await openRemoteVault(record.workingBytes, password, keyFile, account);

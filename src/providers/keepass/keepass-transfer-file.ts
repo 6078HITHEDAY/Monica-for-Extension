@@ -80,7 +80,11 @@ export async function keePassTransferContentHash(database: kdbxweb.Kdbx): Promis
     if (value && typeof value === 'object') {
       const native = value instanceof kdbxweb.KdbxGroup || value instanceof kdbxweb.KdbxEntry;
       const fields = value instanceof kdbxweb.KdbxGroup
-        ? { ...value, notes: value.notes || '', defaultAutoTypeSeq: value.defaultAutoTypeSeq || '' } : value;
+        ? { ...value, notes: value.notes || '', defaultAutoTypeSeq: value.defaultAutoTypeSeq || '' }
+        // Newly created entries leave these unset; KDBX reload reads empty XML
+        // nodes as empty strings. Neither form sets a color or URL override.
+        : value instanceof kdbxweb.KdbxEntry
+          ? { ...value, fgColor: value.fgColor || '', bgColor: value.bgColor || '', overrideUrl: value.overrideUrl || '' } : value;
       return Object.fromEntries(Object.entries(fields)
         // kdbxweb sets this on moves even when the file format cannot store it.
         .filter(([key]) => !['parentGroup', '_editState', 'headerHash'].includes(key)

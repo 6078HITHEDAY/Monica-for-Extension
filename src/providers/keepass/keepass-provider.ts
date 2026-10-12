@@ -377,9 +377,11 @@ export class KeePassProvider implements ProviderAdapter {
       const native = readKeePassEntries(database, Number(source.config.databaseId), source.id);
       for (const item of request.sources) {
         const original = native.items.find(row => row.keepassEntryUuid === item.keepassEntryUuid);
-        const baseline = restoreContentFingerprint(item.providerRefs[0].etag || '');
-        if (!original || original.deletedAt || !baseline || baseline !== restoreContentFingerprint(fingerprint(original))
-          || baseline !== restoreContentFingerprint(fingerprint(item))) throw new Error('KeePass 来源内容已变化或有未保存修改，原文件已保留。');
+        if (!original || original.deletedAt) throw new Error('KeePass 来源内容已变化，原文件已保留。');
+        // Reuse the native reader's field equivalence checks for older items
+        // lacking redundant scope/derived labels. Whole-file hashes still pin
+        // every original field, history record and attachment byte.
+        this.readTransferSource(source, item, request.sources).assertCurrent();
       }
       assertCurrent();
       const result = await applyKeePassSourceRemoval(database, source, request);

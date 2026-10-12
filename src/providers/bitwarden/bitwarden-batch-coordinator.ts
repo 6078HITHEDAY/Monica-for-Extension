@@ -21,9 +21,12 @@ import { bitwardenMdbxMoveSource, type BitwardenMdbxMoveGroup, type BitwardenMov
 import { isLocalTransferItem } from '../../core/local-transfer';
 import type { Mdbx2SourceDeletionIntent } from '../../core/mdbx2-source-deletion';
 import type { Mdbx2ObjectBatchResult } from '../mdbx2/native-contract';
+import { sameKeePassMoveFile, bitwardenKeePassMoveSource, type BitwardenKeePassMoveGroup } from '../../core/bitwarden-keepass-move';
+import type { KeePassBitwardenMove } from '../keepass/keepass-bitwarden-move';
 
 type Vault = Pick<SecureVaultService, 'readState' | 'stageBitwardenBatch' | 'openBitwardenBatchStore' | 'applyProviderSync' | 'passkeySessionId'
-  | 'prepareBitwardenMdbxDeletion' | 'deleteBitwardenMdbxSources' | 'keepBitwardenBatchSources'>;
+  | 'prepareBitwardenMdbxDeletion' | 'deleteBitwardenMdbxSources' | 'keepBitwardenBatchSources'
+  | 'prepareBitwardenKeePassDeletion' | 'deleteBitwardenKeePassSources' | 'confirmBitwardenKeePassPublication'>;
 interface Dependencies {
   resource(state: VaultState, items: VaultItem[], preserveCategories: boolean): Promise<BitwardenBatchResource>;
   folders(account: ProviderAccount, signal?: AbortSignal): Promise<unknown>;
@@ -31,6 +34,7 @@ interface Dependencies {
   remote(copyId: string, store: BitwardenBatchStore): BitwardenCopyRemote & { dispose(): void };
   exclusive<T>(providerId: string, work: () => Promise<T>): Promise<T>;
   exclusiveMany?<T>(providerIds: string[], work: () => Promise<T>): Promise<T>;
+  keepass?: Pick<KeePassBitwardenMove, 'verify' | 'prepareRemoval' | 'remove' | 'publish'>;
   mdbx?: {
     verify(state: VaultState, account: ProviderAccount, items: VaultItem[]): Promise<{ vaultId: string }>;
     prepare(group: BitwardenMdbxMoveGroup, targetId: string, verify: () => Promise<void>): Promise<Mdbx2SourceDeletionIntent>;
@@ -81,10 +85,27 @@ export class BitwardenBatchTransferCoordinator {
         const groups = new Map<string, VaultItem[]>(), copies: BitwardenCipherCopyRecord[] = [], folders: BitwardenBatchFolder[] = [];
         const units: BitwardenBatchIntent['units'] = [];
         const nativeGroups: BitwardenMdbxMoveGroup[] = [];
+        const keePassGroups: BitwardenKeePassMoveGroup[] = [];
         if (request.action === 'move') for (const component of selection.components) {
           const items = component.map(id => selected.find(item => item.id === id)!);
           if (items.every(item => isLocalTransferItem(item, state.providers))) continue;
           try {
+            const sourceAccount = state.providers.find(account => items[0].providerRefs[0]?.providerId === account.id);
+            if (sourceAccount?.kind === 'keepass') {
+              if (!this.dependencies.keepass || !this.dependencies.exclusiveMany) throw new Error('KeePass 移动服务尚未就绪。');
+              if (items.some(item => bitwardenKeePassMoveSource(state, item).id !== sourceAccount.id)) throw new Error('关联组跨越多个来源库，尚不能原子移动。');
+              if (selected.some(item => item.providerRefs.some(ref => ref.providerId !== sourceAccount.id
+                && state.providers.some(other => other.id === ref.providerId && sameKeePassMoveFile(sourceAccount, other)))))
+                throw new Error('同一个 KeePass 文件通过多个连接被选中，请只选择一个来源连接后重试。');
+              if (!keePassGroups.some(group => group.account.id === sourceAccount.id)) {
+                const sources = selected.filter(item => item.providerRefs.some(ref => ref.providerId === sourceAccount.id));
+                sources.forEach(item => bitwardenKeePassMoveSource(state, item));
+                const id = await uuid(request.operationId, `keepass-move:${sourceAccount.id}`);
+                const binding = await this.dependencies.keepass.verify(sourceAccount, sources, id, target.id, request.operationCreatedAt);
+                keePassGroups.push({ id, account: structuredClone(sourceAccount), sources: structuredClone(sources), fingerprints: [], ...binding });
+              }
+              continue;
+            }
             if (!this.dependencies.mdbx || !this.dependencies.exclusiveMany) throw new Error('MDBX 移动服务尚未就绪。');
             const account = bitwardenMdbxMoveSource(state, items[0]);
             if (items.length > 50) throw new Error('关联项目超过 MDBX 单次原子删除的 50 项上限，整组保留来源。');
@@ -105,7 +126,7 @@ export class BitwardenBatchTransferCoordinator {
           try {
             if (items.some(item => blocked.has(item.id))) continue;
             if (request.action === 'move') items.forEach(item => {
-              if (!nativeGroups.some(group => group.sources.some(source => source.id === item.id))) assertBitwardenLocalMoveSource(state, item);
+              if (![...nativeGroups, ...keePassGroups].some(group => group.sources.some(source => source.id === item.id))) assertBitwardenLocalMoveSource(state, item);
             });
             const sourceSnapshotSha256 = await bitwardenBatchSourceHash(state, items.map(row => row.id), request.action === 'move');
             const resource = await this.dependencies.resource(state, items, request.preserveCategories);
@@ -148,6 +169,12 @@ export class BitwardenBatchTransferCoordinator {
           }
         }
         for (const component of selection.components) { const reason = component.map(id => blocked.get(id)).find(Boolean); if (reason) component.forEach(id => blocked.set(id, reason)); }
+        // One KDBX file is one removal transaction. Do not accidentally remove a
+        // source whose target conversion was rejected later in preparation.
+        for (const group of keePassGroups) {
+          const reason = group.sources.map(source => blocked.get(source.id)).find(Boolean);
+          if (reason) group.sources.forEach(source => blocked.set(source.id, reason));
+        }
         const accepted = units.filter(row => !row.sources.some(source => blocked.has(source.id)));
         try { bitwardenBatchOrder(accepted); } catch (error) { accepted.forEach(row => row.sources.forEach(source => blocked.set(source.id, message(error)))); }
         const finalUnits = accepted.filter(row => !row.sources.some(source => blocked.has(source.id)));
@@ -162,6 +189,9 @@ export class BitwardenBatchTransferCoordinator {
           group.fingerprints = finalUnits.filter(unit => group.sources.some(source => unit.sources.some(item => item.id === source.id)))
             .map(unit => ({ copyId: unit.copyId, sha256: fingerprints.get(unit.copyId)! }));
         }
+        const keepassMoves = keePassGroups.filter(group => group.sources.every(source => finalUnits.some(unit => unit.sources.some(item => item.id === source.id))));
+        for (const group of keepassMoves) group.fingerprints = finalUnits.filter(unit => group.sources.some(source => unit.sources.some(item => item.id === source.id)))
+          .map(unit => ({ copyId: unit.copyId, sha256: fingerprints.get(unit.copyId)! }));
         const plan: Mdbx2BatchTransferPlanResult = { ...request, items: selected.map(row => ({ sourceItemId: row.id, title: row.title, kind: row.kind,
           effectiveAction: request.action, blockedReason: blocked.get(row.id), sourcePath: paths.get(row.id) || [],
           targetPath: [parent?.name, ...(paths.get(row.id) || [])].filter((s): s is string => !!s), pathIncomplete: false })),
@@ -169,8 +199,10 @@ export class BitwardenBatchTransferCoordinator {
         if (snapshotHash !== await bitwardenBatchSnapshotHash(await this.vault.readState(false), request)) throw new Error('生成预览期间来源或目标已变化，请重试。');
         this.check(generation);
         if (mdbxMoves.length) plan.warnings.push('MDBX 原生提交历史保留在来源库中；目标校验完成后，当前项目才会从来源移除。');
-        const batch: BitwardenBatchIntent = { version: mdbxMoves.length ? 3 : request.action === 'move' ? 2 : 1, request, requestHash: await hash(request), target: structuredClone(target), snapshotHash, plan,
+        if (keepassMoves.length) plan.warnings.push('KeePass 来源完整条目保留在原生回收站；云端发布确认后才完成移动。本地文件仍需导出 KDBX 并自行保存。');
+        const batch: BitwardenBatchIntent = { version: keepassMoves.length ? 5 : mdbxMoves.length ? 3 : request.action === 'move' ? 2 : 1, request, requestHash: await hash(request), target: structuredClone(target), snapshotHash, plan,
           ...(mdbxMoves.length ? { mdbxMoves } : {}),
+          ...(keepassMoves.length ? { keepassMoves } : {}),
           units: finalUnits, folders: folders.filter(row => finalUnits.some(unit => unit.folderKey === row.key)), status: 'writing' };
         this.forget(request.operationId);
         while (this.plans.size >= 4) this.forget(this.plans.keys().next().value!);
@@ -203,6 +235,10 @@ export class BitwardenBatchTransferCoordinator {
         for (const group of saved.batch.mdbxMoves || []) {
           const binding = await this.dependencies.mdbx!.verify(state, group.account, group.sources);
           if (binding.vaultId !== group.vaultId) throw new Error('MDBX 来源库身份已变化。');
+        }
+        for (const group of saved.batch.keepassMoves || []) {
+          const binding = await this.dependencies.keepass!.verify(group.account, group.sources, group.id, target.id, request.operationCreatedAt);
+          if (binding.inputSha256 !== group.inputSha256 || binding.inputContentSha256 !== group.inputContentSha256) throw new Error('KeePass 来源文件在预览后已变化。');
         }
         batch = await this.vault.stageBitwardenBatch(saved.batch, saved.copies); this.check(generation); this.forget(request.operationId);
       }
@@ -262,6 +298,33 @@ export class BitwardenBatchTransferCoordinator {
           });
           this.check(generation);
         }
+        for (const original of bitwardenBatchAction(batch) === 'move' ? batch.keepassMoves || [] : []) {
+          if (!this.dependencies.keepass) throw new Error('KeePass 移动服务尚未就绪。');
+          let group = (await store.read(request.operationId)).keepassMoves!.find(row => row.id === original.id)!;
+          if (!group.deletion) {
+            const binding = await this.dependencies.keepass.verify(group.account, group.sources, group.id, target.id, request.operationCreatedAt);
+            if (binding.inputSha256 !== group.inputSha256 || binding.inputContentSha256 !== group.inputContentSha256) throw new Error('KeePass 来源文件已变化，来源和副本已保留。');
+            const proof = (await readback()).proof;
+            const staged = await this.vault.prepareBitwardenKeePassDeletion(request.operationId, group.id, {
+              version: 1, operationId: group.id, createdAt: request.operationCreatedAt, targetProviderId: target.id,
+              targetProofSha256: await hash(proof.records), expectedWorkingSha256: group.inputSha256,
+              expectedContentSha256: group.inputContentSha256, sources: group.sources
+            }, proof, sessionId);
+            group = staged.keepassMoves!.find(row => row.id === group.id)!;
+          }
+          if (!group.receipt) {
+            await this.dependencies.keepass.prepareRemoval(group, (await this.vault.readState(false)).providers.find(row => row.id === group.account.id)!);
+            this.check(generation);
+            await this.vault.deleteBitwardenKeePassSources(request.operationId, group.id, group.deletion!, (await readback()).proof,
+              sessionId, (account, removal) => { this.check(generation); return this.dependencies.keepass!.remove(account, removal); });
+          }
+          group = (await store.read(request.operationId)).keepassMoves!.find(row => row.id === group.id)!;
+          const current = (await this.vault.readState(false)).providers.find(row => row.id === group.account.id)!;
+          this.check(generation);
+          const published = await this.dependencies.keepass.publish(group, current, signal);
+          this.check(generation);
+          await this.vault.confirmBitwardenKeePassPublication(request.operationId, group.id, published.workingSha256, published.accountConfig, sessionId);
+        }
         const { latest, current, result } = await readback();
         await this.vault.applyProviderSync(target.id, result.items, result.accountPatch, result.conflicts, result.sourceRecords, latest.items,
           result.acknowledgedMutations || [], result.requestedMutations || [], false, [], { expectedAccount: current, bitwardenBatchTransfer: { operationId: request.operationId, sessionId } });
@@ -279,10 +342,11 @@ export class BitwardenBatchTransferCoordinator {
     if (request.action !== 'move' || !this.dependencies.exclusiveMany) return this.dependencies.exclusive(request.targetProviderId, work);
     const providerIds = (state: VaultState) => {
       const batch = readBitwardenBatches(state.bitwardenBatchTransfers).find(row => row.request.operationId === request.operationId);
-      const ids = batch ? batch.mdbxMoves?.map(group => group.account.id) || []
+      const ids = batch ? [...(batch.mdbxMoves || []), ...(batch.keepassMoves || [])].map(group => group.account.id)
       : bitwardenTransferSelection(request.itemIds, state.items, state.providers, 'move').selectedIds.flatMap(id =>
-        state.items.find(item => item.id === id)!.providerRefs.filter(ref => state.providers.some(account => account.id === ref.providerId && account.kind === 'mdbx2')).map(ref => ref.providerId));
-      return [...new Set([request.targetProviderId, ...ids])].sort();
+        state.items.find(item => item.id === id)!.providerRefs.filter(ref => state.providers.some(account => account.id === ref.providerId && ['mdbx2','keepass'].includes(account.kind))).map(ref => ref.providerId));
+      const aliases = state.providers.filter(account => ids.some(id => state.providers.some(source => source.id === id && sameKeePassMoveFile(source, account)))).map(account => account.id);
+      return [...new Set([request.targetProviderId, ...ids, ...aliases])].sort();
     };
     const ids = providerIds(await this.vault.readState(false));
     return this.dependencies.exclusiveMany(ids, async () => {

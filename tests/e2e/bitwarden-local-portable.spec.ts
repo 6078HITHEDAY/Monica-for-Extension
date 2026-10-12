@@ -26,7 +26,10 @@ const options = { locale: 'zh-CN', colorScheme: 'dark' as const, viewport: { wid
 async function send(page: Page, request: object): Promise<any> { const response = await page.evaluate(input => chrome.runtime.sendMessage(input), request);
   expect(response.ok, response.error).toBe(true); return response.data; }
 
-for (const sourceKind of ['local', 'local-move', 'local-keep-both', 'mdbx', 'mdbx-move', 'mdbx-keep-both', 'keepass', 'webdav'] as const) test(`a browser-created ${sourceKind} Passkey survives Bitwarden transfer interruption and authenticates on a fresh Edge client`, async ({}, info) => {
+for (const sourceKind of ['local', 'local-move', 'local-keep-both', 'mdbx', 'mdbx-move', 'mdbx-keep-both', 'keepass', 'keepass-move', 'keepass-keep-both', 'keepass-webdav-move', 'webdav'] as const) test(`a browser-created ${sourceKind} Passkey survives Bitwarden transfer interruption and authenticates on a fresh Edge client`, async ({}, info) => {
+  const nativeKeePass = sourceKind.startsWith('keepass'), cloudKeePass = sourceKind === 'keepass-webdav-move';
+  let keepassInitial: Uint8Array | undefined, keepassApi: typeof import('../../src/providers/keepass/keepass-fixture') & typeof import('../../src/providers/keepass/keepass-vault');
+  const kdbxRemote = { bytes: Buffer.alloc(0) as Buffer, etag: '"initial"', puts: 0, loseNextReply: false, offline: false };
   const nativeMdbx = sourceKind.startsWith('mdbx'), keepBoth = sourceKind.endsWith('keep-both');
   // Native registration and full-vault verification outlived the default 5s
   // assertion on this host; retain exact results with an explicit native budget.
@@ -46,7 +49,7 @@ for (const sourceKind of ['local', 'local-move', 'local-keep-both', 'mdbx', 'mdb
     await stretchBitwardenMasterKey(await deriveBitwardenMasterKey(password, email, { type: 0, iterations: 10_000 })), new Uint8Array(16));
   const rows: Record<string, unknown>[] = [], unexpected: string[] = []; let posts = 0;
   const projectId = randomUUID(), credentialGroupId = randomUUID(), expectedCopies = withProject ? 3 : 2;
-  const secondRecovery = sourceKind === 'keepass' ? 'Second recovery' : 'Recovery';
+  const secondRecovery = nativeKeePass ? 'Second recovery' : 'Recovery';
   const backups = new Map<string, Buffer>(), davMethods: string[] = [];
   if (sourceKind === 'webdav') backups.set('monica_backup_initial.enc.zip', Buffer.from(await encryptAndroidBackup(zipSync({}), 'Synthetic WebDAV backup')));
   const archiveHashes = () => [...backups].map(([name, bytes]) => [name, createHash('sha256').update(bytes).digest('hex')]);
@@ -57,6 +60,23 @@ for (const sourceKind of ['local', 'local-move', 'local-keep-both', 'mdbx', 'mdb
     const json = (body: unknown) => { response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(body)); };
     const body = async () => { const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk)); return Buffer.concat(chunks); };
     const url = new URL(request.url || '/', 'http://127.0.0.1');
+    if (url.pathname.startsWith('/kdbx/')) {
+      expect(request.headers.authorization).toBe(`Basic ${Buffer.from('synthetic:synthetic').toString('base64')}`);
+      if (kdbxRemote.offline) { response.writeHead(503).end(); return; }
+      if (request.method === 'PROPFIND') {
+        response.writeHead(207, { 'Content-Type': 'application/xml' }).end(`<d:multistatus xmlns:d="DAV:"><d:response><d:href>/kdbx/source.kdbx</d:href><d:propstat><d:prop><d:getetag>${kdbxRemote.etag.replaceAll('"', '&quot;')}</d:getetag><d:getcontentlength>${kdbxRemote.bytes.length}</d:getcontentlength><d:resourcetype/></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>`); return;
+      }
+      if (request.method === 'GET') {
+        if (request.headers['if-match'] && request.headers['if-match'] !== kdbxRemote.etag) { response.writeHead(412).end(); return; }
+        response.writeHead(200, { ETag: kdbxRemote.etag, 'Content-Length': kdbxRemote.bytes.length }).end(kdbxRemote.bytes); return;
+      }
+      if (request.method === 'PUT') {
+        if (request.headers['if-match'] !== kdbxRemote.etag) { response.writeHead(412).end(); return; }
+        kdbxRemote.bytes = await body(); kdbxRemote.puts++; kdbxRemote.etag = `"write-${kdbxRemote.puts}"`;
+        if (kdbxRemote.loseNextReply) { kdbxRemote.loseNextReply = false; kdbxRemote.offline = true; response.destroy(); return; }
+        response.writeHead(204, { ETag: kdbxRemote.etag }).end(); return;
+      }
+    }
     if (url.pathname.startsWith('/dav/')) {
       davMethods.push(request.method!);
       expect(request.headers.authorization).toBe(`Basic ${Buffer.from('synthetic:synthetic').toString('base64')}`);
@@ -167,12 +187,18 @@ for (const sourceKind of ['local', 'local-move', 'local-keep-both', 'mdbx', 'mdb
       const source = (await send(page, { type: 'PROVIDER_LIST' })).find((row: any) => row.name === 'Synthetic MDBX source');
       expect(source.isDefaultSaveTarget).toBe(true); sourceProviderId = source.id;
     }
-    if (sourceKind === 'keepass') {
+    if (nativeKeePass) {
       const helper = info.outputPath('keepass-fixture.cjs');
-      await build({ stdin: { contents: "export {buildKeePassFixture} from './src/providers/keepass/keepass-fixture';", resolveDir: process.cwd() },
+      await build({ stdin: { contents: "export {buildKeePassFixture} from './src/providers/keepass/keepass-fixture'; export {openKeePassVault} from './src/providers/keepass/keepass-vault';", resolveDir: process.cwd() },
         outfile: helper, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent' });
-      const api = createRequire(import.meta.url)(helper) as typeof import('../../src/providers/keepass/keepass-fixture');
-      const bytes = await api.buildKeePassFixture({ password: 'Synthetic source KDBX', entries: [] });
+      const api = keepassApi = createRequire(import.meta.url)(helper);
+      const bytes = keepassInitial = await api.buildKeePassFixture({ password: 'Synthetic source KDBX', entries: [] });
+      if (cloudKeePass) {
+        kdbxRemote.bytes = Buffer.from(bytes);
+        const opened = await send(page, { type: 'KEEPASS_WEBDAV_OPEN', input: { name: 'Synthetic KeePass source', isDefaultSaveTarget: true,
+          baseUrl: `${host}/kdbx`, username: 'synthetic', webDavPassword: 'synthetic', remotePath: 'source.kdbx', databasePassword: 'Synthetic source KDBX' } });
+        sourceProviderId = opened.account.id;
+      } else {
       await page.reload(); await page.getByRole('button', { name: '密码源', exact: true }).click();
       await page.locator('m3e-list-action').filter({ hasText: '连接 KeePass' }).click();
       const connect = dialogContent(page, { name: /KeePass/ });
@@ -183,6 +209,7 @@ for (const sourceKind of ['local', 'local-move', 'local-keep-both', 'mdbx', 'mdb
       await connect.getByRole('button', { name: '解锁并连接', exact: true }).click(); await expect(connect).toHaveCount(0);
       const source = (await send(page, { type: 'PROVIDER_LIST' })).find((row: any) => row.name === 'Synthetic KeePass source');
       expect(source.isDefaultSaveTarget).toBe(true); sourceProviderId = source.id;
+      }
     }
     if (sourceKind === 'webdav') {
       await page.reload(); await page.getByRole('button', { name: '密码源', exact: true }).click();
@@ -242,7 +269,7 @@ for (const sourceKind of ['local', 'local-move', 'local-keep-both', 'mdbx', 'mdb
     const selectedSources = sourcesBeforeCopy.filter(row => row.id === original.id || row.id === rich.id
       || row.kind === 'login' && readProjectCredential(row.customFields)?.projectId === projectId);
     const archivesBeforeCopy = archiveHashes();
-    if (sourceKind === 'keepass') await info.attach('source-shape', { contentType: 'application/json', body: JSON.stringify(sourcesBeforeCopy.map(row => {
+    if (nativeKeePass) await info.attach('source-shape', { contentType: 'application/json', body: JSON.stringify(sourcesBeforeCopy.map(row => {
       const base = JSON.parse(row.providerRefs[0]?.etag || '{}');
       return { kind: row.kind, database: row.keepassDatabaseId, baselineDatabase: base.keepassDatabaseId,
         algorithm: row.kind === 'passkey' ? row.keyAlgorithm : undefined, baselineAlgorithm: base.keyAlgorithm,
@@ -292,7 +319,7 @@ for (const sourceKind of ['local', 'local-move', 'local-keep-both', 'mdbx', 'mdb
       expect(failed.ok).toBe(false);
       // Native conversion detects the queued password edit against the actual
       // database before the final indexed-source hash check can run.
-      expect(failed.error).toContain(nativeMdbx ? '无法完整保存 password 字段' : '已变化');
+      expect(failed.error).toContain(nativeMdbx ? '无法完整保存 password 字段' : nativeKeePass ? '仍有未保存修改' : '已变化');
       const popup = await context!.newPage(); await popup.goto(new URL('popup.html', page.url()).href);
       const denied = await popup.evaluate(input => chrome.runtime.sendMessage(input), { type: 'BITWARDEN_KEEP_BOTH_TRANSFER', providerId,
         operationId: pending[0].request.operationId, confirmed: true });
@@ -324,6 +351,28 @@ for (const sourceKind of ['local', 'local-move', 'local-keep-both', 'mdbx', 'mdb
       await send(page, { type: 'MDBX2_VAULT_OPEN', input: { providerId: sourceProviderId, name: account.name,
         source: { kind: 'vault', handle: account.config.vaultHandle }, credential: { method: 'password', password: 'Synthetic transfer fixture password' }, isDefaultSaveTarget: false } });
     };
+    const reopenKeePass = async () => {
+      if (cloudKeePass) await send(page, { type: 'KEEPASS_REMOTE_RESTORE', providerId: sourceProviderId });
+      else await send(page, { type: 'KEEPASS_OPEN', input: { providerId: sourceProviderId, name: 'Synthetic KeePass source',
+        fileName: 'synthetic.kdbx', file: Buffer.from(keepassInitial!).toString('base64'), password: 'Synthetic source KDBX', isDefaultSaveTarget: false } });
+    };
+    if (nativeKeePass && moving) await reopenKeePass();
+    if (cloudKeePass) {
+      const putsBeforeRemoval = kdbxRemote.puts;
+      kdbxRemote.loseNextReply = true;
+      const interrupted = await page.evaluate(input => chrome.runtime.sendMessage(input), { type: 'MDBX2_BATCH_TRANSFER_EXECUTE', input: pending[0].request });
+      expect(interrupted.ok).toBe(false); expect(kdbxRemote.offline, interrupted.error).toBe(true);
+      expect(kdbxRemote.puts).toBe(putsBeforeRemoval + 1);
+      for (const source of selectedSources) expect((await send(page, { type: 'VAULT_LIST_ITEMS' }) as VaultItem[]).find(row => row.id === source.id)).toEqual(source);
+      const denied = await page.evaluate(providerId => chrome.runtime.sendMessage({ type: 'PROVIDER_REMOVE', providerId }), sourceProviderId!);
+      expect(denied.ok).toBe(false); expect(denied.error).toContain('待恢复');
+      await send(page, { type: 'VAULT_LOCK' }); await context!.close(); context = undefined;
+      kdbxRemote.offline = false;
+      page = await open('original'); await send(page, { type: 'VAULT_UNLOCK', masterPassword: password }); await reopenKeePass();
+      // The server already accepted the exact encrypted bytes. Retry must not issue a second successful PUT.
+      await send(page, { type: 'MDBX2_BATCH_TRANSFER_EXECUTE', input: pending[0].request });
+      expect(kdbxRemote.puts).toBe(putsBeforeRemoval + 1);
+    }
     if (nativeMdbx && moving) await reopenNative();
     if (nativeMdbx && moving && !keepBoth) {
       deletedSourceProbe = async () => {
@@ -367,6 +416,21 @@ for (const sourceKind of ['local', 'local-move', 'local-keep-both', 'mdbx', 'mdb
         expect(deleted.items.find((row: any) => row.objectId === source.providerRefs[0].remoteId)).toMatchObject({ deleted: true });
       }
     }
+    if (nativeKeePass && moving) {
+      const exported = await send(page, { type: 'KEEPASS_EXPORT_FILE', providerId: sourceProviderId });
+      const db = await keepassApi!.openKeePassVault(new Uint8Array(Buffer.from(exported.file, 'base64')), { password: 'Synthetic source KDBX', databaseId: 1, providerId: sourceProviderId! });
+      for (const source of selectedSources) expect(Boolean(db.items.find(row => row.keepassEntryUuid === source.keepassEntryUuid)?.deletedAt)).toBe(!keepBoth);
+      expect(db.items.find(row => row.kind === 'passkey')).toMatchObject({ credentialId: original.credentialId, privateKeyPkcs8: original.privateKeyPkcs8, signCount: 0 });
+      const entry = db.entriesByUuid.get(selectedSources.find(row => row.id === rich.id)!.keepassEntryUuid!)!;
+      const binary = entry.binaries.get('recovery.txt')!;
+      const value = binary instanceof ArrayBuffer ? binary : binary.value;
+      const bytes = 'getBinary' in value ? value.getBinary() : value;
+      expect(Buffer.from(bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : bytes)).toEqual(attachment);
+      if (cloudKeePass) {
+        const remote = await keepassApi!.openKeePassVault(new Uint8Array(kdbxRemote.bytes), { password: 'Synthetic source KDBX', databaseId: 1, providerId: sourceProviderId! });
+        expect(remote.items.filter(row => row.deletedAt)).toHaveLength(3);
+      }
+    }
     if (sourceKind === 'webdav') {
       expect(archiveHashes()).toEqual(archivesBeforeCopy);
       expect(davMethods.slice(davStart)).toEqual(['PROPFIND', 'GET', 'PROPFIND', 'PROPFIND', 'GET', 'PROPFIND']);
@@ -382,8 +446,8 @@ for (const sourceKind of ['local', 'local-move', 'local-keep-both', 'mdbx', 'mdb
     expect(Buffer.from(passkey.privateKeyPkcs8!, 'base64')).toEqual(Buffer.from(original.privateKeyPkcs8!, 'base64'));
     const passwordItem = imported.find(row => row.title === rich.title) as LoginItem;
     for (const field of ['username','password','uris','passwordHistory','appPackageName','appName','email','phone','addressLine','city','state','zipCode','country'] as const)
-      if (!(sourceKind === 'keepass' && field === 'passwordHistory')) expect(passwordItem[field], field).toEqual(rich[field]);
-    if (sourceKind === 'keepass') expect(passwordItem.passwordHistory).toEqual([{ password: rich.password, lastUsedAt: expect.any(String) }]);
+      if (!(nativeKeePass && field === 'passwordHistory')) expect(passwordItem[field], field).toEqual(rich[field]);
+    if (nativeKeePass) expect(passwordItem.passwordHistory).toEqual([{ password: rich.password, lastUsedAt: expect.any(String) }]);
     expect(passwordItem.customFields.filter(row => row.name !== PROJECT_CREDENTIAL_FIELD)).toEqual([{ name: 'Recovery', value: 'first', protected: true }, { name: secondRecovery, value: 'second', protected: true },
       { name: BITWARDEN_TRANSFER_MARKER, value: expect.any(String), protected: true }]);
     expect(JSON.parse(passwordItem.customFields.find(row => row.name === BITWARDEN_TRANSFER_MARKER)!.value)).toMatchObject({ version: 1, operationId: pending[0].request.operationId });

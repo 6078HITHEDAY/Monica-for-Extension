@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import * as kdbxweb from 'kdbxweb';
-import type { PasskeyItem, ProviderAccount } from '../../core/model';
+import { createLoginItem, type PasskeyItem, type ProviderAccount } from '../../core/model';
 import { bytesToBase64, base64ToBytes } from '../../security/encoding';
 import { PROJECT_CREDENTIAL_FIELD } from '../../core/project-credentials';
 import { buildKeePassFixture } from './keepass-fixture';
@@ -247,4 +247,37 @@ it.each(['local-file', 'webdav', 'onedrive'] as const)('commits simultaneous %s 
   const saved = await f.storage.read(f.account.id); expect(saved!.revision).toBe(2);
   expect(await other.persistSourceRemoval(f.account, f.request)).toEqual(await f.service.persistSourceRemoval(f.account, f.request));
   expect(await f.storage.read(f.account.id)).toEqual(saved);
+});
+
+it('accepts equivalent legacy indexed fields without changing original native fields during removal', async () => {
+  const f = await fixture();
+  for (const item of f.request.sources) {
+    delete item.keepassDatabaseId;
+    if (item.kind === 'passkey') { item.keyAlgorithm = 'ECDSA'; item.aaguid = ''; }
+    if (item.kind === 'login') for (const field of item.customFields) if (field.protected) field.fieldType = 'HIDDEN';
+  }
+  const receipt = await f.service.persistSourceRemoval(f.account, f.request);
+  expect(receipt.result.type).toBe('transfer-source-remove');
+  const file = await openKeePassVault((await f.storage.read(f.account.id))!.workingBytes, { password, databaseId: 1, providerId: f.account.id });
+  expect(file.items.filter(item => item.deletedAt)).toHaveLength(3);
+  expect(file.items.find(item => item.kind === 'passkey')).toMatchObject({ credentialId: f.passkey.credentialId, privateKeyPkcs8: f.passkey.privateKeyPkcs8, signCount: 0 });
+});
+
+it('moves newly created live entries after persistence without requiring a reopen', async () => {
+  const f = await fixture();
+  const item = await f.provider.create(f.account, createLoginItem({ title: 'New live entry', password: 'synthetic' }));
+  const saved = await f.service.persistWorkingCopy(f.account);
+  const receipt = await f.service.persistSourceRemoval(f.account, { ...f.request, sources: [...f.request.sources, item],
+    expectedWorkingSha256: saved!.workingSha256, expectedContentSha256: await f.provider.transferNativeContentHash(f.account) });
+  expect(receipt.result.type === 'transfer-source-remove' && receipt.result.entries).toHaveLength(4);
+});
+
+it('still binds nonempty native colors and URL overrides in content proofs', async () => {
+  const f = await fixture(), db = await openKeePassVault(f.bytes, { password, databaseId: 1, providerId: f.account.id });
+  const entry = [...db.entriesByUuid.values()][0];
+  for (const field of ['fgColor', 'bgColor', 'overrideUrl'] as const) {
+    const before = await keePassTransferContentHash(db.database);
+    entry[field] = field === 'overrideUrl' ? 'https://changed.invalid' : '#112233';
+    expect(await keePassTransferContentHash(db.database)).not.toBe(before);
+  }
 });

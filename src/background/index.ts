@@ -2,6 +2,7 @@ import { isLoginItem, createLoginItem, type BillingAddressItem, type CardItem, t
 import { loginMatchScore, matchingLogins } from "../core/matching";
 import { customIconProjection } from '../core/custom-icon';
 import { BitwardenBatchTransferCoordinator } from '../providers/bitwarden/bitwarden-batch-coordinator';
+import { KeePassBitwardenMove } from '../providers/keepass/keepass-bitwarden-move';
 import { BitwardenBatchFoldersRemote } from '../providers/bitwarden/bitwarden-batch-folders';
 import { BitwardenTransferRemote } from '../providers/bitwarden/bitwarden-transfer-remote';
 import { readBitwardenBatchResource } from '../providers/bitwarden/bitwarden-batch-resource';
@@ -302,6 +303,16 @@ const bitwardenAttachmentMutations = new BitwardenAttachmentMutationService();
 const mdbxBitwardenMembers = new MdbxBitwardenMembers();
 const bitwardenWebDavSources = new BitwardenWebDavSources(monicaWebDavProvider);
 const bitwardenBatchTransfers = new BitwardenBatchTransferCoordinator(service, bitwardenProvider, {
+  keepass: new KeePassBitwardenMove(keePassProvider, keePassWorkingCopies, {
+    ensure: account => ensureKeePassSession(account, true),
+    persistence: keePassPersistenceFor,
+    reload: async account => {
+      if (hasLocalKeePassWorkingCopy(account.config)) await keePassLocalCopies.reload(account);
+      else await keePassRemoteSessions.restore(account);
+    },
+    publish: (account, signal) => hasLocalKeePassWorkingCopy(account.config)
+      ? keePassLocalCopies.publishWorkingCopy(account, signal) : keePassRemoteSessions.publishWorkingCopy(account, signal, false)
+  }),
   mdbx: {
     verify: async (state, account, items) => {
       const sessionId = await service.passkeySessionId(); if (!sessionId) throw new Error('密码库已锁定。');
@@ -319,7 +330,13 @@ const bitwardenBatchTransfers = new BitwardenBatchTransferCoordinator(service, b
     prepare: (group, targetId, verify) => prepareMdbx2TransferSourceDeletion(mdbx2NativeClient, group.account, group.sources, group.id, targetId, group.vaultId, verify),
     remove: (account, sources, operationId, targetId, intent) => deleteMdbx2TransferSources(mdbx2NativeClient, account, sources, operationId, targetId, intent)
   },
-  exclusiveMany: (ids, work) => providerOperations.runMany(ids, work),
+  exclusiveMany: (ids, work) => providerOperations.runMany(ids, async () => {
+    const state = await service.readState(false);
+    const keepass = ids.filter(id => state.providers.some(account => account.id === id && account.kind === 'keepass'));
+    let run = work;
+    for (const id of keepass.slice().reverse()) { const next = run; run = () => runKeePassMutationExclusive(id, next, true); }
+    return run();
+  }),
   resource: async (state, items, preserveCategories) => {
     const sessionId = await service.passkeySessionId(); if (!sessionId) throw new Error('密码库已锁定。');
     let previous: ProviderAccount | undefined;
@@ -2386,6 +2403,7 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
         lastSyncAt: existing?.lastSyncAt,
         lastError: undefined
       };
+      return providerOperations.run(account.id, () => runKeePassMutationExclusive(account.id, async () => {
       const previousWorkingCopy = await keePassWorkingCopies.read(account.id);
       try {
         const opened = await keePassRemoteSessions.open(account, input);
@@ -2418,12 +2436,13 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
         previousWorkingCopy?.baseBytes.fill(0);
         previousWorkingCopy?.workingBytes.fill(0);
       }
+      }));
     }
     case "KEEPASS_REMOTE_RESTORE": {
       assertManagerPage(sender);
       const account = await requireKeePassAccountRecord(request.providerId);
       await setProviderAutoSyncPaused([account.id], false);
-      return runKeePassMutationExclusive(account.id, () => ensureKeePassSession(account, true));
+      return providerOperations.run(account.id, () => runKeePassMutationExclusive(account.id, () => ensureKeePassSession(account, true), true));
     }
     case "KEEPASS_REMOTE_STATUS": {
       assertManagerPage(sender);
@@ -2465,12 +2484,15 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
         const vaultSession = await service.passkeySessionId();
         try {
           if (!vaultSession) throw new Error("密码库已锁定，请重新解锁。");
+          const pendingMove = (await service.readState(false)).bitwardenBatchTransfers?.some(batch => batch.status === 'writing'
+            && batch.keepassMoves?.some(group => group.account.id === account.id));
           if (existing) {
             const latest = await service.getProvider(account.id);
             if (!latest || !sameProviderBinding(existing, latest)) throw new Error("密码源已变化，请重新打开。");
             existing = latest;
+            if (pendingMove) Object.assign(account.config, existing.config);
             // Reopen must not discard a native mutation whose checkpoint failed.
-            if (hasLocalKeePassWorkingCopy(existing.config) && keePassProvider.isUnlocked(account.id))
+            if (!pendingMove && hasLocalKeePassWorkingCopy(existing.config) && keePassProvider.isUnlocked(account.id))
               await flushKeePassPendingMutations(existing);
           }
           fileBytes = base64ToBytes(input.file);
@@ -2514,7 +2536,7 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
           fileBytes?.fill(0);
           keyFileBytes?.fill(0);
         }
-      }));
+      }, true));
     }
     case "KEEPASS_STATUS": {
       assertManagerPage(sender);
@@ -2699,6 +2721,7 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
     }
     case "PROVIDER_REMOVE":
       assertManagerPage(sender);
+      return providerOperations.run(request.providerId, () => runKeePassMutationExclusive(request.providerId, async () => {
       void mdbx2LocalFileExports.clear();
       activeProviderSyncs.get(request.providerId)?.abort(new DOMException("密码源已移除", "AbortError"));
       {
@@ -2712,8 +2735,10 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
       clearBitwardenAttachmentSessions(request.providerId);
       providerAttachmentUploads.clear(request.providerId);
       clearBitwardenSendUploads(request.providerId);
+      const result = await service.removeProvider(request.providerId);
       await keePassWorkingCopies.delete(request.providerId).catch(() => undefined);
-      return service.removeProvider(request.providerId);
+      return result;
+      }));
   }
   request satisfies never;
   throw new Error("不支持的 Monica 运行时命令。");
@@ -2759,6 +2784,7 @@ async function executeProviderSync(providerId: string, options: { allowEmptyRemo
   const startedAt = Date.now();
   try {
     controller.signal.throwIfAborted();
+    if (account.kind === 'keepass') await service.assertNoBitwardenKeePassMove(account.id);
     if (account.kind === 'mdbx2') {
       await service.assertNoBitwardenMdbxMove(account.id);
       if ((await service.readMdbx2MoveFinalizations()).some(row => row.status !== 'completed' && row.sourceProviderId === account.id))
@@ -4605,7 +4631,7 @@ async function executeKeePassDurableMutation<T>(input: {
   });
 }
 
-async function runKeePassMutationExclusive<T>(providerId: string, task: () => Promise<T>): Promise<T> {
+async function runKeePassMutationExclusive<T>(providerId: string, task: () => Promise<T>, bitwardenMove = false): Promise<T> {
   const previous = keePassMutationQueues.get(providerId) || Promise.resolve();
   let release!: () => void;
   const current = new Promise<void>((resolve) => { release = resolve; });
@@ -4613,6 +4639,7 @@ async function runKeePassMutationExclusive<T>(providerId: string, task: () => Pr
   keePassMutationQueues.set(providerId, queued);
   await previous;
   try {
+    if (!bitwardenMove) await service.assertNoBitwardenKeePassMove(providerId);
     return await task();
   } finally {
     release();
