@@ -19,7 +19,7 @@ import { readKeePassTransfers, assertKeePassTransferBindings, keePassTransferSna
 import { readBitwardenCipherCopies, validateBitwardenCopyFiles, advanceBitwardenCipherCopy, assertBitwardenCopyTarget,
   bitwardenCopySourceHash, bitwardenCopyIntent, type BitwardenCipherCopyRecord } from '../core/bitwarden-transfer-journal';
 import type { BitwardenCopySessionStore } from '../providers/bitwarden/bitwarden-transfer-execution';
-import { readBitwardenBatches, bitwardenBatchSnapshotHash, bitwardenBatchSourceHash, assertBitwardenBatchCopies, assertBitwardenLocalMoveCurrent, verifyBitwardenBatchReadback,
+import { readBitwardenBatches, bitwardenBatchSnapshotHash, bitwardenBatchSourceHash, assertBitwardenBatchCopies, assertBitwardenBatchMoveCurrent, verifyBitwardenBatchReadback,
   bitwardenBatchResult, type BitwardenBatchIntent } from '../core/bitwarden-batch-transfer';
 import type { BitwardenBatchStore } from '../providers/bitwarden/bitwarden-batch-folders';
 import { bitwardenTransferSelection } from '../providers/bitwarden/bitwarden-transfer-selection';
@@ -59,7 +59,6 @@ import { mergeBitwardenProjectRemovalReadback, type BitwardenProjectRemovalReadb
 import { isPasswordProjectRemovalPending, retainPasswordProjectRemovalHistory, passwordProjectRemovalContent, readPasswordProjectRemovalJournal, type PasswordProjectNativeDeletionIntent, type PasswordProjectRemovalProof, type PasswordProjectRemovalRecord } from '../core/password-project-removal-journal';
 import { cancelPasswordProjectRemovalDraft, assertCancellationPreservesLaterEdits } from '../core/password-project-removal-cancel';
 import { assertPasswordProjectNativeDeletionScope } from '../core/password-project-removal-native';
-import type { Mdbx2ObjectBatchResult } from '../providers/mdbx2/native-contract';
 import { readMdbx2RestoreJournal, assertMdbx2RestoreScope, type Mdbx2RestoreRecord } from '../core/mdbx2-restore-journal';
 import { mdbx2RestoreBatchSources, readMdbx2RestoreBatchJournal, readMdbx2RestoreBatchRequest, assertMdbx2RestoreBatchScope, type Mdbx2RestoreBatchRecord, type Mdbx2RestoreBatchRequest } from '../core/mdbx2-restore-batch-journal';
 import { readMdbx2DeletionCancellations, type Mdbx2DeletionCancellation } from '../core/mdbx2-deletion-cancellation';
@@ -71,6 +70,8 @@ import { readMdbx2MoveJournal, type Mdbx2MoveFinalizationRecord } from "../core/
 import { readMdbx2SourceDeletionIntent, type Mdbx2SourceDeletionIntent } from '../core/mdbx2-source-deletion';
 import { assertMdbx2SourceDeletionScope } from '../providers/mdbx2/mdbx2-transfer-source-delete';
 import { mdbx2TransferDependencies } from '../providers/mdbx2/mdbx2-transfer-dependencies';
+import { assertBitwardenMdbxMoveBinding, type BitwardenMoveReadback } from '../core/bitwarden-mdbx-move';
+import type { Mdbx2ObjectBatchResult } from '../providers/mdbx2/native-contract';
 import { assertPasskeyCounterNotRegressed, nextBitwardenPasskeyCounter, nextPasskeyCounter, passkeyCounterHighWaterMark, preserveLocalPasskeyUsage, preservePasskeyCounterHistory, resolvePasskeyOwnership, samePasskeySigningIdentity } from "../passkey/ownership-policy";
 
 export type VaultLifecycleStatus = "uninitialized" | "locked" | "unlocked";
@@ -801,6 +802,17 @@ export class SecureVaultService {
     return provider ? safeProviderAccount(provider) : undefined;
   }
 
+  /** Ordinary native writers must call this while holding the provider queue. */
+  async assertNoBitwardenMdbxMove(providerId: string): Promise<void> {
+    await this.readProjection(state => {
+      const account = state.providers.find(row => row.id === providerId);
+      if (readBitwardenBatches(state.bitwardenBatchTransfers).some(batch => batch.status === 'writing'
+        && batch.mdbxMoves?.some(group => group.account.id === providerId || account?.kind === 'mdbx2'
+          && (account.config.vaultHandle === group.account.config.vaultHandle || account.config.nativeVaultId === group.vaultId))))
+        throw new Error('此 MDBX 来源还有待恢复的 Bitwarden 移动，请先恢复后再修改或同步。');
+    });
+  }
+
   async upsertProvider(provider: ProviderAccount, activity = true, expectedProvider?: ProviderAccount,
     guard?: { sessionId: string; oneDriveReauthorization?: boolean }): Promise<ProviderAccount> {
     return this.runExclusive(async () => {
@@ -913,6 +925,8 @@ export class SecureVaultService {
     if (guard.expectedAccount && !sameProviderBinding(guard.expectedAccount, provider)) throw new Error("同步期间密码源配置已变化，请重新同步。");
     if (readMdbx2MoveJournal(state.mdbx2MoveFinalizations).some(row => row.status !== 'completed' && row.sourceProviderId === providerId))
       throw new Error('此密码源还有待恢复的移动，普通同步不能覆盖来源恢复快照。');
+    if (readBitwardenBatches(state.bitwardenBatchTransfers).some(row => row.status === 'writing' && row.mdbxMoves?.some(group => group.account.id === providerId)))
+      throw new Error('此 MDBX 来源还有待恢复的 Bitwarden 移动，普通同步不能覆盖恢复快照。');
     if (!guard.bitwardenBatchTransfer && readBitwardenBatches(state.bitwardenBatchTransfers).some(row => row.target.id === providerId && row.status === 'writing'))
       throw new Error('Bitwarden 还有未完成的整批传输，请先恢复；普通同步不能提前入库部分副本。');
     const transferJournal = guard.keePassTransfer ? readKeePassTransfers(state.keepassTransfers) : [];
@@ -932,7 +946,8 @@ export class SecureVaultService {
       const ownerKey = new BitwardenClient().vaultKey(provider.config as BitwardenSessionConfig);
       try { await verifyBitwardenBatchReadback(bitwardenBatch, bitwardenCopies, sourceRecords, items, ownerKey); }
       finally { ownerKey.encKey.fill(0); ownerKey.macKey.fill(0); }
-      bitwardenMoveSources = await assertBitwardenLocalMoveCurrent(state, bitwardenBatch, bitwardenCopies);
+      bitwardenMoveSources = await assertBitwardenBatchMoveCurrent(state, bitwardenBatch, bitwardenCopies);
+      if (bitwardenBatch.mdbxMoves?.some(group => !group.receipt)) throw new Error('MDBX 来源删除尚未确认，整批移动暂未完成。');
     }
     if (guard.keePassTransfer) {
       if (!transfer || transfer.status === 'cancelled' || transfer.target.id !== providerId) throw new Error('KeePass 传输恢复记录不存在或已取消。');
@@ -1097,6 +1112,9 @@ export class SecureVaultService {
         state.localItemAttachments = (state.localItemAttachments || []).filter(file => !bitwardenMoveSources.has(file.itemId));
         state.localItemOrigins = (state.localItemOrigins || []).filter(origin => !bitwardenMoveSources.has(origin.itemId));
         state.settings.lockedAutofillItemIds = (state.settings.lockedAutofillItemIds || []).filter(id => !bitwardenMoveSources.has(id));
+        const nativeSources = bitwardenBatch.mdbxMoves?.flatMap(group => group.sources.flatMap(item => item.providerRefs)) || [];
+        state.sourceRecords = state.sourceRecords.filter(record => !nativeSources.some(ref => ref.providerId === record.providerId && ref.remoteId === record.remoteId));
+        state.providerMutationReceipts = state.providerMutationReceipts.filter(receipt => !bitwardenMoveSources.has(receipt.itemId));
       }
       state.bitwardenBatchTransfers = readBitwardenBatches(bitwardenBatches);
     }
@@ -2025,7 +2043,9 @@ export class SecureVaultService {
         if (!current || JSON.stringify(current) !== JSON.stringify(entry.expected)) throw new Error(`项目「${entry.expected.title || entry.expected.id}」在传输期间发生变化，请重新读取后重试。`);
       }
       const sourceIds = new Set(record.entries.map(entry => entry.expected.id));
-      if (records.some(item => item.status !== "completed" && item.entries.some(entry => sourceIds.has(entry.expected.id)))) {
+      if (records.some(item => item.status !== "completed" && item.entries.some(entry => sourceIds.has(entry.expected.id)))
+        || readBitwardenBatches(state.bitwardenBatchTransfers).some(batch => batch.status === 'writing'
+          && batch.units.some(unit => unit.sources.some(source => sourceIds.has(source.id))))) {
         throw new Error("请先恢复未完成的移动操作。");
       }
       // Retain every unfinished operation; only completed receipts may age out.
@@ -2613,6 +2633,7 @@ export class SecureVaultService {
   async stageBitwardenBatch(input: BitwardenBatchIntent, inputCopies: BitwardenCipherCopyRecord[]): Promise<BitwardenBatchIntent> {
     const batch = readBitwardenBatches([input])[0], copies = readBitwardenCipherCopies(inputCopies);
     if (batch.status !== 'writing' || batch.requestHash !== await transferIdentityHash(batch.request)
+      || batch.mdbxMoves?.some(group => group.deletion || group.receipt)
       || batch.folders?.some(row => !['existing', 'prepared'].includes(row.stage))
       || copies.length !== batch.units.length || copies.some(row => row.stage !== 'prepared' || row.revision !== 0))
       throw new Error('Bitwarden 整批传输初始计划无效。');
@@ -2631,6 +2652,11 @@ export class SecureVaultService {
         || batches.some(row => row.target.id === batch.target.id && row.status === 'writing')
         || copies.some(row => journal.some(old => old.prepared.copyId === row.prepared.copyId)))
         throw new Error('Bitwarden 目标有未完成传输或恢复记录已满。');
+      const sourceIds = new Set(batch.units.flatMap(unit => unit.sources.map(source => source.id)));
+      if (batches.some(old => old.status === 'writing' && (old.request.action === 'move' || batch.request.action === 'move')
+        && old.units.some(unit => unit.sources.some(source => sourceIds.has(source.id))))
+        || readMdbx2MoveJournal(state.mdbx2MoveFinalizations).some(old => old.status !== 'completed' && old.entries.some(entry => sourceIds.has(entry.expected.id))))
+        throw new Error('来源已有未完成的移动，请先恢复。');
       assertBitwardenCopyTarget(state, copies[0]); assertBitwardenBatchCopies(state, batch, copies);
       if (batch.snapshotHash !== await bitwardenBatchSnapshotHash(state, batch.request)) throw new Error('整批预览后来源或目标已变化，请重新预览。');
       const selected = bitwardenTransferSelection(batch.request.itemIds, state.items, state.providers, batch.request.action);
@@ -2638,9 +2664,9 @@ export class SecureVaultService {
         || selected.components.some(group => group.some(id => batch.plan.items.find(row => row.sourceItemId === id)?.blockedReason)
           && group.some(id => !batch.plan.items.find(row => row.sourceItemId === id)?.blockedReason)))
         throw new Error('Bitwarden 整批计划缺少完整项目或关联，已停止创建。');
-      for (const copy of copies) if (copy.sourceSnapshotSha256 !== await bitwardenBatchSourceHash(state, copy.sourceItemIds))
+      for (const copy of copies) if (copy.sourceSnapshotSha256 !== await bitwardenBatchSourceHash(state, copy.sourceItemIds, batch.version === 3))
         throw new Error('Bitwarden 整批来源快照不匹配。');
-      await assertBitwardenLocalMoveCurrent(state, batch, copies);
+      await assertBitwardenBatchMoveCurrent(state, batch, copies);
       state.bitwardenBatchTransfers = [...batches, batch]; state.bitwardenCipherCopies = [...journal, ...copies];
       state.updatedAt = new Date(this.now()).toISOString(); await this.persist(state, key, envelope.kdf); return structuredClone(batch);
     });
@@ -2661,6 +2687,66 @@ export class SecureVaultService {
       state.providers = state.providers.map(row => row.id === account.id ? account : row);
       state.updatedAt = new Date(this.now()).toISOString(); await this.persist(state, key, envelope.kdf, false, false, assertSession); return structuredClone(account);
     });
+  }
+
+  async prepareBitwardenMdbxDeletion(operationId: string, groupId: string, input: Mdbx2SourceDeletionIntent,
+    readback: BitwardenMoveReadback, sessionId: string): Promise<BitwardenBatchIntent> {
+    const intent = readMdbx2SourceDeletionIntent(input);
+    return this.runExclusive(async () => {
+      await this.assertLocalTransferSession(sessionId);
+      const { state, envelope, key } = await this.mutableContext();
+      const batches = readBitwardenBatches(state.bitwardenBatchTransfers), batch = batches.find(row => row.request.operationId === operationId);
+      const group = batch?.mdbxMoves?.find(row => row.id === groupId);
+      if (!batch || batch.status !== 'writing' || !group || intent.version !== 1) throw new Error('MDBX 移动删除计划无效。');
+      const account = assertBitwardenMdbxMoveBinding(state, group);
+      await assertMdbx2SourceDeletionScope(intent, account, group.sources, group.id, batch.target.id, group.vaultId);
+      await this.verifyBitwardenMoveReadback(state, batch, readback);
+      if (group.deletion) {
+        if (await transferIdentityHash(group.deletion) !== await transferIdentityHash(intent)) throw new Error('不能替换已保存的 MDBX 删除请求。');
+        return batch;
+      }
+      group.deletion = intent;
+      state.bitwardenBatchTransfers = readBitwardenBatches(batches);
+      await this.persist(state, key, envelope.kdf, false, false, () => this.assertLocalTransferSession(sessionId));
+      return structuredClone(batch);
+    });
+  }
+
+  /** Native callback must use the supplied snapshot and never re-enter this
+   * service. A failed encrypted write leaves the original deletion intent. */
+  async deleteBitwardenMdbxSources(operationId: string, groupId: string, expected: Mdbx2SourceDeletionIntent,
+    readback: BitwardenMoveReadback, sessionId: string,
+    remove: (account: ProviderAccount, sources: VaultItem[], intent: Mdbx2SourceDeletionIntent) => Promise<Mdbx2ObjectBatchResult>): Promise<void> {
+    return this.runExclusive(async () => {
+      await this.assertLocalTransferSession(sessionId);
+      const { state, envelope, key } = await this.mutableContext();
+      const batches = readBitwardenBatches(state.bitwardenBatchTransfers), batch = batches.find(row => row.request.operationId === operationId);
+      const group = batch?.mdbxMoves?.find(row => row.id === groupId);
+      if (!batch || batch.status !== 'writing' || !group?.deletion
+        || await transferIdentityHash(group.deletion) !== await transferIdentityHash(expected)) throw new Error('MDBX 删除恢复请求已变化。');
+      const account = assertBitwardenMdbxMoveBinding(state, group);
+      await this.verifyBitwardenMoveReadback(state, batch, readback);
+      if (group.receipt) return;
+      const result = await remove(structuredClone(account), structuredClone(group.sources), structuredClone(group.deletion));
+      if (!result.operationId || !result.commitId || result.items.length !== group.sources.length
+        || new Set(result.items.map(row => row.objectId)).size !== group.sources.length
+        || result.items.some(row => row.kind !== 'delete' || row.logicalObjectId !== `native:${row.objectId}`
+          || !group.sources.some(source => source.providerRefs[0].remoteId === row.objectId))) throw new Error('MDBX 删除回执与来源项目不一致。');
+      group.receipt = { operationId: result.operationId, commitId: result.commitId };
+      state.bitwardenBatchTransfers = readBitwardenBatches(batches);
+      await this.persist(state, key, envelope.kdf, false, false, () => this.assertLocalTransferSession(sessionId));
+    });
+  }
+
+  private async verifyBitwardenMoveReadback(state: VaultState, batch: BitwardenBatchIntent, readback: BitwardenMoveReadback): Promise<void> {
+    const account = state.providers.find(row => row.id === batch.target.id);
+    if (!account?.enabled || !sameProviderBinding(account, batch.target) || !sameProviderBinding(account, readback.account))
+      throw new Error('移动期间 Bitwarden 目标已变化。');
+    const copies = readBitwardenCipherCopies(state.bitwardenCipherCopies);
+    await assertBitwardenBatchMoveCurrent(state, batch, copies);
+    const key = new BitwardenClient().vaultKey(account.config as BitwardenSessionConfig);
+    try { await verifyBitwardenBatchReadback(batch, copies, readback.records, readback.items, key); }
+    finally { key.encKey.fill(0); key.macKey.fill(0); }
   }
 
   async openBitwardenBatchStore(): Promise<BitwardenBatchStore> {
@@ -2694,7 +2780,7 @@ export class SecureVaultService {
         await assertSession(); const { state, envelope, key } = await this.mutableContext(), { batches, batch } = find(state, operationId);
         if (batch.status === 'cancelled') return;
         const journal = readBitwardenCipherCopies(state.bitwardenCipherCopies);
-        if (batch.status !== 'writing' || batch.folders?.some(row => ['attempted','created'].includes(row.stage))
+        if (batch.status !== 'writing' || batch.mdbxMoves?.some(group => group.deletion) || batch.folders?.some(row => ['attempted','created'].includes(row.stage))
           || batch.units.some(unit => !journal.some(row => row.prepared.copyId === unit.copyId && row.stage === 'prepared')))
           throw new Error('Bitwarden 已尝试写入，结果可能已保存，请恢复传输。');
         batch.status = 'cancelled'; state.bitwardenBatchTransfers = readBitwardenBatches(batches);
@@ -3322,6 +3408,18 @@ export class SecureVaultService {
   }
 
   private async persist(state: VaultState, key: CryptoKey, kdf: VaultKdfParameters, requireLockedAutofill = false, activity = true, beforeCommit?: () => Promise<void>): Promise<void> {
+    // Once native deletion is authorized, freeze its local sources through
+    // final adoption. This also covers edits through import, groups and settings.
+    if (state.bitwardenBatchTransfers?.some(batch => batch.status === 'writing' && batch.mdbxMoves?.length)) {
+      const copies = readBitwardenCipherCopies(state.bitwardenCipherCopies);
+      for (const batch of readBitwardenBatches(state.bitwardenBatchTransfers)) {
+        if (batch.status !== 'writing' || !batch.mdbxMoves?.length) continue;
+        const bindings = [batch.target, ...batch.mdbxMoves.map(group => group.account)];
+        if (bindings.some(expected => !state.providers.some(current => current.enabled && sameProviderBinding(current, expected))))
+          throw new Error('移动恢复期间不能移除、停用或替换来源及目标连接。');
+        if (batch.mdbxMoves.some(group => group.deletion)) await assertBitwardenBatchMoveCurrent(state, batch, copies);
+      }
+    }
     const eligible = new Set(state.items.filter(supportsLockedAutofill).map((item) => item.id));
     state.settings.lockedAutofillItemIds = (state.settings.lockedAutofillItemIds || []).filter((id) => eligible.has(id));
     const envelope = await encryptVaultState(state, key, kdf);

@@ -1,7 +1,7 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 import { createServer } from 'node:http';
 import { createHash, createPublicKey, randomUUID, verify } from 'node:crypto';
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { launchEdgeContext } from './fixtures/edge';
 import { dialogContent } from './fixtures/material';
@@ -26,13 +26,19 @@ const options = { locale: 'zh-CN', colorScheme: 'dark' as const, viewport: { wid
 async function send(page: Page, request: object): Promise<any> { const response = await page.evaluate(input => chrome.runtime.sendMessage(input), request);
   expect(response.ok, response.error).toBe(true); return response.data; }
 
-for (const sourceKind of ['local', 'local-move', 'mdbx', 'keepass', 'webdav'] as const) test(`a browser-created ${sourceKind} Passkey survives Bitwarden transfer interruption and authenticates on a fresh Edge client`, async ({}, info) => {
-  test.skip(sourceKind === 'mdbx' && !process.env.MONICA_317_NATIVE_PASSKEY_FIXTURE, 'Requires an explicitly selected verified synthetic MDBX fixture');
+for (const sourceKind of ['local', 'local-move', 'mdbx', 'mdbx-move', 'keepass', 'webdav'] as const) test(`a browser-created ${sourceKind} Passkey survives Bitwarden transfer interruption and authenticates on a fresh Edge client`, async ({}, info) => {
+  const nativeMdbx = sourceKind === 'mdbx' || sourceKind === 'mdbx-move';
+  // Native registration and full-vault verification outlived the default 5s
+  // assertion on this host; retain exact results with an explicit native budget.
+  const nativeCheck = { timeout: nativeMdbx ? 20_000 : 5_000 };
+  let registrationMs = 0, previewMs = 0;
+  test.skip(nativeMdbx && !process.env.MONICA_317_NATIVE_PASSKEY_FIXTURE, 'Requires an explicitly selected verified synthetic MDBX fixture');
   test.setTimeout(180_000);
-  const local = sourceKind === 'local' || sourceKind === 'local-move', moving = sourceKind === 'local-move', withProject = sourceKind !== 'local';
+  const local = sourceKind === 'local' || sourceKind === 'local-move', moving = sourceKind === 'local-move' || sourceKind === 'mdbx-move', withProject = sourceKind !== 'local';
   let nativeHost: Awaited<ReturnType<typeof temporaryNativeHost>> | undefined, sourceProviderId: string | undefined;
   const appData = path.resolve('.tmp', `mdbx-bitwarden-${randomUUID().slice(0, 12)}`, 'appdata');
-  if (sourceKind === 'mdbx') await mkdir(appData, { recursive: true });
+  if (nativeMdbx) await mkdir(appData, { recursive: true });
+  let deletedSourceProbe: (() => Promise<boolean>) | undefined, interruptedAfterNativeDeletion = false;
   const attachment = Buffer.from('synthetic encrypted MDBX attachment\n保留原字节'), files = new Map<string, Buffer>();
   const key = { encKey: new Uint8Array(32).fill(11), macKey: new Uint8Array(32).fill(22) };
   const protectedKey = await new BitwardenClient().protectVaultKey(key,
@@ -73,7 +79,13 @@ for (const sourceKind of ['local', 'local-move', 'mdbx', 'keepass', 'webdav'] as
     }
     if (url.pathname === '/identity/accounts/prelogin/password') return json({ Kdf: 0, KdfIterations: 10_000 });
     if (url.pathname === '/identity/connect/token') return json({ access_token: 'synthetic', refresh_token: 'synthetic', expires_in: 3600, Key: protectedKey });
-    if (url.pathname === '/api/sync') return json({ Profile: { Id: 'portable-user', Email: email }, Ciphers: rows, Folders: [] });
+    if (url.pathname === '/api/sync') {
+      if (deletedSourceProbe && (interruptedAfterNativeDeletion || await deletedSourceProbe())) {
+        interruptedAfterNativeDeletion = true;
+        response.writeHead(503); response.end('Synthetic readback interruption after native deletion'); return;
+      }
+      return json({ Profile: { Id: 'portable-user', Email: email }, Ciphers: rows, Folders: [] });
+    }
     if (url.pathname === '/api/folders' && request.method === 'GET') return json({ Data: [] });
     if (url.pathname === '/api/accounts/revision-date') return json(Date.parse(stamp));
     if (url.pathname === '/api/ciphers' && request.method === 'POST') {
@@ -108,7 +120,7 @@ for (const sourceKind of ['local', 'local-move', 'mdbx', 'keepass', 'webdav'] as
   const host = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
   let context: BrowserContext | undefined;
   const open = async (profile: string) => {
-    context = await launchEdgeContext(info.outputPath(profile), { ...options, ...(sourceKind === 'mdbx' ? { env: { ...process.env, LOCALAPPDATA: appData } } : {}) });
+    context = await launchEdgeContext(info.outputPath(profile), { ...options, ...(nativeMdbx ? { env: { ...process.env, LOCALAPPDATA: appData } } : {}) });
     await context.route(`${origin}/**`, route => route.fulfill({ contentType: 'text/html', body: `<!doctype html><title>Synthetic portable Passkey</title>
       <button id="register">Register</button><button id="login">Sign in</button><output id="result"></output><script>
       window.credentialId='';register.onclick=async()=>{try{const c=await navigator.credentials.create({publicKey:PublicKeyCredential.parseCreationOptionsFromJSON({
@@ -137,7 +149,7 @@ for (const sourceKind of ['local', 'local-move', 'mdbx', 'keepass', 'webdav'] as
   const login = (page: Page) => send(page, { type: 'BITWARDEN_LOGIN', name: 'Synthetic portable target', vaultUrl: host, email, masterPassword: password });
   try {
     let page = await open('original'); await setup(page);
-    if (sourceKind === 'mdbx') {
+    if (nativeMdbx) {
       const fixtureRoot = process.env.MONICA_317_NATIVE_PASSKEY_FIXTURE!, fixture = path.join(fixtureRoot, 'edge-passkeys.mdbx');
       const evidence = JSON.parse(await readFile(path.join(fixtureRoot, 'evidence.json'), 'utf8'));
       expect(evidence.status).toBe('passed'); expect(createHash('sha256').update(await readFile(fixture)).digest('hex')).toBe(evidence.exportSha256);
@@ -186,7 +198,9 @@ for (const sourceKind of ['local', 'local-move', 'mdbx', 'keepass', 'webdav'] as
       await send(page, { type: 'PROVIDER_SYNC', providerId: sourceProviderId });
     }
     let website = await context!.newPage(); await website.goto(origin);
-    await website.locator('#register').click(); await confirm(website, true); await expect(website.locator('#result')).toHaveText('registered');
+    const registrationStarted = Date.now();
+    await website.locator('#register').click(); await confirm(website, true); await expect(website.locator('#result')).toHaveText('registered', nativeCheck);
+    registrationMs = Date.now() - registrationStarted;
     const original = (await send(page, { type: 'VAULT_LIST_ITEMS' }) as VaultItem[]).find(row => row.kind === 'passkey' && row.rpId === 'portable.example.test') as PasskeyItem;
     expect(original).toMatchObject({ sourceMode: 'browser-local', signCount: 0, userVerificationRequired: true, discoverable: local });
     expect(original.providerRefs.map(row => row.providerId)).toEqual(sourceProviderId && sourceKind !== 'webdav' ? [sourceProviderId] : []);
@@ -223,6 +237,8 @@ for (const sourceKind of ['local', 'local-move', 'mdbx', 'keepass', 'webdav'] as
     // Native sync adds committed remote identity and revision. Compare against
     // that committed source snapshot, while original key bytes stay anchored to registration.
     const sourcesBeforeCopy = await send(page, { type: 'VAULT_LIST_ITEMS' }) as VaultItem[];
+    const selectedSources = sourcesBeforeCopy.filter(row => row.id === original.id || row.id === rich.id
+      || row.kind === 'login' && readProjectCredential(row.customFields)?.projectId === projectId);
     const archivesBeforeCopy = archiveHashes();
     if (sourceKind === 'keepass') await info.attach('source-shape', { contentType: 'application/json', body: JSON.stringify(sourcesBeforeCopy.map(row => {
       const base = JSON.parse(row.providerRefs[0]?.etag || '{}');
@@ -237,8 +253,10 @@ for (const sourceKind of ['local', 'local-move', 'mdbx', 'keepass', 'webdav'] as
     await dialog.getByRole('checkbox', { name: /Portable passkey/ }).check(); await dialog.getByRole('checkbox', { name: /Rich portable password/ }).check();
     if (moving) await dialog.locator('.batch-action-picker label').filter({ hasText: '移动' }).click();
     const davStart = davMethods.length;
+    const previewStarted = Date.now();
     await dialog.getByRole('button', { name: '检查并生成计划', exact: true }).click();
-    await expect(dialog.getByText(`${expectedCopies} 个可传输，0 个被阻断`, { exact: true })).toBeVisible();
+    await expect(dialog.getByText(`${expectedCopies} 个可传输，0 个被阻断`, { exact: true })).toBeVisible(nativeCheck);
+    previewMs = Date.now() - previewStarted;
     if (sourceKind === 'webdav') expect(davMethods.slice(davStart)).toEqual(['PROPFIND', 'GET', 'PROPFIND']);
     if (moving) {
       await dialog.locator('label').filter({ hasText: '我确认执行移动' }).click();
@@ -250,21 +268,61 @@ for (const sourceKind of ['local', 'local-move', 'mdbx', 'keepass', 'webdav'] as
       await page.setViewportSize(options.viewport);
     }
     await dialog.getByRole('button', { name: moving ? '确认并移动' : '执行复制', exact: true }).click();
-    await expect(dialog.getByRole('button', { name: '恢复传输', exact: true })).toBeVisible(); expect(posts).toBe(1);
+    await expect(dialog.getByRole('button', { name: '恢复传输', exact: true })).toBeVisible(nativeCheck); expect(posts).toBe(1);
     const pending = await send(page, { type: 'BITWARDEN_PENDING_TRANSFERS', providerId }); expect(pending).toHaveLength(1);
+    if (nativeMdbx && moving) {
+      const source = selectedSources[0];
+      for (const request of [
+        { type: 'PROVIDER_SYNC', providerId: sourceProviderId },
+        { type: 'MDBX2_OBJECT_DELETE', providerId: sourceProviderId, operationId: randomUUID(),
+          logicalObjectId: `native:${source.providerRefs[0].remoteId}`, expectedHeadCommitId: source.providerRefs[0].revision }
+      ]) {
+        const guarded = await page.evaluate(input => chrome.runtime.sendMessage(input), request);
+        expect(guarded.ok).toBe(false); expect(guarded.error).toContain('待恢复');
+      }
+    }
     if (moving) for (const source of sourcesBeforeCopy) expect((await send(page, { type: 'VAULT_LIST_ITEMS' }) as VaultItem[]).find(row => row.id === source.id)).toEqual(source);
     await send(page, { type: 'VAULT_LOCK' }); await context!.close(); context = undefined;
     page = await open('original'); await send(page, { type: 'VAULT_UNLOCK', masterPassword: password });
+    const reopenNative = async () => {
+      const sources = await send(page, { type: 'PROVIDER_LIST' });
+      const account = sources.find((row: any) => row.id === sourceProviderId);
+      await send(page, { type: 'MDBX2_VAULT_OPEN', input: { providerId: sourceProviderId, name: account.name,
+        source: { kind: 'vault', handle: account.config.vaultHandle }, credential: { method: 'password', password: 'Synthetic transfer fixture password' }, isDefaultSaveTarget: false } });
+    };
+    if (nativeMdbx && moving) {
+      await reopenNative();
+      deletedSourceProbe = async () => {
+        const deleted = new Set<string>();
+        for (const collectionId of new Set(selectedSources.map(source => source.providerRefs[0].remoteFolderId))) {
+          const result = await send(page, { type: 'MDBX2_OBJECT_LIST', providerId: sourceProviderId, collectionId, deleted: true, pageSize: 200 });
+          expect(result.nextCursor).toBeUndefined();
+          for (const row of result.items) if (row.deleted) deleted.add(row.objectId);
+        }
+        return selectedSources.every(source => deleted.has(source.providerRefs[0].remoteId!));
+      };
+      const interrupted = await page.evaluate(input => chrome.runtime.sendMessage(input), { type: 'MDBX2_BATCH_TRANSFER_EXECUTE', input: pending[0].request });
+      expect(interrupted.ok).toBe(false); expect(interruptedAfterNativeDeletion, interrupted.error).toBe(true);
+      deletedSourceProbe = undefined; // Release the synthetic outage only after all client retries have failed.
+      expect((await send(page, { type: 'BITWARDEN_PENDING_TRANSFERS', providerId }))).toHaveLength(1);
+      for (const source of sourcesBeforeCopy) expect((await send(page, { type: 'VAULT_LIST_ITEMS' }) as VaultItem[]).find(row => row.id === source.id)).toEqual(source);
+      await send(page, { type: 'VAULT_LOCK' }); await context!.close(); context = undefined;
+      page = await open('original'); await send(page, { type: 'VAULT_UNLOCK', masterPassword: password }); await reopenNative();
+    }
     expect(await send(page, { type: 'MDBX2_BATCH_TRANSFER_EXECUTE', input: pending[0].request })).toMatchObject({ completedCount: expectedCopies, failedCount: 0 });
     expect(posts).toBe(expectedCopies);
     const afterCopy = await send(page, { type: 'VAULT_LIST_ITEMS' }) as VaultItem[];
-    for (const source of sourcesBeforeCopy) expect(afterCopy.find(row => row.id === source.id)).toEqual(moving ? undefined : source);
+    for (const source of sourcesBeforeCopy) expect(afterCopy.find(row => row.id === source.id)).toEqual(moving && selectedSources.includes(source) ? undefined : source);
     if (moving) {
       const completed = await send(page, { type: 'MDBX2_BATCH_TRANSFER_EXECUTE', input: pending[0].request });
       expect(completed).toMatchObject({ action: 'move', completedCount: 3 }); expect(posts).toBe(3);
       expect(await send(page, { type: 'BITWARDEN_PENDING_TRANSFERS', providerId })).toEqual([]);
-      const removedFile = await page.evaluate(input => chrome.runtime.sendMessage(input), { type: 'PROVIDER_ATTACHMENT_LIST', providerId: 'local', itemId: rich.id });
+      const removedFile = await page.evaluate(input => chrome.runtime.sendMessage(input), { type: 'PROVIDER_ATTACHMENT_LIST', providerId: sourceProviderId || 'local', itemId: rich.id });
       expect(removedFile.ok).toBe(false);
+      if (nativeMdbx) for (const source of selectedSources) {
+        const deleted = await send(page, { type: 'MDBX2_OBJECT_LIST', providerId: sourceProviderId, collectionId: source.providerRefs[0].remoteFolderId, deleted: true });
+        expect(deleted.items.find((row: any) => row.objectId === source.providerRefs[0].remoteId)).toMatchObject({ deleted: true });
+      }
     }
     if (sourceKind === 'webdav') {
       expect(archiveHashes()).toEqual(archivesBeforeCopy);
@@ -322,10 +380,12 @@ for (const sourceKind of ['local', 'local-move', 'mdbx', 'keepass', 'webdav'] as
     expect(verify('sha256', Buffer.concat([auth, createHash('sha256').update(client).digest()]),
       createPublicKey({ key: Buffer.from(original.publicKey, 'base64'), format: 'der', type: 'spki' }), Buffer.from(assertion.response.signature, 'base64url'))).toBe(true);
     expect(posts).toBe(expectedCopies); expect(unexpected).toEqual([]);
-    await info.attach('acceptance', { contentType: 'application/json', body: JSON.stringify({ browserRegistration: true, interruptedCreate: true,
-      fullRestart: true, independentFreshClient: true, preservedSources: !moving, removedOnlyAfterVerification: moving, remoteCiphers: posts, zeroCounter: true,
-      sourceKind, verificationRequiredWhenRpDiscourages: true, independentlyVerifiedAssertion: true, richPasswordFields: true, nativeAttachment: withProject,
-      nativeProjectMembers: withProject ? 2 : 0, freshClientAttachmentRead: withProject }) });
+    const acceptance = { browserRegistration: true, interruptedCreate: true,
+      fullRestart: true, independentFreshClient: true, preservedSources: !moving, removedOnlyAfterVerification: moving, interruptedAfterNativeDeletion, remoteCiphers: posts, zeroCounter: true,
+      sourceKind, registrationMs, previewMs, verificationRequiredWhenRpDiscourages: true, independentlyVerifiedAssertion: true, richPasswordFields: true, nativeAttachment: withProject,
+      nativeProjectMembers: withProject ? 2 : 0, freshClientAttachmentRead: withProject };
+    await writeFile(info.outputPath('acceptance.json'), JSON.stringify(acceptance, null, 2));
+    await info.attach('acceptance', { contentType: 'application/json', body: JSON.stringify(acceptance) });
   } finally {
     try { await context?.close(); } finally {
       try { await nativeHost?.restore(); } finally {

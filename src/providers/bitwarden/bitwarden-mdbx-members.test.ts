@@ -1,7 +1,52 @@
 import { expect, it, vi } from 'vitest';
-import { createEmptyVaultState, createLoginItem, type ProviderAccount } from '../../core/model';
+import { createEmptyVaultState, createLoginItem, type ProviderAccount, type PasskeyItem } from '../../core/model';
 import { MdbxBitwardenMembers } from './bitwarden-mdbx-members';
 import type { Mdbx2CollectionSummary, Mdbx2ObjectRecord, Mdbx2ObjectSummary, Mdbx2ObjectSummaryPage } from '../mdbx2/native-contract';
+import { encodeMdbx2Object } from '../mdbx2/mdbx2-item-codec';
+import { ssoLogicalId } from '../../core/sso-links';
+
+function moveFixture() {
+  const f = fixture();
+  for (const [index, item] of f.items.entries()) {
+    item.password = 'Synthetic password sentinel';
+    item.replicaGroupId = `password:synthetic-${index}`;
+    const encoded = encodeMdbx2Object(item)!;
+    f.records[index].payloadJson = encoded.payloadJson;
+  }
+  return { ...f, move: () => f.members.verifyMove(f.state, f.account, f.items, f.client, f.collections, f.revision) };
+}
+
+it('loads move links lazily, then reuses only sanitized routing metadata', async () => {
+  const f = moveFixture(); await f.verify(); await f.move(); await f.move();
+  expect(f.client.revealObject).toHaveBeenCalledTimes(4);
+  // A vault-sized decrypted password cache would make unrelated secrets linger.
+  const cache = (f.members as unknown as { snapshots: WeakMap<object, Map<string, unknown>> }).snapshots.get(f.state);
+  expect(JSON.stringify([...cache!.values()])).not.toContain('Synthetic password sentinel');
+});
+
+it.each(['member','incoming-sso','unknown','legacy'] as const)('blocks an unindexed native %s before moving', async mode => {
+  const f = moveFixture();
+  const payload = mode === 'unknown' ? { monica_password_encoding: 'future' }
+    : mode === 'legacy' ? { sso_ref_entry_id: 123 }
+      : mode === 'incoming-sso' ? { sso_ref_logical_id: ssoLogicalId(f.items[0]) }
+        : { password_group_id: f.items[0].passwordGroupId };
+  f.records.push({ ...f.records[0], objectId: 'unindexed', payloadJson: JSON.stringify({ monica_entry_id: 'password:unindexed', ...payload }) });
+  await expect(f.move()).rejects.toThrow();
+});
+
+it('invalidates move catalogs on revision changes and refuses changes during scanning', async () => {
+  const f = moveFixture(); await f.move(); f.revision.revisionSha256 = 'updated';
+  f.client.readWriteRevision.mockResolvedValueOnce({ ...f.revision, revisionSha256: 'racing' });
+  await expect(f.move()).rejects.toThrow('成员或版本');
+  await f.move(); expect(f.client.revealObject).toHaveBeenCalledTimes(6);
+});
+
+it.each(['[{"credentialId":"dXNlcg"}]','[{}]','{broken'])('preserves a Passkey with an unindexed matching or ambiguous binding: %s', async bindings => {
+  const f = moveFixture();
+  f.records.push({ ...f.records[0], objectId: 'unindexed-owner', payloadJson: JSON.stringify({ monica_entry_id: 'password:owner', passkey_bindings: bindings }) });
+  const passkey = { id: 'key', kind: 'passkey', credentialId: 'dXNlcg', providerRefs: [{ providerId: f.account.id, remoteId: 'key-native' }] } as PasskeyItem;
+  await expect(f.members.verifyMove(f.state, f.account, [...f.items,passkey], f.client, f.collections, f.revision)).rejects.toThrow('关联');
+});
 
 function fixture() {
   const account: ProviderAccount = { id: 'source', kind: 'mdbx2', name: 'Synthetic', enabled: true, isDefaultSaveTarget: false,

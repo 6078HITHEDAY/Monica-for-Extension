@@ -3434,6 +3434,7 @@
   "取消未写入操作": "Cancelar operación sin guardar",
   "在同一数据库中移动": "Mover dentro de esta base de datos",
   "文件夹分页未完成，请减少目录数量后重试。": "La lista de carpetas supera el límite. Reduzca el número de carpetas e inténtelo de nuevo.",
-  "本地项目可移入 Bitwarden；其他来源请使用复制。目标完整保存后才会移除本地来源。": "Los elementos locales se pueden mover a Bitwarden. Para otros orígenes, usa Copiar. Los originales locales solo se eliminan cuando el destino se ha guardado y verificado por completo.",
-  "Bitwarden 暂支持复制；无法完整保存的项目会在预览中说明原因。": "Bitwarden permite copiar por ahora. La vista previa explica qué elementos no se pueden conservar por completo."
+  "本地及 MDBX 项目可移入 Bitwarden；其他来源请使用复制。目标和附件完整校验后才会移除来源，中断后可恢复。": "Los elementos locales y MDBX se pueden mover a Bitwarden. Use Copiar para otros orígenes. Los originales se eliminan tras verificar completamente el destino y los adjuntos; los movimientos interrumpidos se pueden reanudar.",
+  "Bitwarden 暂支持复制；无法完整保存的项目会在预览中说明原因。": "Bitwarden permite copiar por ahora. La vista previa explica qué elementos no se pueden conservar por completo.",
+  "MDBX 原生提交历史保留在来源库中；目标校验完成后，当前项目才会从来源移除。": "El historial de commits nativo de MDBX permanece en la bóveda de origen. Los elementos actuales solo se eliminan del origen tras verificar el destino."
 }

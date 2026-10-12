@@ -3434,6 +3434,7 @@
   "取消未写入操作": "Cancel unwritten operation",
   "在同一数据库中移动": "Move within this database",
   "文件夹分页未完成，请减少目录数量后重试。": "The folder list exceeded the supported limit. Reduce the number of folders and try again.",
-  "本地项目可移入 Bitwarden；其他来源请使用复制。目标完整保存后才会移除本地来源。": "Local items can be moved into Bitwarden. Use Copy for other sources. Local originals are removed only after the destination is fully saved and verified.",
-  "Bitwarden 暂支持复制；无法完整保存的项目会在预览中说明原因。": "Bitwarden currently supports copying; the preview explains any entries that cannot be preserved completely."
+  "本地及 MDBX 项目可移入 Bitwarden；其他来源请使用复制。目标和附件完整校验后才会移除来源，中断后可恢复。": "Local and MDBX items can be moved into Bitwarden. Use Copy for other sources. Originals are removed after the destination and attachments are fully verified; interrupted moves can be resumed.",
+  "Bitwarden 暂支持复制；无法完整保存的项目会在预览中说明原因。": "Bitwarden currently supports copying; the preview explains any entries that cannot be preserved completely.",
+  "MDBX 原生提交历史保留在来源库中；目标校验完成后，当前项目才会从来源移除。": "Native MDBX commit history stays in the source vault. Current items are removed from the source only after destination verification."
 }

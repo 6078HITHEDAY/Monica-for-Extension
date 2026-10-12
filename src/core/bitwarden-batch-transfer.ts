@@ -12,6 +12,7 @@ import type { BitwardenSymmetricKey } from '../providers/bitwarden/bitwarden-cry
 import { parseLosslessJson } from './lossless-json';
 import { isLocalTransferItem } from './local-transfer';
 import { readPasskeyBindings } from './passkey-bindings';
+import { readBitwardenMdbxMoveGroups, assertBitwardenMdbxMoveBinding, type BitwardenMdbxMoveGroup } from './bitwarden-mdbx-move';
 
 export type BitwardenBatchRequest = Omit<Mdbx2BatchTransferRequest, 'operationId' | 'operationCreatedAt' | 'confirmed'> & { operationId: string; operationCreatedAt: string };
 export interface BitwardenBatchUnit {
@@ -29,7 +30,7 @@ export interface BitwardenBatchFolder {
   targetId?: string;
 }
 export interface BitwardenBatchIntent {
-  version: 1 | 2;
+  version: 1 | 2 | 3;
   request: BitwardenBatchRequest;
   requestHash: string;
   plan: Mdbx2BatchTransferPlanResult;
@@ -37,6 +38,7 @@ export interface BitwardenBatchIntent {
   snapshotHash: string;
   units: BitwardenBatchUnit[];
   folders?: BitwardenBatchFolder[];
+  mdbxMoves?: BitwardenMdbxMoveGroup[];
   status: 'writing' | 'completed' | 'cancelled';
   result?: Mdbx2BatchTransferExecuteResult;
 }
@@ -75,7 +77,7 @@ export function readBitwardenBatches(value: unknown): BitwardenBatchIntent[] {
   const seen = new Set<string>();
   return value.map(raw => {
     const row = raw as BitwardenBatchIntent, request = normalizeBitwardenBatchRequest(row?.request);
-    if (!(row.version === 1 && request.action === 'copy' || row.version === 2 && request.action === 'move')
+    if (!(row.version === 1 && request.action === 'copy' || [2, 3].includes(row.version) && request.action === 'move')
       || !row.request.operationId || !row.request.operationCreatedAt || seen.has(request.operationId)
       || row.target?.kind !== 'bitwarden' || row.target.id !== request.targetProviderId || row.target.enabled !== true
       || !digest(row.requestHash) || !digest(row.snapshotHash) || !['writing', 'completed', 'cancelled'].includes(row.status)
@@ -93,6 +95,12 @@ export function readBitwardenBatches(value: unknown): BitwardenBatchIntent[] {
         || [...item.sourcePath, ...item.targetPath].some(value => typeof value !== 'string')
         || item.blockedReason !== undefined && !id(item.blockedReason))) throw invalid();
     const sources = row.units.flatMap(unit => unit.sources), accepted = row.plan.items.filter(item => !item.blockedReason);
+    const moves = readBitwardenMdbxMoveGroups(row.mdbxMoves);
+    if ((row.version === 3) !== (moves.length > 0) || moves.some(group => group.account.id === row.target.id
+      || group.sources.some(source => !sources.some(item => item.id === source.id && item.kind === source.kind))
+      || group.fingerprints.some(fingerprint => !row.units.some(unit => unit.copyId === fingerprint.copyId && unit.sources.length === 1
+        && group.sources.some(source => source.id === unit.sources[0].id)))
+      || row.status === 'completed' && !group.receipt || row.status === 'cancelled' && group.deletion)) throw invalid();
     const folders = row.folders || [];
     if (!Array.isArray(folders) || folders.length > 200 || folders.some(folder => !folder || !id(folder.key) || !id(folder.name)
       || typeof folder.encryptedName !== 'string' || !folder.encryptedName.startsWith('2.') || folder.encryptedName.length > 8192
@@ -143,8 +151,16 @@ function batchAccountSnapshot(account: ProviderAccount): ProviderAccount {
 
 /** New batch intents exclude only rotating bearer tokens. Existing standalone
  * receipt hashes deliberately keep their original semantics. */
-export function bitwardenBatchSourceHash(state: VaultState, ids: string[]) {
-  return bitwardenCopySourceHash({ ...state, providers: state.providers.map(batchAccountSnapshot) }, ids, true);
+export function bitwardenBatchSourceHash(state: VaultState, ids: string[], nativeMove = false) {
+  return bitwardenCopySourceHash({ ...state, providers: state.providers.map(account => {
+    if (!nativeMove || account.kind !== 'mdbx2') return batchAccountSnapshot(account);
+    // V3 moves survive reopening the same native working copy. Display/default
+    // settings and host verification timestamps are not source content. The
+    // journal separately verifies authenticated vault ID and the live binding.
+    const keys = ['vaultHandle','syncStateHandle','webDavBaseUrl','webDavUsername','webDavPassword','remotePath'];
+    return { id: account.id, kind: account.kind, enabled: account.enabled, name: '', isDefaultSaveTarget: false,
+      config: Object.fromEntries(keys.filter(key => account.config[key] !== undefined).map(key => [key, account.config[key]])) };
+  }) }, ids, true);
 }
 
 export function assertBitwardenBatchCopies(state: VaultState, batch: BitwardenBatchIntent, copies: BitwardenCipherCopyRecord[]) {
@@ -211,21 +227,23 @@ export function assertBitwardenLocalMoveSource(state: VaultState, item: VaultIte
 
 /** Recheck after the final network read, while holding the local mutation lock.
  * A new dependent or an edit since staging must never be removed by an old plan. */
-export async function assertBitwardenLocalMoveCurrent(state: VaultState, batch: BitwardenBatchIntent, copies: BitwardenCipherCopyRecord[]): Promise<Set<string>> {
+export async function assertBitwardenBatchMoveCurrent(state: VaultState, batch: BitwardenBatchIntent, copies: BitwardenCipherCopyRecord[]): Promise<Set<string>> {
   const ids = new Set(batch.units.flatMap(unit => unit.sources.map(source => source.id)));
   if (batch.request.action !== 'move') return new Set();
+  const moves = readBitwardenMdbxMoveGroups(batch.mdbxMoves), nativeIds = new Set(moves.flatMap(group => group.sources.map(source => source.id)));
+  for (const group of moves) assertBitwardenMdbxMoveBinding(state, group);
   const selection = bitwardenTransferSelection(batch.request.itemIds, state.items, state.providers, 'move');
   if (selection.selectedIds.length !== batch.plan.items.length || selection.selectedIds.some(id => !batch.plan.items.some(row => row.sourceItemId === id))
     || selection.components.some(group => group.some(id => ids.has(id)) && group.some(id => !ids.has(id))))
     throw new Error('移动期间项目或关联已变化，已保留来源和目标副本。');
   for (const unit of batch.units) {
     const copy = copies.find(row => row.prepared.copyId === unit.copyId);
-    if (!copy || copy.sourceSnapshotSha256 !== await bitwardenBatchSourceHash(state, unit.sources.map(source => source.id)))
+    if (!copy || copy.sourceSnapshotSha256 !== await bitwardenBatchSourceHash(state, unit.sources.map(source => source.id), batch.version === 3))
       throw new Error('移动期间来源已变化，已保留来源和目标副本。');
     for (const source of unit.sources) {
       const item = state.items.find(row => row.id === source.id);
       if (!item) throw invalid();
-      assertBitwardenLocalMoveSource(state, item);
+      if (!nativeIds.has(item.id)) assertBitwardenLocalMoveSource(state, item);
     }
   }
   return ids;

@@ -66,6 +66,9 @@ import { PasswordProjectRestoreWorkflow, PasswordProjectRestoreNotStagedError } 
 import { Mdbx2PasswordProjectRemovalCoordinator } from '../providers/mdbx2/mdbx2-project-removal';
 import { PasswordProjectRemovalWorkflow, PasswordProjectRemovalNotStagedError } from './password-project-removal';
 import { ProviderOperationQueue } from './provider-operation-queue';
+import { mdbxDirectWriteProvider } from './mdbx-direct-write';
+import { readMdbx2TransferBinding } from '../providers/mdbx2/mdbx2-transfer-verification';
+import { prepareMdbx2TransferSourceDeletion, deleteMdbx2TransferSources } from '../providers/mdbx2/mdbx2-transfer-source-delete';
 import { MDBX2_MAX_BINARY_CHUNK_BYTES, MDBX2_WINDOWS_HELLO_PROTOCOL_VERSION, MDBX2_WINDOWS_HELLO_RP_ID, Mdbx2NativeHostError, type Mdbx2SyncStateStatus, type Mdbx2WindowsHelloStatus } from "../providers/mdbx2/native-contract";
 import { Mdbx2Provider } from "../providers/mdbx2/mdbx2-provider";
 import { Mdbx2BatchTransferCoordinator, type Mdbx2BatchTransferProgress, type Mdbx2BatchTransferStatus } from "../providers/mdbx2/mdbx2-batch-transfer-coordinator";
@@ -299,6 +302,24 @@ const bitwardenAttachmentMutations = new BitwardenAttachmentMutationService();
 const mdbxBitwardenMembers = new MdbxBitwardenMembers();
 const bitwardenWebDavSources = new BitwardenWebDavSources(monicaWebDavProvider);
 const bitwardenBatchTransfers = new BitwardenBatchTransferCoordinator(service, bitwardenProvider, {
+  mdbx: {
+    verify: async (state, account, items) => {
+      const sessionId = await service.passkeySessionId(); if (!sessionId) throw new Error('密码库已锁定。');
+      const binding = await readMdbx2TransferBinding(mdbx2NativeClient, account);
+      const revision = await mdbx2NativeClient.readWriteRevision(binding.vaultHandle);
+      if (revision.vaultId !== binding.vaultId) throw new Error('MDBX 来源身份已变化。');
+      const collections = await listMdbx2TransferCollections(mdbx2NativeClient, binding.vaultHandle, false);
+      await mdbxBitwardenMembers.verifyMove(state, account, items, mdbx2NativeClient, collections, revision);
+      const after = await mdbx2NativeClient.readWriteRevision(binding.vaultHandle), current = await service.getProvider(account.id);
+      if (after.vaultId !== revision.vaultId || after.revisionSha256 !== revision.revisionSha256
+        || !current?.enabled || !sameProviderBinding(current, account) || await service.passkeySessionId() !== sessionId)
+        throw new Error('核验期间 MDBX 来源或解锁会话已变化。');
+      return binding;
+    },
+    prepare: (group, targetId, verify) => prepareMdbx2TransferSourceDeletion(mdbx2NativeClient, group.account, group.sources, group.id, targetId, group.vaultId, verify),
+    remove: (account, sources, operationId, targetId, intent) => deleteMdbx2TransferSources(mdbx2NativeClient, account, sources, operationId, targetId, intent)
+  },
+  exclusiveMany: (ids, work) => providerOperations.runMany(ids, work),
   resource: async (state, items, preserveCategories) => {
     const sessionId = await service.passkeySessionId(); if (!sessionId) throw new Error('密码库已锁定。');
     let previous: ProviderAccount | undefined;
@@ -612,8 +633,16 @@ chrome.runtime.onMessage.addListener((message: ExtensionRequest, sender, sendRes
 void chrome.alarms.create(AUTO_SYNC_ALARM, { periodInMinutes: 1 });
 void reconcileAutomaticSync().catch(() => undefined);
 
-async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.MessageSender): Promise<unknown> {
+async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.MessageSender, nativeWriteLocked = false): Promise<unknown> {
   if (!WEB_PAGE_REQUEST_TYPES.has(request.type)) assertExtensionPage(sender);
+  const nativeProvider = !nativeWriteLocked && mdbxDirectWriteProvider(request);
+  if (nativeProvider && (await service.getProvider(nativeProvider))?.kind === 'mdbx2') {
+    assertManagerPage(sender);
+    return providerOperations.run(nativeProvider, async () => {
+      await service.assertNoBitwardenMdbxMove(nativeProvider);
+      return handleRequest(request, sender, true);
+    });
+  }
   switch (request.type) {
     case "RUNTIME_INFO":
       return runtimeInfo;
@@ -1684,11 +1713,13 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
         failedCount: 0
       });
       try {
-        return (await service.getProvider(input.targetProviderId))?.kind === 'local'
+        const target = await service.getProvider(input.targetProviderId);
+        if (nativeWriteLocked && target?.kind !== 'mdbx2') throw new Error('等待传输期间目标类型已变化，请重新预览。');
+        return target?.kind === 'local'
           ? await localTransfers.execute(input, recordMdbx2BatchTransferProgress)
-          : (await service.getProvider(input.targetProviderId))?.kind === 'keepass'
+          : target?.kind === 'keepass'
             ? await keePassTransfers.execute(input, recordMdbx2BatchTransferProgress)
-            : (await service.getProvider(input.targetProviderId))?.kind === 'bitwarden'
+            : target?.kind === 'bitwarden'
               ? await bitwardenBatchTransfers.execute(input, recordMdbx2BatchTransferProgress)
               : await mdbx2BatchTransferCoordinator.execute(input, recordMdbx2BatchTransferProgress);
       } catch (error) {
@@ -2726,6 +2757,7 @@ async function executeProviderSync(providerId: string, options: { allowEmptyRemo
   try {
     controller.signal.throwIfAborted();
     if (account.kind === 'mdbx2') {
+      await service.assertNoBitwardenMdbxMove(account.id);
       if ((await service.readMdbx2MoveFinalizations()).some(row => row.status !== 'completed' && row.sourceProviderId === account.id))
         throw new Error('此密码源还有待恢复的移动，请先恢复后再同步。');
       await passwordProjectRemovals.recoverProvider(account.id, controller.signal);
