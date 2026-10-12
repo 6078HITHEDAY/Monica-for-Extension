@@ -1,0 +1,309 @@
+{
+  "title": "Monica · KeePass 传输与恢复",
+  "brief": "沿用现有青绿 M3E、系统字体与紧凑连续列表。目标选择加入 KeePass，文件夹仍用原生身份；复制、同库移动、保留分类与预览沿用现有操作位置。未完成传输在目标选择下方提供恢复按钮；只有尚未写入文件的操作可取消。已写入本地文件须导出，云文件须发布成功后确认完成。",
+  "frame": "phone",
+  "platform": "web",
+  "paletteKey": "teal",
+  "theme": {
+    "dark": true,
+    "bothModes": true,
+    "contrast": "standard",
+    "shape": "rounded",
+    "font": "system",
+    "emphasized": true,
+    "motion": "standard"
+  },
+  "frames": [
+    {
+      "id": "keepasstarget319",
+      "name": "复制或移动项目",
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 850
+    },
+    {
+      "id": "keepassresume319",
+      "name": "复制或移动项目",
+      "x": 430,
+      "y": 0,
+      "w": 390,
+      "h": 850
+    },
+    {
+      "id": "keepasslocaldone319",
+      "name": "传输结果",
+      "x": 860,
+      "y": 0,
+      "w": 390,
+      "h": 850
+    }
+  ],
+  "groups": [
+    {
+      "id": "keepasstarget319header",
+      "frameId": "keepasstarget319",
+      "x": 12,
+      "y": 12,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "keepasstarget319bar",
+          "kind": "topAppBar",
+          "label": "复制或移动项目",
+          "icon": "arrow_back",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled"
+        }
+      ]
+    },
+    {
+      "id": "keepasstarget319body",
+      "frameId": "keepasstarget319",
+      "x": 12,
+      "y": 100,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "keepasstarget3190",
+          "size": 366,
+          "icon": "search",
+          "variant": "filled",
+          "radius": 24,
+          "kind": "searchBar",
+          "label": "筛选项目"
+        },
+        {
+          "id": "keepasstarget3191",
+          "size": 366,
+          "icon": "check_box",
+          "variant": "filled",
+          "radius": 4,
+          "kind": "listItem",
+          "label": "工作账号",
+          "supporting": "2 个关联密码与附件"
+        },
+        {
+          "id": "keepasstarget3192",
+          "size": 366,
+          "icon": null,
+          "variant": "filled",
+          "radius": 4,
+          "kind": "select",
+          "label": "目标密码源",
+          "tabs": [
+            {
+              "label": "家庭 KeePass · WebDAV",
+              "icon": null
+            }
+          ],
+          "selected": 0
+        },
+        {
+          "id": "keepasstarget3193",
+          "size": 366,
+          "icon": "content_copy",
+          "variant": "filled",
+          "radius": 4,
+          "kind": "listItem",
+          "label": "复制",
+          "supporting": "保留来源项目"
+        },
+        {
+          "id": "keepasstarget3194",
+          "size": 366,
+          "icon": "check",
+          "variant": "filled",
+          "radius": 4,
+          "kind": "listItem",
+          "label": "登录 / 工作",
+          "supporting": "目标文件夹"
+        },
+        {
+          "id": "keepasstarget3195",
+          "size": 366,
+          "icon": "folder_copy",
+          "variant": "filled",
+          "radius": 4,
+          "kind": "listItem",
+          "label": "保留原分类层级",
+          "supporting": "按来源文件夹身份保留"
+        },
+        {
+          "id": "keepasstarget3196",
+          "size": 366,
+          "icon": "rule",
+          "variant": "filled",
+          "radius": 24,
+          "kind": "button",
+          "label": "检查并生成计划"
+        }
+      ]
+    },
+    {
+      "id": "keepassresume319header",
+      "frameId": "keepassresume319",
+      "x": 442,
+      "y": 12,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "keepassresume319bar",
+          "kind": "topAppBar",
+          "label": "复制或移动项目",
+          "icon": "arrow_back",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled"
+        }
+      ]
+    },
+    {
+      "id": "keepassresume319body",
+      "frameId": "keepassresume319",
+      "x": 442,
+      "y": 100,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "keepassresume3190",
+          "size": 366,
+          "icon": null,
+          "variant": "filled",
+          "radius": 24,
+          "kind": "select",
+          "label": "目标密码源",
+          "tabs": [
+            {
+              "label": "家庭 KeePass · WebDAV",
+              "icon": null
+            }
+          ],
+          "selected": 0
+        },
+        {
+          "id": "keepassresume3191",
+          "size": 366,
+          "icon": "history",
+          "variant": "filled",
+          "radius": 4,
+          "kind": "listItem",
+          "label": "未完成的传输",
+          "supporting": "工作账号 · 2 个项目"
+        },
+        {
+          "id": "keepassresume3192",
+          "size": 366,
+          "icon": "refresh",
+          "variant": "filled",
+          "radius": 4,
+          "kind": "button",
+          "label": "恢复传输"
+        },
+        {
+          "id": "keepassresume3193",
+          "size": 366,
+          "icon": "close",
+          "variant": "text",
+          "radius": 4,
+          "kind": "button",
+          "label": "取消未写入操作"
+        },
+        {
+          "id": "keepassresume3194",
+          "size": 366,
+          "icon": "info",
+          "variant": "filled",
+          "radius": 4,
+          "kind": "listItem",
+          "label": "文件保存后可继续恢复",
+          "supporting": "重试保留已完成的文件修改"
+        },
+        {
+          "id": "keepassresume3195",
+          "size": 366,
+          "icon": "key",
+          "variant": "filled",
+          "radius": 24,
+          "kind": "listItem",
+          "label": "工作账号",
+          "supporting": "来源保留"
+        }
+      ]
+    },
+    {
+      "id": "keepasslocaldone319header",
+      "frameId": "keepasslocaldone319",
+      "x": 872,
+      "y": 12,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "keepasslocaldone319bar",
+          "kind": "topAppBar",
+          "label": "传输结果",
+          "icon": "arrow_back",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled"
+        }
+      ]
+    },
+    {
+      "id": "keepasslocaldone319body",
+      "frameId": "keepasslocaldone319",
+      "x": 872,
+      "y": 100,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "keepasslocaldone3190",
+          "size": 366,
+          "icon": "folder",
+          "variant": "filled",
+          "radius": 24,
+          "kind": "listItem",
+          "label": "家庭 KeePass · 本地文件",
+          "supporting": "在同一数据库中移动"
+        },
+        {
+          "id": "keepasslocaldone3191",
+          "size": 366,
+          "icon": "check",
+          "variant": "filled",
+          "radius": 4,
+          "kind": "listItem",
+          "label": "工作账号",
+          "supporting": "已写入目标 · 原项目身份保留"
+        },
+        {
+          "id": "keepasslocaldone3192",
+          "size": 366,
+          "icon": "info",
+          "variant": "filled",
+          "radius": 4,
+          "kind": "listItem",
+          "label": "完成后请导出并保存 KDBX",
+          "supporting": "修改已保存在本机加密副本中"
+        },
+        {
+          "id": "keepasslocaldone3193",
+          "size": 366,
+          "icon": "close",
+          "variant": "filled",
+          "radius": 24,
+          "kind": "button",
+          "label": "关闭"
+        }
+      ]
+    }
+  ],
+  "dynamicColor": false
+}

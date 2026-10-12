@@ -3428,5 +3428,10 @@
   "保存到目标密码库": "Đang lưu vào kho đích",
   "批量传输失败，请重试。": "Truyền hàng loạt thất bại. Hãy thử lại.",
   "选择目标密码库": "Chọn kho đích",
-  "删除后无法恢复此附件。": "Không thể khôi phục tệp đính kèm này sau khi xóa."
+  "删除后无法恢复此附件。": "Không thể khôi phục tệp đính kèm này sau khi xóa.",
+  "未完成的传输": "Chuyển chưa hoàn tất",
+  "恢复传输": "Tiếp tục chuyển",
+  "取消未写入操作": "Hủy thao tác chưa ghi",
+  "在同一数据库中移动": "Di chuyển trong cùng cơ sở dữ liệu",
+  "文件夹分页未完成，请减少目录数量后重试。": "Danh sách thư mục vượt quá giới hạn hỗ trợ. Hãy giảm số thư mục rồi thử lại."
 }

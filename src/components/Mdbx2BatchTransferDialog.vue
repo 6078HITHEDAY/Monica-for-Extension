@@ -2,7 +2,7 @@
 import { materialSelectTag, materialOptionTag } from "../lib/material-controls";
 import { locale, tr } from '../i18n';
 
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import type { ProviderAccount, VaultItem } from "../core/model";
 import { itemIcon, itemKindLabel, itemSafeSummary, itemSearchText } from "../manager/item-metadata";
 import { presentMdbx2Collections, type Mdbx2CollectionPresentation } from "../providers/mdbx2/mdbx2-collections";
@@ -40,6 +40,8 @@ const preserveCategories = ref(true);
 const action = ref<Mdbx2BatchTransferRequest["action"]>("copy");
 const collections = ref<Mdbx2CollectionSummary[]>([]);
 const localFolders = ref<Array<{ key: string; categoryName: string }>>([]);
+const keePassReady = ref(false);
+const pendingKeePass = ref<Array<{ request: Mdbx2BatchTransferRequest; plan: Mdbx2BatchTransferPlanResult }>>([]);
 const collectionsLoading = ref(false);
 const collectionsError = ref("");
 const selectionNotice = ref("");
@@ -55,10 +57,10 @@ const progress = ref<Mdbx2BatchTransferStatus | null>(null);
 let collectionRequestToken = 0;
 let progressTimer: ReturnType<typeof setTimeout> | undefined;
 
-const targetProviders = computed(() => props.providers.filter((provider) => (provider.kind === 'local' || provider.kind === "mdbx2") && provider.enabled));
+const targetProviders = computed(() => props.providers.filter((provider) => ['local', 'mdbx2', 'keepass'].includes(provider.kind) && provider.enabled));
 const targetProvider = computed(() => targetProviders.value.find((provider) => provider.id === targetProviderId.value));
 const targetRuntime = computed(() => targetProviderId.value ? props.runtimeStatuses[targetProviderId.value] : undefined);
-const targetReady = computed(() => targetProvider.value?.kind === 'local' || Boolean(targetRuntime.value?.open && targetRuntime.value.available));
+const targetReady = computed(() => targetProvider.value?.kind === 'local' || (targetProvider.value?.kind === 'keepass' ? keePassReady.value : Boolean(targetRuntime.value?.open && targetRuntime.value.available)));
 const activeItems = computed(() => {
   const scope = props.scopeItemIds ? new Set(props.scopeItemIds) : undefined;
   return props.items.filter(item => !item.deletedAt && (!scope || scope.has(item.id)));
@@ -124,7 +126,7 @@ watch(activeItems, items => {
 onBeforeUnmount(() => stopProgressPolling());
 
 function readyFor(providerId: string): boolean {
-  if (targetProviders.value.find(provider => provider.id === providerId)?.kind === 'local') return true;
+  if (['local', 'keepass'].includes(targetProviders.value.find(provider => provider.id === providerId)?.kind || '')) return true;
   const status = props.runtimeStatuses[providerId];
   return Boolean(status?.open && status.available);
 }
@@ -179,10 +181,31 @@ async function loadCollections(): Promise<void> {
   const token = ++collectionRequestToken;
   collections.value = [];
   localFolders.value = [];
+  keePassReady.value = false;
+  pendingKeePass.value = [];
   collectionsError.value = "";
   if (!providerId || !readyFor(providerId)) return;
   collectionsLoading.value = true;
   try {
+    if (targetProvider.value?.kind === 'keepass') {
+      const pending = await vaultClient.pendingKeePassTransfers(providerId);
+      if (token !== collectionRequestToken) return;
+      pendingKeePass.value = pending;
+      const folders: Array<{ key: string; categoryName: string }> = [];
+      const seen = new Set<string>();
+      let cursor: string | undefined;
+      for (let n = 0; n < 100; n++) {
+        const page = await vaultClient.listKeePassGroups(providerId, { includeRecycleBin: false, pageSize: 100, cursor });
+        if (token !== collectionRequestToken) return;
+        folders.push(...page.items.filter(row => !row.inRecycleBin).map(row => ({ key: row.groupId, categoryName: row.displayPath })));
+        cursor = page.nextCursor;
+        if (!cursor) break;
+        if (seen.has(cursor) || n === 99) throw new Error(tr('文件夹分页未完成，请减少目录数量后重试。'));
+        seen.add(cursor);
+      }
+      localFolders.value = folders; keePassReady.value = true;
+      return;
+    }
     if (targetProvider.value?.kind === 'local') {
       const folders = await vaultClient.localTransferFolders();
       if (token === collectionRequestToken) localFolders.value = folders;
@@ -206,6 +229,28 @@ async function loadCollections(): Promise<void> {
   } finally {
     if (token === collectionRequestToken) collectionsLoading.value = false;
   }
+}
+
+async function resumeKeePass(row: { request: Mdbx2BatchTransferRequest; plan: Mdbx2BatchTransferPlanResult }) {
+  if (planning.value || executing.value) return;
+  planning.value = true;
+  selectedIds.value = new Set(row.request.itemIds);
+  action.value = row.request.action; preserveCategories.value = row.request.preserveCategories;
+  targetCollectionId.value = row.request.targetCollectionId || '';
+  preparedRequest.value = row.request; planResult.value = row.plan; moveConfirmed.value = true;
+  await nextTick(); planning.value = false;
+  await executePlan();
+}
+
+async function cancelKeePass(row: { request: Mdbx2BatchTransferRequest }) {
+  if (planning.value || executing.value || !row.request.operationId) return;
+  planning.value = true; error.value = '';
+  try {
+    await vaultClient.cancelUnwrittenKeePassTransfer(row.request.targetProviderId, row.request.operationId);
+    pendingKeePass.value = await vaultClient.pendingKeePassTransfers(row.request.targetProviderId);
+    planResult.value = null; preparedRequest.value = null; progress.value = null;
+  } catch (cause) { error.value = errorMessage(cause); }
+  finally { planning.value = false; }
 }
 
 async function createPlan(): Promise<void> {
@@ -283,6 +328,7 @@ async function executePlan(): Promise<void> {
     if (status) progress.value = status;
   } finally {
     stopProgressPolling();
+    if (targetProvider.value?.kind === 'keepass') pendingKeePass.value = await vaultClient.pendingKeePassTransfers(targetProviderId.value).catch(() => pendingKeePass.value);
     executing.value = false;
   }
 }
@@ -385,7 +431,18 @@ function errorMessage(cause: unknown): string {
           <m3e-form-field v-field-label variant="filled" hide-required-marker class="batch-field"><label slot="label">{{ tr('目标密码源') }}</label><component :is="materialSelectTag" @input="targetProviderId = ($event.target as HTMLElement &amp; { value: string }).value"  :disabled="planning || executing"><component :is="materialOptionTag" :selected.prop="String(targetProviderId ?? '') === String('')" value="" disabled>{{ tr('选择目标密码库') }}</component><component :is="materialOptionTag" :selected.prop="String(targetProviderId ?? '') === String(provider.id)" v-for="provider in targetProviders" :key="provider.id" :value="provider.id">{{ provider.name }}{{ readyFor(provider.id) ? '' : tr('（已锁定）') }}</component></component></m3e-form-field>
           <p v-if="targetProvider && !targetReady" class="batch-warning" role="status"><m3e-icon name="lock"></m3e-icon><span>{{ tr('请先在密码源页面解锁 {0}。', { 0: targetProvider.name }) }}</span></p>
 
-          <fieldset class="batch-action-picker"><legend>{{ tr('操作') }}</legend><m3e-radio-group class="batch-action-segments" :aria-label="tr('操作')"><label v-choice-label><m3e-radio :checked.prop="action === 'copy'" @input="action = 'copy'"   value="copy" :disabled="planning || executing" /><span><m3e-icon name="content_copy"></m3e-icon><strong>{{ tr('复制') }}</strong><small>{{ tr('创建独立项目') }}</small></span></label><label v-choice-label><m3e-radio :checked.prop="action === 'move'" @input="action = 'move'"   value="move" :disabled="planning || executing" /><span><m3e-icon name="drive_file_move"></m3e-icon><strong>{{ tr('移动') }}</strong><small>{{ tr('完成后移除来源绑定') }}</small></span></label></m3e-radio-group></fieldset>
+          <div v-if="pendingKeePass.length" class="batch-pending-keepass" aria-live="polite">
+            <div v-for="pending in pendingKeePass" :key="pending.request.operationId" class="batch-panel">
+              <strong>{{ tr('未完成的传输') }}</strong>
+              <p>{{ pending.plan.items.map(row => row.title).join('、') }}</p>
+              <div class="batch-recovery-actions">
+                <m3e-button variant="tonal" :disabled="planning || executing || !targetReady" @click="resumeKeePass(pending)"><m3e-icon slot="icon" name="refresh" />{{ tr('恢复传输') }}</m3e-button>
+                <m3e-button variant="text" :disabled="planning || executing" @click="cancelKeePass(pending)">{{ tr('取消未写入操作') }}</m3e-button>
+              </div>
+            </div>
+          </div>
+
+          <fieldset class="batch-action-picker"><legend>{{ tr('操作') }}</legend><m3e-radio-group class="batch-action-segments" :aria-label="tr('操作')"><label v-choice-label><m3e-radio :checked.prop="action === 'copy'" @input="action = 'copy'"   value="copy" :disabled="planning || executing" /><span><m3e-icon name="content_copy"></m3e-icon><strong>{{ tr('复制') }}</strong><small>{{ tr('创建独立项目') }}</small></span></label><label v-choice-label><m3e-radio :checked.prop="action === 'move'" @input="action = 'move'"   value="move" :disabled="planning || executing" /><span><m3e-icon name="drive_file_move"></m3e-icon><strong>{{ tr('移动') }}</strong><small>{{ targetProvider?.kind === 'keepass' ? tr('在同一数据库中移动') : tr('完成后移除来源绑定') }}</small></span></label></m3e-radio-group></fieldset>
 
           <div class="batch-folder-section">
             <div class="batch-subheading"><div><strong>{{ tr('目标文件夹') }}</strong></div><m3e-button variant="text" type="button" :disabled="collectionsLoading || planning || executing || !targetReady" @click="loadCollections"><m3e-icon slot="icon" name="refresh"></m3e-icon>{{ tr('刷新') }}</m3e-button></div>
@@ -394,13 +451,13 @@ function errorMessage(cause: unknown): string {
             <m3e-radio-group v-else class="batch-folder-tree" :aria-label="tr('目标文件夹')">
               <label v-choice-label class="batch-folder-row" :class="{ selected: !targetCollectionId }"><m3e-radio :checked.prop="targetCollectionId === ''" @input="targetCollectionId = ''"   value="" :disabled="planning || executing" /><span class="batch-folder-icon"><m3e-icon name="folder_open"></m3e-icon></span><span><strong>{{ tr('根目录') }}</strong><small>{{ tr('未分类项目') }}</small></span></label>
               <label v-choice-label v-for="row in collectionRows" :key="row.item.collectionId" class="batch-folder-row" :class="{ selected: targetCollectionId === row.item.collectionId, incomplete: row.hierarchyState !== 'ready' }" :style="{ '--folder-depth': row.depth }"><m3e-radio :checked.prop="targetCollectionId === row.item.collectionId" @input="targetCollectionId = row.item.collectionId"   :value="row.item.collectionId" :disabled="planning || executing" /><span class="batch-folder-icon"><m3e-icon name="folder"></m3e-icon></span><span><strong>{{ folderLabel(row) }}</strong><small>{{ row.hierarchyState === 'ready' ? tr('{0} 个附件', { 0: row.item.attachmentCount }) : row.parentPath }}</small></span></label>
-              <label v-choice-label v-for="folder in localFolders" :key="folder.key" class="batch-folder-row" :class="{ selected: targetCollectionId === folder.key }"><m3e-radio :checked.prop="targetCollectionId === folder.key" @input="targetCollectionId = folder.key" :value="folder.key" :disabled="planning || executing" /><span class="batch-folder-icon"><m3e-icon name="folder"></m3e-icon></span><span><strong>{{ folder.categoryName || tr('未命名文件夹') }}</strong><small>{{ tr('Monica 本地库') }}</small></span></label>
+              <label v-choice-label v-for="folder in localFolders" :key="folder.key" class="batch-folder-row" :class="{ selected: targetCollectionId === folder.key }"><m3e-radio :checked.prop="targetCollectionId === folder.key" @input="targetCollectionId = folder.key" :value="folder.key" :disabled="planning || executing" /><span class="batch-folder-icon"><m3e-icon name="folder"></m3e-icon></span><span><strong>{{ folder.categoryName || tr('未命名文件夹') }}</strong><small>{{ targetProvider?.kind === 'keepass' ? targetProvider.name : tr('Monica 本地库') }}</small></span></label>
               <p v-if="!collectionRows.length && !localFolders.length && targetReady" class="batch-folder-state"><m3e-icon name="folder_off"></m3e-icon><span>{{ tr('还没有自定义文件夹；项目会写入根目录。') }}</span></p>
             </m3e-radio-group>
           </div>
 
           <label v-choice-label class="batch-check batch-preserve"><m3e-checkbox :checked.prop="preserveCategories" @input="preserveCategories = ($event.target as HTMLElement &amp; { checked: boolean }).checked"   :disabled="planning || executing" /><span><strong>{{ tr('保留原分类层级') }}</strong></span></label>
-          <p v-if="action === 'move'" class="batch-warning"><m3e-icon name="warning"></m3e-icon><span>{{ tr('移动只会在目标项目与附件验证成功后删除来源；失败时来源保留。') }}</span></p>
+          <p v-if="action === 'move' && targetProvider?.kind !== 'keepass'" class="batch-warning"><m3e-icon name="warning"></m3e-icon><span>{{ tr('移动只会在目标项目与附件验证成功后删除来源；失败时来源保留。') }}</span></p>
         </section>
         </div>
 
@@ -410,7 +467,7 @@ function errorMessage(cause: unknown): string {
         <div class="batch-plan-list" role="list" :aria-label="tr('传输计划项目')">
           <div v-for="item in planResult.items" :key="item.sourceItemId" class="batch-plan-row" :class="{ blocked: item.blockedReason }" role="listitem"><m3e-icon :name="item.blockedReason ? 'block' : item.effectiveAction === 'move' ? 'drive_file_move' : 'content_copy'"></m3e-icon><span><strong>{{ item.title }}</strong><small>{{ itemKindLabel(item.kind) }} · {{ pathLabel(item.sourcePath) }} <m3e-icon name="arrow_forward"></m3e-icon> {{ pathLabel(item.targetPath) }}</small><small v-if="!selectedIds.has(item.sourceItemId)" class="batch-dependency">{{ tr('关联项目 · 自动包含') }}</small><small v-if="item.blockedReason" class="batch-error">{{ item.blockedReason }}</small><small v-else-if="item.pathIncomplete" class="batch-inline-note">{{ tr('原分类路径不完整，已保留可解析部分。') }}</small></span></div>
         </div>
-        <label v-choice-label v-if="planResult.requiresMoveConfirmation" class="batch-move-confirm"><m3e-checkbox :checked.prop="moveConfirmed" @input="moveConfirmed = ($event.target as HTMLElement &amp; { checked: boolean }).checked"   /><span><strong>{{ tr('我确认执行移动') }}</strong><small>{{ tr('目标写入、附件校验和来源删除会按顺序执行；已完成操作可安全重试。') }}</small></span></label>
+        <label v-choice-label v-if="planResult.requiresMoveConfirmation" class="batch-move-confirm"><m3e-checkbox :checked.prop="moveConfirmed" @input="moveConfirmed = ($event.target as HTMLElement &amp; { checked: boolean }).checked"   /><span><strong>{{ tr('我确认执行移动') }}</strong><small>{{ targetProvider?.kind === 'keepass' ? tr('在同一数据库中移动') : tr('目标写入、附件校验和来源删除会按顺序执行；已完成操作可安全重试。') }}</small></span></label>
         </section>
 
         <section v-if="executing || progress" class="batch-panel batch-progress-panel" aria-live="polite" aria-labelledby="batch-progress-title">
@@ -424,6 +481,7 @@ function errorMessage(cause: unknown): string {
           <div v-for="item in executeResult.items" :key="item.sourceItemId" class="batch-result-row" :class="`result-${item.status}`" role="listitem"><m3e-icon :name="resultIcon(item.status)"></m3e-icon><span><strong>{{ item.title }}</strong><small>{{ itemKindLabel(item.kind) }} · {{ item.status === 'completed' ? tr('已写入目标') : item.error || tr('未执行') }}</small></span></div>
         </div>
         <p v-if="retryableCount" class="batch-inline-note"><m3e-icon name="info"></m3e-icon>{{ tr('重试会重放同一个确定性操作；已完成项目不会重复创建。') }}</p>
+        <p v-if="executeResult.completedCount && targetProvider?.kind === 'keepass' && targetProvider.config.sourceMode === 'local-file'" class="batch-inline-note"><m3e-icon name="info"></m3e-icon>{{ tr('已保存的修改会在本机加密保留。解锁仍需数据库密码或密钥文件，完成后请导出并保存 KDBX。') }}</p>
         </section>
 
         <p v-if="error" class="batch-error batch-dialog-error" role="alert">{{ error }}</p>
@@ -439,6 +497,8 @@ function errorMessage(cause: unknown): string {
 </template>
 
 <style scoped>
+.batch-recovery-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.batch-pending-keepass { display: grid; gap: 8px; overflow-wrap: anywhere; }
 .mdbx2-batch-backdrop {
   padding: 16px;
 }

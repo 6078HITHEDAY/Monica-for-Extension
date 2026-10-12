@@ -4,7 +4,8 @@
 
 ## 中文
 
-- 修复真实 KDBX 条目使用 Base64 身份、字段引用使用十六进制身份时无法匹配的问题，用户名与密码引用可正确解析。补充 KeePass 整组传输的文件准备与加密回执：原生字段、历史与附件保留，复制时重建项目及内部引用，原 Passkey 凭据与零计数保持不变；写入失败不留下半组内容，重启重试不覆盖后续修改。此部分尚未接入传输目标界面与云端发布流程，暂不表示 KeePass 批量传输目标已开放。
+- 批量传输现可选择 KeePass 本地文件、WebDAV 或 OneDrive 数据库及原生文件夹，复制完整密码项目、可用 Passkey 与附件；同库移动保留原项目身份。文件保存后即使浏览器中断，也可从目标下方恢复，保留后续编辑及删除；只有尚未写入文件的操作可以取消。本地文件完成后需导出并保存 KDBX，云端在带版本检查的上传完成后确认成功；不覆盖另一端的冲突修改。
+- 修复真实 KDBX 条目使用 Base64 身份、字段引用使用十六进制身份时无法匹配的问题，用户名与密码引用可正确解析。整组传输保留原生字段、历史及附件，复制时重建项目及内部引用；原 Passkey 凭据、私钥字节与零计数不变。修复 Base64URL 私钥被误报为无法完整保存、旧格式 KDBX 已保存的移动被误报为未保存的问题。锁定会中止待发上传，目标变化会停止恢复，完成迁移不会覆盖刚刷新的 OneDrive 登录令牌。
 - 修复 KeePass 操作回执超过保留数量后，旧请求可能被重复执行的问题。过期回执保留不含密码内容的操作标记，重试会提示检查当前内容，不会重新创建已删除分组或覆盖后续修改；浏览器重启后仍有效。现有工作副本与回执原位升级，新操作继续可用。
 - 批量传输可选择 Monica 本地库作为目标；本地库卡片也提供入口，可复制整组密码及附件，或在本地文件夹间移动。项目、附件与恢复回执一起加密提交，预览后内容变化会停止保存；浏览器重启后的重试不会覆盖后续修改或复活已删除的附件。新增本地附件上传、下载、替换与删除，替换和删除会检查当前版本，防止旧窗口覆盖新内容。单次传输与每个项目的附件总量上限为 16 MiB。
 - 修复加密密码库写入容量与读取上限不一致的问题：超过 64 MiB 时在覆盖原库之前停止保存，避免下次无法解锁；传输摘要及附件读取的临时明文字节会及时清理。
@@ -22,11 +23,12 @@
 - 无待写入修改的本地 MDBX 不再周期性触发同步任务；编辑后的本地写回与云端同步继续保留。
 - 修复 MDBX 批量传输把 Passkey“复制”执行为“移动”的问题：副本保留原凭据 ID、私钥及计数，来源记录不变。目标数据库已有相同凭据时提前阻止；受限条目可取消或跳过，复制中断后可重试。
 
-以上是已实现的改动，完整 Android 对齐仍在进行。传输目前提供本地库和 MDBX 目标；KeePass、Bitwarden 目标及外部来源的持久删除恢复尚未补齐，同 Wi-Fi 设备同步仍待接入，不据此宣称所有数据库之间已完成互通。尚未发布新安装包或更新商店。
+以上是已实现的改动，完整 Android 对齐仍在进行。传输目前提供本地库、MDBX 和 KeePass 目标；Bitwarden 目标及外部来源的持久删除恢复尚未补齐，同 Wi-Fi 设备同步仍待接入，不据此宣称所有数据库之间已完成互通。尚未发布新安装包或更新商店。
 
 ## English
 
-- Fixed native KDBX field references failing to match base64 entry identities against hexadecimal reference UUIDs, restoring username and password resolution. Added encrypted file preparation and receipts for future KeePass batch transfers: preserve native fields, history and attachments; rebase copied project/reference identities while retaining Passkey credentials and zero counters; commit complete batches and recover retries without overwriting later edits. Destination UI and cloud publication are not integrated yet, so this does not enable KeePass batch-transfer destinations.
+- Batch transfer now supports KeePass local files, WebDAV and OneDrive destinations with native folder selection. Copy complete password projects, usable Passkeys and attachments, or move native entries within the same database while retaining their identities. Resume committed files after browser interruption without overwriting later edits or deletions; only unwritten operations can be cancelled. Local files still require exporting and saving the KDBX. Cloud transfers complete after version-checked publication and stop on conflicting peer changes.
+- Fixed native KDBX field references failing to match base64 entry identities against hexadecimal reference UUIDs. Batch transfers preserve native fields, history and attachments, rebasing copied project/reference identities while retaining Passkey credential IDs, private-key bytes and zero counters. Fixed false preservation failures for Base64URL private keys and false unsaved-change warnings after moves in older KDBX formats. Locking aborts pending uploads, changed destinations stop recovery, and transfer completion retains freshly rotated OneDrive tokens.
 - Fixed old KeePass requests becoming executable again after their detailed receipts exceed the retention limit. Expired receipts now retain compact operation markers without password contents; retries ask users to check current data instead of recreating deleted groups or overwriting later changes, including after browser restart. Existing working copies and receipts migrate in place, and new operations remain available.
 - Batch transfer now offers the Monica local vault as a destination, with an entry on the local-vault card. Copy related password items and attachments together, or move them between local folders. Items, files and recovery receipts commit in one encrypted transaction; changed previews stop before saving, and retries after browser restart preserve later edits and deletions. Local attachments support upload, download, replacement and deletion, with revision checks to prevent stale windows overwriting newer contents. Attachments are limited to 16 MiB per transfer and per item.
 - Matched encrypted-vault writes to the reader's 64 MiB limit: oversized writes now stop before replacing the readable vault. Temporary plaintext used for transfer fingerprints and attachment reads is cleared.
@@ -44,4 +46,4 @@
 - Clean local MDBX databases no longer schedule periodic synchronization. Pending local writes and cloud synchronization remain supported.
 - Fixed MDBX batch transfer treating a Passkey copy as a move. Copies retain the credential ID, private key and counter while preserving the source. Existing credentials in the destination are blocked before transfer; unavailable entries can be cancelled or skipped, and interrupted copies can be retried.
 
-Full Android parity remains in progress. Transfers currently offer local-vault and MDBX destinations; KeePass and Bitwarden destinations, durable foreign-source deletion and nearby-device synchronization remain unfinished. This update does not claim interoperability between every database. No new release package or store update has been published.
+Full Android parity remains in progress. Transfers now offer local-vault, MDBX and KeePass destinations; Bitwarden destinations, durable foreign-source deletion and nearby-device synchronization remain unfinished. This update does not claim interoperability between every database. No new release package or store update has been published.

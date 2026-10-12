@@ -491,6 +491,7 @@ export interface VaultState {
   /** Local encrypted recovery records, never a provider-synchronized field. */
   mdbx2MoveFinalizations?: import("./mdbx2-move-journal").Mdbx2MoveFinalizationRecord[];
   localTransferReceipts?: import('./local-transfer').LocalTransferReceipt[];
+  keepassTransfers?: import('./keepass-transfer-journal').KeePassTransferIntent[];
   localTransferFolders?: import('./local-transfer').LocalTransferFolder[];
   localItemAttachments?: import('./local-transfer').LocalItemAttachment[];
   localItemOrigins?: import('./local-transfer').LocalItemOrigin[];

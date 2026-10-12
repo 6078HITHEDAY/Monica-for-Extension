@@ -20,6 +20,8 @@ import { normalizeUuid } from './keepass-field-reference';
 /** Authenticated source readback only; never accept these secrets from manager messages. */
 export interface KeePassTransferRow {
   source: VaultItem;
+  /** Complete native content checkpoint, including unknown fields and history. */
+  nativeContentSha256?: string;
   /** Scoped native folder identity. Names alone do not merge folders from different sources. */
   folder?: { identities: string[]; segments: string[] };
   /** Required for foreign sources, including an explicitly empty catalog. Native files are cloned directly. */
@@ -63,6 +65,7 @@ export async function keePassTransferRequestHash(account: ProviderAccount, reque
 /** Compare persisted content, independent of randomized KDBX encryption headers.
  * Used only for explicit batch preparation, never on the autofill hot path. */
 export async function keePassTransferContentHash(database: kdbxweb.Kdbx): Promise<string> {
+  const storesPreviousParent = database.versionIsAtLeast(4, 1);
   const encode = (value: unknown): unknown => {
     if (value instanceof kdbxweb.ProtectedValue) {
       const bytes = value.getBinary();
@@ -74,9 +77,16 @@ export async function keePassTransferContentHash(database: kdbxweb.Kdbx): Promis
     if (value instanceof Uint8Array) return { bytes: bytesToBase64(value) };
     if (value instanceof Map) return [...value].map(([key, item]) => [key, encode(item)]);
     if (Array.isArray(value)) return value.map(encode);
-    if (value instanceof kdbxweb.KdbxGroup) return encode({ ...value, notes: value.notes || '', defaultAutoTypeSeq: value.defaultAutoTypeSeq || '' });
-    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value)
-      .filter(([key]) => !['parentGroup', '_editState', 'headerHash'].includes(key)).map(([key, item]) => [key, encode(item)]));
+    if (value && typeof value === 'object') {
+      const native = value instanceof kdbxweb.KdbxGroup || value instanceof kdbxweb.KdbxEntry;
+      const fields = value instanceof kdbxweb.KdbxGroup
+        ? { ...value, notes: value.notes || '', defaultAutoTypeSeq: value.defaultAutoTypeSeq || '' } : value;
+      return Object.fromEntries(Object.entries(fields)
+        // kdbxweb sets this on moves even when the file format cannot store it.
+        .filter(([key]) => !['parentGroup', '_editState', 'headerHash'].includes(key)
+          && !(native && key === 'previousParentGroup' && !storesPreviousParent))
+        .map(([key, item]) => [key, encode(item)]));
+    }
     return value;
   };
   return hash({ groups: encode(database.groups), meta: encode(database.meta), deleted: encode(database.deletedObjects),
@@ -306,6 +316,10 @@ function assertPortableProjection(source: VaultItem, projected: VaultItem) {
     const actual = (projected as unknown as Record<string, unknown>)[name];
     if ((value === '' || Array.isArray(value) && !value.length) && actual === undefined) continue;
     if (canonical(value) === canonical(actual)) continue;
+    if (source.kind === 'passkey' && typeof value === 'string' && typeof actual === 'string') {
+      if (name === 'credentialId' && normalizeCredentialId(value) === normalizeCredentialId(actual)) continue;
+      if (['privateKeyPkcs8', 'publicKey', 'userHandle'].includes(name) && sameEncodedBytes(value, actual)) continue;
+    }
     if (jsonFields.has(name) && typeof value === 'string' && typeof actual === 'string') {
       try {
         const original = parseLosslessJson(value), result = parseLosslessJson(actual);
@@ -315,6 +329,18 @@ function assertPortableProjection(source: VaultItem, projected: VaultItem) {
     }
     throw new Error(`KeePass 无法完整保存所选项目的 ${name} 字段，未写入目标文件。`);
   }
+}
+
+/** KDBX's PEM reader canonicalizes Base64URL to Base64. Compare bytes, not
+ * textual padding/alphabet, without relaxing preservation of key material. */
+function sameEncodedBytes(left: string, right: string): boolean {
+  let a: Uint8Array | undefined, b: Uint8Array | undefined;
+  try {
+    a = base64ToBytes(left.replace(/-/g, '+').replace(/_/g, '/'));
+    b = base64ToBytes(right.replace(/-/g, '+').replace(/_/g, '/'));
+    return a.length > 0 && a.length === b.length && a.every((byte, index) => byte === b![index]);
+  } catch { return false; }
+  finally { a?.fill(0); b?.fill(0); }
 }
 
 function canonical(value: unknown): string | undefined {

@@ -3428,5 +3428,10 @@
   "保存到目标密码库": "Saving to destination vault",
   "批量传输失败，请重试。": "Batch transfer failed. Try again.",
   "选择目标密码库": "Select destination vault",
-  "删除后无法恢复此附件。": "This attachment cannot be restored after deletion."
+  "删除后无法恢复此附件。": "This attachment cannot be restored after deletion.",
+  "未完成的传输": "Unfinished transfer",
+  "恢复传输": "Resume transfer",
+  "取消未写入操作": "Cancel unwritten operation",
+  "在同一数据库中移动": "Move within this database",
+  "文件夹分页未完成，请减少目录数量后重试。": "The folder list exceeded the supported limit. Reduce the number of folders and try again."
 }

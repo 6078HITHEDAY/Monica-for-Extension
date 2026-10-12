@@ -15,6 +15,8 @@ import { providerSourceRecordsFor, replaceProviderSourceRecords, validProviderMu
 import { sourceRecordsBudgetError } from "../core/source-records";
 import { applyLocalTransferBatch, prepareLocalTransferBatch, type LocalTransferBatch, type LocalTransferRequest, type LocalTransferResource } from '../core/local-transfer';
 import { applyLocalAttachmentMutation, localAttachmentOwner, type LocalAttachmentMutation } from '../core/local-attachments';
+import { readKeePassTransfers, assertKeePassTransferBindings, keePassTransferSnapshotHash, keePassTransferResult, type KeePassTransferIntent } from '../core/keepass-transfer-journal';
+import { mdbx2TransferOperationScope as transferIdentityHash } from '../providers/mdbx2/mdbx2-transfer-identity';
 import { mergeBitwardenProjectRestoration, type BitwardenProjectRestorationReadback, type BitwardenProjectPreparationReadback } from '../providers/bitwarden/bitwarden-project-removal-restoration';
 import { adoptBitwardenPreparationCopies } from '../providers/bitwarden/bitwarden-preparation-recovery';
 import type { BitwardenPasskeyPreservationPlan } from '../providers/bitwarden/bitwarden-passkey-preservation';
@@ -897,6 +899,14 @@ export class SecureVaultService {
     const provider = state.providers.find((candidate) => candidate.id === providerId);
     if (!provider) throw new Error("密码源不存在。");
     if (guard.expectedAccount && !sameProviderBinding(guard.expectedAccount, provider)) throw new Error("同步期间密码源配置已变化，请重新同步。");
+    const transferJournal = guard.keePassTransfer ? readKeePassTransfers(state.keepassTransfers) : [];
+    const transfer = guard.keePassTransfer && transferJournal.find(row => row.request.operationId === guard.keePassTransfer!.operationId);
+    if (guard.keePassTransfer) {
+      if (!transfer || transfer.status === 'cancelled' || transfer.target.id !== providerId) throw new Error('KeePass 传输恢复记录不存在或已取消。');
+      keePassTransferResult(transfer, guard.keePassTransfer);
+      if (transfer.status === 'completed') return { conflicts: 0 };
+      assertKeePassTransferBindings(state, { target: transfer.target, sourceAccounts: [] });
+    }
     if (state.providerConflicts.some(row => row.providerId === providerId && row.requiresExplicitResolution))
       throw new Error('恢复保留的数据需要明确解决冲突，普通同步不能覆盖。');
     if (readPasswordProjectRemovalJournal(state.passwordProjectRemovals).some(row => isPasswordProjectRemovalPending(row)
@@ -1020,6 +1030,10 @@ export class SecureVaultService {
     state.providers = state.providers.map((candidate) => candidate.id === providerId ? {
       ...candidate,
       ...accountPatch,
+      // Refresh may finish after the coordinator's last read. Keep the token
+      // from this encrypted transaction, not the earlier file publication.
+      ...(transfer && accountPatch?.config && candidate.config.oneDriveConnection
+        ? { config: { ...accountPatch.config, oneDriveConnection: candidate.config.oneDriveConnection } } : {}),
       id: candidate.id,
       kind: candidate.kind,
       lastError: persistedConflicts.length ? `发现 ${persistedConflicts.length} 个同步冲突。` : accountPatch?.lastError
@@ -1028,6 +1042,11 @@ export class SecureVaultService {
       replaceProviderSourceRecords(state, providerId, sourceRecords);
       const budgetError = sourceRecordsBudgetError(state.sourceRecords);
       if (budgetError) throw new Error(budgetError);
+    }
+    if (transfer && guard.keePassTransfer) {
+      if (persistedConflicts.length) throw new Error('传输索引更新遇到后续修改，恢复记录与本地内容已保留。');
+      transfer.status = 'completed'; transfer.result = keePassTransferResult(transfer, guard.keePassTransfer);
+      state.keepassTransfers = readKeePassTransfers(transferJournal);
     }
     state.updatedAt = new Date(this.now()).toISOString();
     await this.persist(state, key, envelope.kdf, false, false);
@@ -2481,6 +2500,44 @@ export class SecureVaultService {
       intent.status = 'completed'; intent.resolvedSha256 = result.projectionSha256; state.keepassProjectResolutionIntents = intents;
       state.updatedAt = new Date(this.now()).toISOString(); await this.persist(state, key, envelope.kdf);
       return structuredClone(intent);
+    });
+  }
+
+  async stageKeePassTransfer(input: KeePassTransferIntent): Promise<KeePassTransferIntent> {
+    const candidate = readKeePassTransfers([input])[0];
+    if (candidate.requestHash !== await transferIdentityHash(candidate.request)) throw new Error('KeePass 传输请求校验失败。');
+    return this.runExclusive(async () => {
+      const { state, envelope, key } = await this.mutableContext();
+      const journal = readKeePassTransfers(state.keepassTransfers);
+      const previous = journal.find(row => row.request.operationId === candidate.request.operationId);
+      if (previous) {
+        if (previous.requestHash !== candidate.requestHash || previous.fileIntentSha256 !== candidate.fileIntentSha256
+          || previous.status === 'cancelled') throw new Error('传输操作标识已用于其他计划或已取消。');
+        return previous;
+      }
+      if (candidate.status !== 'writing' || journal.length >= 1000) throw new Error('KeePass 传输恢复记录已满或状态无效。');
+      assertKeePassTransferBindings(state, candidate);
+      if (candidate.snapshotHash !== await keePassTransferSnapshotHash(state, candidate.request)) throw new Error('传输预览后来源或目标已变化。');
+      if (journal.some(row => row.status === 'writing' && row.target.id === candidate.target.id)
+        || readKeePassProjectRemovalIntents(state.keepassProjectRemovalIntents).some(row => row.source.id === candidate.target.id && ['staged', 'writing'].includes(row.status))
+        || readKeePassProjectResolutionIntents(state.keepassProjectResolutionIntents).some(row => row.source.id === candidate.target.id && ['staged', 'writing'].includes(row.status)))
+        throw new Error('目标 KeePass 已有未完成操作，请先恢复。');
+      state.keepassTransfers = [...journal, candidate];
+      state.updatedAt = new Date(this.now()).toISOString();
+      await this.persist(state, key, envelope.kdf);
+      return structuredClone(candidate);
+    });
+  }
+
+  /** The caller holds the provider queue and has proved no file receipt exists. */
+  async cancelUnwrittenKeePassTransfer(operationId: string): Promise<void> {
+    return this.runExclusive(async () => {
+      const { state, envelope, key } = await this.mutableContext();
+      const journal = readKeePassTransfers(state.keepassTransfers), intent = journal.find(row => row.request.operationId === operationId);
+      if (!intent || intent.status === 'completed') throw new Error('已保存的传输不能取消，请恢复结果。');
+      intent.status = 'cancelled'; state.keepassTransfers = journal;
+      state.updatedAt = new Date(this.now()).toISOString();
+      await this.persist(state, key, envelope.kdf);
     });
   }
 

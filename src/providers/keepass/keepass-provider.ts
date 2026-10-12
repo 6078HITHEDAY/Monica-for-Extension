@@ -137,6 +137,7 @@ interface KeePassGroupOperationReceipt {
 export class KeePassProvider implements ProviderAdapter {
   readonly kind = "keepass" as const;
   private readonly sessions = new Map<string, KeePassSession>();
+  private readonly transferHashes = new WeakMap<KeePassSession, { revision: number; value: Promise<string> }>();
   private readonly pendingUnlocks = new Map<string, object>();
   private readonly attachmentHandles = new Map<string, KeePassAttachmentHandle>();
   private readonly attachmentHandleByKey = new Map<string, string>();
@@ -293,7 +294,7 @@ export class KeePassProvider implements ProviderAdapter {
       };
       if (!/^[a-f0-9]{64}$/.test(input.expectedSha256) || await digest(bytes) !== input.expectedSha256)
         throw new Error('目标 KeePass 文件版本已变化，请重新预览。');
-      if (local) {
+      if (local || targetSession && !credential) {
         const live = this.requireKeePassAccountSession(source);
         const database = await kdbxweb.Kdbx.load(bytes.slice().buffer, live.database.credentials);
         assertCurrent();
@@ -308,6 +309,7 @@ export class KeePassProvider implements ProviderAdapter {
       assertCurrent();
       const native = new Map<string, KeePassTransferNativeSource>();
       const nativeIdentities = new Set<string>();
+      const nativeHashes = new Map<string, string>();
       for (const row of request.rows) {
         const item = row.source;
         if (!item.keepassEntryUuid) continue;
@@ -317,6 +319,10 @@ export class KeePassProvider implements ProviderAdapter {
         if (nativeIdentities.has(identity)) throw new Error('所选项目重复引用同一原生 KeePass 条目。');
         nativeIdentities.add(identity);
         const live = this.requireSession(providerId), entry = live.entries.entriesByUuid.get(item.keepassEntryUuid);
+        if (row.nativeContentSha256) {
+          if (!nativeHashes.has(providerId)) nativeHashes.set(providerId, await keePassTransferContentHash(live.database));
+          if (nativeHashes.get(providerId) !== row.nativeContentSha256) throw new Error('KeePass 原生字段或附件在预览后已变化。');
+        }
         const original = live.entries.items.find(row => row.keepassEntryUuid === item.keepassEntryUuid);
         const baseline = restoreContentFingerprint(item.providerRefs[0].etag || '');
         if (!entry || !original || original.deletedAt || !baseline || baseline !== restoreContentFingerprint(fingerprint(original))
@@ -346,6 +352,41 @@ export class KeePassProvider implements ProviderAdapter {
           assertCurrent: () => { assertCurrent(); for (const row of native.values()) row.assertCurrent(); } };
       } catch (cause) { output.fill(0); throw cause; }
     } finally { isolated.lock(); credential?.keyFile?.fill(0); bytes.fill(0); }
+  }
+
+  /** Internal persistence guard; contains no credential or serializable session state. */
+  async transferNativeContentHash(account: ProviderAccount): Promise<string> {
+    const session = this.requireKeePassAccountSession(account), cached = this.transferHashes.get(session);
+    if (cached?.revision === session.groupRevision) return cached.value;
+    const value = keePassTransferContentHash(session.database);
+    this.transferHashes.set(session, { revision: session.groupRevision, value });
+    return value;
+  }
+
+  transferSourceFolder(account: ProviderAccount, item: VaultItem) {
+    const session = this.requireKeePassAccountSession(account);
+    const entry = session.entries.entriesByUuid.get(item.keepassEntryUuid || '');
+    if (!entry?.parentGroup) throw new Error('KeePass 来源条目不存在。');
+    const identities: string[] = [], segments: string[] = [];
+    let group: kdbxweb.KdbxGroup | undefined = entry.parentGroup;
+    const root = session.database.getDefaultGroup(), seen = new Set<string>();
+    while (group && group !== root) {
+      const id = group.uuid.toString();
+      if (seen.has(id) || seen.size >= 128) throw new Error('KeePass 来源分组层级无效。');
+      seen.add(id); identities.unshift(id); segments.unshift(group.name || '(未命名)'); group = group.parentGroup;
+    }
+    if (!group) throw new Error('KeePass 来源分组缺少父目录。');
+    return segments.length ? { identities, segments } : undefined;
+  }
+
+  async assertTransferReload(account: ProviderAccount, bytes: Uint8Array, originalContentSha256: string) {
+    const live = this.requireKeePassAccountSession(account), revision = live.groupRevision;
+    const current = await keePassTransferContentHash(live.database);
+    if (current !== originalContentSha256) {
+      const persisted = await kdbxweb.Kdbx.load(bytes.slice().buffer, live.database.credentials);
+      if (current !== await keePassTransferContentHash(persisted)) throw new Error('KeePass 会话还有未持久保存的后续修改，请先保存后恢复传输。');
+    }
+    if (this.sessions.get(account.id) !== live || live.groupRevision !== revision) throw new Error('KeePass 会话在恢复前已变化。');
   }
 
   /** Internal persistence guard; contains no credential or serializable session state. */

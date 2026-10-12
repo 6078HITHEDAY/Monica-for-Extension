@@ -65,6 +65,8 @@ export interface ProviderSyncResult {
 export interface ProviderSyncGuard {
   expectedAccount?: ProviderAccount;
   confirmedRemovedItemIds?: string[];
+  /** Internal file receipt; finalize the encrypted transfer journal with adoption. */
+  keePassTransfer?: import('../providers/keepass/keepass-working-copy-store').KeePassDurableMutationReceipt;
 }
 
 /** Ignore rotating tokens and sync metadata, but never merge results from a replaced source. */

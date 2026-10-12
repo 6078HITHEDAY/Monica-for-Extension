@@ -248,10 +248,11 @@ it.each(['missing-member', 'changed-source', 'locked-source', 'bad-file', 'bad-a
   expect(f.provider.summarize(f.target.id).itemCount).toBe(1);
 });
 
-it('copies a zero-counter Passkey without changing its private key and refuses a second credential copy', async () => {
+it.each(['base64', 'base64url'] as const)('copies a zero-counter %s Passkey without changing its private key and refuses a second credential copy', async encoding => {
   const f = await fixture();
   const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
-  const key = bytesToBase64(new Uint8Array(await crypto.subtle.exportKey('pkcs8', pair.privateKey)));
+  const canonicalKey = bytesToBase64(new Uint8Array(await crypto.subtle.exportKey('pkcs8', pair.privateKey)));
+  const key = encoding === 'base64url' ? canonicalKey.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '') : canonicalKey;
   const source: PasskeyItem = { id: id(60), kind: 'passkey', title: 'Passkey', favorite: false, notes: '', createdAt: '2026-10-01T00:00:00Z',
     updatedAt: '2026-10-01T00:00:00Z', providerRefs: [], credentialId: 'AQIDBA', privateKeyPkcs8: key, rpId: 'example.invalid',
     rpName: 'Synthetic', publicKey: bytesToBase64(new Uint8Array(await crypto.subtle.exportKey('spki', pair.publicKey))), discoverable: true,
@@ -262,7 +263,7 @@ it('copies a zero-counter Passkey without changing its private key and refuses a
   const stored = (await f.storage.read(f.target.id))!;
   const opened = await openKeePassVault(stored.workingBytes, { password, providerId: 'target', databaseId: 2 });
   const copied = opened.items.find(row => row.kind === 'passkey') as PasskeyItem;
-  expect(copied).toMatchObject({ credentialId: source.credentialId, privateKeyPkcs8: key, signCount: 0, backupEligible: true, backupState: true });
+  expect(copied).toMatchObject({ credentialId: source.credentialId, privateKeyPkcs8: canonicalKey, signCount: 0, backupEligible: true, backupState: true });
   if (!copied.privateKeyPkcs8) throw new Error('Missing private key');
   const imported = await crypto.subtle.importKey('pkcs8', base64ToBytes(copied.privateKeyPkcs8).slice().buffer, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
   const challenge = Uint8Array.of(9, 8, 7), signature = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, imported, challenge);

@@ -3428,5 +3428,10 @@
   "保存到目标密码库": "Guardando en la bóveda de destino",
   "批量传输失败，请重试。": "La transferencia por lotes falló. Inténtalo de nuevo.",
   "选择目标密码库": "Seleccionar bóveda de destino",
-  "删除后无法恢复此附件。": "Este archivo adjunto no se puede recuperar después de eliminarlo."
+  "删除后无法恢复此附件。": "Este archivo adjunto no se puede recuperar después de eliminarlo.",
+  "未完成的传输": "Transferencia sin terminar",
+  "恢复传输": "Reanudar transferencia",
+  "取消未写入操作": "Cancelar operación sin guardar",
+  "在同一数据库中移动": "Mover dentro de esta base de datos",
+  "文件夹分页未完成，请减少目录数量后重试。": "La lista de carpetas supera el límite. Reduzca el número de carpetas e inténtelo de nuevo."
 }

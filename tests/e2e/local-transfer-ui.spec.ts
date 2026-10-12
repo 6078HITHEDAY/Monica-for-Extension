@@ -65,7 +65,7 @@ test('local files and project copy use the real extension runtime and survive Ed
     }
     await attachments.getByRole('button', { name: '关闭', exact: true }).click();
     await page.getByRole('button', { name: '密码源', exact: true }).click();
-    await page.getByRole('button', { name: '批量传输', exact: true }).click();
+    await page.locator('[data-home-provider-id="local"]').getByRole('button', { name: '批量传输', exact: true }).click();
     const transfer = dialogContent(page, { name: '复制或移动项目' });
     await transfer.getByRole('checkbox', { name: /Local source/ }).first().check();
     await transfer.getByRole('radio', { name: /Destination/ }).check();
@@ -146,7 +146,7 @@ test('real KDBX files copy to local through the product UI without altering the 
     await page.locator('m3e-card.source-card').filter({ hasText: 'Synthetic KDBX' }).getByRole('button', { name: '立即同步', exact: true }).click();
     await expect.poll(async () => (await send(page, { type: 'VAULT_LIST_ITEMS' })).some((item: any) => item.title === 'KDBX source')).toBe(true);
     const before = (await send(page, { type: 'VAULT_LIST_ITEMS' })).find((item: any) => item.title === 'KDBX source');
-    await page.getByRole('button', { name: '批量传输', exact: true }).click();
+    await page.locator('[data-home-provider-id="local"]').getByRole('button', { name: '批量传输', exact: true }).click();
     const transfer = dialogContent(page, { name: '复制或移动项目' });
     await transfer.getByRole('checkbox', { name: /KDBX source/ }).check();
     await transfer.getByRole('button', { name: '检查并生成计划', exact: true }).click();

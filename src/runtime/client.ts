@@ -239,6 +239,8 @@ export const vaultClient = {
   listMdbx2PendingMoves: () => send<import("./messages").Mdbx2PendingMove[]>({ type: "MDBX2_PENDING_MOVES" }),
   planMdbx2BatchTransfer: (input: Mdbx2BatchTransferRequest) => send<Mdbx2BatchTransferPlanResult>({ type: "MDBX2_BATCH_TRANSFER_PLAN", input }),
   localTransferFolders: () => send<Array<{ key: string; categoryId?: number; categoryName: string }>>({ type: 'LOCAL_TRANSFER_FOLDERS' }),
+  pendingKeePassTransfers: (providerId: string) => send<Array<{ request: Mdbx2BatchTransferRequest; plan: Mdbx2BatchTransferPlanResult }>>({ type: 'KEEPASS_PENDING_TRANSFERS', providerId }),
+  cancelUnwrittenKeePassTransfer: (providerId: string, operationId: string) => send<void>({ type: 'KEEPASS_CANCEL_UNWRITTEN_TRANSFER', providerId, operationId }),
   executeMdbx2BatchTransfer: (input: Mdbx2BatchTransferRequest, confirmed = false) => send<Mdbx2BatchTransferExecuteResult>({ type: "MDBX2_BATCH_TRANSFER_EXECUTE", input, ...(confirmed ? { confirmed: true as const } : {}) }),
   mdbx2BatchTransferStatus: (operationId: string) => send<Mdbx2BatchTransferStatus | undefined>({ type: "MDBX2_BATCH_TRANSFER_STATUS", operationId }),
   listMdbx2History: (providerId: string, input: { pageSize?: number; cursor?: string } = {}) => send<Mdbx2CommitHistoryPage>({ type: "MDBX2_HISTORY_LIST", providerId, ...input }),

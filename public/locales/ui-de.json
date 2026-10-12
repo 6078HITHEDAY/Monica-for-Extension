@@ -3428,5 +3428,10 @@
   "保存到目标密码库": "Im Zieltresor speichern",
   "批量传输失败，请重试。": "Stapelübertragung fehlgeschlagen. Versuchen Sie es erneut.",
   "选择目标密码库": "Zieltresor auswählen",
-  "删除后无法恢复此附件。": "Dieser Anhang kann nach dem Löschen nicht wiederhergestellt werden."
+  "删除后无法恢复此附件。": "Dieser Anhang kann nach dem Löschen nicht wiederhergestellt werden.",
+  "未完成的传输": "Unvollständige Übertragung",
+  "恢复传输": "Übertragung fortsetzen",
+  "取消未写入操作": "Ungeschriebenen Vorgang abbrechen",
+  "在同一数据库中移动": "Innerhalb dieser Datenbank verschieben",
+  "文件夹分页未完成，请减少目录数量后重试。": "Die Ordnerliste überschreitet das unterstützte Limit. Reduzieren Sie die Ordnerzahl und versuchen Sie es erneut."
 }

@@ -32,6 +32,8 @@ import { ProviderAttachmentUploadStore } from "../providers/attachments/attachme
 import { LocalAttachmentService } from '../providers/attachments/local-attachments';
 import { LocalTransferCoordinator } from '../providers/attachments/local-transfer-coordinator';
 import { readLocalTransferResource } from '../providers/attachments/local-transfer-resource';
+import { KeePassTransferCoordinator } from '../providers/keepass/keepass-transfer-coordinator';
+import { readKeePassTransferResource } from '../providers/keepass/keepass-transfer-resource';
 import { isLocalTransferItem, localTransferFolders, LOCAL_ATTACHMENT_MAX_BYTES } from '../core/local-transfer';
 import { listMdbx2TransferCollections } from '../providers/mdbx2/mdbx2-transfer-collections';
 import { BitwardenClient } from "../providers/bitwarden/bitwarden-client";
@@ -251,6 +253,29 @@ const mdbx2BatchTransferCoordinator = new Mdbx2BatchTransferCoordinator(
   mdbx2NativeClient,
   mdbx2TransferAttachmentService
 );
+const keePassTransfers = new KeePassTransferCoordinator(service, keePassProvider, keePassWorkingCopies, {
+  ensure: account => ensureKeePassSession(account, true),
+  persistence: keePassPersistenceFor,
+  reload: async account => {
+    await ensureKeePassSession(account, true);
+    if (hasLocalKeePassWorkingCopy(account.config)) await keePassLocalCopies.reload(account);
+    else await keePassRemoteSessions.restore(account);
+  },
+  publish: async (account, signal) => {
+    const result = await keePassPersistenceFor(account).publishWorkingCopy(account, signal);
+    if (!result) throw new Error('KeePass 工作副本无法发布。');
+    return result.accountConfig;
+  },
+  resource: (state, item, preserveCategories) => readKeePassTransferResource(state, item, preserveCategories, {
+    provider: keePassProvider, files: mdbx2TransferAttachmentService,
+    prepare: async account => {
+      if (account.kind === 'keepass') await ensureKeePassSession(account, true);
+      if (account.kind === 'mdbx2') return listMdbx2TransferCollections(mdbx2NativeClient, stringAccountConfig(account, 'vaultHandle'), true);
+      return undefined;
+    }
+  }),
+  exclusive: (providerId, work) => providerOperations.run(providerId, () => runKeePassMutationExclusive(providerId, work))
+});
 const providerAttachmentUploads = new ProviderAttachmentUploadStore();
 const providerAttachmentTransfers = new ProviderAttachmentTransferCoordinator();
 const providerAttachmentReads = new Map<string, { providerId: string; itemId: string; attachmentId: string; expiresAt: number }>();
@@ -482,7 +507,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
       if (status !== "unlocked") clearBitwardenAttachmentSessions();
       if (status !== "unlocked") providerAttachmentUploads.clear();
       if (status !== "unlocked") clearBitwardenSendUploads();
-      if (status !== "unlocked") { mdbx2BatchTransferStatuses.clear(); localTransfers.clear(); localAttachments.clear(); }
+      if (status !== "unlocked") { mdbx2BatchTransferStatuses.clear(); localTransfers.clear(); keePassTransfers.clear(); localAttachments.clear(); }
     });
   }
 });
@@ -599,7 +624,7 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
       pendingCredentialCaptures.clear();
       await clearPendingUsernameContexts();
       await clearPendingPasskeyRequests();
-      mdbx2BatchTransferStatuses.clear(); localTransfers.clear(); localAttachments.clear();
+      mdbx2BatchTransferStatuses.clear(); localTransfers.clear(); keePassTransfers.clear(); localAttachments.clear();
       return service.lock();
     }
     case "VAULT_CHANGE_MASTER_PASSWORD":
@@ -610,7 +635,7 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
       return service.exportEncryptedBackup(request.backupPassword);
     case "VAULT_RESTORE_ENCRYPTED": {
       assertExtensionPage(sender);
-      localTransfers.clear(); localAttachments.clear();
+      localTransfers.clear(); keePassTransfers.clear(); localAttachments.clear();
       const replacedHelloBindingId = request.replaceExisting ? await service.windowsHelloBindingIdForRuntime() : undefined;
       abortProviderSyncs();
       void mdbx2LocalFileExports.clear();
@@ -1559,7 +1584,14 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
     case "MDBX2_BATCH_TRANSFER_PLAN":
       assertManagerPage(sender);
       return (await service.getProvider(request.input.targetProviderId))?.kind === 'local'
-        ? localTransfers.plan(request.input) : mdbx2BatchTransferCoordinator.plan(request.input);
+        ? localTransfers.plan(request.input) : (await service.getProvider(request.input.targetProviderId))?.kind === 'keepass'
+          ? keePassTransfers.plan(request.input) : mdbx2BatchTransferCoordinator.plan(request.input);
+    case "KEEPASS_PENDING_TRANSFERS":
+      assertManagerPage(sender);
+      return keePassTransfers.pending(request.providerId);
+    case "KEEPASS_CANCEL_UNWRITTEN_TRANSFER":
+      assertManagerPage(sender);
+      return keePassTransfers.cancel(request.providerId, request.operationId);
     case "MDBX2_PENDING_MOVES":
       assertManagerPage(sender);
       return mdbx2BatchTransferCoordinator.pendingMoves();
@@ -1580,7 +1612,9 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
       try {
         return (await service.getProvider(input.targetProviderId))?.kind === 'local'
           ? await localTransfers.execute(input, recordMdbx2BatchTransferProgress)
-          : await mdbx2BatchTransferCoordinator.execute(input, recordMdbx2BatchTransferProgress);
+          : (await service.getProvider(input.targetProviderId))?.kind === 'keepass'
+            ? await keePassTransfers.execute(input, recordMdbx2BatchTransferProgress)
+            : await mdbx2BatchTransferCoordinator.execute(input, recordMdbx2BatchTransferProgress);
       } catch (error) {
         const current = mdbx2BatchTransferStatuses.get(operationId);
         recordMdbx2BatchTransferProgress({

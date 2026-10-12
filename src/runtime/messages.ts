@@ -445,6 +445,8 @@ export type ExtensionRequest =
   | { type: "MDBX2_OBJECT_DELETE"; providerId: string; operationId: string; logicalObjectId: string; expectedHeadCommitId?: string }
   | { type: "MDBX2_BATCH_TRANSFER_PLAN"; input: Mdbx2BatchTransferRequest }
   | { type: "LOCAL_TRANSFER_FOLDERS" }
+  | { type: "KEEPASS_PENDING_TRANSFERS"; providerId: string }
+  | { type: "KEEPASS_CANCEL_UNWRITTEN_TRANSFER"; providerId: string; operationId: string }
   | { type: "MDBX2_PENDING_MOVES" }
   | { type: "MDBX2_BATCH_TRANSFER_EXECUTE"; input: Mdbx2BatchTransferRequest; confirmed?: true }
   | { type: "MDBX2_BATCH_TRANSFER_STATUS"; operationId: string }
