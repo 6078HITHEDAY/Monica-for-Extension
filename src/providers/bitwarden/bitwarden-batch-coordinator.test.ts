@@ -86,9 +86,9 @@ it('refuses stale preview, expired memory and lock during preparation before rem
   await expect(f.coordinator.plan(f.request)).rejects.toThrow('锁定'); expect(f.remote.create).not.toHaveBeenCalled(); expect(f.folderRemote.create).not.toHaveBeenCalled();
 });
 
-it('rejects loss of protected/custom field semantics instead of comparing only names and values', () => {
+it('rejects loss of protected/custom field semantics instead of comparing only names and values', async () => {
   const source = { ...createLoginItem({ title: 'Field preservation' }), customFields: [{ name: 'Secret', value: 'synthetic', protected: true }] };
-  expect(() => assertBitwardenPortableProjection(source, { ...source, customFields: [{ ...source.customFields[0], protected: false }] })).toThrow('customFields');
+  await expect(assertBitwardenPortableProjection(source, { ...source, customFields: [{ ...source.customFields[0], protected: false }] })).rejects.toThrow('customFields');
   const boolean = { ...source, customFields: [{ ...source.customFields[0], fieldType: 'BOOLEAN' as const }] };
-  expect(() => assertBitwardenPortableProjection(boolean, source)).toThrow('customFields');
+  await expect(assertBitwardenPortableProjection(boolean, source)).rejects.toThrow('customFields');
 });

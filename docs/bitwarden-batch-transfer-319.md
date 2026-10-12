@@ -6,6 +6,8 @@ The manager can now copy into an authenticated personal Bitwarden/Vaultwarden va
 
 Native Bitwarden sources retain the full Cipher, including password history, unknown native values, OTP and all FIDO2 siblings. Fixed-point selection expands native siblings, password projects and SSO dependencies; if one member cannot be preserved, the whole connected component is blocked. Copies use a new shared project identity and resolve SSO references to confirmed destination server IDs. Numeric-only Room references and unsupported note/OTP relationships are refused. Local entries undergo a codec round trip and explicit field comparison, including custom-field protection/type and binary credential identity. Other backends and archived native origins currently stop with an explanation instead of silently discarding unprojected data.
 
+Follow-up local-source validation now accepts proven public/private-key equivalence and native default representations; normal browser-created Passkeys and rich supported password fields have fresh-client acceptance. Exact policy/field limits and verification are recorded in [Local records to Bitwarden](bitwarden-local-portable-319.md).
+
 ## Persistence and recovery
 
 - The entire reviewed batch, source fingerprints, encrypted Cipher preparations and attachment bytes are staged in one encrypted vault transaction before any remote write. Selection is limited to 200 items and attachments to 16 MiB per batch. Four private previews expire after five minutes and are cleared on lock.

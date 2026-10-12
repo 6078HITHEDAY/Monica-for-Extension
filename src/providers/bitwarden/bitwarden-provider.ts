@@ -884,7 +884,7 @@ function rebaseRemoteItems(remotes: VaultItem[], locals: VaultItem[], providerId
         ...preservePasskeyCounterHistory(local, remote),
         id: local.id,
         publicKey: remote.publicKey || local.publicKey,
-        userVerificationRequired: local.userVerificationRequired,
+        userVerificationRequired: local.userVerificationRequired ?? remote.userVerificationRequired,
         backupEligible: local.backupEligible,
         backupState: local.backupState,
         transports: local.transports,

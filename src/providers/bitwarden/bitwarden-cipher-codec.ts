@@ -1148,6 +1148,9 @@ async function decodeFido2Credentials(
       privateKeyPkcs8,
       signCount: Number(decrypted.Counter || metadata.get("signCount")) || 0,
       discoverable: decrypted.Discoverable.toLowerCase() !== "false",
+      // Bitwarden has no per-credential UV preference. Match Monica Android's
+      // native import policy so a fresh client cannot weaken a required check.
+      userVerificationRequired: true,
       sourceMode: privateKeyPkcs8 ? "bitwarden" : androidMetadata ? "android-metadata-only" : "bitwarden",
       createdAt: dateValue(decrypted.CreationDate || metadata.get("createdAt"), base.createdAt),
       providerRefs: [{ ...cipherReference, remoteId: `${cipherReference.remoteId}#fido2:${credentialId}` }]

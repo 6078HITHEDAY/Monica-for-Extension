@@ -1,0 +1,130 @@
+import { expect, test, type BrowserContext, type Page } from '@playwright/test';
+import { createServer } from 'node:http';
+import { createHash, createPublicKey, verify } from 'node:crypto';
+import path from 'node:path';
+import { launchEdgeContext } from './fixtures/edge';
+import { dialogContent } from './fixtures/material';
+import { BitwardenClient } from '../../src/providers/bitwarden/bitwarden-client';
+import { deriveBitwardenMasterKey, stretchBitwardenMasterKey } from '../../src/providers/bitwarden/bitwarden-crypto';
+import { createLoginItem, type LoginItem, type PasskeyItem, type VaultItem } from '../../src/core/model';
+import { BITWARDEN_TRANSFER_MARKER } from '../../src/providers/bitwarden/bitwarden-transfer-cipher';
+
+const stamp = '2026-10-12T00:00:00.000Z', password = 'Synthetic portable password', email = 'portable@example.invalid';
+const origin = 'https://portable.example.test', challenge = Buffer.alloc(32, 41).toString('base64url');
+const options = { locale: 'zh-CN', colorScheme: 'dark' as const, viewport: { width: 1180, height: 950 },
+  args: [`--disable-extensions-except=${path.resolve('dist')}`, `--load-extension=${path.resolve('dist')}`] };
+async function send(page: Page, request: object): Promise<any> { const response = await page.evaluate(input => chrome.runtime.sendMessage(input), request);
+  expect(response.ok, response.error).toBe(true); return response.data; }
+
+test('a browser-created local Passkey survives Bitwarden copy interruption and authenticates on a fresh Edge client', async ({}, info) => {
+  test.setTimeout(180_000);
+  const key = { encKey: new Uint8Array(32).fill(11), macKey: new Uint8Array(32).fill(22) };
+  const protectedKey = await new BitwardenClient().protectVaultKey(key,
+    await stretchBitwardenMasterKey(await deriveBitwardenMasterKey(password, email, { type: 0, iterations: 10_000 })), new Uint8Array(16));
+  const rows: Record<string, unknown>[] = [], unexpected: string[] = []; let posts = 0;
+  const server = createServer(async (request, response) => {
+    const json = (body: unknown) => { response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(body)); };
+    const url = new URL(request.url || '/', 'http://127.0.0.1');
+    if (url.pathname === '/identity/accounts/prelogin/password') return json({ Kdf: 0, KdfIterations: 10_000 });
+    if (url.pathname === '/identity/connect/token') return json({ access_token: 'synthetic', refresh_token: 'synthetic', expires_in: 3600, Key: protectedKey });
+    if (url.pathname === '/api/sync') return json({ Profile: { Id: 'portable-user', Email: email }, Ciphers: rows, Folders: [] });
+    if (url.pathname === '/api/folders' && request.method === 'GET') return json({ Data: [] });
+    if (url.pathname === '/api/accounts/revision-date') return json(Date.parse(stamp));
+    if (url.pathname === '/api/ciphers' && request.method === 'POST') {
+      const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      const raw = { ...JSON.parse(Buffer.concat(chunks).toString()), id: `copy-${posts++}`, revisionDate: stamp, creationDate: stamp }; rows.push(raw);
+      if (posts === 1) { response.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': '1000' });
+        response.flushHeaders(); response.write('{"lost":'); setImmediate(() => response.destroy()); return; }
+      return json(raw);
+    }
+    const detail = /^\/api\/ciphers\/([^/]+)\/details$/.exec(url.pathname);
+    if (detail) return json(rows.find(row => row.id === detail[1]));
+    unexpected.push(`${request.method} ${url.pathname}`); response.writeHead(404); response.end();
+  });
+  await new Promise<void>(done => server.listen(0, '127.0.0.1', done));
+  const host = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  let context: BrowserContext | undefined;
+  const open = async (profile: string) => {
+    context = await launchEdgeContext(info.outputPath(profile), options);
+    await context.route(`${origin}/**`, route => route.fulfill({ contentType: 'text/html', body: `<!doctype html><title>Synthetic portable Passkey</title>
+      <button id="register">Register</button><button id="login">Sign in</button><output id="result"></output><script>
+      window.credentialId='';register.onclick=async()=>{try{const c=await navigator.credentials.create({publicKey:PublicKeyCredential.parseCreationOptionsFromJSON({
+        challenge:'${challenge}',rp:{id:'portable.example.test',name:'Portable passkey'},user:{id:'dXNlcg',name:'synthetic',displayName:'Synthetic'},
+        pubKeyCredParams:[{type:'public-key',alg:-7}],authenticatorSelection:{residentKey:'required',userVerification:'required'}})});
+        window.registration=c.toJSON();result.textContent='registered';}catch(e){result.textContent=e.name+':'+e.message;}};
+      login.onclick=async()=>{try{const c=await navigator.credentials.get({publicKey:PublicKeyCredential.parseRequestOptionsFromJSON({challenge:'${challenge}',
+        rpId:'portable.example.test',allowCredentials:[{type:'public-key',id:credentialId}],userVerification:'discouraged'})});
+        window.assertion=c.toJSON();result.textContent='authenticated';}catch(e){result.textContent=e.name+':'+e.message;}};</script>` }));
+    const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
+    const page = await context.newPage(); page.setDefaultTimeout(20_000);
+    await page.goto(`chrome-extension://${new URL(worker.url()).host}/index.html`); return page;
+  };
+  const confirm = async (website: Page, create: boolean) => {
+    await expect(website.locator('#monica-passkey-prompt-host')).toHaveCount(1);
+    await expect.poll(() => website.evaluate(() => document.activeElement?.id)).toBe('monica-passkey-prompt-host');
+    if (!create) { await website.keyboard.press('Home'); await website.keyboard.press('Tab'); await website.keyboard.press('Tab'); }
+    const opened = context!.waitForEvent('page'); await website.keyboard.press('Enter'); const confirmation = await opened;
+    await confirmation.getByLabel('Monica 主密码', { exact: true }).fill(password);
+    await confirmation.getByRole('button', { name: '确认', exact: true }).click();
+  };
+  const setup = async (page: Page) => {
+    await send(page, { type: 'VAULT_SETUP', masterPassword: password });
+    await page.evaluate(() => chrome.storage.local.set({ 'monica.sync.preferences.v1': { enabled: false } }));
+  };
+  const login = (page: Page) => send(page, { type: 'BITWARDEN_LOGIN', name: 'Synthetic portable target', vaultUrl: host, email, masterPassword: password });
+  try {
+    let page = await open('original'); await setup(page);
+    let website = await context!.newPage(); await website.goto(origin);
+    await website.locator('#register').click(); await confirm(website, true); await expect(website.locator('#result')).toHaveText('registered');
+    const original = (await send(page, { type: 'VAULT_LIST_ITEMS' }) as VaultItem[]).find(row => row.kind === 'passkey') as PasskeyItem;
+    expect(original).toMatchObject({ sourceMode: 'browser-local', providerRefs: [], signCount: 0, userVerificationRequired: true });
+    const rich: LoginItem = { ...createLoginItem({ title: 'Rich portable password', username: 'synthetic', password: 'synthetic-secret', uris: [origin] }),
+      loginType: 'PASSWORD', appPackageName: 'test.portable', appName: 'Portable', email: 'user@example.test', phone: '+000123',
+      addressLine: 'Synthetic street', city: 'City', state: 'State', zipCode: '1234', country: 'XX',
+      customFields: [{ name: 'Recovery', value: 'first', protected: true }, { name: 'Recovery', value: 'second', protected: true, fieldType: 'HIDDEN' }],
+      passwordHistory: [{ password: 'synthetic-older', lastUsedAt: stamp }] };
+    await send(page, { type: 'VAULT_UPSERT_ITEM', item: rich });
+    const { providerId } = await login(page); await page.reload(); await page.getByRole('button', { name: '密码源', exact: true }).click();
+    await page.locator('[data-home-provider-id]').filter({ has: page.getByRole('heading', { name: 'Synthetic portable target', exact: true }) })
+      .getByRole('button', { name: '批量传输', exact: true }).click();
+    const dialog = dialogContent(page, { name: '复制或移动项目' });
+    await dialog.getByRole('checkbox', { name: /Portable passkey/ }).check(); await dialog.getByRole('checkbox', { name: /Rich portable password/ }).check();
+    await dialog.getByRole('button', { name: '检查并生成计划', exact: true }).click();
+    await expect(dialog.getByText('2 个可传输，0 个被阻断', { exact: true })).toBeVisible();
+    await dialog.getByRole('button', { name: '执行复制', exact: true }).click();
+    await expect(dialog.getByRole('button', { name: '恢复传输', exact: true })).toBeVisible(); expect(posts).toBe(1);
+    const pending = await send(page, { type: 'BITWARDEN_PENDING_TRANSFERS', providerId }); expect(pending).toHaveLength(1);
+    await send(page, { type: 'VAULT_LOCK' }); await context!.close(); context = undefined;
+    page = await open('original'); await send(page, { type: 'VAULT_UNLOCK', masterPassword: password });
+    expect(await send(page, { type: 'MDBX2_BATCH_TRANSFER_EXECUTE', input: pending[0].request })).toMatchObject({ completedCount: 2, failedCount: 0 });
+    expect(posts).toBe(2); expect((await send(page, { type: 'VAULT_LIST_ITEMS' }) as VaultItem[]).find(row => row.id === original.id)).toEqual(original);
+    await context!.close(); context = undefined;
+
+    // Independent installation has no local policy/identity cache from registration.
+    page = await open('fresh-client'); await setup(page); const fresh = await login(page);
+    await send(page, { type: 'PROVIDER_SYNC', providerId: fresh.providerId });
+    const imported: VaultItem[] = await send(page, { type: 'VAULT_LIST_ITEMS' });
+    const passkey = imported.find(row => row.kind === 'passkey') as PasskeyItem;
+    expect(passkey).toMatchObject({ credentialId: original.credentialId, signCount: 0, userVerificationRequired: true });
+    expect(Buffer.from(passkey.privateKeyPkcs8!, 'base64')).toEqual(Buffer.from(original.privateKeyPkcs8!, 'base64'));
+    const passwordItem = imported.find(row => row.title === rich.title) as LoginItem;
+    for (const field of ['username','password','uris','passwordHistory','appPackageName','appName','email','phone','addressLine','city','state','zipCode','country'] as const)
+      expect(passwordItem[field], field).toEqual(rich[field]);
+    expect(passwordItem.customFields).toEqual([{ name: 'Recovery', value: 'first', protected: true }, { name: 'Recovery', value: 'second', protected: true },
+      { name: BITWARDEN_TRANSFER_MARKER, value: expect.any(String), protected: true }]);
+    expect(JSON.parse(passwordItem.customFields[2].value)).toMatchObject({ version: 1, operationId: pending[0].request.operationId });
+    website = await context!.newPage(); await website.goto(origin); await website.evaluate(id => { (window as any).credentialId = id; }, original.credentialId);
+    await website.locator('#login').click(); await confirm(website, false); await expect(website.locator('#result')).toHaveText('authenticated');
+    const assertion = await website.evaluate(() => (window as any).assertion);
+    expect(assertion.id).toBe(original.credentialId);
+    const auth = Buffer.from(assertion.response.authenticatorData, 'base64url'), client = Buffer.from(assertion.response.clientDataJSON, 'base64url');
+    expect(auth.readUInt32BE(33)).toBe(0); expect(auth[32] & 0x1c).toBe(0x1c);
+    expect(JSON.parse(client.toString())).toMatchObject({ origin, challenge, type: 'webauthn.get' });
+    expect(verify('sha256', Buffer.concat([auth, createHash('sha256').update(client).digest()]),
+      createPublicKey({ key: Buffer.from(original.publicKey, 'base64'), format: 'der', type: 'spki' }), Buffer.from(assertion.response.signature, 'base64url'))).toBe(true);
+    expect(posts).toBe(2); expect(unexpected).toEqual([]);
+    await info.attach('acceptance', { contentType: 'application/json', body: JSON.stringify({ browserRegistration: true, interruptedCreate: true,
+      fullRestart: true, independentFreshClient: true, preservedSources: true, remoteCiphers: posts, zeroCounter: true,
+      verificationRequiredWhenRpDiscourages: true, independentlyVerifiedAssertion: true, richPasswordFields: true }) });
+  } finally { await context?.close(); server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); key.encKey.fill(0); key.macKey.fill(0); }
+});

@@ -10,6 +10,8 @@ import { parseLosslessJson } from '../../core/lossless-json';
 import { mdbx2TransferOperationScope as hash } from '../mdbx2/mdbx2-transfer-identity';
 import { normalizeCredentialId } from '../../passkey/source-policy';
 import { base64ToBytes } from '../../security/encoding';
+import { assertBitwardenPasskeyPublicKey } from './bitwarden-passkey-public-key';
+import { parsePortablePasskeyPrivateKey } from '../../passkey/private-key-portability';
 
 export interface BitwardenBatchResource {
   raw: Record<string, unknown>;
@@ -38,7 +40,7 @@ export async function readBitwardenBatchResource(state: VaultState, items: Vault
       const decoded = await decodeBitwardenCipher(raw, 'transfer-source', key);
       const matches = decoded.items.filter(row => row.kind === first.kind && (row.kind !== 'passkey' || first.kind === 'passkey' && normalizeCredentialId(row.credentialId) === normalizeCredentialId(first.credentialId)));
       if (decoded.warning || decoded.historyWarning || decoded.unsupported || matches.length !== 1) throw new Error('Bitwarden 无法完整表示所选项目。');
-      assertBitwardenPortableProjection(first, matches[0]);
+      await assertBitwardenPortableProjection(first, matches[0]);
       files = structuredClone((state.localItemAttachments || []).filter(row => row.itemId === first.id)); await validateLocalAttachments(files, first.id);
       // The source attachment metadata is synthetic but authenticated, and binds
       // exactly the bytes staged in the encrypted journal.
@@ -81,23 +83,35 @@ export async function readBitwardenBatchResource(state: VaultState, items: Vault
 }
 
 /** Explicit field-loss refusal. Error messages name the field, never its value. */
-export function assertBitwardenPortableProjection(source: VaultItem, projected: VaultItem) {
+export async function assertBitwardenPortableProjection(source: VaultItem, projected: VaultItem) {
+  if (source.kind === 'passkey' && projected.kind === 'passkey') {
+    // Native FIDO2 carries PKCS#8, not SPKI. Prove that the saved private key
+    // still authenticates against the source public key before accepting this omission.
+    await assertBitwardenPasskeyPublicKey(source.publicKey, projected);
+  }
   const routing = new Set(['id','providerRefs','createdAt','updatedAt','categoryId','categoryName',
     'sourceMode','passkeyMode','keyAlgorithm','lastUsedAt','useCount','signCountHighWaterMark']);
   const jsonFields = new Set(['sshKeyData','wifiMetadata','barcodeData','steamRawJson','passkeyBindings']);
   for (const [name, value] of Object.entries(source)) {
     if (routing.has(name) || value === undefined) continue;
     const actual = (projected as unknown as Record<string, unknown>)[name];
-    if ((value === '' || Array.isArray(value) && !value.length) && actual === undefined || canonical(value) === canonical(actual)) continue;
+    if (source.kind === 'login' && projected.kind === 'login' && name === 'loginType' && value === 'PASSWORD' && actual === undefined) continue;
+    if (source.kind === 'passkey' && projected.kind === 'passkey') {
+      if (name === 'publicKey' && !actual) continue; // Proven above, not discarded blindly.
+      if ((name === 'backupEligible' || name === 'backupState') && value === true && actual === undefined) continue;
+      if (name === 'transports' && canonical(value) === '["internal"]' && actual === undefined) continue;
+    }
+    if ((name !== 'boundTotpItemId' && value === '' || Array.isArray(value) && !value.length) && actual === undefined || canonical(value) === canonical(actual)) continue;
     if (name === 'customFields' && Array.isArray(value) && Array.isArray(actual)
       && canonical(value.map(normalizeField)) === canonical(actual.map(normalizeField))) continue;
     if (source.kind === 'passkey' && typeof value === 'string' && typeof actual === 'string') {
       if (name === 'credentialId' && normalizeCredentialId(value) === normalizeCredentialId(actual)) continue;
       if (['privateKeyPkcs8','publicKey','userHandle'].includes(name)) {
         let a: Uint8Array | undefined, b: Uint8Array | undefined;
-        try { a = base64ToBytes(value.replace(/-/g, '+').replace(/_/g, '/')); b = base64ToBytes(actual.replace(/-/g, '+').replace(/_/g, '/'));
+        try { a = base64ToBytes(name === 'privateKeyPkcs8' ? parsePortablePasskeyPrivateKey(value)?.pkcs8Base64 || '' : value.replace(/-/g, '+').replace(/_/g, '/'));
+          b = base64ToBytes(actual.replace(/-/g, '+').replace(/_/g, '/'));
           if (a.length === b.length && a.every((v,i) => v === b![i])) continue;
-        } finally { a?.fill(0); b?.fill(0); }
+        } catch { /* Report the field name only. */ } finally { a?.fill(0); b?.fill(0); }
       }
     }
     if (jsonFields.has(name) && typeof value === 'string' && typeof actual === 'string') {
@@ -106,7 +120,13 @@ export function assertBitwardenPortableProjection(source: VaultItem, projected: 
     throw new Error(`Bitwarden 无法完整保存 ${name} 字段，已保留来源。`);
   }
 }
-function normalizeField(field: Record<string, unknown>) { const { id: _id, ...rest } = field; return { ...rest, protected: rest.protected === true }; }
+function normalizeField(field: Record<string, unknown>) {
+  const { id: _id, fieldType, ...rest } = field;
+  // TEXT/HIDDEN are the same native text types represented by `protected` on
+  // readback. Retain every other type/attribute so actual losses still refuse.
+  return { ...rest, protected: rest.protected === true || fieldType === 'HIDDEN',
+    ...(fieldType !== undefined && fieldType !== 'TEXT' && fieldType !== 'HIDDEN' ? { fieldType } : {}) };
+}
 function canonical(value: unknown) { const json = JSON as typeof JSON & { isRawJSON?: (row: unknown) => boolean };
   return JSON.stringify(value, (_key, row) => row && typeof row === 'object' && !Array.isArray(row) && !json.isRawJSON?.(row)
     ? Object.fromEntries(Object.entries(row).sort(([a],[b]) => a.localeCompare(b))) : row); }
