@@ -28,6 +28,7 @@ import type {
   Mdbx2ObjectUpsertInput,
   Mdbx2ObjectWriteResult
 } from "./native-contract";
+import type { Mdbx2WriteRevision } from './native-contract';
 
 const TARGET_HANDLE = "11111111-1111-4111-8111-111111111111";
 const SOURCE_HANDLE = "22222222-2222-4222-8222-222222222222";
@@ -47,6 +48,8 @@ class FakeNative implements Mdbx2BatchTransferNativeClient, Mdbx2RuntimeClient {
   private readonly committed = new Map<string, Mdbx2ObjectBatchResult>();
   loseNextBatchResponse = false;
   afterDeleteBatch?: () => void;
+  beforeDeleteBatch?: () => void;
+  readonly revisions = new Map<string, number>();
   private objectCounter = 0;
 
   constructor() {
@@ -55,6 +58,7 @@ class FakeNative implements Mdbx2BatchTransferNativeClient, Mdbx2RuntimeClient {
   }
 
   async vaultStatus(vaultHandle: string) { return { vaultHandle, open: true, available: true, vaultId: `vault-${vaultHandle}` }; }
+  async readWriteRevision(vaultHandle: string) { return { vaultId: `vault-${vaultHandle}`, revisionSha256: (this.revisions.get(vaultHandle) || 0).toString(16).padStart(64, '0') }; }
 
   async listCollections(vaultHandle: string) {
     return { items: (this.collections.get(vaultHandle) || []).map((item) => ({ ...item })) };
@@ -108,11 +112,13 @@ class FakeNative implements Mdbx2BatchTransferNativeClient, Mdbx2RuntimeClient {
     return { commitId: result.commitId, alreadyCommitted: false, logicalObjectId: written.logicalObjectId, objectId: written.objectId, collectionId: written.collectionId, objectTypeId: written.objectTypeId };
   }
 
-  async mutateObjects(vaultHandle: string, operationScope: string, mutations: Mdbx2ObjectMutationInput[]): Promise<Mdbx2ObjectBatchResult> {
+  async mutateObjects(vaultHandle: string, operationScope: string, mutations: Mdbx2ObjectMutationInput[], _timeout?: number, revision?: Mdbx2WriteRevision): Promise<Mdbx2ObjectBatchResult> {
     this.scopes.push(operationScope);
     this.batches.push(mutations);
     const previous = this.committed.get(operationScope);
     if (previous) return { ...previous, alreadyCommitted: true, items: previous.items.map((item) => ({ ...item })) };
+    if (mutations.every(row => row.kind === 'delete')) this.beforeDeleteBatch?.();
+    if (revision && JSON.stringify(revision) !== JSON.stringify(await this.readWriteRevision(vaultHandle))) throw new Error('Synthetic source revision conflict');
     const items = mutations.map((mutation) => {
       if (mutation.kind === "delete") {
         const objectId = mutation.logicalObjectId.slice(7), record = this.records.get(objectId);
@@ -142,6 +148,7 @@ class FakeNative implements Mdbx2BatchTransferNativeClient, Mdbx2RuntimeClient {
     });
     const result: Mdbx2ObjectBatchResult = { changed: true, operationId: OPERATION_ID, commitId: `commit-${this.committed.size + 1}`, alreadyCommitted: false, items };
     this.committed.set(operationScope, result);
+    this.revisions.set(vaultHandle, (this.revisions.get(vaultHandle) || 0) + 1);
     if (mutations.every(mutation => mutation.kind === "delete")) this.afterDeleteBatch?.();
     this.events.push(`batch:${mutations.length}`);
     if (this.loseNextBatchResponse) {
@@ -546,6 +553,57 @@ describe("MDBX2 batch transfer coordinator", () => {
     expect(native.deleted).toHaveLength(2);
     expect(await service.readMdbx2MoveFinalizations(OPERATION_ID)).toEqual([expect.objectContaining({ status: "completed", entries: expect.any(Array) })]);
     for(const item of items) expect((await service.getItem(item.id))!.providerRefs[0].providerId).toBe(target.id);
+  });
+
+  it.each(['files during validation', 'revision after journal', 'new local dependent', 'intent persistence', 'delete reply'] as const)
+    ('guards remote move finalization against %s', async change => {
+    const { service, target, storage } = await setupVault();
+    const sourceProvider: ProviderAccount = { ...target, id: 'mdbx-source', config: { vaultHandle: SOURCE_HANDLE } };
+    await service.upsertProvider(sourceProvider);
+    const source = await importNativeItem(service, { ...createLoginItem({ title: 'Source boundary' }), passwordGroupId: 'boundary-group',
+      replicaGroupId: 'password:boundary', mdbxFolderId: SOURCE_COLLECTION,
+      providerRefs: [{ providerId: sourceProvider.id, remoteId: SOURCE_OBJECT, remoteFolderId: SOURCE_COLLECTION, revision: 'source-commit' }] });
+    const native = new FakeNative(); native.addSourceRecord(source);
+    let captures = 0;
+    const attachments = { ...noAttachments, async captureMoveAttachmentProofs() {
+      if (++captures === 2 && change === 'files during validation') native.revisions.set(SOURCE_HANDLE, 1);
+      return [];
+    }, async verifyMoveAttachmentProofs() {} };
+    const save = service.prepareMdbx2SourceDeletion.bind(service);
+    service.prepareMdbx2SourceDeletion = async (...args) => {
+      if (change === 'intent persistence') storage.failNext = true;
+      const record = await save(...args);
+      if (change === 'revision after journal') native.revisions.set(SOURCE_HANDLE, 1);
+      if (change === 'new local dependent') await service.upsertItem({ ...source, id: 'new-member', title: 'New group member',
+        providerRefs: [{ providerId: sourceProvider.id, remoteId: 'new-object', revision: 'new-head' }] });
+      if (change === 'delete reply') native.loseNextBatchResponse = true;
+      return record;
+    };
+    const coordinator = new Mdbx2BatchTransferCoordinator(service, new EmptyRegistry(), new Mdbx2Provider(native), native, attachments);
+    const request = { itemIds: [source.id], targetProviderId: target.id, targetCollectionId: TARGET_COLLECTION,
+      action: 'move' as const, confirmed: true, preserveCategories: false, operationId: OPERATION_ID, operationCreatedAt: OPERATION_TIME };
+    const result = await coordinator.execute(request);
+    if (change === 'delete reply') {
+      expect(result.completedCount, JSON.stringify(result)).toBe(1); expect(native.deleted).toHaveLength(1);
+      expect(native.batches.filter(row => row[0].kind === 'delete')).toHaveLength(2);
+    } else {
+      expect(result.failedCount, JSON.stringify(result)).toBe(1); expect(native.deleted).toHaveLength(0);
+      expect(await service.getItem(source.id)).toEqual(source);
+      const [pending] = await service.readMdbx2MoveFinalizations();
+      if (change === 'intent persistence' || change === 'files during validation') expect(pending.sourceDeletion).toBeUndefined();
+      else expect(pending.sourceDeletion).toMatchObject({ version: 1 });
+      // Sync may not erase the source snapshot while native outcome is pending.
+      await expect(service.applyProviderSync(sourceProvider.id, [])).rejects.toThrow('恢复');
+      expect(await service.getItem(source.id)).toEqual(source);
+      if (change === 'revision after journal') {
+        const restarted = new SecureVaultService(storage, new MemoryVaultSessionStore()); await restarted.unlock('coordinator password');
+        const recovered = new Mdbx2BatchTransferCoordinator(restarted, new EmptyRegistry(), new Mdbx2Provider(native), native, attachments);
+        const reads = captures;
+        expect((await recovered.execute(request)).failedCount).toBe(1);
+        expect(captures).toBe(reads); expect(native.deleted).toHaveLength(0);
+        expect((await restarted.readMdbx2MoveFinalizations())[0].sourceDeletion).toEqual(pending.sourceDeletion);
+      }
+    }
   });
 
   it("adopts no copied group member when the last source changes during attachment work", async () => {

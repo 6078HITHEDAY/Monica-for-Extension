@@ -5,6 +5,8 @@ import { SecureVaultService } from "./secure-vault-service";
 import { MemoryVaultStorage } from "./vault-storage";
 import { MemoryVaultSessionStore } from "./vault-session";
 import type { VaultEnvelope } from "./vault-crypto";
+import { mdbx2TransferOperationScope as hash } from '../providers/mdbx2/mdbx2-transfer-identity';
+import type { Mdbx2SourceDeletionIntent } from '../core/mdbx2-source-deletion';
 
 class FailableStorage extends MemoryVaultStorage {
   failNext = false;
@@ -165,4 +167,52 @@ it('rejects incomplete pre-write data without modifying the original record', as
     expect(()=>readMdbx2MoveJournal([{ ...writing, ...change }])).toThrow('恢复记录');
   }
   expect(readMdbx2MoveJournal([writing])).toEqual([writing]);
+});
+
+async function sourceDeletionFixture() {
+  const f = await setup(), source: ProviderAccount = { id: 'source', kind: 'mdbx2', name: 'Source', enabled: true,
+    isDefaultSaveTarget: false, config: { vaultHandle: 'source-handle' } };
+  await f.service.upsertProvider(source);
+  const expected = { ...f.record.entries[0].expected, providerRefs: [{ providerId: source.id, remoteId: 'source-object', revision: 'source-head' }] };
+  await f.service.applyProviderSync(source.id, [expected]);
+  const record = { ...f.record, attachments: [], entries: [{ ...f.record.entries[0], expected: (await f.service.getItem(expected.id))! }] };
+  await f.service.stageMdbx2MoveFinalization(record);
+  const writeRevision = { vaultId: record.sourceVaultId, revisionSha256: 'bc'.repeat(32) };
+  const intent: Mdbx2SourceDeletionIntent = { version: 1, writeRevision, operationScope: await hash({ version: 2, purpose: 'source-group-delete',
+    operationId: record.operationId, sourceProviderId: source.id, targetProviderId: record.targetProviderId,
+    mutations: [{ kind: 'delete', logicalObjectId: 'native:source-object', expectedHeadCommitId: 'source-head' }], writeRevision }) };
+  return { ...f, record, source, intent };
+}
+
+it('persists the immutable native source deletion before IO and restores it from encrypted storage', async () => {
+  const { storage, service, record, intent } = await sourceDeletionFixture();
+  storage.failNext = true;
+  await expect(service.prepareMdbx2SourceDeletion(record.id, intent)).rejects.toThrow('interrupted');
+  expect((await service.readMdbx2MoveFinalizations())[0].sourceDeletion).toBeUndefined();
+  const prepared = await service.prepareMdbx2SourceDeletion(record.id, intent);
+  expect(prepared.sourceDeletion).toEqual(intent);
+  expect(JSON.stringify(storage.envelope)).not.toContain(intent.operationScope);
+  expect(JSON.stringify(storage.envelope)).not.toContain('Synthetic journal secret value');
+  const restarted = new SecureVaultService(storage, new MemoryVaultSessionStore()); await restarted.unlock(password);
+  expect((await restarted.readMdbx2MoveFinalizations())[0]).toEqual(prepared);
+  expect(await restarted.prepareMdbx2SourceDeletion(record.id, intent)).toEqual(prepared);
+  await expect(restarted.prepareMdbx2SourceDeletion(record.id, { ...intent, operationScope: 'aa'.repeat(32) })).rejects.toThrow();
+  expect((await restarted.readMdbx2MoveFinalizations())[0]).toEqual(prepared);
+});
+
+it('rejects a changed source before persisting its deletion and blocks source sync while recovery is pending', async () => {
+  const { service, record, intent, source } = await sourceDeletionFixture();
+  await service.upsertItem({ ...record.entries[0].expected, notes: 'newer edit' });
+  await expect(service.prepareMdbx2SourceDeletion(record.id, intent)).rejects.toThrow('已变化');
+  await expect(service.applyProviderSync(source.id, [])).rejects.toThrow('恢复');
+  expect(await service.getItem(record.entries[0].expected.id)).toMatchObject({ notes: 'newer edit' });
+  expect((await service.readMdbx2MoveFinalizations())[0].sourceDeletion).toBeUndefined();
+});
+
+it('does not let ordinary staging bypass source deletion verification or accept a mismatched vault', async () => {
+  const { service, record, intent } = await sourceDeletionFixture();
+  await expect(service.stageMdbx2MoveFinalization({ ...record, sourceDeletion: intent })).rejects.toThrow();
+  expect(() => readMdbx2MoveJournal([{ ...record, sourceDeletion: { ...intent, writeRevision: { vaultId: 'other', revisionSha256: 'bc'.repeat(32) } } }])).toThrow();
+  expect(() => readMdbx2MoveJournal([{ ...record, sourceProviderId: 'local', sourceDeletion: intent }])).toThrow();
+  expect(() => readMdbx2MoveJournal([{ ...writingRecord(record), sourceDeletion: intent }])).toThrow();
 });

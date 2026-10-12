@@ -3,7 +3,8 @@ import { inspectPasskeyKey } from '../../passkey/capability';
 import { normalizeCredentialId } from '../../passkey/source-policy';
 import type { Mdbx2MoveAttachmentProof, Mdbx2MoveFinalizationRecord } from "../../core/mdbx2-move-journal";
 import { completeTransferComponents, mdbx2TransferDependencies } from "./mdbx2-transfer-dependencies";
-import { deleteMdbx2TransferSources } from "./mdbx2-transfer-source-delete";
+import { deleteMdbx2TransferSources, prepareMdbx2TransferSourceDeletion } from "./mdbx2-transfer-source-delete";
+import type { Mdbx2SourceDeletionIntent } from '../../core/mdbx2-source-deletion';
 import { readMdbx2TransferBinding, verifyMdbx2TransferBinding, verifyMdbx2TransferTargets,
   type Mdbx2TransferVaultBinding } from "./mdbx2-transfer-verification";
 import type {
@@ -26,6 +27,7 @@ import {
   type Mdbx2ObjectSummaryPage,
   type Mdbx2ObjectWriteResult,
   type Mdbx2VaultRuntimeStatus,
+  type Mdbx2WriteRevision,
   type Mdbx2AttachmentMutationResult
 } from "./native-contract";
 import {
@@ -152,6 +154,7 @@ export interface Mdbx2BatchTransferVault {
   readMdbx2MoveFinalizations(operationId?: string): Promise<Mdbx2MoveFinalizationRecord[]>;
   stageMdbx2MoveFinalization(record: Mdbx2MoveFinalizationRecord): Promise<void>;
   prepareMdbx2MoveFinalization(record: Mdbx2MoveFinalizationRecord): Promise<void>;
+  prepareMdbx2SourceDeletion(id: string, intent: Mdbx2SourceDeletionIntent): Promise<Mdbx2MoveFinalizationRecord>;
   applyCompletedMdbx2Transfer(entries: CompletedMdbx2TransferEntry[], targetProviderId?: string,
     deleteSources?: (pendingMoves: readonly CompletedMdbx2TransferEntry[], providers: readonly ProviderAccount[]) => Promise<void>, finalizationId?: string): Promise<VaultItem[]>;
   listItems(): Promise<VaultItem[]>;
@@ -169,7 +172,8 @@ export interface Mdbx2BatchTransferProviderRegistry {
 }
 
 export interface Mdbx2BatchTransferNativeClient extends Mdbx2TransferCollectionClient {
-  mutateObjects(vaultHandle: string, operationScope: string, mutations: Mdbx2ObjectMutationInput[]): Promise<Mdbx2ObjectBatchResult>;
+  mutateObjects(vaultHandle: string, operationScope: string, mutations: Mdbx2ObjectMutationInput[], timeoutMs?: number, writeRevision?: Mdbx2WriteRevision): Promise<Mdbx2ObjectBatchResult>;
+  readWriteRevision(vaultHandle: string): Promise<Mdbx2WriteRevision>;
   vaultStatus(vaultHandle: string): Promise<Mdbx2VaultRuntimeStatus>;
   listObjects(
     vaultHandle: string,
@@ -309,6 +313,32 @@ export class Mdbx2BatchTransferCoordinator {
   private async resumeFinalization(record: Mdbx2MoveFinalizationRecord): Promise<void> {
     if (record.status === "writing") record = await this.resumeWriteIntent(record);
     if (!record.attachments) throw new Error("移动恢复记录无效，已保留原始数据。");
+    if (record.status !== 'completed' && record.sourceProviderId !== 'local' && record.sourceProviderId !== record.targetProviderId && !record.sourceDeletion) {
+      const source = await this.vault.getProvider(record.sourceProviderId), target = await this.vault.getProvider(record.targetProviderId);
+      if (!source || !target) throw new Error('移动期间密码库连接已变化，来源项目已保留。');
+      const intent = await prepareMdbx2TransferSourceDeletion(this.nativeClient, source, record.entries.map(row => row.expected),
+        record.operationId, target.id, record.sourceVaultId, async () => {
+          const binding = await readMdbx2TransferBinding(this.nativeClient, source);
+          await verifyMdbx2TransferTargets(this.nativeClient, binding, record.entries.map(row => row.expected));
+          // Re-read the source files under a whole-vault revision fence. Saved
+          // target proofs alone cannot detect new/replaced source attachments.
+          for (const entry of record.entries) {
+            const expected = record.attachments!.filter(proof => proof.itemId === entry.result.id);
+            if (this.attachments?.captureMoveAttachmentProofs && this.attachments.verifyMoveAttachmentProofs) {
+              const actual = await this.attachments.captureMoveAttachmentProofs(source, entry.expected, target, entry.result,
+                await mdbx2TransferUuid(record.operationId, `attachment-transfer:${entry.expected.id}`));
+              const sorted = (proofs: Mdbx2MoveAttachmentProof[]) => proofs.slice().sort((a,b) => a.attachmentId.localeCompare(b.attachmentId));
+              if (await mdbx2TransferOperationScope(sorted(actual)) !== await mdbx2TransferOperationScope(sorted(expected)))
+                throw new Error('移动期间来源附件已变化，已保留来源和副本。');
+            } else {
+              const ref = referenceFor(entry.expected, source.id)!;
+              const actual = await this.nativeClient.listAttachments(binding.vaultHandle, ref.remoteFolderId!, ref.remoteId!);
+              if (expected.length || actual.items.length || actual.nextCursor) throw new Error('移动附件校验失败，来源项目已保留。');
+            }
+          }
+        });
+      record = await this.vault.prepareMdbx2SourceDeletion(record.id, intent);
+    }
     await this.vault.applyCompletedMdbx2Transfer(record.entries, record.targetProviderId, async (pending, providers) => {
       const target = providers.find(account => account.id === record.targetProviderId);
       if (!target) throw new Error("移动期间密码库连接已变化，来源项目已保留。");
@@ -332,7 +362,10 @@ export class Mdbx2BatchTransferCoordinator {
           if (proofs.length || actual.items.length || actual.nextCursor) throw new Error("移动附件校验失败，来源项目已保留。");
         }
       }
-      if (source && record.sourceProviderId !== "local" && source.id !== target.id) await deleteMdbx2TransferSources(this.nativeClient, source, pending.map(entry => entry.expected), record.operationId, target.id);
+      if (source && record.sourceProviderId !== "local" && source.id !== target.id) {
+        if (!record.sourceDeletion) throw new Error('来源删除尚未保存恢复请求。');
+        await deleteMdbx2TransferSources(this.nativeClient, source, pending.map(entry => entry.expected), record.operationId, target.id, record.sourceDeletion);
+      }
     }, record.id);
   }
 
@@ -562,6 +595,7 @@ export class Mdbx2BatchTransferCoordinator {
           // its complete finalization intent before the first destructive step.
           // Same-vault moves need a separate journal before the target write itself.
           let finalizationId: string | undefined;
+          let finalizationRecord: Mdbx2MoveFinalizationRecord | undefined;
           if (groupAction === "move" && sourceAccount.id !== context.targetAccount.id) {
             finalizationId = await mdbx2TransferUuid(context.operationId, `move-finalization:${JSON.stringify(component.slice().sort())}`);
             const record: Mdbx2MoveFinalizationRecord = {
@@ -577,8 +611,10 @@ export class Mdbx2BatchTransferCoordinator {
               entries: completedEntries.map(entry => ({ ...entry, action: "move" }))
             };
             await this.vault.stageMdbx2MoveFinalization(record);
+            finalizationRecord = record;
           }
-          await this.vault.applyCompletedMdbx2Transfer(completedEntries,
+          if (finalizationRecord) await this.resumeFinalization(finalizationRecord);
+          else await this.vault.applyCompletedMdbx2Transfer(completedEntries,
             context.request.targetProviderId, groupAction === "move"
               ? async (pending, providers) => {
                 await this.verifyMoveFinalization(context, sourceAccount, pending.map(item => item.result), providers);
@@ -587,7 +623,7 @@ export class Mdbx2BatchTransferCoordinator {
                   if (proofs && this.attachments?.verifyMoveAttachmentProofs) await this.attachments.verifyMoveAttachmentProofs(context.targetAccount, item.result, proofs);
                 }
                 if (sourceAccount.kind === "mdbx2" && sourceAccount.id !== context.targetAccount.id) {
-                  await deleteMdbx2TransferSources(this.nativeClient, sourceAccount, pending.map(item => item.expected), context.operationId, context.targetAccount.id);
+                  throw new Error('跨库移动必须先保存完整的来源删除恢复请求。');
                 }
               }
               : undefined, finalizationId);
@@ -943,13 +979,7 @@ export class Mdbx2BatchTransferCoordinator {
   private async deleteSource(operationId: string, account: ProviderAccount, item: VaultItem): Promise<void> {
     if (account.kind === "local") return;
     if (account.kind === "mdbx2") {
-      const operation = await mdbx2TransferUuid(operationId, `source-delete:${account.id}:${item.id}`);
-      const reference = referenceFor(item, account.id);
-      if (!reference?.remoteId || !reference.revision) throw new Error("来源 MDBX2 缺少原生身份或版本，已保留来源。");
-      const logicalId = `native:${reference.remoteId}`;
-      const result = await this.nativeClient.deleteObject(vaultHandleOf(account), operation, logicalId, reference.revision);
-      if (result.logicalObjectId !== logicalId || result.objectId !== reference.remoteId) throw new Error("来源 MDBX2 删除响应与项目不一致。");
-      return;
+      throw new Error('跨库移动必须先保存完整的来源删除恢复请求。');
     }
     await this.registry.get(account.kind).remove(account, item);
   }

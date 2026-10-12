@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { expect, it } from "vitest";
 import { Mdbx2NativeClient } from "../../src/providers/mdbx2/native-client";
 import { decodeMdbx2Object } from "../../src/providers/mdbx2/mdbx2-item-codec";
-import { deleteMdbx2TransferSources } from "../../src/providers/mdbx2/mdbx2-transfer-source-delete";
+import { deleteMdbx2TransferSources, prepareMdbx2TransferSourceDeletion } from "../../src/providers/mdbx2/mdbx2-transfer-source-delete";
 import { readMdbx2TransferBinding, verifyMdbx2TransferBinding, verifyMdbx2TransferTargets } from "../../src/providers/mdbx2/mdbx2-transfer-verification";
 import type { Mdbx2ObjectRecord } from "../../src/providers/mdbx2/native-contract";
 import type { ProviderAccount, VaultItem } from "../../src/core/model";
@@ -44,15 +44,18 @@ it.skipIf(!input || !root)('actual Native atomic group deletion: stale last memb
     await verifyMdbx2TransferBinding(client, source, binding);
     await verifyMdbx2TransferTargets(client, binding, items);
     const stale=structuredClone(items);stale[1].providerRefs[0].revision='ffffffff-ffff-4fff-8fff-ffffffffffff';
-    await expect(deleteMdbx2TransferSources(client,source,stale,crypto.randomUUID(),'synthetic-target')).rejects.toThrow();
+    const staleId = crypto.randomUUID(), staleIntent = await prepareMdbx2TransferSourceDeletion(client, source, stale, staleId, 'synthetic-target', binding.vaultId, async () => {});
+    await expect(deleteMdbx2TransferSources(client,source,stale,staleId,'synthetic-target',staleIntent)).rejects.toThrow();
     expect(await snapshot()).toEqual(before);
     let calls=0, drop=true;
-    const lossy={resolveObjectOperation:client.resolveObjectOperation.bind(client),mutateObjects:async (...args:Parameters<Mdbx2NativeClient['mutateObjects']>)=>{
+    const lossy={vaultStatus:client.vaultStatus.bind(client),resolveObjectOperation:client.resolveObjectOperation.bind(client),mutateObjects:async (...args:Parameters<Mdbx2NativeClient['mutateObjects']>)=>{
       calls++;const result=await client.mutateObjects(...args);
       if(drop){drop=false;throw new Error('Synthetic lost response after actual commit');}return result;
     }};
     const operationId=crypto.randomUUID();
-    const result=await deleteMdbx2TransferSources(lossy,source,items,operationId,'synthetic-target');
+    const intent = await prepareMdbx2TransferSourceDeletion(client, source, items, operationId, 'synthetic-target', binding.vaultId,
+      () => verifyMdbx2TransferTargets(client, binding, items));
+    const result=await deleteMdbx2TransferSources(lossy,source,items,operationId,'synthetic-target',intent);
     expect(calls).toBe(2);expect(result.alreadyCommitted).toBe(true);
     await expect(verifyMdbx2TransferTargets(client, binding, items)).rejects.toThrow();
     const targetIds=new Set([password!.objectId,note!.objectId]);
@@ -71,7 +74,7 @@ it.skipIf(!input || !root)('actual Native atomic group deletion: stale last memb
         expect(actual.headCommitId).toBe(original.headCommitId);
       }
     }
-    const repeated=await deleteMdbx2TransferSources(client,source,[...items].reverse(),operationId,'synthetic-target');
+    const repeated=await deleteMdbx2TransferSources(client,source,[...items].reverse(),operationId,'synthetic-target',intent);
     expect(repeated.commitId).toBe(result.commitId);expect(repeated.alreadyCommitted).toBe(true);
     expect(hash(await readFile(input))).toBe(inputHash);
     await writeFile(join(root,'source-delete-evidence.json'),JSON.stringify({status:'passed',input,inputSha256:inputHash,

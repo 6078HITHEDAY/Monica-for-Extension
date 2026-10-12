@@ -2726,6 +2726,8 @@ async function executeProviderSync(providerId: string, options: { allowEmptyRemo
   try {
     controller.signal.throwIfAborted();
     if (account.kind === 'mdbx2') {
+      if ((await service.readMdbx2MoveFinalizations()).some(row => row.status !== 'completed' && row.sourceProviderId === account.id))
+        throw new Error('此密码源还有待恢复的移动，请先恢复后再同步。');
       await passwordProjectRemovals.recoverProvider(account.id, controller.signal);
       for (const batch of (await service.readMdbx2RestoreBatches()).filter(row => row.status === 'prepared' && row.members[0].provider.id === account.id)) {
         controller.signal.throwIfAborted();

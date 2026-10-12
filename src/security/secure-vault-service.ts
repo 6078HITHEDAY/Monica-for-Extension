@@ -68,6 +68,9 @@ import type { Mdbx2ObjectsRestoreResult } from '../providers/mdbx2/native-contra
 import type { Mdbx2ObjectRestoreResult } from '../providers/mdbx2/native-contract';
 import { mdbx2ItemFingerprint } from '../providers/mdbx2/mdbx2-provider';
 import { readMdbx2MoveJournal, type Mdbx2MoveFinalizationRecord } from "../core/mdbx2-move-journal";
+import { readMdbx2SourceDeletionIntent, type Mdbx2SourceDeletionIntent } from '../core/mdbx2-source-deletion';
+import { assertMdbx2SourceDeletionScope } from '../providers/mdbx2/mdbx2-transfer-source-delete';
+import { mdbx2TransferDependencies } from '../providers/mdbx2/mdbx2-transfer-dependencies';
 import { assertPasskeyCounterNotRegressed, nextBitwardenPasskeyCounter, nextPasskeyCounter, passkeyCounterHighWaterMark, preserveLocalPasskeyUsage, preservePasskeyCounterHistory, resolvePasskeyOwnership, samePasskeySigningIdentity } from "../passkey/ownership-policy";
 
 export type VaultLifecycleStatus = "uninitialized" | "locked" | "unlocked";
@@ -908,6 +911,8 @@ export class SecureVaultService {
     const provider = state.providers.find((candidate) => candidate.id === providerId);
     if (!provider) throw new Error("密码源不存在。");
     if (guard.expectedAccount && !sameProviderBinding(guard.expectedAccount, provider)) throw new Error("同步期间密码源配置已变化，请重新同步。");
+    if (readMdbx2MoveJournal(state.mdbx2MoveFinalizations).some(row => row.status !== 'completed' && row.sourceProviderId === providerId))
+      throw new Error('此密码源还有待恢复的移动，普通同步不能覆盖来源恢复快照。');
     if (!guard.bitwardenBatchTransfer && readBitwardenBatches(state.bitwardenBatchTransfers).some(row => row.target.id === providerId && row.status === 'writing'))
       throw new Error('Bitwarden 还有未完成的整批传输，请先恢复；普通同步不能提前入库部分副本。');
     const transferJournal = guard.keePassTransfer ? readKeePassTransfers(state.keepassTransfers) : [];
@@ -2004,7 +2009,7 @@ export class SecureVaultService {
   /** Persist before native write or source deletion. Caller must verify both Native vault IDs. */
   async stageMdbx2MoveFinalization(input: Mdbx2MoveFinalizationRecord): Promise<void> {
     const [record] = readMdbx2MoveJournal([input]);
-    if (record.status === "completed") throw new Error("移动恢复记录无效，已保留原始数据。");
+    if (record.status === "completed" || record.sourceDeletion) throw new Error("移动恢复记录无效，已保留原始数据。");
     await this.runExclusive(async () => {
       const { state, envelope, key } = await this.mutableContext();
       const records = readMdbx2MoveJournal(state.mdbx2MoveFinalizations);
@@ -2055,6 +2060,29 @@ export class SecureVaultService {
       }
       state.mdbx2MoveFinalizations = records.map(item => item.id === record.id ? record : item);
       await this.persist(state, key, envelope.kdf);
+    });
+  }
+
+  /** Save the exact deletion after read-only native verification, before IO that
+   * can remove sources. A later revision must never overwrite this intent. */
+  async prepareMdbx2SourceDeletion(id: string, input: Mdbx2SourceDeletionIntent): Promise<Mdbx2MoveFinalizationRecord> {
+    const intent = readMdbx2SourceDeletionIntent(input);
+    return this.runExclusive(async () => {
+      const { state, envelope, key } = await this.mutableContext();
+      const records = readMdbx2MoveJournal(state.mdbx2MoveFinalizations), record = records.find(row => row.id === id);
+      const source = record && state.providers.find(row => row.id === record.sourceProviderId);
+      if (!record || record.status === 'writing' || !record.attachments || !source) throw new Error('移动来源删除尚未准备。');
+      await assertMdbx2SourceDeletionScope(intent, source, record.entries.map(row => row.expected), record.operationId, record.targetProviderId, record.sourceVaultId);
+      if (record.sourceDeletion) {
+        if (await transferIdentityHash(record.sourceDeletion) !== await transferIdentityHash(intent)) throw new Error('不能覆盖已保存的来源删除请求。');
+        return structuredClone(record);
+      }
+      if (record.status !== 'prepared') throw new Error('移动来源删除阶段无效。');
+      assertMdbx2MoveSourcesCurrent(state, record);
+      record.sourceDeletion = intent;
+      state.mdbx2MoveFinalizations = readMdbx2MoveJournal(records);
+      await this.persist(state, key, envelope.kdf);
+      return structuredClone(record);
     });
   }
 
@@ -2115,6 +2143,7 @@ export class SecureVaultService {
       // Validate every member before an external deletion can begin. The callback must
       // commit the source group atomically and support operation-ID recovery on retry.
       if (!pendingEntries.length && (!finalization || finalization.status === "completed")) return entries.map(entry => structuredClone(entry.result));
+      if (finalization && pendingMoves.length) assertMdbx2MoveSourcesCurrent(state, finalization);
       // Supply a detached snapshot from this lock; callbacks must not re-enter service reads.
       if (pendingMoves.length && deleteSources) await deleteSources(pendingMoves, structuredClone(state.providers));
       const replaceById = new Map(pendingEntries.filter((entry) => entry.action === "move").map((entry) => [entry.expected.id, entry.result]));
@@ -4057,6 +4086,15 @@ function assertMdbx2RestoreReady(state: VaultState, record: Mdbx2RestoreRecord, 
     && [...row.retained, ...row.removed].some(item => item.id === record.source.id)))
     throw new Error('此密码项目的移除结果尚未确认，请先完成移除恢复。');
   return deletedAgain;
+}
+
+function assertMdbx2MoveSourcesCurrent(state: VaultState, record: Mdbx2MoveFinalizationRecord): void {
+  const ids = record.entries.map(row => row.expected.id), selected = mdbx2TransferDependencies(ids, state.items, 'move').selectedIds;
+  if (selected.length !== ids.length || selected.some(id => !ids.includes(id))
+    || record.entries.some(row => JSON.stringify(state.items.find(item => item.id === row.expected.id)) !== JSON.stringify(row.expected))
+    || state.providerConflicts.some(row => ids.includes(row.itemId))
+    || state.mutationQueue.some(row => ids.includes(row.itemId)))
+    throw new Error('移动期间来源项目或关联已变化，已保留来源和副本。');
 }
 
 function replayMdbx2DeletionCancellation(state: VaultState, operationId: string, expected?: Mdbx2RestoreBatchRequest): VaultItem[] | undefined {

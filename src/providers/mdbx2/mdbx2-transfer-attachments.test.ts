@@ -20,6 +20,7 @@ const ITEM: VaultItem = {
 } as VaultItem;
 
 class AttachmentNativeFake implements Mdbx2BatchTransferNativeClient {
+  async readWriteRevision(): Promise<never> { throw new Error('Unexpected revision read by attachment-only tests'); }
   corruptTarget = false;
   hideTarget = false;
   extraTarget = false;

@@ -4,6 +4,7 @@
 
 ## 中文
 
+- 加强 MDBX 跨库移动的数据保护：删除前重新核对来源附件，并将整个数据库的提交摘要加密保存；即使条目版本没变，后续附件变化也会阻止删除。回复丢失或浏览器重启后继续使用原删除回执，不重复删除、不自动放宽版本检查；兼容旧版已提交回执，待恢复期间同步不会覆盖来源快照。
 - 本地项目现可移动到 Bitwarden：自动包含完整密码项目和支持的 SSO 关联，保留可迁移 Passkey、密码历史及附件。目标全部回读校验后，一次性纳入目标并移除本地原件；中断后可恢复，重复执行不重复创建。来源在传输期间被修改或出现新关联时停止移除，保留两端数据；远程来源继续使用复制。复用现有移动确认入口，补齐各语言提示并改善暗色提示文字对比度。
 - 旧 Monica Android WebDAV 快照现可将通过完整性校验的密码项目、可迁移 Passkey、密码历史和附件批量复制到 Bitwarden，中断后可恢复；原凭据、零计数及来源备份保持不变。同批成员共用一次整库读取，减少重复下载。校验附件归属、大小和校验和，保留合法空文件；无法完整表示的字段或历史明确阻断，源备份变化时要求重新同步。旧 WebDAV 快照仍不作为网站新建 Passkey 的直接保存目标。
 - KeePass 来源现可将通过完整性校验的密码项目、可用 Passkey 和附件批量复制到 Bitwarden，并在浏览器中断后恢复；新客户端可读取附件并使用原 Passkey 登录。只包含旧密码差异的 KDBX 历史可转为 Bitwarden 密码历史；旧快照中的不同字段、附件及无法表示的原生设置会明确阻断。修复旧本地条目缺少冗余库编号、Passkey 派生标记和隐藏字段类型差异导致的误报，同时严格检查字段值、保护状态和完整项目成员。MDBX 预览也会拒绝尚未同步的可选字段清空。
@@ -34,6 +35,7 @@
 
 ## English
 
+- Hardened cross-vault MDBX moves: source attachments are rechecked before an encrypted deletion intent records the complete vault revision. Later attachment changes block deletion even when item heads are unchanged. Lost replies and restarts reuse the original receipt without duplicate deletion or relaxed revision checks; committed legacy receipts remain recoverable, and pending moves protect their source snapshots from sync.
 - Local items can now be moved into Bitwarden, including complete password projects, supported SSO dependencies, portable Passkeys, password history and attachments. After full destination readback verification, one encrypted transaction adopts the destination and removes local originals. Interrupted transfers resume without duplicate creates. Source edits or new dependencies stop removal and preserve both sides; remote sources continue to use Copy. The existing move confirmation is reused, with complete locale instructions and more readable warning text in dark mode.
 - Eligible password projects, portable Passkeys, password history and attachments from legacy Monica Android WebDAV snapshots can now be batch-copied into Bitwarden with interruption recovery. Original credentials, zero counters and source backups remain intact. Each batch shares one archive read, avoiding repeated whole-vault downloads. Attachment ownership, size and hashes are verified, including valid empty files; unsupported fields/history or changed source snapshots stop the affected transfer. Legacy WebDAV snapshots remain unavailable as direct website Passkey registration destinations.
 - KeePass sources can now copy eligible password projects, usable Passkeys and attachments into Bitwarden with interruption recovery. A fresh client can read copied files and authenticate with the original credential. KDBX snapshots containing only old-password differences can become native Bitwarden password history; distinct historical fields/files and unrepresentable native settings are explicitly blocked. Fixed false change reports from missing redundant database IDs, derived Passkey labels and equivalent hidden-field types while retaining checks for values, protection and complete project membership. MDBX previews also reject unsynchronized removal of optional fields.

@@ -79,7 +79,7 @@ test('actual Edge and Native Host block history loss before MDBX transfer and pr
     await transfer.getByRole('checkbox', { name: new RegExp(item.title) }).check();
     await transfer.getByRole('button', { name: '检查并生成计划', exact: true }).click();
     await expect(transfer.getByText('0 个可传输，1 个被阻断', { exact: true })).toBeVisible();
-    await expect(transfer.getByRole('button', { name: '执行复制', exact: true })).toBeDisabled();
+    await expect(transfer.getByRole('button', { name: '跳过受限项并继续', exact: true })).toBeDisabled();
     await expect(transfer.getByText(/MDBX2 目标无法保存此项目的逐密码历史/).first()).toBeVisible();
     await page.screenshot({ path: info.outputPath('blocked-history-copy.png') });
     const outcomes = [];

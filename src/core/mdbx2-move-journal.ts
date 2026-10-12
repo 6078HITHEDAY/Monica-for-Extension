@@ -1,4 +1,5 @@
 import type { VaultItem } from "./model";
+import { readMdbx2SourceDeletionIntent, type Mdbx2SourceDeletionIntent } from './mdbx2-source-deletion';
 
 export interface Mdbx2MoveAttachmentProof {
   itemId: string;
@@ -35,6 +36,8 @@ export interface Mdbx2MoveFinalizationRecord {
   };
   /** Undefined is a legacy journal, not proof that the move had no attachments. */
   attachments?: Mdbx2MoveAttachmentProof[];
+  /** Durable source revision or an already-committed legacy receipt. */
+  sourceDeletion?: Mdbx2SourceDeletionIntent;
   entries: { expected: VaultItem; result: VaultItem; action: "move" }[];
 }
 
@@ -51,6 +54,12 @@ export function readMdbx2MoveJournal(value: unknown): Mdbx2MoveFinalizationRecor
       throw new Error("移动恢复记录无效，已保留原始数据。");
     }
     ids.add(record.id);
+    if (record.sourceDeletion !== undefined) {
+      const intent = readMdbx2SourceDeletionIntent(record.sourceDeletion);
+      if (record.status === 'writing' || record.sourceProviderId === 'local' || record.sourceProviderId === record.targetProviderId
+        || (intent.version === 1 ? intent.writeRevision.vaultId : intent.vaultId) !== record.sourceVaultId)
+        throw new Error('移动恢复记录无效，已保留原始数据。');
+    }
     if (record.request !== undefined) {
       const request = record.request;
       if (!request || !Array.isArray(request.itemIds) || !request.itemIds.length || request.itemIds.length > 200
