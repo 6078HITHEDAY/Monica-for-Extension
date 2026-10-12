@@ -81,6 +81,164 @@ async function fixture(extra: VaultItem[] = [], native = false) {
     request: { itemIds: [sso.id, ...extra.map(row => row.id)], targetProviderId: account.id, action: 'copy' as const, preserveCategories: true } };
 }
 
+async function interruptedMove(native = false) {
+  const f = await fixture([], native), input = { ...f.request, action: 'move' as const }, plan = await f.coordinator.plan(input);
+  const request = { ...input, operationId: plan.operationId, operationCreatedAt: plan.operationCreatedAt, confirmed: true };
+  const create = vi.mocked(f.remote.create).getMockImplementation()!;
+  vi.mocked(f.remote.create).mockImplementationOnce(async payload => { await create(payload); throw new Error('Lost first reply'); });
+  await expect(f.coordinator.execute(request)).rejects.toThrow('Lost first reply');
+  return { current: f, request };
+}
+
+it.each([false, true])('keeps edited %s sources and their pending changes while adopting the reviewed copy after restart', async native => {
+  const { current: f, request } = await interruptedMove(native);
+  await f.vault.upsertItem({ ...f.base, password: 'Later local edit' });
+  const before = await f.vault.readState(), original = before.bitwardenBatchTransfers![0];
+  await expect(f.coordinator.execute(request)).rejects.toThrow('已变化');
+  const reads = f.resource.mock.calls.length;
+  const pending = await f.coordinator.keepBoth(f.account.id, request.operationId, true);
+  expect(pending).toMatchObject({ canKeepBoth: false, keptBoth: true, request: { action: 'move' }, plan: { action: 'copy', requiresMoveConfirmation: false } });
+  expect(Object.keys(pending).sort()).toEqual(['canKeepBoth', 'keptBoth', 'plan', 'request']);
+  const saved = (await f.vault.readState()).bitwardenBatchTransfers![0];
+  expect(saved).toMatchObject({ version: 4, request: original.request, plan: original.plan, requestHash: original.requestHash,
+    resolution: { originalVersion: native ? 3 : 2, kind: 'keep-both', version: 1 } });
+  f.restart();
+  expect(await f.coordinator.execute(request)).toMatchObject({ action: 'copy', completedCount: 2 });
+  const after = await f.vault.readState();
+  for (const source of before.items) expect(after.items.find(item => item.id === source.id)).toEqual(source);
+  expect(after.mutationQueue).toEqual(before.mutationQueue);
+  expect(after.sourceRecords.filter(row => row.providerId !== f.account.id)).toEqual(before.sourceRecords);
+  expect(after.items.find(item => item.id !== f.base.id && item.kind === 'login' && item.loginType !== 'SSO')).toMatchObject({ password: 'Synthetic secret' });
+  expect(f.resource).toHaveBeenCalledTimes(reads); expect(f.mdbx.remove).not.toHaveBeenCalled(); expect(f.raw).toHaveLength(2);
+  expect(await f.coordinator.pending(f.account.id)).toEqual([]);
+  expect(() => readBitwardenBatches(after.bitwardenBatchTransfers)).not.toThrow();
+});
+
+it.each(['save-failure', 'lost-reply', 'offline'] as const)('makes the keep-both decision durable across %s without early source removal', async failure => {
+  const { current: f, request } = await interruptedMove();
+  if (failure === 'save-failure') vi.spyOn(f.storage, 'write').mockRejectedValueOnce(new Error('Save failed'));
+  if (failure === 'lost-reply') {
+    const save = f.vault.keepBitwardenBatchSources.bind(f.vault);
+    vi.spyOn(f.vault, 'keepBitwardenBatchSources').mockImplementationOnce(async (...args) => { await save(...args); throw new Error('Reply lost'); });
+  }
+  const choice = f.coordinator.keepBoth(f.account.id, request.operationId, true);
+  if (failure === 'offline') await choice; else await expect(choice).rejects.toThrow();
+  f.restart();
+  expect((await f.coordinator.pending(f.account.id))[0].keptBoth).toBe(failure !== 'save-failure');
+  // A failed save does not authorize a decision. A successful retry preserves
+  // the same operation; a lost response does not need another confirmation.
+  if (failure === 'save-failure') await f.coordinator.keepBoth(f.account.id, request.operationId, true);
+  const stable = await f.storage.read();
+  await f.coordinator.keepBoth(f.account.id, request.operationId, true); expect(await f.storage.read()).toEqual(stable);
+  if (failure === 'offline') {
+    f.provider.sync.mockRejectedValueOnce(new Error('Offline'));
+    await expect(f.coordinator.execute(request)).rejects.toThrow('Offline'); f.restart();
+  }
+  expect(await f.coordinator.execute(request)).toMatchObject({ action: 'copy', completedCount: 2 });
+  expect((await f.vault.readState()).items.find(row => row.id === f.base.id)).toEqual(f.base);
+  expect(f.raw).toHaveLength(2);
+});
+
+it('preserves a newly added local file and user-deleted source instead of restoring the reviewed snapshot', async () => {
+  const { current: f, request } = await interruptedMove();
+  const bytes = new TextEncoder().encode('Later file');
+  const attachment = { attachmentId: 'later-file', itemId: f.base.id, fileName: 'later.txt', sizeBytes: bytes.length,
+    dataBase64: bytesToBase64(bytes), sha256: Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), byte => byte.toString(16).padStart(2, '0')).join(''), protected: true, mediaType: 'text/plain' };
+  await f.vault.mutateLocalAttachment({ operationId: crypto.randomUUID(), providerId: 'local', itemId: f.base.id,
+    attachmentId: attachment.attachmentId, mode: 'create', attachment }, (await f.vault.passkeySessionId())!);
+  await f.vault.deleteItem(f.sso.id);
+  const before = await f.vault.readState();
+  await f.coordinator.keepBoth(f.account.id, request.operationId, true); f.restart();
+  expect(await f.coordinator.execute(request)).toMatchObject({ action: 'copy' });
+  const after = await f.vault.readState();
+  expect(after.localItemAttachments).toEqual(before.localItemAttachments);
+  expect(after.localAttachmentReceipts).toEqual(before.localAttachmentReceipts);
+  expect(after.items.find(row => row.id === f.sso.id)).toEqual(before.items.find(row => row.id === f.sso.id));
+  expect(f.remote.upload).not.toHaveBeenCalled();
+});
+
+it('rejects unconfirmed, wrong-target and stale-session decisions without writing', async () => {
+  const { current: f, request } = await interruptedMove(), sessionId = (await f.vault.passkeySessionId())!, before = await f.storage.read();
+  await expect(f.coordinator.keepBoth(f.account.id, request.operationId, false)).rejects.toThrow('先确认');
+  await expect(f.coordinator.keepBoth('another', request.operationId, true)).rejects.toThrow('不匹配');
+  expect(await f.storage.read()).toEqual(before);
+  await f.vault.lock(); await f.vault.unlock('');
+  await expect(f.vault.keepBitwardenBatchSources(f.account.id, request.operationId, true, sessionId)).rejects.toThrow();
+  expect(await f.storage.read()).toEqual(before);
+});
+
+it.each([false, true])('refuses keep-both after native deletion authorization (committed=%s)', async committed => {
+  const f = await fixture([], true), input = { ...f.request, action: 'move' as const }, plan = await f.coordinator.plan(input);
+  const request = { ...input, operationId: plan.operationId, operationCreatedAt: plan.operationCreatedAt, confirmed: true };
+  const remove = f.mdbx.remove.getMockImplementation()!;
+  f.mdbx.remove.mockImplementationOnce(async (...args) => { if (committed) await remove(...args); throw new Error('Native reply lost'); });
+  await expect(f.coordinator.execute(request)).rejects.toThrow('Native reply lost');
+  expect((await f.coordinator.pending(f.account.id))[0].canKeepBoth).toBe(false);
+  const before = await f.storage.read();
+  await expect(f.coordinator.keepBoth(f.account.id, plan.operationId, true)).rejects.toThrow('删除已进入');
+  expect(await f.storage.read()).toEqual(before);
+  f.restart(); expect(await f.coordinator.execute(request)).toMatchObject({ action: 'move' });
+});
+
+it('reserves the native source queue and rejects an old-session choice after waiting', async () => {
+  const { current: f, request } = await interruptedMove(true);
+  let release!: () => void, entered!: () => void;
+  const running = new Promise<void>(resolve => { entered = resolve; });
+  const hold = f.queue.run(f.source.id, async () => { entered(); await new Promise<void>(resolve => { release = resolve; }); });
+  await running;
+  const snapshot = await f.storage.read(), read = f.vault.readState.bind(f.vault);
+  let readCount = 0, waiting!: () => void;
+  const queued = new Promise<void>(resolve => { waiting = resolve; });
+  vi.spyOn(f.vault, 'readState').mockImplementation(async (...args) => { const state = await read(...args); if (++readCount === 2) waiting(); return state; });
+  const choice = f.coordinator.keepBoth(f.account.id, request.operationId, true);
+  const failure = expect(choice).rejects.toThrow();
+  await queued; expect(await f.storage.read()).toEqual(snapshot);
+  await f.vault.lock(); await f.vault.unlock(''); release(); await hold; await failure;
+  expect(await f.storage.read()).toEqual(snapshot);
+});
+
+it('refuses a changed target binding even when current sources are deliberately kept', async () => {
+  const { current: f, request } = await interruptedMove();
+  await f.vault.upsertProvider({ ...f.account, config: { ...f.account.config, apiUrl: 'https://different.invalid/api' } });
+  const before = await f.storage.read();
+  await expect(f.coordinator.keepBoth(f.account.id, request.operationId, true)).rejects.toThrow('目标');
+  expect(await f.storage.read()).toEqual(before); expect(f.raw).toHaveLength(1);
+});
+
+it('refuses a copy decision for a completed move or an original copy', async () => {
+  const f = await fixture(), plan = await f.coordinator.plan(f.request);
+  vi.mocked(f.remote.create).mockRejectedValueOnce(new Error('Offline'));
+  await expect(f.coordinator.execute({ ...f.request, ...plan })).rejects.toThrow('Offline');
+  await expect(f.coordinator.keepBoth(f.account.id, plan.operationId, true)).rejects.toThrow('不是移动');
+  const { current: move, request } = await interruptedMove();
+  await move.coordinator.execute(request);
+  await expect(move.coordinator.keepBoth(move.account.id, request.operationId, true)).rejects.toThrow('已结束');
+});
+
+it('still requires complete untampered target readback after choosing keep-both', async () => {
+  const { current: f, request } = await interruptedMove(true);
+  await f.coordinator.keepBoth(f.account.id, request.operationId, true);
+  const sync = f.provider.sync.getMockImplementation()!;
+  f.provider.sync.mockImplementationOnce(async () => ({ ...await sync(), sourceRecords: [] }));
+  await expect(f.coordinator.execute(request)).rejects.toThrow();
+  expect((await f.coordinator.pending(f.account.id))[0].keptBoth).toBe(true);
+  expect((await f.vault.readState()).items.find(row => row.id === f.base.id)).toEqual(f.base);
+  f.restart(); expect(await f.coordinator.execute(request)).toMatchObject({ action: 'copy' });
+  expect(f.mdbx.remove).not.toHaveBeenCalled();
+});
+
+it('rejects malformed, downgraded or deletion-bearing keep-both journals and direct staging', async () => {
+  const { current: f, request } = await interruptedMove(true);
+  await f.coordinator.keepBoth(f.account.id, request.operationId, true);
+  const state = await f.vault.readState(), batch = state.bitwardenBatchTransfers![0];
+  for (const change of [
+    { version: 3 }, { resolution: undefined }, { resolution: { ...batch.resolution, originalVersion: 2 } },
+    { resolution: { ...batch.resolution, confirmedAt: 'invalid' } },
+    { mdbxMoves: batch.mdbxMoves!.map(group => ({ ...group, deletion: null })) }
+  ]) expect(() => readBitwardenBatches([{ ...batch, ...change }])).toThrow();
+  await expect(f.vault.stageBitwardenBatch(batch, state.bitwardenCipherCopies!)).rejects.toThrow('初始计划');
+});
+
 it('previews the complete graph, creates one folder and adopts both linked passwords atomically', async () => {
   const f = await fixture(), plan = await f.coordinator.plan(f.request);
   expect(plan.items.map(row => row.blockedReason)).toEqual([undefined, undefined]); expect(plan.transferableCount).toBe(2);

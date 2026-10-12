@@ -30,7 +30,7 @@ export interface BitwardenBatchFolder {
   targetId?: string;
 }
 export interface BitwardenBatchIntent {
-  version: 1 | 2 | 3;
+  version: 1 | 2 | 3 | 4;
   request: BitwardenBatchRequest;
   requestHash: string;
   plan: Mdbx2BatchTransferPlanResult;
@@ -39,12 +39,36 @@ export interface BitwardenBatchIntent {
   units: BitwardenBatchUnit[];
   folders?: BitwardenBatchFolder[];
   mdbxMoves?: BitwardenMdbxMoveGroup[];
+  /** V4 prevents older readers from ignoring the decision and deleting sources. */
+  resolution?: { version: 1; kind: 'keep-both'; originalVersion: 2 | 3; confirmedAt: string };
   status: 'writing' | 'completed' | 'cancelled';
   result?: Mdbx2BatchTransferExecuteResult;
 }
 const invalid = () => new Error('Bitwarden 整批传输恢复记录无效，来源和已保存副本均已保留。');
 const id = (value: unknown): value is string => typeof value === 'string' && !!value && value.length <= 4096;
 const digest = (value: unknown) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+
+export interface BitwardenPendingTransfer {
+  request: BitwardenBatchRequest;
+  plan: Mdbx2BatchTransferPlanResult;
+  canKeepBoth: boolean;
+  keptBoth: boolean;
+}
+export function bitwardenBatchAction(batch: BitwardenBatchIntent): 'copy' | 'move' {
+  return batch.version === 4 ? 'copy' : batch.request.action;
+}
+export function canKeepBitwardenBatchSources(batch: BitwardenBatchIntent): boolean {
+  return batch.status === 'writing' && (batch.version === 2 || batch.version === 3)
+    && !(batch.mdbxMoves || []).some(group => group.deletion || group.receipt);
+}
+/** Only a display projection changes action. The original request stays immutable. */
+export function pendingBitwardenBatch(batch: BitwardenBatchIntent): BitwardenPendingTransfer {
+  const action = bitwardenBatchAction(batch);
+  return { request: structuredClone(batch.request),
+    plan: { ...structuredClone(batch.plan), action, requiresMoveConfirmation: action === 'move',
+      items: batch.plan.items.map(item => ({ ...structuredClone(item), effectiveAction: action })) },
+    canKeepBoth: canKeepBitwardenBatchSources(batch), keptBoth: batch.version === 4 };
+}
 
 export function normalizeBitwardenBatchRequest(input: Mdbx2BatchTransferRequest): BitwardenBatchRequest {
   if (!input || !Array.isArray(input.itemIds) || !input.itemIds.length || input.itemIds.length > 200
@@ -77,7 +101,7 @@ export function readBitwardenBatches(value: unknown): BitwardenBatchIntent[] {
   const seen = new Set<string>();
   return value.map(raw => {
     const row = raw as BitwardenBatchIntent, request = normalizeBitwardenBatchRequest(row?.request);
-    if (!(row.version === 1 && request.action === 'copy' || [2, 3].includes(row.version) && request.action === 'move')
+    if (!(row.version === 1 && request.action === 'copy' || [2, 3, 4].includes(row.version) && request.action === 'move')
       || !row.request.operationId || !row.request.operationCreatedAt || seen.has(request.operationId)
       || row.target?.kind !== 'bitwarden' || row.target.id !== request.targetProviderId || row.target.enabled !== true
       || !digest(row.requestHash) || !digest(row.snapshotHash) || !['writing', 'completed', 'cancelled'].includes(row.status)
@@ -94,13 +118,18 @@ export function readBitwardenBatches(value: unknown): BitwardenBatchIntent[] {
         || typeof item.pathIncomplete !== 'boolean' || !Array.isArray(item.sourcePath) || !Array.isArray(item.targetPath)
         || [...item.sourcePath, ...item.targetPath].some(value => typeof value !== 'string')
         || item.blockedReason !== undefined && !id(item.blockedReason))) throw invalid();
+    if (row.version === 4 ? !row.resolution || row.resolution.version !== 1 || row.resolution.kind !== 'keep-both'
+      || ![2, 3].includes(row.resolution.originalVersion) || typeof row.resolution.confirmedAt !== 'string'
+      || !Number.isFinite(Date.parse(row.resolution.confirmedAt)) : row.resolution !== undefined) throw invalid();
     const sources = row.units.flatMap(unit => unit.sources), accepted = row.plan.items.filter(item => !item.blockedReason);
     const moves = readBitwardenMdbxMoveGroups(row.mdbxMoves);
-    if ((row.version === 3) !== (moves.length > 0) || moves.some(group => group.account.id === row.target.id
+    const originalVersion = row.version === 4 ? row.resolution!.originalVersion : row.version;
+    if ((originalVersion === 3) !== (moves.length > 0) || moves.some(group => group.account.id === row.target.id
       || group.sources.some(source => !sources.some(item => item.id === source.id && item.kind === source.kind))
       || group.fingerprints.some(fingerprint => !row.units.some(unit => unit.copyId === fingerprint.copyId && unit.sources.length === 1
         && group.sources.some(source => source.id === unit.sources[0].id)))
-      || row.status === 'completed' && !group.receipt || row.status === 'cancelled' && group.deletion)) throw invalid();
+      || row.version === 4 && (group.deletion !== undefined || group.receipt !== undefined)
+      || row.status === 'completed' && row.version !== 4 && !group.receipt || row.status === 'cancelled' && group.deletion)) throw invalid();
     const folders = row.folders || [];
     if (!Array.isArray(folders) || folders.length > 200 || folders.some(folder => !folder || !id(folder.key) || !id(folder.name)
       || typeof folder.encryptedName !== 'string' || !folder.encryptedName.startsWith('2.') || folder.encryptedName.length > 8192
@@ -116,9 +145,9 @@ export function readBitwardenBatches(value: unknown): BitwardenBatchIntent[] {
       || row.plan.transferableCount !== accepted.length || row.plan.blockedCount !== row.plan.items.length - accepted.length
       || row.status !== 'completed' && row.result !== undefined
       || row.status === 'completed' && (!row.result || row.result.operationId !== request.operationId || row.result.targetProviderId !== request.targetProviderId
-        || row.result.action !== request.action || row.result.completedCount !== accepted.length || row.result.failedCount !== 0
+        || row.result.action !== bitwardenBatchAction(row) || row.result.completedCount !== accepted.length || row.result.failedCount !== 0
         || row.result.blockedCount !== row.plan.blockedCount || !Array.isArray(row.result.items) || row.result.items.length !== row.plan.items.length
-        || row.result.items.some((item,index) => item.sourceItemId !== row.plan.items[index].sourceItemId || item.effectiveAction !== request.action
+        || row.result.items.some((item,index) => item.sourceItemId !== row.plan.items[index].sourceItemId || item.effectiveAction !== bitwardenBatchAction(row)
           || item.status !== (row.plan.items[index].blockedReason ? 'blocked' : 'completed') || item.status === 'completed' && !id(item.targetItemId)))) throw invalid();
     row.units.forEach(unit => assertMdbx2TransferOperationId(unit.copyId)); bitwardenBatchOrder(row.units);
     seen.add(request.operationId); return structuredClone(row);
@@ -202,8 +231,8 @@ export function bitwardenBatchResult(batch: BitwardenBatchIntent, copies: Bitwar
     }
   }
   if (new Set(targets.values()).size !== targets.size) throw invalid();
-  return { operationId: batch.request.operationId, action: batch.request.action, targetProviderId: batch.target.id,
-    items: batch.plan.items.map(row => ({ sourceItemId: row.sourceItemId, kind: row.kind, title: row.title, effectiveAction: batch.request.action,
+  return { operationId: batch.request.operationId, action: bitwardenBatchAction(batch), targetProviderId: batch.target.id,
+    items: batch.plan.items.map(row => ({ sourceItemId: row.sourceItemId, kind: row.kind, title: row.title, effectiveAction: bitwardenBatchAction(batch),
       status: row.blockedReason ? 'blocked' : 'completed', targetItemId: targets.get(row.sourceItemId), retryable: false, error: row.blockedReason })),
     completedCount: targets.size, blockedCount: batch.plan.blockedCount, failedCount: 0, warnings: batch.plan.warnings };
 }
@@ -229,7 +258,7 @@ export function assertBitwardenLocalMoveSource(state: VaultState, item: VaultIte
  * A new dependent or an edit since staging must never be removed by an old plan. */
 export async function assertBitwardenBatchMoveCurrent(state: VaultState, batch: BitwardenBatchIntent, copies: BitwardenCipherCopyRecord[]): Promise<Set<string>> {
   const ids = new Set(batch.units.flatMap(unit => unit.sources.map(source => source.id)));
-  if (batch.request.action !== 'move') return new Set();
+  if (bitwardenBatchAction(batch) !== 'move') return new Set();
   const moves = readBitwardenMdbxMoveGroups(batch.mdbxMoves), nativeIds = new Set(moves.flatMap(group => group.sources.map(source => source.id)));
   for (const group of moves) assertBitwardenMdbxMoveBinding(state, group);
   const selection = bitwardenTransferSelection(batch.request.itemIds, state.items, state.providers, 'move');

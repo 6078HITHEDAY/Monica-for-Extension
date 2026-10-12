@@ -26,15 +26,16 @@ const options = { locale: 'zh-CN', colorScheme: 'dark' as const, viewport: { wid
 async function send(page: Page, request: object): Promise<any> { const response = await page.evaluate(input => chrome.runtime.sendMessage(input), request);
   expect(response.ok, response.error).toBe(true); return response.data; }
 
-for (const sourceKind of ['local', 'local-move', 'mdbx', 'mdbx-move', 'keepass', 'webdav'] as const) test(`a browser-created ${sourceKind} Passkey survives Bitwarden transfer interruption and authenticates on a fresh Edge client`, async ({}, info) => {
-  const nativeMdbx = sourceKind === 'mdbx' || sourceKind === 'mdbx-move';
+for (const sourceKind of ['local', 'local-move', 'local-keep-both', 'mdbx', 'mdbx-move', 'mdbx-keep-both', 'keepass', 'webdav'] as const) test(`a browser-created ${sourceKind} Passkey survives Bitwarden transfer interruption and authenticates on a fresh Edge client`, async ({}, info) => {
+  const nativeMdbx = sourceKind.startsWith('mdbx'), keepBoth = sourceKind.endsWith('keep-both');
   // Native registration and full-vault verification outlived the default 5s
   // assertion on this host; retain exact results with an explicit native budget.
   const nativeCheck = { timeout: nativeMdbx ? 20_000 : 5_000 };
   let registrationMs = 0, previewMs = 0;
   test.skip(nativeMdbx && !process.env.MONICA_317_NATIVE_PASSKEY_FIXTURE, 'Requires an explicitly selected verified synthetic MDBX fixture');
   test.setTimeout(180_000);
-  const local = sourceKind === 'local' || sourceKind === 'local-move', moving = sourceKind === 'local-move' || sourceKind === 'mdbx-move', withProject = sourceKind !== 'local';
+  const local = sourceKind.startsWith('local'), moving = sourceKind.endsWith('-move') || keepBoth, withProject = sourceKind !== 'local';
+  let copyReadbackOffline = false, editedSource: VaultItem | undefined;
   let nativeHost: Awaited<ReturnType<typeof temporaryNativeHost>> | undefined, sourceProviderId: string | undefined;
   const appData = path.resolve('.tmp', `mdbx-bitwarden-${randomUUID().slice(0, 12)}`, 'appdata');
   if (nativeMdbx) await mkdir(appData, { recursive: true });
@@ -80,6 +81,7 @@ for (const sourceKind of ['local', 'local-move', 'mdbx', 'mdbx-move', 'keepass',
     if (url.pathname === '/identity/accounts/prelogin/password') return json({ Kdf: 0, KdfIterations: 10_000 });
     if (url.pathname === '/identity/connect/token') return json({ access_token: 'synthetic', refresh_token: 'synthetic', expires_in: 3600, Key: protectedKey });
     if (url.pathname === '/api/sync') {
+      if (copyReadbackOffline) { response.writeHead(503); response.end('Synthetic copy recovery outage'); return; }
       if (deletedSourceProbe && (interruptedAfterNativeDeletion || await deletedSourceProbe())) {
         interruptedAfterNativeDeletion = true;
         response.writeHead(503); response.end('Synthetic readback interruption after native deletion'); return;
@@ -282,7 +284,39 @@ for (const sourceKind of ['local', 'local-move', 'mdbx', 'mdbx-move', 'keepass',
       }
     }
     if (moving) for (const source of sourcesBeforeCopy) expect((await send(page, { type: 'VAULT_LIST_ITEMS' }) as VaultItem[]).find(row => row.id === source.id)).toEqual(source);
+    if (keepBoth) {
+      const source = sourcesBeforeCopy.find(row => row.id === rich.id)!;
+      await send(page, { type: 'VAULT_UPSERT_ITEM', item: { ...source, password: 'Edited after transfer started' } });
+      editedSource = (await send(page, { type: 'VAULT_LIST_ITEMS' }) as VaultItem[]).find(row => row.id === rich.id)!;
+      const failed = await page.evaluate(input => chrome.runtime.sendMessage(input), { type: 'MDBX2_BATCH_TRANSFER_EXECUTE', input: pending[0].request });
+      expect(failed.ok).toBe(false);
+      // Native conversion detects the queued password edit against the actual
+      // database before the final indexed-source hash check can run.
+      expect(failed.error).toContain(nativeMdbx ? '无法完整保存 password 字段' : '已变化');
+      const popup = await context!.newPage(); await popup.goto(new URL('popup.html', page.url()).href);
+      const denied = await popup.evaluate(input => chrome.runtime.sendMessage(input), { type: 'BITWARDEN_KEEP_BOTH_TRANSFER', providerId,
+        operationId: pending[0].request.operationId, confirmed: true });
+      expect(denied.ok).toBe(false); expect(denied.error).toContain('管理页'); await popup.close();
+      await dialog.getByRole('button', { name: '保留两端，完成复制', exact: true }).click();
+      await expect(dialog.getByRole('button', { name: '确认并移动', exact: true })).toHaveCount(0);
+      await expect(dialog.getByRole('button', { name: '恢复传输', exact: true })).toHaveCount(0);
+      const confirmCopy = dialog.getByRole('button', { name: '确认保留并继续', exact: true });
+      await expect(confirmCopy).toBeDisabled();
+      await dialog.getByRole('checkbox', { name: '我确认保留来源并按复制完成', exact: true }).check();
+      await page.setViewportSize({ width: 375, height: 820 });
+      await confirmCopy.scrollIntoViewIfNeeded();
+      expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+      await page.screenshot({ path: info.outputPath('keep-both-confirmation-narrow.png') });
+      await page.setViewportSize(options.viewport);
+      copyReadbackOffline = true;
+      await confirmCopy.click();
+      await expect(dialog.getByRole('button', { name: '继续复制', exact: true })).toBeEnabled({ timeout: 20_000 });
+      const resolved = await send(page, { type: 'BITWARDEN_PENDING_TRANSFERS', providerId });
+      expect(resolved[0]).toMatchObject({ canKeepBoth: false, keptBoth: true, request: { action: 'move' }, plan: { action: 'copy' } });
+      await expect(dialog.getByText('已选择保留来源；继续完成预览版本的复制。', { exact: true })).toBeVisible();
+    }
     await send(page, { type: 'VAULT_LOCK' }); await context!.close(); context = undefined;
+    copyReadbackOffline = false;
     page = await open('original'); await send(page, { type: 'VAULT_UNLOCK', masterPassword: password });
     const reopenNative = async () => {
       const sources = await send(page, { type: 'PROVIDER_LIST' });
@@ -290,8 +324,8 @@ for (const sourceKind of ['local', 'local-move', 'mdbx', 'mdbx-move', 'keepass',
       await send(page, { type: 'MDBX2_VAULT_OPEN', input: { providerId: sourceProviderId, name: account.name,
         source: { kind: 'vault', handle: account.config.vaultHandle }, credential: { method: 'password', password: 'Synthetic transfer fixture password' }, isDefaultSaveTarget: false } });
     };
-    if (nativeMdbx && moving) {
-      await reopenNative();
+    if (nativeMdbx && moving) await reopenNative();
+    if (nativeMdbx && moving && !keepBoth) {
       deletedSourceProbe = async () => {
         const deleted = new Set<string>();
         for (const collectionId of new Set(selectedSources.map(source => source.providerRefs[0].remoteFolderId))) {
@@ -309,11 +343,20 @@ for (const sourceKind of ['local', 'local-move', 'mdbx', 'mdbx-move', 'keepass',
       await send(page, { type: 'VAULT_LOCK' }); await context!.close(); context = undefined;
       page = await open('original'); await send(page, { type: 'VAULT_UNLOCK', masterPassword: password }); await reopenNative();
     }
-    expect(await send(page, { type: 'MDBX2_BATCH_TRANSFER_EXECUTE', input: pending[0].request })).toMatchObject({ completedCount: expectedCopies, failedCount: 0 });
+    expect(await send(page, { type: 'MDBX2_BATCH_TRANSFER_EXECUTE', input: pending[0].request })).toMatchObject({ completedCount: expectedCopies, failedCount: 0, action: moving && !keepBoth ? 'move' : 'copy' });
     expect(posts).toBe(expectedCopies);
     const afterCopy = await send(page, { type: 'VAULT_LIST_ITEMS' }) as VaultItem[];
-    for (const source of sourcesBeforeCopy) expect(afterCopy.find(row => row.id === source.id)).toEqual(moving && selectedSources.includes(source) ? undefined : source);
-    if (moving) {
+    for (const source of sourcesBeforeCopy) expect(afterCopy.find(row => row.id === source.id)).toEqual(moving && !keepBoth && selectedSources.includes(source) ? undefined : source.id === editedSource?.id ? editedSource : source);
+    if (keepBoth) {
+      expect(await send(page, { type: 'BITWARDEN_PENDING_TRANSFERS', providerId })).toEqual([]);
+      const sourceFiles = await send(page, { type: 'PROVIDER_ATTACHMENT_LIST', providerId: sourceProviderId || 'local', itemId: rich.id });
+      expect(sourceFiles.items).toHaveLength(1);
+      if (nativeMdbx) for (const source of selectedSources) {
+        const live = await send(page, { type: 'MDBX2_OBJECT_REVEAL', providerId: sourceProviderId, objectId: source.providerRefs[0].remoteId });
+        expect(live.deleted).not.toBe(true);
+      }
+    }
+    if (moving && !keepBoth) {
       const completed = await send(page, { type: 'MDBX2_BATCH_TRANSFER_EXECUTE', input: pending[0].request });
       expect(completed).toMatchObject({ action: 'move', completedCount: 3 }); expect(posts).toBe(3);
       expect(await send(page, { type: 'BITWARDEN_PENDING_TRANSFERS', providerId })).toEqual([]);
@@ -381,7 +424,8 @@ for (const sourceKind of ['local', 'local-move', 'mdbx', 'mdbx-move', 'keepass',
       createPublicKey({ key: Buffer.from(original.publicKey, 'base64'), format: 'der', type: 'spki' }), Buffer.from(assertion.response.signature, 'base64url'))).toBe(true);
     expect(posts).toBe(expectedCopies); expect(unexpected).toEqual([]);
     const acceptance = { browserRegistration: true, interruptedCreate: true,
-      fullRestart: true, independentFreshClient: true, preservedSources: !moving, removedOnlyAfterVerification: moving, interruptedAfterNativeDeletion, remoteCiphers: posts, zeroCounter: true,
+      fullRestart: true, independentFreshClient: true, preservedSources: !moving || keepBoth, removedOnlyAfterVerification: moving && !keepBoth,
+      keepBothAfterSourceEdit: keepBoth, durableCopyDecisionDuringOutage: keepBoth, interruptedAfterNativeDeletion, remoteCiphers: posts, zeroCounter: true,
       sourceKind, registrationMs, previewMs, verificationRequiredWhenRpDiscourages: true, independentlyVerifiedAssertion: true, richPasswordFields: true, nativeAttachment: withProject,
       nativeProjectMembers: withProject ? 2 : 0, freshClientAttachmentRead: withProject };
     await writeFile(info.outputPath('acceptance.json'), JSON.stringify(acceptance, null, 2));

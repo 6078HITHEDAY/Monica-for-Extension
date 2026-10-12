@@ -449,6 +449,7 @@ export type ExtensionRequest =
   | { type: "KEEPASS_CANCEL_UNWRITTEN_TRANSFER"; providerId: string; operationId: string }
   | { type: "BITWARDEN_PENDING_TRANSFERS"; providerId: string }
   | { type: "BITWARDEN_CANCEL_UNWRITTEN_TRANSFER"; providerId: string; operationId: string }
+  | { type: "BITWARDEN_KEEP_BOTH_TRANSFER"; providerId: string; operationId: string; confirmed: boolean }
   | { type: "MDBX2_PENDING_MOVES" }
   | { type: "MDBX2_BATCH_TRANSFER_EXECUTE"; input: Mdbx2BatchTransferRequest; confirmed?: true }
   | { type: "MDBX2_BATCH_TRANSFER_STATUS"; operationId: string }

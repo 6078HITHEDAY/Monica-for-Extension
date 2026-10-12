@@ -1,4 +1,5 @@
 import { translateRuntimeError } from "../i18n/runtime";
+import type { BitwardenPendingTransfer } from '../core/bitwarden-batch-transfer';
 import type { Mdbx2FileExportBegin, Mdbx2FileExportChunk } from "./messages";
 import { runtimeInfo, type RuntimeInfo } from "./version";
 import type { ProviderAccount, ProviderConflictResolution, ProviderConflictSummary, ProviderDiagnosticExport } from "../core/model";
@@ -241,7 +242,8 @@ export const vaultClient = {
   localTransferFolders: () => send<Array<{ key: string; categoryId?: number; categoryName: string }>>({ type: 'LOCAL_TRANSFER_FOLDERS' }),
   pendingKeePassTransfers: (providerId: string) => send<Array<{ request: Mdbx2BatchTransferRequest; plan: Mdbx2BatchTransferPlanResult }>>({ type: 'KEEPASS_PENDING_TRANSFERS', providerId }),
   cancelUnwrittenKeePassTransfer: (providerId: string, operationId: string) => send<void>({ type: 'KEEPASS_CANCEL_UNWRITTEN_TRANSFER', providerId, operationId }),
-  pendingBitwardenTransfers: (providerId: string) => send<Array<{ request: Mdbx2BatchTransferRequest; plan: Mdbx2BatchTransferPlanResult }>>({ type: 'BITWARDEN_PENDING_TRANSFERS', providerId }),
+  pendingBitwardenTransfers: (providerId: string) => send<BitwardenPendingTransfer[]>({ type: 'BITWARDEN_PENDING_TRANSFERS', providerId }),
+  keepBothBitwardenTransfer: (providerId: string, operationId: string, confirmed: boolean) => send<BitwardenPendingTransfer>({ type: 'BITWARDEN_KEEP_BOTH_TRANSFER', providerId, operationId, confirmed }),
   cancelUnwrittenBitwardenTransfer: (providerId: string, operationId: string) => send<void>({ type: 'BITWARDEN_CANCEL_UNWRITTEN_TRANSFER', providerId, operationId }),
   executeMdbx2BatchTransfer: (input: Mdbx2BatchTransferRequest, confirmed = false) => send<Mdbx2BatchTransferExecuteResult>({ type: "MDBX2_BATCH_TRANSFER_EXECUTE", input, ...(confirmed ? { confirmed: true as const } : {}) }),
   mdbx2BatchTransferStatus: (operationId: string) => send<Mdbx2BatchTransferStatus | undefined>({ type: "MDBX2_BATCH_TRANSFER_STATUS", operationId }),

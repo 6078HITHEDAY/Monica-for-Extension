@@ -1689,6 +1689,9 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
     case "BITWARDEN_CANCEL_UNWRITTEN_TRANSFER":
       assertManagerPage(sender);
       return bitwardenBatchTransfers.cancel(request.providerId, request.operationId);
+    case "BITWARDEN_KEEP_BOTH_TRANSFER":
+      assertManagerPage(sender);
+      return bitwardenBatchTransfers.keepBoth(request.providerId, request.operationId, request.confirmed);
     case "KEEPASS_PENDING_TRANSFERS":
       assertManagerPage(sender);
       return keePassTransfers.pending(request.providerId);

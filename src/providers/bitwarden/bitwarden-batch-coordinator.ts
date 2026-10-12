@@ -1,7 +1,7 @@
 import type { ProviderAccount, VaultItem, VaultState } from '../../core/model';
 import type { ProviderAdapter } from '../../core/provider';
 import { sameProviderBinding } from '../../core/provider';
-import { assertBitwardenLocalMoveSource, bitwardenBatchOrder, bitwardenBatchSnapshotHash, bitwardenBatchSourceHash, normalizeBitwardenBatchRequest, readBitwardenBatches,
+import { assertBitwardenLocalMoveSource, bitwardenBatchAction, pendingBitwardenBatch, bitwardenBatchOrder, bitwardenBatchSnapshotHash, bitwardenBatchSourceHash, normalizeBitwardenBatchRequest, readBitwardenBatches,
   type BitwardenBatchIntent, type BitwardenBatchFolder } from '../../core/bitwarden-batch-transfer';
 import type { BitwardenCipherCopyRecord } from '../../core/bitwarden-transfer-journal';
 import { bitwardenTransferSelection } from './bitwarden-transfer-selection';
@@ -23,7 +23,7 @@ import type { Mdbx2SourceDeletionIntent } from '../../core/mdbx2-source-deletion
 import type { Mdbx2ObjectBatchResult } from '../mdbx2/native-contract';
 
 type Vault = Pick<SecureVaultService, 'readState' | 'stageBitwardenBatch' | 'openBitwardenBatchStore' | 'applyProviderSync' | 'passkeySessionId'
-  | 'prepareBitwardenMdbxDeletion' | 'deleteBitwardenMdbxSources'>;
+  | 'prepareBitwardenMdbxDeletion' | 'deleteBitwardenMdbxSources' | 'keepBitwardenBatchSources'>;
 interface Dependencies {
   resource(state: VaultState, items: VaultItem[], preserveCategories: boolean): Promise<BitwardenBatchResource>;
   folders(account: ProviderAccount, signal?: AbortSignal): Promise<unknown>;
@@ -46,7 +46,22 @@ export class BitwardenBatchTransferCoordinator {
   constructor(private readonly vault: Vault, private readonly provider: Pick<ProviderAdapter, 'sync'>, private readonly dependencies: Dependencies) {}
   clear() { this.generation++; this.controller.abort(); this.controller = new AbortController(); for (const row of this.plans.values()) clearTimeout(row.timer); this.plans.clear(); }
   async pending(providerId: string) { return readBitwardenBatches((await this.vault.readState(false)).bitwardenBatchTransfers)
-    .filter(row => row.target.id === providerId && row.status === 'writing').map(row => ({ request: row.request, plan: row.plan })); }
+    .filter(row => row.target.id === providerId && row.status === 'writing').map(pendingBitwardenBatch); }
+
+  /** Persist the decision before the UI resumes. No remote write is needed to
+   * make a keep-both decision durable, even when the destination is offline. */
+  async keepBoth(providerId: string, operationId: string, confirmed: boolean) {
+    if (confirmed !== true) throw new Error('请先确认保留两端并按复制完成。');
+    const generation = this.generation, sessionId = await this.vault.passkeySessionId();
+    if (!sessionId) throw new Error('密码库已锁定。');
+    const batch = readBitwardenBatches((await this.vault.readState(false)).bitwardenBatchTransfers).find(row => row.request.operationId === operationId);
+    if (!batch || batch.target.id !== providerId) throw new Error('传输目标不匹配。');
+    return this.exclusive(batch.request, async () => {
+      this.check(generation);
+      const saved = await this.vault.keepBitwardenBatchSources(providerId, operationId, confirmed, sessionId);
+      this.check(generation); this.forget(operationId); return pendingBitwardenBatch(saved);
+    });
+  }
 
   async plan(input: Mdbx2BatchTransferRequest): Promise<Mdbx2BatchTransferPlanResult> {
     const request = normalizeBitwardenBatchRequest(input), generation = this.generation, signal = this.controller.signal;
@@ -219,7 +234,7 @@ export class BitwardenBatchTransferCoordinator {
           if (result.accountPatch?.config) await store.copies.saveSession(anchor, current, result.accountPatch.config as BitwardenSessionConfig);
           return { latest, current, result, proof: { account: current, records: result.sourceRecords, items: result.items } satisfies BitwardenMoveReadback };
         };
-        for (const originalGroup of batch.mdbxMoves || []) {
+        for (const originalGroup of bitwardenBatchAction(batch) === 'move' ? batch.mdbxMoves || [] : []) {
           if (!this.dependencies.mdbx) throw new Error('MDBX 移动服务尚未就绪。');
           let group = (await store.read(request.operationId)).mdbxMoves!.find(row => row.id === originalGroup.id)!;
           if (group.receipt) continue;

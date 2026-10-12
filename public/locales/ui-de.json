@@ -3436,5 +3436,15 @@
   "文件夹分页未完成，请减少目录数量后重试。": "Die Ordnerliste überschreitet das unterstützte Limit. Reduzieren Sie die Ordnerzahl und versuchen Sie es erneut.",
   "本地及 MDBX 项目可移入 Bitwarden；其他来源请使用复制。目标和附件完整校验后才会移除来源，中断后可恢复。": "Lokale und MDBX-Einträge können nach Bitwarden verschoben werden. Nutzen Sie für andere Quellen Kopieren. Originale werden erst nach vollständiger Prüfung des Ziels und der Anhänge entfernt. Unterbrochene Vorgänge können fortgesetzt werden.",
   "Bitwarden 暂支持复制；无法完整保存的项目会在预览中说明原因。": "Bitwarden unterstützt derzeit das Kopieren. Die Vorschau erklärt, welche Einträge nicht vollständig erhalten werden können.",
-  "MDBX 原生提交历史保留在来源库中；目标校验完成后，当前项目才会从来源移除。": "Der native MDBX-Commitverlauf bleibt im Quelltresor. Aktuelle Einträge werden erst nach Prüfung des Ziels aus der Quelle entfernt."
+  "MDBX 原生提交历史保留在来源库中；目标校验完成后，当前项目才会从来源移除。": "Der native MDBX-Commitverlauf bleibt im Quelltresor. Aktuelle Einträge werden erst nach Prüfung des Ziels aus der Quelle entfernt.",
+  "已选择保留来源；继续完成预览版本的复制。": "Die Quelle bleibt erhalten. Kopieren der Vorschauversion fortsetzen.",
+  "继续复制": "Kopieren fortsetzen",
+  "保留两端，完成复制": "Beide behalten und Kopieren abschließen",
+  "目标继续使用预览时的版本，保留来源当前内容；不会恢复你已删除的来源项目。确认后会先保存这个决定，再继续复制。": "Das Ziel erhält die Vorschauversion. Der aktuelle Quellinhalt bleibt erhalten. Von dir gelöschte Quelleinträge werden nicht wiederhergestellt. Deine Entscheidung wird vor dem Fortsetzen gespeichert.",
+  "我确认保留来源并按复制完成": "Ich bestätige, die Quellen zu behalten und den Vorgang als Kopie abzuschließen",
+  "确认保留并继续": "Bestätigen und fortsetzen",
+  "请先确认保留两端并按复制完成。": "Bestätige zuerst, beide zu behalten und den Vorgang als Kopie abzuschließen.",
+  "传输目标不匹配或已变化。": "Das Übertragungsziel stimmt nicht überein oder wurde geändert.",
+  "传输已结束，不能更改恢复方式。": "Diese Übertragung ist beendet. Der Wiederherstellungsmodus kann nicht geändert werden.",
+  "来源删除已进入确认流程或此操作不是移动，暂不能按保留两端完成。": "Die Quelllöschung wurde bereits freigegeben, oder dieser Vorgang ist kein Verschieben. Beide können nicht beibehalten werden."
 }

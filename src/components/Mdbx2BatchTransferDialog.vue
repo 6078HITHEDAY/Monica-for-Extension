@@ -41,7 +41,10 @@ const action = ref<Mdbx2BatchTransferRequest["action"]>("copy");
 const collections = ref<Mdbx2CollectionSummary[]>([]);
 const localFolders = ref<Array<{ key: string; categoryName: string }>>([]);
 const remoteReady = ref(false);
-const pendingTransfers = ref<Array<{ request: Mdbx2BatchTransferRequest; plan: Mdbx2BatchTransferPlanResult }>>([]);
+type PendingTransfer = { request: Mdbx2BatchTransferRequest; plan: Mdbx2BatchTransferPlanResult; canKeepBoth?: boolean; keptBoth?: boolean };
+const pendingTransfers = ref<PendingTransfer[]>([]);
+const keepBothOperation = ref('');
+const keepBothConfirmed = ref(false);
 const collectionsLoading = ref(false);
 const collectionsError = ref("");
 const selectionNotice = ref("");
@@ -78,6 +81,7 @@ const collectionRows = computed<Mdbx2CollectionPresentation[]>(() => presentMdbx
 const hasPlan = computed(() => Boolean(planResult.value && preparedRequest.value));
 const planCanExecute = computed(() => Boolean(
   planResult.value
+  && !keepBothOperation.value
   && preparedRequest.value
   && planResult.value.transferableCount > 0
   && (!planResult.value.requiresMoveConfirmation || moveConfirmed.value)
@@ -98,6 +102,7 @@ watch(
     preparedRequest.value = null;
     progress.value = null;
     moveConfirmed.value = false;
+    keepBothOperation.value = ''; keepBothConfirmed.value = false;
     error.value = "";
   }
 );
@@ -238,15 +243,37 @@ function pendingForTarget() {
   return targetProvider.value?.kind === 'bitwarden' ? vaultClient.pendingBitwardenTransfers(targetProviderId.value) : vaultClient.pendingKeePassTransfers(targetProviderId.value);
 }
 
-async function resumeTransfer(row: { request: Mdbx2BatchTransferRequest; plan: Mdbx2BatchTransferPlanResult }) {
+async function resumeTransfer(row: PendingTransfer) {
   if (planning.value || executing.value) return;
   planning.value = true;
   selectedIds.value = new Set(row.request.itemIds);
-  action.value = row.request.action; preserveCategories.value = row.request.preserveCategories;
+  action.value = row.plan.action; preserveCategories.value = row.request.preserveCategories;
   targetCollectionId.value = row.request.targetCollectionId || '';
   preparedRequest.value = row.request; planResult.value = row.plan; moveConfirmed.value = true;
   await nextTick(); planning.value = false;
   await executePlan();
+}
+
+function showKeepBoth(row: PendingTransfer) {
+  keepBothOperation.value = row.request.operationId || '';
+  keepBothConfirmed.value = false;
+}
+
+async function keepBothTransfer(row: PendingTransfer) {
+  if (planning.value || executing.value || !row.request.operationId || !keepBothConfirmed.value || !row.canKeepBoth) return;
+  planning.value = true; error.value = '';
+  let saved: PendingTransfer | undefined;
+  try {
+    saved = await vaultClient.keepBothBitwardenTransfer(row.request.targetProviderId, row.request.operationId, true);
+  } catch (cause) { error.value = errorMessage(cause); }
+  finally {
+    // A reply may be lost after the decision was saved. Discard the displayed
+    // move plan and reload the durable summary before offering another action.
+    planResult.value = null; preparedRequest.value = null; progress.value = null;
+    pendingTransfers.value = await pendingForTarget().catch(() => pendingTransfers.value);
+    keepBothOperation.value = ''; keepBothConfirmed.value = false; planning.value = false;
+  }
+  if (saved && targetReady.value) await resumeTransfer(saved);
 }
 
 async function cancelTransfer(row: { request: Mdbx2BatchTransferRequest }) {
@@ -443,9 +470,19 @@ function errorMessage(cause: unknown): string {
             <div v-for="pending in pendingTransfers" :key="pending.request.operationId" class="batch-panel">
               <strong>{{ tr('未完成的传输') }}</strong>
               <p>{{ pending.plan.items.map(row => row.title).join('、') }}</p>
-              <div class="batch-recovery-actions">
-                <m3e-button variant="tonal" :disabled="planning || executing || !targetReady" @click="resumeTransfer(pending)"><m3e-icon slot="icon" name="refresh" />{{ tr('恢复传输') }}</m3e-button>
+              <p v-if="pending.keptBoth" class="batch-inline-note">{{ tr('已选择保留来源；继续完成预览版本的复制。') }}</p>
+              <div v-if="keepBothOperation !== pending.request.operationId" class="batch-recovery-actions">
+                <m3e-button variant="tonal" :disabled="planning || executing || !targetReady" @click="resumeTransfer(pending)"><m3e-icon slot="icon" name="refresh" />{{ pending.keptBoth ? tr('继续复制') : tr('恢复传输') }}</m3e-button>
+                <m3e-button v-if="pending.canKeepBoth && keepBothOperation !== pending.request.operationId" variant="text" :disabled="planning || executing" @click="showKeepBoth(pending)">{{ tr('保留两端，完成复制') }}</m3e-button>
                 <m3e-button variant="text" :disabled="planning || executing" @click="cancelTransfer(pending)">{{ tr('取消未写入操作') }}</m3e-button>
+              </div>
+              <div v-if="pending.canKeepBoth && keepBothOperation === pending.request.operationId" class="batch-keep-both-confirm">
+                <p>{{ tr('目标继续使用预览时的版本，保留来源当前内容；不会恢复你已删除的来源项目。确认后会先保存这个决定，再继续复制。') }}</p>
+                <label v-choice-label class="batch-check"><m3e-checkbox :checked.prop="keepBothConfirmed" :disabled="planning || executing" @input="keepBothConfirmed = ($event.target as HTMLElement &amp; { checked: boolean }).checked" /><span>{{ tr('我确认保留来源并按复制完成') }}</span></label>
+                <div class="batch-recovery-actions">
+                  <m3e-button variant="filled" :disabled="!keepBothConfirmed || planning || executing" @click="keepBothTransfer(pending)">{{ tr('确认保留并继续') }}</m3e-button>
+                  <m3e-button variant="text" :disabled="planning || executing" @click="keepBothOperation = ''; keepBothConfirmed = false">{{ tr('取消') }}</m3e-button>
+                </div>
               </div>
             </div>
           </div>
@@ -498,9 +535,11 @@ function errorMessage(cause: unknown): string {
       </div>
       <footer class="mdbx2-batch-footer">
         <m3e-button variant="text" type="button" :disabled="executing" @click="closeDialog">{{ hasPlan && !executeResult ? tr('取消') : tr('关闭') }}</m3e-button>
+        <template v-if="!keepBothOperation">
         <m3e-button v-if="retryableCount" variant="tonal" type="button" :disabled="executing" @click="retryFailed"><m3e-icon slot="icon" name="refresh"></m3e-icon>{{ tr('重试失败项目') }}</m3e-button>
         <m3e-button v-if="!hasPlan" variant="filled" type="button" :disabled="planning || executing || !selectedCount || !targetReady" @click="createPlan"><m3e-icon slot="icon" name="rule"></m3e-icon>{{ planning ? tr('检查兼容性…') : tr('检查并生成计划') }}</m3e-button>
         <m3e-button v-else variant="filled" type="button" :disabled="planning || executing || !planCanExecute" @click="executePlan"><m3e-icon slot="icon" :name="executing ? 'progress_activity' : action === 'move' ? 'drive_file_move' : 'content_copy'"></m3e-icon>{{ executing ? tr('正在提交…') : planResult?.blockedCount ? tr('跳过受限项并继续') : planResult?.requiresMoveConfirmation ? tr('确认并移动') : tr('执行复制') }}</m3e-button>
+        </template>
       </footer>
     </section>
   </div>
@@ -509,6 +548,8 @@ function errorMessage(cause: unknown): string {
 <style scoped>
 .batch-recovery-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .batch-pending-keepass { display: grid; gap: 8px; overflow-wrap: anywhere; }
+.batch-keep-both-confirm { margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--md-sys-color-outline-variant); }
+.batch-keep-both-confirm > p { margin: 0 0 8px; font-size: 13px; line-height: 1.5; }
 .mdbx2-batch-backdrop {
   padding: 16px;
 }

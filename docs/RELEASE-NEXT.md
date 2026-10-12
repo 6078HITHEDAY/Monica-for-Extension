@@ -4,6 +4,7 @@
 
 ## 中文
 
+- 本地或 MDBX 项目移入 Bitwarden 期间，如果来源被修改导致无法完成，现在可明确选择“保留两端，完成复制”。目标继续使用预览时的版本，来源当前内容和后续附件保留；不会恢复用户自行删除的来源。选择先加密保存，目标离线或浏览器重启后仍按复制恢复，不重复创建副本、不再删除来源。已经提交原生删除请求的操作暂不提供此选项，仍按原删除回执恢复。
 - 通过完整性校验的 MDBX 密码项目、可迁移 Passkey 和附件现可移动到 Bitwarden。目标完整保存并回读后才删除来源；删除回执丢失、浏览器重启或最后入库失败后可继续恢复，不重复创建副本。移动期间检查尚未同步的原生关联成员，保护来源免受其他写入干扰；重新解锁同一 MDBX 工作副本可继续恢复。完整关联组不拆分，同库独立项目合并到最多 50 项的原子事务，减少重复回读。原生提交历史保留在原库，未支持的字段或关联明确阻断。
 - 加强 MDBX 跨库移动的数据保护：删除前重新核对来源附件，并将整个数据库的提交摘要加密保存；即使条目版本没变，后续附件变化也会阻止删除。回复丢失或浏览器重启后继续使用原删除回执，不重复删除、不自动放宽版本检查；兼容旧版已提交回执，待恢复期间同步不会覆盖来源快照。
 - 本地项目现可移动到 Bitwarden：自动包含完整密码项目和支持的 SSO 关联，保留可迁移 Passkey、密码历史及附件。目标全部回读校验后，一次性纳入目标并移除本地原件；中断后可恢复，重复执行不重复创建。来源在传输期间被修改或出现新关联时停止移除，保留两端数据。复用现有移动确认入口，补齐各语言提示并改善暗色提示文字对比度。
@@ -36,6 +37,7 @@
 
 ## English
 
+- Interrupted local or MDBX moves into Bitwarden can now explicitly keep both sides and finish as a copy when source edits prevent completion. The destination uses the reviewed version while current source contents and later attachments remain intact; user-deleted sources are not restored. The decision is encrypted and saved before continuation, surviving destination outages and browser restarts without duplicate copies or source deletion. Operations with an authorized native deletion still recover through their original deletion receipts and cannot select this option.
 - Eligible MDBX password projects, portable Passkeys and attachments can now be moved into Bitwarden. Source deletion follows complete destination storage and authenticated readback; lost deletion replies, browser restarts and final adoption failures resume without duplicate copies. Moves check unindexed native relationship members and protect pending sources from other writes. Reopening the same MDBX working copy supports recovery. Complete relationship components stay together; independent items share native transactions of up to 50 objects to reduce repeated readbacks. Native commit history stays in the original vault, and unsupported fields or relationships block the affected component.
 - Hardened cross-vault MDBX moves: source attachments are rechecked before an encrypted deletion intent records the complete vault revision. Later attachment changes block deletion even when item heads are unchanged. Lost replies and restarts reuse the original receipt without duplicate deletion or relaxed revision checks; committed legacy receipts remain recoverable, and pending moves protect their source snapshots from sync.
 - Local items can now be moved into Bitwarden, including complete password projects, supported SSO dependencies, portable Passkeys, password history and attachments. After full destination readback verification, one encrypted transaction adopts the destination and removes local originals. Interrupted transfers resume without duplicate creates. Source edits or new dependencies stop removal and preserve both sides. The existing move confirmation is reused, with complete locale instructions and more readable warning text in dark mode.

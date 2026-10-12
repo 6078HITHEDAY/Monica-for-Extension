@@ -3436,5 +3436,15 @@
   "文件夹分页未完成，请减少目录数量后重试。": "The folder list exceeded the supported limit. Reduce the number of folders and try again.",
   "本地及 MDBX 项目可移入 Bitwarden；其他来源请使用复制。目标和附件完整校验后才会移除来源，中断后可恢复。": "Local and MDBX items can be moved into Bitwarden. Use Copy for other sources. Originals are removed after the destination and attachments are fully verified; interrupted moves can be resumed.",
   "Bitwarden 暂支持复制；无法完整保存的项目会在预览中说明原因。": "Bitwarden currently supports copying; the preview explains any entries that cannot be preserved completely.",
-  "MDBX 原生提交历史保留在来源库中；目标校验完成后，当前项目才会从来源移除。": "Native MDBX commit history stays in the source vault. Current items are removed from the source only after destination verification."
+  "MDBX 原生提交历史保留在来源库中；目标校验完成后，当前项目才会从来源移除。": "Native MDBX commit history stays in the source vault. Current items are removed from the source only after destination verification.",
+  "已选择保留来源；继续完成预览版本的复制。": "Source preservation selected; continue copying the version from the preview.",
+  "继续复制": "Continue copying",
+  "保留两端，完成复制": "Keep both and finish copying",
+  "目标继续使用预览时的版本，保留来源当前内容；不会恢复你已删除的来源项目。确认后会先保存这个决定，再继续复制。": "The destination will use the version from the preview, preserving the current source contents. Source items you deleted will not be restored. Your choice will be saved before copying continues.",
+  "我确认保留来源并按复制完成": "I confirm keeping the sources and completing this as a copy",
+  "确认保留并继续": "Confirm and continue",
+  "请先确认保留两端并按复制完成。": "Confirm keeping both and completing this as a copy first.",
+  "传输目标不匹配或已变化。": "The transfer destination does not match or has changed.",
+  "传输已结束，不能更改恢复方式。": "This transfer has ended; its recovery mode cannot be changed.",
+  "来源删除已进入确认流程或此操作不是移动，暂不能按保留两端完成。": "Source deletion has already been authorized, or this operation is not a move. Keeping both is unavailable."
 }

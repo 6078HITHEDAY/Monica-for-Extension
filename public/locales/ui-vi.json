@@ -3436,5 +3436,15 @@
   "文件夹分页未完成，请减少目录数量后重试。": "Danh sách thư mục vượt quá giới hạn hỗ trợ. Hãy giảm số thư mục rồi thử lại.",
   "本地及 MDBX 项目可移入 Bitwarden；其他来源请使用复制。目标和附件完整校验后才会移除来源，中断后可恢复。": "Có thể chuyển các mục cục bộ và MDBX vào Bitwarden. Với nguồn khác, hãy dùng Sao chép. Chỉ xóa bản gốc sau khi xác minh đầy đủ đích và tệp đính kèm; có thể tiếp tục nếu quá trình bị gián đoạn.",
   "Bitwarden 暂支持复制；无法完整保存的项目会在预览中说明原因。": "Bitwarden hiện hỗ trợ sao chép. Bản xem trước giải thích những mục không thể được bảo toàn đầy đủ.",
-  "MDBX 原生提交历史保留在来源库中；目标校验完成后，当前项目才会从来源移除。": "Lịch sử commit gốc của MDBX vẫn nằm trong kho nguồn. Chỉ xóa các mục hiện tại khỏi nguồn sau khi xác minh đích."
+  "MDBX 原生提交历史保留在来源库中；目标校验完成后，当前项目才会从来源移除。": "Lịch sử commit gốc của MDBX vẫn nằm trong kho nguồn. Chỉ xóa các mục hiện tại khỏi nguồn sau khi xác minh đích.",
+  "已选择保留来源；继续完成预览版本的复制。": "Đã chọn giữ nguồn; tiếp tục sao chép phiên bản đã xem trước.",
+  "继续复制": "Tiếp tục sao chép",
+  "保留两端，完成复制": "Giữ cả hai và hoàn tất sao chép",
+  "目标继续使用预览时的版本，保留来源当前内容；不会恢复你已删除的来源项目。确认后会先保存这个决定，再继续复制。": "Đích sẽ dùng phiên bản đã xem trước và giữ nguyên nội dung nguồn hiện tại. Các mục nguồn bạn đã xóa sẽ không được khôi phục. Lựa chọn sẽ được lưu trước khi tiếp tục sao chép.",
+  "我确认保留来源并按复制完成": "Tôi xác nhận giữ nguồn và hoàn tất dưới dạng sao chép",
+  "确认保留并继续": "Xác nhận và tiếp tục",
+  "请先确认保留两端并按复制完成。": "Hãy xác nhận giữ cả hai và hoàn tất dưới dạng sao chép trước.",
+  "传输目标不匹配或已变化。": "Đích truyền không khớp hoặc đã thay đổi.",
+  "传输已结束，不能更改恢复方式。": "Quá trình truyền đã kết thúc; không thể đổi cách khôi phục.",
+  "来源删除已进入确认流程或此操作不是移动，暂不能按保留两端完成。": "Việc xóa nguồn đã được cho phép hoặc thao tác này không phải di chuyển. Không thể chọn giữ cả hai."
 }

@@ -90,7 +90,7 @@ for (const type of projectCommands) {
   if (new RegExp(`["']${type}["']`).test(allowlistBlock) || !handlers.get(type).includes('assertManagerPage(sender)'))
     throw new Error(`Password project request ${type} is not restricted to the manager page.`);
 }
-for (const type of ['BITWARDEN_PENDING_TRANSFERS', 'BITWARDEN_CANCEL_UNWRITTEN_TRANSFER']) {
+for (const type of ['BITWARDEN_PENDING_TRANSFERS', 'BITWARDEN_CANCEL_UNWRITTEN_TRANSFER', 'BITWARDEN_KEEP_BOTH_TRANSFER']) {
   if (new RegExp(`["']${type}["']`).test(allowlistBlock) || !handlers.get(type)?.includes('assertManagerPage(sender)'))
     throw new Error(`Bitwarden batch recovery request ${type} is not restricted to the manager page.`);
 }

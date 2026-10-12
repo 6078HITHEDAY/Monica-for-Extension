@@ -3436,5 +3436,15 @@
   "文件夹分页未完成，请减少目录数量后重试。": "La lista de carpetas supera el límite. Reduzca el número de carpetas e inténtelo de nuevo.",
   "本地及 MDBX 项目可移入 Bitwarden；其他来源请使用复制。目标和附件完整校验后才会移除来源，中断后可恢复。": "Los elementos locales y MDBX se pueden mover a Bitwarden. Use Copiar para otros orígenes. Los originales se eliminan tras verificar completamente el destino y los adjuntos; los movimientos interrumpidos se pueden reanudar.",
   "Bitwarden 暂支持复制；无法完整保存的项目会在预览中说明原因。": "Bitwarden permite copiar por ahora. La vista previa explica qué elementos no se pueden conservar por completo.",
-  "MDBX 原生提交历史保留在来源库中；目标校验完成后，当前项目才会从来源移除。": "El historial de commits nativo de MDBX permanece en la bóveda de origen. Los elementos actuales solo se eliminan del origen tras verificar el destino."
+  "MDBX 原生提交历史保留在来源库中；目标校验完成后，当前项目才会从来源移除。": "El historial de commits nativo de MDBX permanece en la bóveda de origen. Los elementos actuales solo se eliminan del origen tras verificar el destino.",
+  "已选择保留来源；继续完成预览版本的复制。": "Se conservará el origen; continúa copiando la versión de la vista previa.",
+  "继续复制": "Continuar copiando",
+  "保留两端，完成复制": "Conservar ambos y terminar la copia",
+  "目标继续使用预览时的版本，保留来源当前内容；不会恢复你已删除的来源项目。确认后会先保存这个决定，再继续复制。": "El destino usará la versión de la vista previa y se conservará el contenido actual del origen. No se restaurarán los elementos de origen que hayas eliminado. Tu decisión se guardará antes de continuar.",
+  "我确认保留来源并按复制完成": "Confirmo conservar los originales y completar la operación como copia",
+  "确认保留并继续": "Confirmar y continuar",
+  "请先确认保留两端并按复制完成。": "Confirma primero que quieres conservar ambos y completar la operación como copia.",
+  "传输目标不匹配或已变化。": "El destino de la transferencia no coincide o ha cambiado.",
+  "传输已结束，不能更改恢复方式。": "La transferencia ha terminado; no se puede cambiar su modo de recuperación.",
+  "来源删除已进入确认流程或此操作不是移动，暂不能按保留两端完成。": "La eliminación del origen ya se ha autorizado, o esta operación no es un traslado. No se pueden conservar ambos."
 }
