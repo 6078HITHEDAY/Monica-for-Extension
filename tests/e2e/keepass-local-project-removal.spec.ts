@@ -117,7 +117,10 @@ for (const version of [3, 4] as const) test(`local KDBX ${version} owner removal
     await dialogContent(page, { name: title, exact: true }).getByRole('button', { name: '编辑', exact: true }).click();
     const followup = dialogContent(page, { name: '编辑密码', exact: true });
     const laterNotes = 'Saved after removal · 中文';
-    await followup.getByLabel('恢复备注与笔记', { exact: true }).fill(laterNotes);
+    await followup.getByRole('button', { name: '笔记与恢复备注', exact: true }).click();
+    const noteEditor = page.locator('.editor-content-dialog');
+    await noteEditor.getByLabel('恢复备注与笔记', { exact: true }).fill(laterNotes);
+    await noteEditor.getByRole('button', { name: '完成', exact: true }).click(); await expect(noteEditor).toHaveCount(0);
     await followup.getByRole('button', { name: '加密保存', exact: true }).click(); await expect(followup).toHaveCount(0);
     await page.getByRole('button', { name: '密码源', exact: true }).click();
     await sourceCard().getByRole('button', { name: '立即同步', exact: true }).click();

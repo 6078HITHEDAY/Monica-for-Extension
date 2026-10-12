@@ -1,4 +1,5 @@
 import * as kdbxweb from "kdbxweb";
+import { applyKeePassSourceRemoval, readKeePassSourceRemoval, type KeePassSourceRemovalRequest, type KeePassSourceRemovalFileResult } from './keepass-source-removal';
 import { applyKeePassTransferFile, keePassTransferContentHash, type KeePassTransferDraft, type KeePassTransferFileResult, type KeePassTransferNativeSource } from './keepass-transfer-file';
 import { preserveLocalPasswordHistory } from '../../core/password-history';
 import { preserveLocalWalletContentOrder } from '../../core/wallet-content-order';
@@ -352,6 +353,47 @@ export class KeePassProvider implements ProviderAdapter {
           assertCurrent: () => { assertCurrent(); for (const row of native.values()) row.assertCurrent(); } };
       } catch (cause) { output.fill(0); throw cause; }
     } finally { isolated.lock(); credential?.keyFile?.fill(0); bytes.fill(0); }
+  }
+
+  /** Prepare and round-trip a whole source deletion in a disposable KDBX. */
+  async prepareSourceRemovalFile(account: ProviderAccount, input: KeePassSourceRemovalRequest, originalBytes: Uint8Array): Promise<KeePassSourceRemovalFileResult> {
+    const source = structuredClone(account), request = readKeePassSourceRemoval(source, input), bytes = originalBytes.slice();
+    let output: Uint8Array | undefined;
+    const digest = async (value: Uint8Array) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', value.slice().buffer))]
+      .map(byte => byte.toString(16).padStart(2, '0')).join('');
+    try {
+      const live = this.requireKeePassAccountSession(source), revision = live.groupRevision, history = live.historyRevision;
+      if (live.databaseId !== databaseIdOf(source) || live.summary.sourceMode !== source.config.sourceMode)
+        throw new Error('KeePass 来源会话与数据库绑定不一致，原文件已保留。');
+      const assertCurrent = () => {
+        if (this.sessions.get(source.id) !== live || live.groupRevision !== revision || live.historyRevision !== history)
+          throw new Error('准备移除期间 KeePass 来源已锁定或变化，原文件已保留。');
+      };
+      if (await digest(bytes) !== request.expectedWorkingSha256) throw new Error('KeePass 来源文件版本已变化，原文件已保留。');
+      if (await keePassTransferContentHash(live.database) !== request.expectedContentSha256)
+        throw new Error('KeePass 来源还有未保存修改或已变化，原文件已保留。');
+      assertCurrent();
+      const database = await kdbxweb.Kdbx.load(bytes.slice().buffer, live.database.credentials);
+      const native = readKeePassEntries(database, Number(source.config.databaseId), source.id);
+      for (const item of request.sources) {
+        const original = native.items.find(row => row.keepassEntryUuid === item.keepassEntryUuid);
+        const baseline = restoreContentFingerprint(item.providerRefs[0].etag || '');
+        if (!original || original.deletedAt || !baseline || baseline !== restoreContentFingerprint(fingerprint(original))
+          || baseline !== restoreContentFingerprint(fingerprint(item))) throw new Error('KeePass 来源内容已变化或有未保存修改，原文件已保留。');
+      }
+      assertCurrent();
+      const result = await applyKeePassSourceRemoval(database, source, request);
+      const expected = await keePassTransferContentHash(database);
+      output = new Uint8Array(await database.save());
+      const serialized = await kdbxweb.Kdbx.load(output.slice().buffer, live.database.credentials);
+      if (await keePassTransferContentHash(serialized) !== expected) throw new Error('KeePass 来源移除后的文件内容无法完整保存，原文件已保留。');
+      const deleted = readKeePassEntries(serialized, Number(source.config.databaseId), source.id).items;
+      if (result.entries.some(entry => !deleted.some(item => item.keepassEntryUuid === entry.entryUuid && item.deletedAt)))
+        throw new Error('KeePass 来源移除后的原生回收站校验失败，原文件已保留。');
+      const outputSha256 = await digest(output); assertCurrent();
+      return { ...result, inputSha256: request.expectedWorkingSha256, outputSha256, bytes: output, assertCurrent };
+    } catch (cause) { output?.fill(0); throw cause; }
+    finally { bytes.fill(0); }
   }
 
   /** Internal persistence guard; contains no credential or serializable session state. */

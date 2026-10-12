@@ -1,4 +1,5 @@
 import type { ProviderAccount } from "../../core/model";
+import { keePassSourceRemovalRequestHash, type KeePassSourceRemovalRequest } from './keepass-source-removal';
 import { keePassTransferRequestHash, type KeePassTransferDraft } from './keepass-transfer-file';
 import type { KeePassProjectRemovalDraft } from '../../core/keepass-project-removal';
 import { keePassRemovalFileRequestHash } from '../../core/keepass-project-removal-journal';
@@ -728,6 +729,34 @@ export class KeePassRemoteSessionService {
       remoteSha256: record.baseSha256,
       workingSha256: record.workingSha256
     };
+  }
+
+  /** Save only the guarded native deletion. Publication and target verification
+   * remain the responsibility of the cross-provider transaction coordinator. */
+  async persistSourceRemoval(account: ProviderAccount, input: KeePassSourceRemovalRequest): Promise<KeePassDurableMutationReceipt> {
+    const source = structuredClone(account), request = structuredClone(input);
+    if (source.kind !== 'keepass' || !source.enabled || !isRemoteKeePassSource(source.config.sourceMode)) throw invalidProvider();
+    const intentSha256 = await keePassSourceRemovalRequestHash(source, request);
+    return this.runPersistenceExclusive(source.id, async () => {
+      const previous = await this.readDurableReceipt(source, request.operationId, 'transfer-source-remove', intentSha256);
+      if (previous) return previous;
+      const record = await this.storage.read(source.id);
+      if (!record) throw new KeePassRemoteSessionError('remote-working-copy-missing', 'KeePass 本机工作副本不存在。');
+      let output: Uint8Array | undefined;
+      try {
+        if (record.workingSha256 !== request.expectedWorkingSha256 || await sha256Hex(record.baseBytes) !== record.baseSha256)
+          throw new KeePassWorkingCopyStoreError('revision-stale', 'KeePass 来源文件版本已变化，原文件已保留。');
+        const result = await this.provider.prepareSourceRemovalFile(source, request, record.workingBytes);
+        output = result.bytes;
+        const receipt: KeePassDurableMutationReceipt = { providerId: source.id, operationId: request.operationId,
+          kind: 'transfer-source-remove', intentSha256, completedAt: new Date().toISOString(), result: { type: 'transfer-source-remove',
+            inputSha256: result.inputSha256, outputSha256: result.outputSha256, recycleBinUuid: result.recycleBinUuid, entries: result.entries } };
+        const encrypted = await sealKeePassDurableReceipt(source, receipt); result.assertCurrent();
+        const saved = await this.storage.save({ ...record, workingBytes: output, workingSha256: result.outputSha256,
+          updatedAt: receipt.completedAt }, record.revision, encrypted);
+        saved.baseBytes.fill(0); saved.workingBytes.fill(0); return receipt;
+      } finally { output?.fill(0); record.baseBytes.fill(0); record.workingBytes.fill(0); }
+    });
   }
 
   private async openReceipt(account: ProviderAccount, envelope: Awaited<ReturnType<KeePassWorkingCopyStorage["readReceipt"]>> & {}): Promise<KeePassDurableMutationReceipt> {

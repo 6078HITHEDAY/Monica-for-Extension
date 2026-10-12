@@ -4,6 +4,7 @@
 
 ## 中文
 
+- 为 KeePass 跨库移动补齐文件层保护：完整条目进入原生回收站，保留原 Passkey、计数、历史及附件；整库版本或关联不一致时停止移除。文件与加密回执一起保存，写入中断、重启和重复请求不会再次移除后来恢复的条目。此项为内部基础，KeePass 跨库移动入口仍待完整流程验收后开放。
 - 本地或 MDBX 项目移入 Bitwarden 期间，如果来源被修改导致无法完成，现在可明确选择“保留两端，完成复制”。目标继续使用预览时的版本，来源当前内容和后续附件保留；不会恢复用户自行删除的来源。选择先加密保存，目标离线或浏览器重启后仍按复制恢复，不重复创建副本、不再删除来源。已经提交原生删除请求的操作暂不提供此选项，仍按原删除回执恢复。
 - 通过完整性校验的 MDBX 密码项目、可迁移 Passkey 和附件现可移动到 Bitwarden。目标完整保存并回读后才删除来源；删除回执丢失、浏览器重启或最后入库失败后可继续恢复，不重复创建副本。移动期间检查尚未同步的原生关联成员，保护来源免受其他写入干扰；重新解锁同一 MDBX 工作副本可继续恢复。完整关联组不拆分，同库独立项目合并到最多 50 项的原子事务，减少重复回读。原生提交历史保留在原库，未支持的字段或关联明确阻断。
 - 加强 MDBX 跨库移动的数据保护：删除前重新核对来源附件，并将整个数据库的提交摘要加密保存；即使条目版本没变，后续附件变化也会阻止删除。回复丢失或浏览器重启后继续使用原删除回执，不重复删除、不自动放宽版本检查；兼容旧版已提交回执，待恢复期间同步不会覆盖来源快照。
@@ -37,6 +38,7 @@
 
 ## English
 
+- Added the file-level safety foundation for moving items out of KeePass: whole entries enter the native recycle bin with original Passkeys, counters, history and attachments retained. Changed database versions or inconsistent relationships stop removal. The file and encrypted receipt commit together; interrupted writes, restarts and retries do not remove later-restored entries again. This is internal groundwork; new cross-provider KeePass move actions remain unavailable pending complete workflow acceptance.
 - Interrupted local or MDBX moves into Bitwarden can now explicitly keep both sides and finish as a copy when source edits prevent completion. The destination uses the reviewed version while current source contents and later attachments remain intact; user-deleted sources are not restored. The decision is encrypted and saved before continuation, surviving destination outages and browser restarts without duplicate copies or source deletion. Operations with an authorized native deletion still recover through their original deletion receipts and cannot select this option.
 - Eligible MDBX password projects, portable Passkeys and attachments can now be moved into Bitwarden. Source deletion follows complete destination storage and authenticated readback; lost deletion replies, browser restarts and final adoption failures resume without duplicate copies. Moves check unindexed native relationship members and protect pending sources from other writes. Reopening the same MDBX working copy supports recovery. Complete relationship components stay together; independent items share native transactions of up to 50 objects to reduce repeated readbacks. Native commit history stays in the original vault, and unsupported fields or relationships block the affected component.
 - Hardened cross-vault MDBX moves: source attachments are rechecked before an encrypted deletion intent records the complete vault revision. Later attachment changes block deletion even when item heads are unchanged. Lost replies and restarts reuse the original receipt without duplicate deletion or relaxed revision checks; committed legacy receipts remain recoverable, and pending moves protect their source snapshots from sync.

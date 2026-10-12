@@ -1,6 +1,7 @@
 import type { ProviderConflictInput, VaultItem } from "../../core/model";
 import { base64ToBytes } from "../../security/encoding";
 import { KEEPASS_REMOTE_MAX_DATABASE_BYTES } from "./keepass-webdav-client";
+import { normalizeUuid } from './keepass-field-reference';
 
 export interface KeePassRemoteWorkingCopyInput {
   providerId: string;
@@ -33,9 +34,11 @@ export type KeePassDurableMutationKind =
   | "item-sync"
   | "project-remove"
   | "batch-transfer"
+  | "transfer-source-remove"
   | "project-resolve";
 
 export type KeePassDurableMutationResult =
+  | ({ type: 'transfer-source-remove' } & import('./keepass-source-removal').KeePassSourceRemovalResult)
   | { type: 'batch-transfer'; inputSha256: string; outputSha256: string; snapshotItems: VaultItem[];
       entries: Array<{ sourceItemId: string; targetItemId: string; entryUuid: string }> }
   | { type: 'project-resolve'; reviewToken: string; recoveryIntentTag: string; baseSha256: string; resolvedSha256: string }
@@ -628,6 +631,23 @@ function assertDurableReceipt(receipt: KeePassDurableMutationReceipt): void {
       const items = result.snapshotItems.filter(item => item.id === entry.targetItemId);
       if (items.length !== 1 || items[0].providerRefs?.length !== 1 || items[0].providerRefs[0].providerId !== receipt.providerId
         || items[0].providerRefs[0].remoteId !== entry.entryUuid || items[0].keepassEntryUuid !== entry.entryUuid) throw invalidRecord();
+    }
+    return;
+  }
+  if (receipt.kind === 'transfer-source-remove') {
+    const result = receipt.result;
+    if (result?.type !== 'transfer-source-remove') throw invalidRecord();
+    assertSha256(result.inputSha256); assertSha256(result.outputSha256); assertOpaqueId(result.recycleBinUuid);
+    if (!/^[a-f0-9]{32}$/.test(normalizeUuid(result.recycleBinUuid))) throw invalidRecord();
+    if (!Array.isArray(result.entries) || !result.entries.length || result.entries.length > 200) throw invalidRecord();
+    const sources = new Set<string>(), native = new Set<string>();
+    for (const entry of result.entries) {
+      if (!entry) throw invalidRecord();
+      assertOpaqueId(entry.sourceItemId); assertOpaqueId(entry.entryUuid);
+      const uuid = normalizeUuid(entry.entryUuid);
+      if (!/^[a-f0-9]{32}$/.test(uuid) || uuid === normalizeUuid(result.recycleBinUuid)
+        || sources.has(entry.sourceItemId) || native.has(uuid)) throw invalidRecord();
+      sources.add(entry.sourceItemId); native.add(uuid);
     }
     return;
   }
