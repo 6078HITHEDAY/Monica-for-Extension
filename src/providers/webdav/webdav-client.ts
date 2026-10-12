@@ -46,10 +46,11 @@ export class WebDavClient {
     });
   }
 
-  async listBackups(signal?: AbortSignal): Promise<WebDavBackupFile[]> {
+  async listBackups(signal?: AbortSignal, createMissing = true): Promise<WebDavBackupFile[]> {
     const folderUrl = backupFolderUrl(this.credentials.baseUrl);
     let result = await this.listFolder(folderUrl, signal);
     if (result.status === 404) {
+      if (!createMissing) return [];
       await this.ensureBackupFolder(signal);
       result = await this.listFolder(folderUrl, signal);
     }

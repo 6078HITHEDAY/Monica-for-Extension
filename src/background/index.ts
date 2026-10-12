@@ -8,6 +8,7 @@ import { readBitwardenBatchResource } from '../providers/bitwarden/bitwarden-bat
 import { readMdbxBitwardenSource } from '../providers/bitwarden/bitwarden-mdbx-source';
 import { MdbxBitwardenMembers } from '../providers/bitwarden/bitwarden-mdbx-members';
 import { readKeePassBitwardenSource } from '../providers/bitwarden/bitwarden-keepass-source';
+import { BitwardenWebDavSources } from '../providers/bitwarden/bitwarden-webdav-source';
 import { readPasswordProjectRemovalJournal, isPasswordProjectRemovalPending } from '../core/password-project-removal-journal';
 import { KeePassProjectRemovalWorkflow } from './keepass-project-removal';
 import { KeePassProjectResolutionWorkflow } from './keepass-project-resolution';
@@ -296,6 +297,7 @@ const bitwardenTransferAttachmentSource = new BitwardenTransferAttachmentSource(
   loadBitwardenTransferAttachmentContext, persistBitwardenSession);
 const bitwardenAttachmentMutations = new BitwardenAttachmentMutationService();
 const mdbxBitwardenMembers = new MdbxBitwardenMembers();
+const bitwardenWebDavSources = new BitwardenWebDavSources(monicaWebDavProvider);
 const bitwardenBatchTransfers = new BitwardenBatchTransferCoordinator(service, bitwardenProvider, {
   resource: async (state, items, preserveCategories) => {
     const sessionId = await service.passkeySessionId(); if (!sessionId) throw new Error('密码库已锁定。');
@@ -313,6 +315,11 @@ const bitwardenBatchTransfers = new BitwardenBatchTransferCoordinator(service, b
     });
     return readBitwardenBatchResource(state, items, preserveCategories, { context,
       portableSource: (account, item, preserveCategories) => {
+        if (account.kind === 'monica-webdav') return bitwardenWebDavSources.read(state, account, item, preserveCategories, async () => {
+          const current = await service.getProvider(account.id);
+          if (!current?.enabled || !sameProviderBinding(account, current) || await service.passkeySessionId() !== sessionId)
+            throw new Error('读取期间 WebDAV 来源连接或解锁会话已变化。');
+        });
         if (account.kind === 'keepass') return readKeePassBitwardenSource(state, account, item, preserveCategories, {
           provider: keePassProvider, files: mdbx2TransferAttachmentService,
           prepare: async () => { await ensureKeePassSession(account, true); },

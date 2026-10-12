@@ -31,4 +31,4 @@ Earlier browser failures and diagnostics are retained locally. They exposed nati
 
 ## Remaining scope
 
-Legacy WebDAV native-source conversion into Bitwarden, remaining unsupported rich fields/history across backends, durable foreign-source deletion, actual OneDrive/current Android/F-Droid/system Credential Manager acceptance, nearby transport and per-recipient Passkey consent remain open. No Android edits/builds/device actions, real accounts, user Chrome access, release, push or tag are included.
+Legacy WebDAV native-source conversion into Bitwarden was subsequently completed for eligible records in [the WebDAV source follow-up](bitwarden-webdav-source-319.md). Remaining unsupported rich fields/history across backends, durable foreign-source deletion, actual OneDrive/current Android/F-Droid/system Credential Manager acceptance, nearby transport and per-recipient Passkey consent remain open. No Android edits/builds/device actions, real accounts, user Chrome access, release, push or tag are included.

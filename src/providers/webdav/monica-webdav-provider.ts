@@ -232,6 +232,26 @@ export class MonicaWebDavProvider implements ProviderAdapter {
     return { file, document: readAndroidBackup(zipBytes, account.id, { allowPortablePasskeys: encrypted, allowPortableAttachments: encrypted }) };
   }
 
+  /** Complete read-only snapshot for a batch. Do not create a missing source
+   * directory or download the whole archive separately for every attachment. */
+  async readTransferSnapshot(account: ProviderAccount, signal?: AbortSignal): Promise<{ file: WebDavBackupFile; document: AndroidBackupDocument; sha256: string }> {
+    const client = this.client(account), config = readConfig(account);
+    const [file] = await client.listBackups(signal, false);
+    if (!file || config.lastFileName !== file.name || config.lastEtag && config.lastEtag.replace(/^W\//, '') !== file.etag?.replace(/^W\//, ''))
+      throw new Error('WebDAV 来源备份已变化或尚未同步，请先同步再预览。');
+    const remote = await client.download(file, signal); let zip: Uint8Array | undefined;
+    try {
+      const sha256 = [...new Uint8Array(await crypto.subtle.digest('SHA-256', remote as BufferSource))].map(value => value.toString(16).padStart(2, '0')).join('');
+      const encrypted = isAndroidEncryptedBackup(remote);
+      zip = encrypted ? await decryptAndroidBackup(remote, config.backupPassword || '') : remote;
+      const document = readAndroidBackup(zip, account.id, { allowPortablePasskeys: encrypted, allowPortableAttachments: encrypted });
+      const [after] = await client.listBackups(signal, false);
+      if (!after || !sameBackupVersion(file, after) || file.size !== after.size || file.lastModified !== after.lastModified)
+        throw new Error('读取期间 WebDAV 来源备份已变化。');
+      return { file, document, sha256 };
+    } finally { zip?.fill(0); remote.fill(0); }
+  }
+
   private async uploadDocument(
     account: ProviderAccount,
     document: AndroidBackupDocument,

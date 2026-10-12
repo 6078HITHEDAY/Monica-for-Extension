@@ -15,6 +15,9 @@ import { decryptBitwardenSymmetricKey } from '../../src/providers/bitwarden/bitw
 import { PROJECT_CREDENTIAL_FIELD, readProjectCredential } from '../../src/core/project-credentials';
 import { createRequire } from 'node:module';
 import { build } from 'esbuild';
+import { strToU8, zipSync } from 'fflate';
+import { encryptAndroidBackup } from '../../src/providers/webdav/android-backup-crypto';
+import { vaultItemToAndroidRecord } from '../../src/providers/webdav/android-backup-codec';
 
 const stamp = '2026-10-12T00:00:00.000Z', password = 'Synthetic portable password', email = 'portable@example.invalid';
 const origin = 'https://portable.example.test', challenge = Buffer.alloc(32, 41).toString('base64url');
@@ -23,7 +26,7 @@ const options = { locale: 'zh-CN', colorScheme: 'dark' as const, viewport: { wid
 async function send(page: Page, request: object): Promise<any> { const response = await page.evaluate(input => chrome.runtime.sendMessage(input), request);
   expect(response.ok, response.error).toBe(true); return response.data; }
 
-for (const sourceKind of ['local', 'mdbx', 'keepass'] as const) test(`a browser-created ${sourceKind} Passkey survives Bitwarden copy interruption and authenticates on a fresh Edge client`, async ({}, info) => {
+for (const sourceKind of ['local', 'mdbx', 'keepass', 'webdav'] as const) test(`a browser-created ${sourceKind} Passkey survives Bitwarden copy interruption and authenticates on a fresh Edge client`, async ({}, info) => {
   test.skip(sourceKind === 'mdbx' && !process.env.MONICA_317_NATIVE_PASSKEY_FIXTURE, 'Requires an explicitly selected verified synthetic MDBX fixture');
   test.setTimeout(180_000);
   let nativeHost: Awaited<ReturnType<typeof temporaryNativeHost>> | undefined, sourceProviderId: string | undefined;
@@ -36,6 +39,9 @@ for (const sourceKind of ['local', 'mdbx', 'keepass'] as const) test(`a browser-
   const rows: Record<string, unknown>[] = [], unexpected: string[] = []; let posts = 0;
   const projectId = randomUUID(), credentialGroupId = randomUUID(), expectedCopies = sourceKind === 'local' ? 2 : 3;
   const secondRecovery = sourceKind === 'keepass' ? 'Second recovery' : 'Recovery';
+  const backups = new Map<string, Buffer>(), davMethods: string[] = [];
+  if (sourceKind === 'webdav') backups.set('monica_backup_initial.enc.zip', Buffer.from(await encryptAndroidBackup(zipSync({}), 'Synthetic WebDAV backup')));
+  const archiveHashes = () => [...backups].map(([name, bytes]) => [name, createHash('sha256').update(bytes).digest('hex')]);
   const projectField = (index: number) => ({ name: PROJECT_CREDENTIAL_FIELD, protected: true, value: JSON.stringify({ version: 1,
     projectId, groupId: credentialGroupId, passwordId: randomUUID(), label: `Account ${index}`, primary: index === 0, groupOrder: 0, passwordOrder: index }) });
   const server = createServer(async (request, response) => {
@@ -43,6 +49,27 @@ for (const sourceKind of ['local', 'mdbx', 'keepass'] as const) test(`a browser-
     const json = (body: unknown) => { response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(body)); };
     const body = async () => { const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk)); return Buffer.concat(chunks); };
     const url = new URL(request.url || '/', 'http://127.0.0.1');
+    if (url.pathname.startsWith('/dav/')) {
+      davMethods.push(request.method!);
+      expect(request.headers.authorization).toBe(`Basic ${Buffer.from('synthetic:synthetic').toString('base64')}`);
+      if (request.method === 'PROPFIND') {
+        response.writeHead(207, { 'Content-Type': 'application/xml' });
+        response.end(`<d:multistatus xmlns:d="DAV:">${[...backups].map(([name, bytes], index) => `<d:response><d:href>/dav/Monica_Backups/${name}</d:href><d:propstat><d:prop>
+          <d:getetag>"${createHash('sha256').update(bytes).digest('hex')}"</d:getetag><d:getcontentlength>${bytes.length}</d:getcontentlength>
+          <d:getlastmodified>${new Date(Date.parse(stamp) + index * 1000).toUTCString()}</d:getlastmodified></d:prop></d:propstat></d:response>`).join('')}</d:multistatus>`); return;
+      }
+      const name = url.pathname.split('/').pop()!;
+      if (request.method === 'PUT') {
+        expect(request.headers['if-none-match']).toBe('*'); expect(backups.has(name)).toBe(false);
+        backups.set(name, await body()); response.writeHead(201); response.end(); return;
+      }
+      if (request.method === 'GET' && backups.has(name)) {
+        const bytes = backups.get(name)!, etag = `"${createHash('sha256').update(bytes).digest('hex')}"`;
+        if (request.headers['if-match']) expect(request.headers['if-match']).toBe(etag);
+        response.writeHead(200, { etag, 'last-modified': new Date(Date.parse(stamp) + [...backups.keys()].indexOf(name) * 1000).toUTCString() });
+        response.end(bytes); return;
+      }
+    }
     if (url.pathname === '/identity/accounts/prelogin/password') return json({ Kdf: 0, KdfIterations: 10_000 });
     if (url.pathname === '/identity/connect/token') return json({ access_token: 'synthetic', refresh_token: 'synthetic', expires_in: 3600, Key: protectedKey });
     if (url.pathname === '/api/sync') return json({ Profile: { Id: 'portable-user', Email: email }, Ciphers: rows, Folders: [] });
@@ -142,16 +169,42 @@ for (const sourceKind of ['local', 'mdbx', 'keepass'] as const) test(`a browser-
       const source = (await send(page, { type: 'PROVIDER_LIST' })).find((row: any) => row.name === 'Synthetic KeePass source');
       expect(source.isDefaultSaveTarget).toBe(true); sourceProviderId = source.id;
     }
+    if (sourceKind === 'webdav') {
+      await page.reload(); await page.getByRole('button', { name: '密码源', exact: true }).click();
+      await page.locator('m3e-list-action').filter({ hasText: '连接 Monica Android WebDAV' }).click();
+      const connect = page.getByRole('dialog', { name: '连接 Monica Android WebDAV', exact: true });
+      await connect.getByLabel('显示名称', { exact: true }).fill('Synthetic WebDAV source');
+      await connect.getByLabel('WebDAV 地址 *', { exact: true }).fill(`${host}/dav`);
+      await connect.getByLabel('用户名', { exact: true }).fill('synthetic');
+      await connect.getByLabel('WebDAV 密码', { exact: true }).fill('synthetic');
+      await connect.getByLabel('Android 备份加密密码（可选）', { exact: true }).fill('Synthetic WebDAV backup');
+      await connect.locator('label').filter({ hasText: '设为新项目的默认保存目标' }).click();
+      await connect.getByRole('button', { name: '加密保存', exact: true }).click(); await expect(connect).toHaveCount(0);
+      const source = (await send(page, { type: 'PROVIDER_LIST' })).find((row: any) => row.name === 'Synthetic WebDAV source');
+      expect(source.isDefaultSaveTarget).toBe(true); sourceProviderId = source.id;
+      await send(page, { type: 'PROVIDER_SYNC', providerId: sourceProviderId });
+    }
     let website = await context!.newPage(); await website.goto(origin);
     await website.locator('#register').click(); await confirm(website, true); await expect(website.locator('#result')).toHaveText('registered');
     const original = (await send(page, { type: 'VAULT_LIST_ITEMS' }) as VaultItem[]).find(row => row.kind === 'passkey' && row.rpId === 'portable.example.test') as PasskeyItem;
     expect(original).toMatchObject({ sourceMode: 'browser-local', signCount: 0, userVerificationRequired: true, discoverable: sourceKind === 'local' });
-    expect(original.providerRefs.map(row => row.providerId)).toEqual(sourceProviderId ? [sourceProviderId] : []);
+    expect(original.providerRefs.map(row => row.providerId)).toEqual(sourceProviderId && sourceKind !== 'webdav' ? [sourceProviderId] : []);
+    if (sourceKind === 'webdav') {
+      // Legacy snapshot providers are not direct WebAuthn registration targets.
+      // Import an encrypted native backup of this genuinely registered key.
+      backups.set('monica_backup_registered.enc.zip', Buffer.from(await encryptAndroidBackup(zipSync({
+        'passkeys/passkey_registered.json': strToU8(JSON.stringify(vaultItemToAndroidRecord(original, undefined, undefined, { allowPortablePasskeys: true })))
+      }), 'Synthetic WebDAV backup')));
+      await send(page, { type: 'VAULT_DELETE_ITEM', itemId: original.id });
+      await send(page, { type: 'PROVIDER_SYNC', providerId: sourceProviderId });
+      const native = (await send(page, { type: 'VAULT_LIST_ITEMS' }) as VaultItem[]).find(row => row.kind === 'passkey' && row.providerRefs[0]?.providerId === sourceProviderId) as PasskeyItem;
+      expect(native).toMatchObject({ credentialId: original.credentialId, privateKeyPkcs8: original.privateKeyPkcs8, signCount: 0 });
+    }
     const rich: LoginItem = { ...createLoginItem({ title: 'Rich portable password', username: 'synthetic', password: 'synthetic-secret', uris: [origin] }),
       loginType: 'PASSWORD', appPackageName: 'test.portable', appName: 'Portable', email: 'user@example.test', phone: '+000123',
       addressLine: 'Synthetic street', city: 'City', state: 'State', zipCode: '1234', country: 'XX',
       customFields: [{ name: 'Recovery', value: 'first', protected: true }, { name: secondRecovery, value: 'second', protected: true, fieldType: 'HIDDEN' }],
-      passwordHistory: sourceKind === 'local' ? [{ password: 'synthetic-older', lastUsedAt: stamp }] : undefined,
+      passwordHistory: sourceKind === 'local' || sourceKind === 'webdav' ? [{ password: 'synthetic-older', lastUsedAt: stamp }] : undefined,
       providerRefs: sourceProviderId ? [{ providerId: sourceProviderId }] : [], mdbxFolderId: original.mdbxFolderId };
     if (sourceProviderId) { rich.passwordGroupId = projectId; rich.customFields.push(projectField(0)); }
     await send(page, { type: 'VAULT_UPSERT_ITEM', item: rich });
@@ -168,6 +221,7 @@ for (const sourceKind of ['local', 'mdbx', 'keepass'] as const) test(`a browser-
     // Native sync adds committed remote identity and revision. Compare against
     // that committed source snapshot, while original key bytes stay anchored to registration.
     const sourcesBeforeCopy = await send(page, { type: 'VAULT_LIST_ITEMS' }) as VaultItem[];
+    const archivesBeforeCopy = archiveHashes();
     if (sourceKind === 'keepass') await info.attach('source-shape', { contentType: 'application/json', body: JSON.stringify(sourcesBeforeCopy.map(row => {
       const base = JSON.parse(row.providerRefs[0]?.etag || '{}');
       return { kind: row.kind, database: row.keepassDatabaseId, baselineDatabase: base.keepassDatabaseId,
@@ -179,8 +233,10 @@ for (const sourceKind of ['local', 'mdbx', 'keepass'] as const) test(`a browser-
       .getByRole('button', { name: '批量传输', exact: true }).click();
     const dialog = dialogContent(page, { name: '复制或移动项目' });
     await dialog.getByRole('checkbox', { name: /Portable passkey/ }).check(); await dialog.getByRole('checkbox', { name: /Rich portable password/ }).check();
+    const davStart = davMethods.length;
     await dialog.getByRole('button', { name: '检查并生成计划', exact: true }).click();
     await expect(dialog.getByText(`${expectedCopies} 个可传输，0 个被阻断`, { exact: true })).toBeVisible();
+    if (sourceKind === 'webdav') expect(davMethods.slice(davStart)).toEqual(['PROPFIND', 'GET', 'PROPFIND']);
     await dialog.getByRole('button', { name: '执行复制', exact: true }).click();
     await expect(dialog.getByRole('button', { name: '恢复传输', exact: true })).toBeVisible(); expect(posts).toBe(1);
     const pending = await send(page, { type: 'BITWARDEN_PENDING_TRANSFERS', providerId }); expect(pending).toHaveLength(1);
@@ -190,6 +246,10 @@ for (const sourceKind of ['local', 'mdbx', 'keepass'] as const) test(`a browser-
     expect(posts).toBe(expectedCopies);
     const afterCopy = await send(page, { type: 'VAULT_LIST_ITEMS' }) as VaultItem[];
     for (const source of sourcesBeforeCopy) expect(afterCopy.find(row => row.id === source.id)).toEqual(source);
+    if (sourceKind === 'webdav') {
+      expect(archiveHashes()).toEqual(archivesBeforeCopy);
+      expect(davMethods.slice(davStart)).toEqual(['PROPFIND', 'GET', 'PROPFIND', 'PROPFIND', 'GET', 'PROPFIND']);
+    }
     await context!.close(); context = undefined;
 
     // Independent installation has no local policy/identity cache from registration.

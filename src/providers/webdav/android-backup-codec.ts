@@ -1111,8 +1111,8 @@ function historyRowMatches(entry: unknown, owner: string, value: { password: str
   return passwordHistoryOwner(raw.entryId) === owner && raw.password === value.password && dateValue(raw.lastUsedAt, '') === value.lastUsedAt;
 }
 
-export function vaultItemToAndroidRecord(item: VaultItem, original?: Record<string, unknown>, originalItem?: VaultItem): Record<string, unknown> | null {
-  return serializeAndroidItem(item, original, originalItem)?.raw || null;
+export function vaultItemToAndroidRecord(item: VaultItem, original?: Record<string, unknown>, originalItem?: VaultItem, options: AndroidBackupCodecOptions = {}): Record<string, unknown> | null {
+  return serializeAndroidItem(item, original, originalItem, options)?.raw || null;
 }
 
 function baseFields(path: string, raw: Record<string, unknown>, providerId: string) {
