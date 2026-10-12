@@ -1,6 +1,10 @@
 import { isLoginItem, createLoginItem, type BillingAddressItem, type CardItem, type IdentityItem, type LoginItem, type PasskeyItem, type PaymentAccountItem, type ProviderAccount, type ProviderConflict, type ProviderConflictSummary, type TotpItem, type VaultItem } from "../core/model";
 import { loginMatchScore, matchingLogins } from "../core/matching";
 import { customIconProjection } from '../core/custom-icon';
+import { BitwardenBatchTransferCoordinator } from '../providers/bitwarden/bitwarden-batch-coordinator';
+import { BitwardenBatchFoldersRemote } from '../providers/bitwarden/bitwarden-batch-folders';
+import { BitwardenTransferRemote } from '../providers/bitwarden/bitwarden-transfer-remote';
+import { readBitwardenBatchResource } from '../providers/bitwarden/bitwarden-batch-resource';
 import { readPasswordProjectRemovalJournal, isPasswordProjectRemovalPending } from '../core/password-project-removal-journal';
 import { KeePassProjectRemovalWorkflow } from './keepass-project-removal';
 import { KeePassProjectResolutionWorkflow } from './keepass-project-resolution';
@@ -288,6 +292,37 @@ const bitwardenAttachmentDownloads = new BitwardenAttachmentDownloadService();
 const bitwardenTransferAttachmentSource = new BitwardenTransferAttachmentSource(bitwardenAttachmentDownloads,
   loadBitwardenTransferAttachmentContext, persistBitwardenSession);
 const bitwardenAttachmentMutations = new BitwardenAttachmentMutationService();
+const bitwardenBatchTransfers = new BitwardenBatchTransferCoordinator(service, bitwardenProvider, {
+  resource: async (state, items, preserveCategories) => {
+    const sessionId = await service.passkeySessionId(); if (!sessionId) throw new Error('密码库已锁定。');
+    let previous: ProviderAccount | undefined;
+    const context = async (account: ProviderAccount, item: VaultItem) => {
+      previous = await service.getProvider(account.id);
+      if (!previous?.enabled || !sameProviderBinding(account, previous)) throw new Error('Bitwarden 来源连接已变化。');
+      const result = await loadBitwardenTransferAttachmentContext(previous, item);
+      try { previous = await service.saveBitwardenTransferSession(previous, result.session, sessionId); return result; }
+      catch (error) { clearBitwardenOrganizationKeys(result.organizationKeys); throw error; }
+    };
+    const files = new BitwardenTransferAttachmentSource(bitwardenAttachmentDownloads, context, async (_account, session) => {
+      if (!previous) throw new Error('Bitwarden 来源会话不存在。');
+      previous = await service.saveBitwardenTransferSession(previous, session, sessionId);
+    });
+    return readBitwardenBatchResource(state, items, preserveCategories, { context,
+      files: async (state, item) => (await readLocalTransferResource(state, item, { prepare: async () => undefined,
+        files: { listSourceAttachments: (account, row) => files.list(account, row), readSourceAttachment: (account, row, file) => files.read(account, row, file) }
+      })).attachments });
+  },
+  folders: async (account, signal) => {
+    const sessionId = await service.passkeySessionId(); if (!sessionId) throw new Error('密码库已锁定。');
+    const result = await bitwardenClient.sync(readBitwardenSession(account), signal);
+    await service.saveBitwardenTransferSession(account, result.session, sessionId);
+    if (result.payload.folders !== undefined && result.payload.Folders !== undefined) throw new Error('Bitwarden 文件夹清单有歧义。');
+    return result.payload.folders ?? result.payload.Folders;
+  },
+  folderRemote: (copyId, store) => new BitwardenBatchFoldersRemote(copyId, store.copies, bitwardenClient),
+  remote: (copyId, store) => new BitwardenTransferRemote(copyId, store.copies, bitwardenClient, bitwardenAttachmentDownloads, bitwardenAttachmentMutations),
+  exclusive: (providerId, work) => providerOperations.run(providerId, work)
+});
 const bitwardenSendUploads = new ProviderAttachmentUploadStore();
 const bitwardenSendUploadInputs = new Map<string, { providerId: string; input: Omit<BitwardenSendFileInput, "bytes"> }>();
 const CAPTURE_TTL_MS = 60_000;
@@ -507,7 +542,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
       if (status !== "unlocked") clearBitwardenAttachmentSessions();
       if (status !== "unlocked") providerAttachmentUploads.clear();
       if (status !== "unlocked") clearBitwardenSendUploads();
-      if (status !== "unlocked") { mdbx2BatchTransferStatuses.clear(); localTransfers.clear(); keePassTransfers.clear(); localAttachments.clear(); }
+      if (status !== "unlocked") { mdbx2BatchTransferStatuses.clear(); localTransfers.clear(); keePassTransfers.clear(); bitwardenBatchTransfers.clear(); localAttachments.clear(); }
     });
   }
 });
@@ -624,7 +659,7 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
       pendingCredentialCaptures.clear();
       await clearPendingUsernameContexts();
       await clearPendingPasskeyRequests();
-      mdbx2BatchTransferStatuses.clear(); localTransfers.clear(); keePassTransfers.clear(); localAttachments.clear();
+      mdbx2BatchTransferStatuses.clear(); localTransfers.clear(); keePassTransfers.clear(); bitwardenBatchTransfers.clear(); localAttachments.clear();
       return service.lock();
     }
     case "VAULT_CHANGE_MASTER_PASSWORD":
@@ -635,7 +670,7 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
       return service.exportEncryptedBackup(request.backupPassword);
     case "VAULT_RESTORE_ENCRYPTED": {
       assertExtensionPage(sender);
-      localTransfers.clear(); keePassTransfers.clear(); localAttachments.clear();
+      localTransfers.clear(); keePassTransfers.clear(); bitwardenBatchTransfers.clear(); localAttachments.clear();
       const replacedHelloBindingId = request.replaceExisting ? await service.windowsHelloBindingIdForRuntime() : undefined;
       abortProviderSyncs();
       void mdbx2LocalFileExports.clear();
@@ -1585,7 +1620,14 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
       assertManagerPage(sender);
       return (await service.getProvider(request.input.targetProviderId))?.kind === 'local'
         ? localTransfers.plan(request.input) : (await service.getProvider(request.input.targetProviderId))?.kind === 'keepass'
-          ? keePassTransfers.plan(request.input) : mdbx2BatchTransferCoordinator.plan(request.input);
+          ? keePassTransfers.plan(request.input) : (await service.getProvider(request.input.targetProviderId))?.kind === 'bitwarden'
+            ? bitwardenBatchTransfers.plan(request.input) : mdbx2BatchTransferCoordinator.plan(request.input);
+    case "BITWARDEN_PENDING_TRANSFERS":
+      assertManagerPage(sender);
+      return bitwardenBatchTransfers.pending(request.providerId);
+    case "BITWARDEN_CANCEL_UNWRITTEN_TRANSFER":
+      assertManagerPage(sender);
+      return bitwardenBatchTransfers.cancel(request.providerId, request.operationId);
     case "KEEPASS_PENDING_TRANSFERS":
       assertManagerPage(sender);
       return keePassTransfers.pending(request.providerId);
@@ -1614,7 +1656,9 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
           ? await localTransfers.execute(input, recordMdbx2BatchTransferProgress)
           : (await service.getProvider(input.targetProviderId))?.kind === 'keepass'
             ? await keePassTransfers.execute(input, recordMdbx2BatchTransferProgress)
-            : await mdbx2BatchTransferCoordinator.execute(input, recordMdbx2BatchTransferProgress);
+            : (await service.getProvider(input.targetProviderId))?.kind === 'bitwarden'
+              ? await bitwardenBatchTransfers.execute(input, recordMdbx2BatchTransferProgress)
+              : await mdbx2BatchTransferCoordinator.execute(input, recordMdbx2BatchTransferProgress);
       } catch (error) {
         const current = mdbx2BatchTransferStatuses.get(operationId);
         recordMdbx2BatchTransferProgress({

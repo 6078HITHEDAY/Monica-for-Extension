@@ -67,6 +67,7 @@ export interface ProviderSyncGuard {
   confirmedRemovedItemIds?: string[];
   /** Internal file receipt; finalize the encrypted transfer journal with adoption. */
   keePassTransfer?: import('../providers/keepass/keepass-working-copy-store').KeePassDurableMutationReceipt;
+  bitwardenBatchTransfer?: { operationId: string; sessionId: string };
 }
 
 /** Ignore rotating tokens and sync metadata, but never merge results from a replaced source. */

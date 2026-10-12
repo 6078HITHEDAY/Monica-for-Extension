@@ -13,6 +13,7 @@ export interface BitwardenCopyStore {
   advance(copyId: string, expectedRevision: number, patch: BitwardenCopyProgress): Promise<BitwardenCipherCopyRecord>;
 }
 export interface BitwardenCopySessionStore extends BitwardenCopyStore {
+  materialize(copyId: string): Promise<BitwardenCipherCopyRecord>;
   account(copyId: string): Promise<ProviderAccount>;
   /** CAS only rotating tokens; must preserve newer credentials and unrelated settings. */
   saveSession(copyId: string, previous: ProviderAccount, next: BitwardenSessionConfig): Promise<ProviderAccount>;

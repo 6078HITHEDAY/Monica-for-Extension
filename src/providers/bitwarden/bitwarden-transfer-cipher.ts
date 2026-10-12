@@ -93,6 +93,10 @@ export interface BitwardenTransferCipher {
   /** Original IDs only route authenticated file reads; never install them on the new Cipher. */
   attachments: Array<{ sourceAttachmentId: string; fileName: string }>;
   credentialIds: string[];
+  /** Non-executable template until the dependency's server identity is confirmed. */
+  pendingSso?: { sourceLogicalId: string };
+  boundSso?: { sourceLogicalId: string; targetCipherId: string };
+  pendingFolderKey?: string;
 }
 
 /** Use this same normalization on the authenticated source refresh before
@@ -108,6 +112,8 @@ export async function prepareBitwardenTransferCipher(input: {
   operationId: string; copyId: string; targetProviderId: string; targetFolderId?: string;
   /** Shared by all records in a copied password project. Never reuse the source project ID. */
   targetProjectId?: string;
+  /** Batch-only preparation. Execution refuses unresolved templates. */
+  deferSsoBinding?: boolean;
   source: Record<string, unknown>; sourceOwnerKey: BitwardenSymmetricKey; targetOwnerKey: BitwardenSymmetricKey;
 }): Promise<BitwardenTransferCipher> {
   assertMdbx2TransferOperationId(input.operationId); assertMdbx2TransferOperationId(input.copyId);
@@ -122,8 +128,8 @@ export async function prepareBitwardenTransferCipher(input: {
   const sourceLogin = decoded.items.find(row => row.kind === 'login');
   // Graph-wide rebinding requires the enclosing batch's confirmed identities.
   // Until that planner supplies a lossless rewrite, refuse stale source links.
-  if (sourceLogin && (sourceLogin.boundNoteEntryId || sourceLogin.boundNoteId != null || sourceLogin.ssoRefLogicalId
-    || sourceLogin.ssoRefEntryId != null || sourceLogin.boundTotpItemId))
+  if (sourceLogin && (sourceLogin.boundNoteEntryId || sourceLogin.boundNoteId != null || sourceLogin.boundTotpItemId
+    || (sourceLogin.ssoRefLogicalId || sourceLogin.ssoRefEntryId != null) && (!input.deferSsoBinding || !sourceLogin.ssoRefLogicalId)))
     throw new Error('此 Bitwarden 记录包含需要整组重建的关联，尚不能单独无损复制。');
   if (sourceLogin?.passwordGroupId) {
     if (!input.targetProjectId || input.targetProjectId === sourceLogin.passwordGroupId) throw new Error('复制完整密码项目必须使用新的项目身份。');
@@ -184,7 +190,8 @@ export async function prepareBitwardenTransferCipher(input: {
     if (new TextEncoder().encode(payloadJson).length > MAX_JSON_BYTES) throw invalid();
     return { version: 1, operationId: input.operationId, copyId: input.copyId, sourceCipherId: source.id, sourceSha256,
       targetProviderId: input.targetProviderId, payloadJson, contentSha256: await hash(await rewrite(content(payload), targetKey)),
-      attachments, credentialIds: credentials };
+      attachments, credentialIds: credentials,
+      ...(sourceLogin?.ssoRefLogicalId ? { pendingSso: { sourceLogicalId: sourceLogin.ssoRefLogicalId } } : {}) };
   } finally { material.fill(0); clear(targetKey); if (sourceKey !== input.sourceOwnerKey) clear(sourceKey); }
 }
 
@@ -192,7 +199,7 @@ export async function prepareBitwardenTransferCipher(input: {
  * atomic vault adoption belong to the enclosing transfer transaction. */
 export async function verifyBitwardenTransferCipher(plan: BitwardenTransferCipher, raw: Record<string, unknown>, targetOwnerKey: BitwardenSymmetricKey) {
   assertMdbx2TransferOperationId(plan.operationId); assertMdbx2TransferOperationId(plan.copyId);
-  if (plan.version !== 1 || !identifier(plan.targetProviderId) || !identifier(plan.sourceCipherId)
+  if (plan.pendingSso || plan.pendingFolderKey || plan.version !== 1 || !identifier(plan.targetProviderId) || !identifier(plan.sourceCipherId)
     || !/^[a-f0-9]{64}$/.test(plan.sourceSha256) || !/^[a-f0-9]{64}$/.test(plan.contentSha256)
     || typeof plan.payloadJson !== 'string' || new TextEncoder().encode(plan.payloadJson).length > MAX_JSON_BYTES
     || new TextEncoder().encode(JSON.stringify(raw)).length > MAX_JSON_BYTES) throw invalid();
@@ -222,9 +229,54 @@ export async function verifyBitwardenTransferCipher(plan: BitwardenTransferCiphe
     if (await hash(await rewrite(content(candidate), key)) !== plan.contentSha256) throw invalid();
     const decoded = await decodeBitwardenCipher(candidate, plan.targetProviderId, targetOwnerKey, undefined, { requireReadableProjectMembership: true });
     if (decoded.warning || decoded.historyWarning || decoded.unsupported) throw invalid();
+    if (plan.boundSso && (!identifier(plan.boundSso.sourceLogicalId) || !identifier(plan.boundSso.targetCipherId)
+      || decoded.items.find(row => row.kind === 'login')?.ssoRefLogicalId !== `password:bitwarden:${plan.boundSso.targetCipherId}`
+      || decoded.items.find(row => row.kind === 'login')?.ssoRefEntryId != null)) throw invalid();
     const ids = decoded.items.filter(row => row.kind === 'passkey').map(row => normalizeCredentialId(row.credentialId));
     if (JSON.stringify(ids) !== JSON.stringify(plan.credentialIds)) throw invalid();
     return decoded.items;
+  } finally { if (key !== targetOwnerKey) clear(key); }
+}
+
+/** Materialize only the known SSO binding after its dependency has a durable
+ * server identity. Other encrypted values and the operation marker are exact. */
+export async function bindBitwardenTransferSso(template: BitwardenTransferCipher, targetCipherId: string,
+  targetOwnerKey: BitwardenSymmetricKey): Promise<BitwardenTransferCipher> {
+  if (!template.pendingSso || template.boundSso || !identifier(template.pendingSso.sourceLogicalId) || !identifier(targetCipherId)) throw invalid();
+  const plan = structuredClone(template), pending = plan.pendingSso!;
+  delete plan.pendingSso;
+  const raw = object(canonical(parseLosslessJson(plan.payloadJson)));
+  const items = await verifyBitwardenTransferCipher(plan, { ...raw, id: `template-${plan.copyId}`, revisionDate: '1970-01-01T00:00:00.000Z' }, targetOwnerKey);
+  if (items.find(row => row.kind === 'login')?.ssoRefLogicalId !== pending.sourceLogicalId) throw invalid();
+  const key = await resolveBitwardenCipherKey(raw, targetOwnerKey);
+  try {
+    let logical = 0, numeric = 0;
+    for (const field of raw.fields as unknown[]) {
+      const row = object(field), name = await decryptBitwardenString(String(row.name), key);
+      if (name === 'monica_sso_ref_logical_id') {
+        logical++; row.value = await encryptBitwardenString(`password:bitwarden:${targetCipherId}`, key);
+      } else if (name === 'monica_sso_ref_entry_id') {
+        numeric++; row.value = await encryptBitwardenString('', key);
+      }
+    }
+    if (logical !== 1 || numeric > 1) throw invalid();
+    plan.payloadJson = JSON.stringify(raw); plan.contentSha256 = await hash(await rewrite(content(raw), key));
+    plan.boundSso = { sourceLogicalId: pending.sourceLogicalId, targetCipherId };
+    await verifyBitwardenTransferCipher(plan, { ...raw, id: `template-${plan.copyId}`, revisionDate: '1970-01-01T00:00:00.000Z' }, targetOwnerKey);
+    return plan;
+  } finally { if (key !== targetOwnerKey) clear(key); }
+}
+
+export async function bindBitwardenTransferFolder(template: BitwardenTransferCipher, folderId: string,
+  targetOwnerKey: BitwardenSymmetricKey): Promise<BitwardenTransferCipher> {
+  if (!identifier(template.pendingFolderKey) || !identifier(folderId)) throw invalid();
+  const plan = structuredClone(template), raw = object(canonical(parseLosslessJson(plan.payloadJson)));
+  const check = { ...plan }; delete check.pendingFolderKey; delete check.pendingSso;
+  await verifyBitwardenTransferCipher(check, { ...raw, id: `template-${plan.copyId}`, revisionDate: '1970-01-01T00:00:00.000Z' }, targetOwnerKey);
+  const key = await resolveBitwardenCipherKey(raw, targetOwnerKey);
+  try {
+    raw.folderId = folderId; plan.payloadJson = JSON.stringify(raw); plan.contentSha256 = await hash(await rewrite(content(raw), key));
+    delete plan.pendingFolderKey; return plan;
   } finally { if (key !== targetOwnerKey) clear(key); }
 }
 

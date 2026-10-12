@@ -90,6 +90,10 @@ for (const type of projectCommands) {
   if (new RegExp(`["']${type}["']`).test(allowlistBlock) || !handlers.get(type).includes('assertManagerPage(sender)'))
     throw new Error(`Password project request ${type} is not restricted to the manager page.`);
 }
+for (const type of ['BITWARDEN_PENDING_TRANSFERS', 'BITWARDEN_CANCEL_UNWRITTEN_TRANSFER']) {
+  if (new RegExp(`["']${type}["']`).test(allowlistBlock) || !handlers.get(type)?.includes('assertManagerPage(sender)'))
+    throw new Error(`Bitwarden batch recovery request ${type} is not restricted to the manager page.`);
+}
 for (const type of ['VAULT_PASSWORD_PROJECT_REMOVE', 'VAULT_PASSWORD_PROJECT_RESTORE', 'VAULT_KEEPASS_PROJECT_REMOVE', 'VAULT_KEEPASS_PROJECT_RESOLVE', 'VAULT_KEEPASS_PROJECT_RECOVERY_DELETE']) {
   if (!handlers.get(type)?.includes('request.confirmed !== true')) throw new Error(`Password project request ${type} lacks explicit confirmation.`);
 }

@@ -23,6 +23,7 @@ export interface BitwardenCipherCopyRecord {
   remoteId?: string;
   attachmentReceipts: Array<{ sourceAttachmentId: string; targetAttachmentId: string }>;
   verifiedItems?: VaultItem[];
+  batchOperationId?: string;
 }
 
 const invalid = () => new Error('Bitwarden 迁移恢复记录无效，已保留原密码库。');
@@ -55,6 +56,13 @@ export function readBitwardenCipherCopies(value: unknown): BitwardenCipherCopyRe
       || row.stage === 'verified' && (!Array.isArray(row.verifiedItems) || !row.verifiedItems.length || row.verifiedItems.length > 202)
       || row.stage !== 'verified' && row.verifiedItems !== undefined) throw invalid();
     assertMdbx2TransferOperationId(plan.copyId); assertMdbx2TransferOperationId(plan.operationId);
+    if (row.batchOperationId !== undefined) {
+      assertMdbx2TransferOperationId(row.batchOperationId);
+      if (row.batchOperationId !== plan.operationId) throw invalid();
+    }
+    if (plan.pendingSso && (row.stage !== 'prepared' || !row.batchOperationId || plan.boundSso || !id(plan.pendingSso.sourceLogicalId))) throw invalid();
+    if (plan.pendingFolderKey && (row.stage !== 'prepared' || !row.batchOperationId || !id(plan.pendingFolderKey))) throw invalid();
+    if (plan.boundSso && (!row.batchOperationId || !id(plan.boundSso.sourceLogicalId) || !id(plan.boundSso.targetCipherId))) throw invalid();
     const files = new Set<string>();
     for (const file of row.files) {
       if (!id(file.attachmentId) || !id(file.fileName, 1024) || !Number.isSafeInteger(file.sizeBytes) || file.sizeBytes < 0 || file.sizeBytes > 16 * 1024 * 1024
@@ -97,7 +105,7 @@ export function advanceBitwardenCipherCopy(row: BitwardenCipherCopyRecord, expec
   return next;
 }
 
-export async function bitwardenCopySourceHash(state: VaultState, ids: string[]): Promise<string> {
+export async function bitwardenCopySourceHash(state: VaultState, ids: string[], allowSsoGraph = false): Promise<string> {
   const items = state.items.filter(row => ids.includes(row.id));
   if (items.length !== ids.length || items.some(row => row.deletedAt)
     || new Set(items.map(row => row.id)).size !== ids.length
@@ -111,7 +119,7 @@ export async function bitwardenCopySourceHash(state: VaultState, ids: string[]):
     if (await inspectPasskeyKey(item.privateKeyPkcs8, item.algorithm) !== 'usable') throw new Error('迁移来源 Passkey 私钥不可用，已保留原记录。');
   }
   if (items.some(item => item.kind === 'login' && (item.boundNoteEntryId || item.boundNoteId != null
-    || item.ssoRefLogicalId || item.ssoRefEntryId != null || item.boundTotpItemId)))
+    || (!allowSsoGraph || !item.ssoRefLogicalId) && (item.ssoRefLogicalId || item.ssoRefEntryId != null) || item.boundTotpItemId)))
     throw new Error('迁移来源包含尚未重建的关联，已保留原记录。');
   const providers = new Set(items.flatMap(row => row.providerRefs.map(ref => ref.providerId)));
   return hash({ items, providers: state.providers.filter(row => providers.has(row.id)),
@@ -127,5 +135,6 @@ export function assertBitwardenCopyTarget(state: VaultState, row: BitwardenCiphe
 }
 
 export function bitwardenCopyIntent(row: BitwardenCipherCopyRecord) {
-  return { target: row.target, sourceItemIds: row.sourceItemIds, sourceSnapshotSha256: row.sourceSnapshotSha256, prepared: row.prepared, files: row.files };
+  return { target: row.target, sourceItemIds: row.sourceItemIds, sourceSnapshotSha256: row.sourceSnapshotSha256, prepared: row.prepared, files: row.files,
+    ...(row.batchOperationId ? { batchOperationId: row.batchOperationId } : {}) };
 }

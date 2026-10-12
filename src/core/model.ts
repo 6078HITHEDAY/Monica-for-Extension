@@ -495,6 +495,7 @@ export interface VaultState {
   localTransferReceipts?: import('./local-transfer').LocalTransferReceipt[];
   keepassTransfers?: import('./keepass-transfer-journal').KeePassTransferIntent[];
   bitwardenCipherCopies?: import('./bitwarden-transfer-journal').BitwardenCipherCopyRecord[];
+  bitwardenBatchTransfers?: import('./bitwarden-batch-transfer').BitwardenBatchIntent[];
   localTransferFolders?: import('./local-transfer').LocalTransferFolder[];
   localItemAttachments?: import('./local-transfer').LocalItemAttachment[];
   localItemOrigins?: import('./local-transfer').LocalItemOrigin[];

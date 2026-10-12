@@ -3433,5 +3433,6 @@
   "恢复传输": "Übertragung fortsetzen",
   "取消未写入操作": "Ungeschriebenen Vorgang abbrechen",
   "在同一数据库中移动": "Innerhalb dieser Datenbank verschieben",
-  "文件夹分页未完成，请减少目录数量后重试。": "Die Ordnerliste überschreitet das unterstützte Limit. Reduzieren Sie die Ordnerzahl und versuchen Sie es erneut."
+  "文件夹分页未完成，请减少目录数量后重试。": "Die Ordnerliste überschreitet das unterstützte Limit. Reduzieren Sie die Ordnerzahl und versuchen Sie es erneut.",
+  "Bitwarden 暂支持复制；无法完整保存的项目会在预览中说明原因。": "Bitwarden unterstützt derzeit das Kopieren. Die Vorschau erklärt, welche Einträge nicht vollständig erhalten werden können."
 }

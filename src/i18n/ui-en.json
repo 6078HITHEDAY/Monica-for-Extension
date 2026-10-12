@@ -3433,5 +3433,6 @@
   "恢复传输": "Resume transfer",
   "取消未写入操作": "Cancel unwritten operation",
   "在同一数据库中移动": "Move within this database",
-  "文件夹分页未完成，请减少目录数量后重试。": "The folder list exceeded the supported limit. Reduce the number of folders and try again."
+  "文件夹分页未完成，请减少目录数量后重试。": "The folder list exceeded the supported limit. Reduce the number of folders and try again.",
+  "Bitwarden 暂支持复制；无法完整保存的项目会在预览中说明原因。": "Bitwarden currently supports copying; the preview explains any entries that cannot be preserved completely."
 }

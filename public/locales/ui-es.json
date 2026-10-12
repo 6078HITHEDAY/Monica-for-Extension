@@ -3433,5 +3433,6 @@
   "恢复传输": "Reanudar transferencia",
   "取消未写入操作": "Cancelar operación sin guardar",
   "在同一数据库中移动": "Mover dentro de esta base de datos",
-  "文件夹分页未完成，请减少目录数量后重试。": "La lista de carpetas supera el límite. Reduzca el número de carpetas e inténtelo de nuevo."
+  "文件夹分页未完成，请减少目录数量后重试。": "La lista de carpetas supera el límite. Reduzca el número de carpetas e inténtelo de nuevo.",
+  "Bitwarden 暂支持复制；无法完整保存的项目会在预览中说明原因。": "Bitwarden permite copiar por ahora. La vista previa explica qué elementos no se pueden conservar por completo."
 }

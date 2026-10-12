@@ -3105,6 +3105,7 @@ function errorCode(error: unknown): string | undefined {
               @empty-remote="confirmBitwardenEmptyRemote"
               @resolve-conflict="resolveProviderConflict"
               @folders="openBitwardenFolders"
+              @transfer="openMdbx2BatchTransfer"
               @collections="openBitwardenCollections"
               @relogin="openBitwarden"
               @logout="logoutBitwarden"

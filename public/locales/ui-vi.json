@@ -3433,5 +3433,6 @@
   "恢复传输": "Tiếp tục chuyển",
   "取消未写入操作": "Hủy thao tác chưa ghi",
   "在同一数据库中移动": "Di chuyển trong cùng cơ sở dữ liệu",
-  "文件夹分页未完成，请减少目录数量后重试。": "Danh sách thư mục vượt quá giới hạn hỗ trợ. Hãy giảm số thư mục rồi thử lại."
+  "文件夹分页未完成，请减少目录数量后重试。": "Danh sách thư mục vượt quá giới hạn hỗ trợ. Hãy giảm số thư mục rồi thử lại.",
+  "Bitwarden 暂支持复制；无法完整保存的项目会在预览中说明原因。": "Bitwarden hiện hỗ trợ sao chép. Bản xem trước giải thích những mục không thể được bảo toàn đầy đủ."
 }

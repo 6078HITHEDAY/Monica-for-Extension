@@ -19,6 +19,12 @@ import { readKeePassTransfers, assertKeePassTransferBindings, keePassTransferSna
 import { readBitwardenCipherCopies, validateBitwardenCopyFiles, advanceBitwardenCipherCopy, assertBitwardenCopyTarget,
   bitwardenCopySourceHash, bitwardenCopyIntent, type BitwardenCipherCopyRecord } from '../core/bitwarden-transfer-journal';
 import type { BitwardenCopySessionStore } from '../providers/bitwarden/bitwarden-transfer-execution';
+import { readBitwardenBatches, bitwardenBatchSnapshotHash, bitwardenBatchSourceHash, assertBitwardenBatchCopies, verifyBitwardenBatchReadback,
+  bitwardenBatchResult, type BitwardenBatchIntent } from '../core/bitwarden-batch-transfer';
+import type { BitwardenBatchStore } from '../providers/bitwarden/bitwarden-batch-folders';
+import { bitwardenTransferSelection } from '../providers/bitwarden/bitwarden-transfer-selection';
+import { bindBitwardenTransferSso, bindBitwardenTransferFolder } from '../providers/bitwarden/bitwarden-transfer-cipher';
+import { BitwardenClient, type BitwardenSessionConfig } from '../providers/bitwarden/bitwarden-client';
 import { mdbx2TransferOperationScope as transferIdentityHash } from '../providers/mdbx2/mdbx2-transfer-identity';
 import { mergeBitwardenProjectRestoration, type BitwardenProjectRestorationReadback, type BitwardenProjectPreparationReadback } from '../providers/bitwarden/bitwarden-project-removal-restoration';
 import { adoptBitwardenPreparationCopies } from '../providers/bitwarden/bitwarden-preparation-recovery';
@@ -902,8 +908,25 @@ export class SecureVaultService {
     const provider = state.providers.find((candidate) => candidate.id === providerId);
     if (!provider) throw new Error("密码源不存在。");
     if (guard.expectedAccount && !sameProviderBinding(guard.expectedAccount, provider)) throw new Error("同步期间密码源配置已变化，请重新同步。");
+    if (!guard.bitwardenBatchTransfer && readBitwardenBatches(state.bitwardenBatchTransfers).some(row => row.target.id === providerId && row.status === 'writing'))
+      throw new Error('Bitwarden 还有未完成的整批传输，请先恢复；普通同步不能提前入库部分副本。');
     const transferJournal = guard.keePassTransfer ? readKeePassTransfers(state.keepassTransfers) : [];
     const transfer = guard.keePassTransfer && transferJournal.find(row => row.request.operationId === guard.keePassTransfer!.operationId);
+    const bitwardenBatches = guard.bitwardenBatchTransfer ? readBitwardenBatches(state.bitwardenBatchTransfers) : [];
+    const bitwardenBatch = guard.bitwardenBatchTransfer && bitwardenBatches.find(row => row.request.operationId === guard.bitwardenBatchTransfer!.operationId);
+    const bitwardenCopies = guard.bitwardenBatchTransfer ? readBitwardenCipherCopies(state.bitwardenCipherCopies) : [];
+    if (guard.bitwardenBatchTransfer) {
+      await this.assertLocalTransferSession(guard.bitwardenBatchTransfer.sessionId);
+      if (!bitwardenBatch || bitwardenBatch.status === 'cancelled' || bitwardenBatch.target.id !== providerId
+        || provider.kind !== 'bitwarden' || !provider.enabled || !sameProviderBinding(provider, bitwardenBatch.target))
+        throw new Error('Bitwarden 整批传输恢复记录或目标无效。');
+      if (bitwardenBatch.status === 'completed') return { conflicts: 0 };
+      if (!sourceRecords || !syncSnapshot || conflicts.length || acknowledgedMutations.length || requestedMutations.length)
+        throw new Error('Bitwarden 整批入库需要无写入、无冲突的完整回读。');
+      const ownerKey = new BitwardenClient().vaultKey(provider.config as BitwardenSessionConfig);
+      try { await verifyBitwardenBatchReadback(bitwardenBatch, bitwardenCopies, sourceRecords, items, ownerKey); }
+      finally { ownerKey.encKey.fill(0); ownerKey.macKey.fill(0); }
+    }
     if (guard.keePassTransfer) {
       if (!transfer || transfer.status === 'cancelled' || transfer.target.id !== providerId) throw new Error('KeePass 传输恢复记录不存在或已取消。');
       keePassTransferResult(transfer, guard.keePassTransfer);
@@ -1030,6 +1053,13 @@ export class SecureVaultService {
       queueProviderMutation(state, item, providerId, request.operation, detectedAt);
     }
     state.providerConflicts = [...state.providerConflicts.filter((conflict) => conflict.providerId !== providerId), ...persistedConflicts];
+    const bitwardenBatchConfig = bitwardenBatch && accountPatch?.config ? { ...provider.config } : undefined;
+    if (bitwardenBatchConfig && accountPatch?.config) {
+      for (const [name, value] of Object.entries(accountPatch.config)) {
+        if (['accessToken','refreshToken','expiresAt'].includes(name)) continue;
+        if (JSON.stringify(provider.config[name]) === JSON.stringify(guard.expectedAccount?.config[name])) bitwardenBatchConfig[name] = value;
+      }
+    }
     state.providers = state.providers.map((candidate) => candidate.id === providerId ? {
       ...candidate,
       ...accountPatch,
@@ -1037,6 +1067,7 @@ export class SecureVaultService {
       // from this encrypted transaction, not the earlier file publication.
       ...(transfer && accountPatch?.config && candidate.config.oneDriveConnection
         ? { config: { ...accountPatch.config, oneDriveConnection: candidate.config.oneDriveConnection } } : {}),
+      ...(bitwardenBatchConfig ? { config: bitwardenBatchConfig } : {}),
       id: candidate.id,
       kind: candidate.kind,
       lastError: persistedConflicts.length ? `发现 ${persistedConflicts.length} 个同步冲突。` : accountPatch?.lastError
@@ -1051,8 +1082,14 @@ export class SecureVaultService {
       transfer.status = 'completed'; transfer.result = keePassTransferResult(transfer, guard.keePassTransfer);
       state.keepassTransfers = readKeePassTransfers(transferJournal);
     }
+    if (bitwardenBatch) {
+      if (persistedConflicts.length) throw new Error('Bitwarden 整批入库遇到后续编辑，已保留恢复记录。');
+      bitwardenBatch.result = bitwardenBatchResult(bitwardenBatch, bitwardenCopies, state.items); bitwardenBatch.status = 'completed';
+      state.bitwardenBatchTransfers = readBitwardenBatches(bitwardenBatches);
+    }
     state.updatedAt = new Date(this.now()).toISOString();
-    await this.persist(state, key, envelope.kdf, false, false);
+    await this.persist(state, key, envelope.kdf, false, false, guard.bitwardenBatchTransfer
+      ? () => this.assertLocalTransferSession(guard.bitwardenBatchTransfer!.sessionId) : undefined);
     return { conflicts: persistedConflicts.length };
     });
   }
@@ -2510,6 +2547,7 @@ export class SecureVaultService {
    * are retained permanently; per-Cipher verification is not batch adoption. */
   async stageBitwardenCipherCopy(input: BitwardenCipherCopyRecord): Promise<BitwardenCipherCopyRecord> {
     const candidate = readBitwardenCipherCopies([input])[0];
+    if (candidate.batchOperationId) throw new Error('整批传输必须共同保存后才能开始。');
     await validateBitwardenCopyFiles(candidate);
     return this.runExclusive(async () => {
       const { state, envelope, key } = await this.mutableContext();
@@ -2534,6 +2572,99 @@ export class SecureVaultService {
     });
   }
 
+  /** Stage every accepted Cipher and its dependency graph in one encrypted write. */
+  async stageBitwardenBatch(input: BitwardenBatchIntent, inputCopies: BitwardenCipherCopyRecord[]): Promise<BitwardenBatchIntent> {
+    const batch = readBitwardenBatches([input])[0], copies = readBitwardenCipherCopies(inputCopies);
+    if (batch.status !== 'writing' || batch.requestHash !== await transferIdentityHash(batch.request)
+      || batch.folders?.some(row => !['existing', 'prepared'].includes(row.stage))
+      || copies.length !== batch.units.length || copies.some(row => row.stage !== 'prepared' || row.revision !== 0))
+      throw new Error('Bitwarden 整批传输初始计划无效。');
+    for (const row of copies) await validateBitwardenCopyFiles(row);
+    if (copies.reduce((sum,row) => sum + row.files.reduce((n,file) => n + file.sizeBytes, 0), 0) > 16 * 1024 * 1024)
+      throw new Error('Bitwarden 整批传输附件合计超过 16 MiB。');
+    return this.runExclusive(async () => {
+      const { state, envelope, key } = await this.mutableContext();
+      const batches = readBitwardenBatches(state.bitwardenBatchTransfers), journal = readBitwardenCipherCopies(state.bitwardenCipherCopies);
+      const previous = batches.find(row => row.request.operationId === batch.request.operationId);
+      if (previous) {
+        if (previous.requestHash !== batch.requestHash || previous.status === 'cancelled') throw new Error('Bitwarden 整批操作身份已使用或取消。');
+        return previous;
+      }
+      if (batches.length >= 1000 || journal.length + copies.length > 1000
+        || batches.some(row => row.target.id === batch.target.id && row.status === 'writing')
+        || copies.some(row => journal.some(old => old.prepared.copyId === row.prepared.copyId)))
+        throw new Error('Bitwarden 目标有未完成传输或恢复记录已满。');
+      assertBitwardenCopyTarget(state, copies[0]); assertBitwardenBatchCopies(state, batch, copies);
+      if (batch.snapshotHash !== await bitwardenBatchSnapshotHash(state, batch.request)) throw new Error('整批预览后来源或目标已变化，请重新预览。');
+      const selected = bitwardenTransferSelection(batch.request.itemIds, state.items, state.providers);
+      if (selected.selectedIds.length !== batch.plan.items.length || selected.selectedIds.some(id => !batch.plan.items.some(row => row.sourceItemId === id))
+        || selected.components.some(group => group.some(id => batch.plan.items.find(row => row.sourceItemId === id)?.blockedReason)
+          && group.some(id => !batch.plan.items.find(row => row.sourceItemId === id)?.blockedReason)))
+        throw new Error('Bitwarden 整批计划缺少完整项目或关联，已停止创建。');
+      for (const copy of copies) if (copy.sourceSnapshotSha256 !== await bitwardenBatchSourceHash(state, copy.sourceItemIds))
+        throw new Error('Bitwarden 整批来源快照不匹配。');
+      state.bitwardenBatchTransfers = [...batches, batch]; state.bitwardenCipherCopies = [...journal, ...copies];
+      state.updatedAt = new Date(this.now()).toISOString(); await this.persist(state, key, envelope.kdf); return structuredClone(batch);
+    });
+  }
+
+  /** Preparation can refresh login tokens before a copy journal exists. */
+  async saveBitwardenTransferSession(previous: ProviderAccount, next: BitwardenSessionConfig, sessionId: string): Promise<ProviderAccount> {
+    return this.runExclusive(async () => {
+      const assertSession = () => this.assertLocalTransferSession(sessionId); await assertSession();
+      const { state, envelope, key } = await this.mutableContext(), current = state.providers.find(row => row.id === previous.id);
+      if (!current?.enabled || current.kind !== 'bitwarden' || !sameProviderBinding(current, previous)
+        || !sameProviderBinding(current, { ...current, config: next }) || typeof next.accessToken !== 'string' || !next.accessToken
+        || !Number.isFinite(next.expiresAt) || next.refreshToken !== undefined && typeof next.refreshToken !== 'string') throw new Error('Bitwarden 登录身份已变化。');
+      const fields = ['accessToken','refreshToken','expiresAt'] as const;
+      if (fields.some(field => current.config[field] !== previous.config[field]) || fields.every(field => current.config[field] === next[field])) return structuredClone(current);
+      const account = { ...current, config: { ...current.config } };
+      for (const field of fields) { if (next[field] === undefined) delete account.config[field]; else account.config[field] = next[field]; }
+      state.providers = state.providers.map(row => row.id === account.id ? account : row);
+      state.updatedAt = new Date(this.now()).toISOString(); await this.persist(state, key, envelope.kdf, false, false, assertSession); return structuredClone(account);
+    });
+  }
+
+  async openBitwardenBatchStore(): Promise<BitwardenBatchStore> {
+    const sessionId = await this.passkeySessionId();
+    if (!sessionId) throw new VaultLockedError();
+    const assertSession = () => this.assertLocalTransferSession(sessionId);
+    const copies = await this.openBitwardenCipherCopyStore();
+    const find = (state: VaultState, operationId: string) => {
+      const batches = readBitwardenBatches(state.bitwardenBatchTransfers), batch = batches.find(row => row.request.operationId === operationId);
+      const account = batch && state.providers.find(row => row.id === batch.target.id);
+      if (!batch || !account?.enabled || !sameProviderBinding(account, batch.target)) throw new Error('Bitwarden 整批传输不存在或目标已变化。');
+      return { batches, batch };
+    };
+    return { copies,
+      read: operationId => this.runExclusive(async () => {
+        await assertSession(); const { state } = await this.mutableContext(); return find(state, operationId).batch;
+      }),
+      advanceFolder: (operationId, folderKey, expected, stage, targetId) => this.runExclusive(async () => {
+        await assertSession(); const { state, envelope, key } = await this.mutableContext(), { batches, batch } = find(state, operationId);
+        const folder = batch.folders?.find(row => row.key === folderKey);
+        if (batch.status !== 'writing' || !folder || await transferIdentityHash(folder) !== await transferIdentityHash(expected)
+          || stage === 'attempted' && (folder.stage !== 'prepared' || targetId !== undefined)
+          || stage === 'created' && !['prepared','attempted'].includes(folder.stage)
+          || !['attempted','created'].includes(stage)) throw new Error('Bitwarden 文件夹恢复状态已变化。');
+        folder.stage = stage; if (targetId !== undefined) folder.targetId = targetId;
+        state.bitwardenBatchTransfers = readBitwardenBatches(batches);
+        state.updatedAt = new Date(this.now()).toISOString(); await this.persist(state, key, envelope.kdf, false, true, assertSession);
+        return structuredClone(folder);
+      }),
+      cancel: operationId => this.runExclusive(async () => {
+        await assertSession(); const { state, envelope, key } = await this.mutableContext(), { batches, batch } = find(state, operationId);
+        if (batch.status === 'cancelled') return;
+        const journal = readBitwardenCipherCopies(state.bitwardenCipherCopies);
+        if (batch.status !== 'writing' || batch.folders?.some(row => ['attempted','created'].includes(row.stage))
+          || batch.units.some(unit => !journal.some(row => row.prepared.copyId === unit.copyId && row.stage === 'prepared')))
+          throw new Error('Bitwarden 已尝试写入，结果可能已保存，请恢复传输。');
+        batch.status = 'cancelled'; state.bitwardenBatchTransfers = readBitwardenBatches(batches);
+        state.updatedAt = new Date(this.now()).toISOString(); await this.persist(state, key, envelope.kdf, false, true, assertSession);
+      })
+    };
+  }
+
   /** Every execution handle belongs to one unlock session. Reopening the vault
    * requires a new handle even if its encryption key is unchanged. */
   async openBitwardenCipherCopyStore(): Promise<BitwardenCopySessionStore> {
@@ -2543,6 +2674,32 @@ export class SecureVaultService {
       if (current.id !== session.id || current.rawKey !== session.rawKey) throw new VaultLockedError();
     };
     return {
+      materialize: copyId => this.runExclusive(async () => {
+        await assertSession();
+        const { state, envelope, key } = await this.mutableContext();
+        const copies = readBitwardenCipherCopies(state.bitwardenCipherCopies), copy = copies.find(row => row.prepared.copyId === copyId);
+        if (!copy) throw new Error('Bitwarden 迁移恢复记录不存在。');
+        const account = assertBitwardenCopyTarget(state, copy);
+        if (!copy.prepared.pendingSso && !copy.prepared.pendingFolderKey) return copy;
+        const batch = readBitwardenBatches(state.bitwardenBatchTransfers).find(row => row.request.operationId === copy.batchOperationId);
+        const unit = batch?.units.find(row => row.copyId === copyId), dependency = copies.find(row => row.prepared.copyId === unit?.ssoTargetCopyId);
+        if (!batch || batch.status !== 'writing' || !unit || copy.prepared.pendingSso && (!dependency || dependency.stage !== 'verified'
+          || dependency.batchOperationId !== batch.request.operationId || dependency.target.id !== copy.target.id || !dependency.remoteId))
+          throw new Error('关联记录尚未确认，已保留整批传输以便恢复。');
+        const ownerKey = new BitwardenClient().vaultKey(account.config as BitwardenSessionConfig);
+        try {
+          if (copy.prepared.pendingFolderKey) {
+            const folder = batch.folders?.find(row => row.key === unit.folderKey && row.key === copy.prepared.pendingFolderKey);
+            if (!folder?.targetId || !['existing','created'].includes(folder.stage)) throw new Error('目标文件夹尚未确认，请恢复整批传输。');
+            copy.prepared = await bindBitwardenTransferFolder(copy.prepared, folder.targetId, ownerKey);
+          }
+          if (copy.prepared.pendingSso) copy.prepared = await bindBitwardenTransferSso(copy.prepared, dependency!.remoteId!, ownerKey);
+        }
+        finally { ownerKey.encKey.fill(0); ownerKey.macKey.fill(0); }
+        copy.revision++; state.bitwardenCipherCopies = readBitwardenCipherCopies(copies);
+        state.updatedAt = new Date(this.now()).toISOString(); await this.persist(state, key, envelope.kdf, false, true, assertSession);
+        return structuredClone(copy);
+      }),
       account: copyId => this.runExclusive(async () => {
         await assertSession();
         const { state } = await this.mutableContext();
@@ -2585,7 +2742,11 @@ export class SecureVaultService {
         const journal = readBitwardenCipherCopies(state.bitwardenCipherCopies), index = journal.findIndex(row => row.prepared.copyId === copyId);
         if (index < 0) throw new Error('Bitwarden 迁移恢复记录不存在。');
         const previous = journal[index]; assertBitwardenCopyTarget(state, previous);
-        if (previous.stage === 'prepared' && previous.sourceSnapshotSha256 !== await bitwardenCopySourceHash(state, previous.sourceItemIds))
+        if (previous.batchOperationId) {
+          const batch = readBitwardenBatches(state.bitwardenBatchTransfers).find(row => row.request.operationId === previous.batchOperationId);
+          if (!batch || batch.status !== 'writing' || !batch.units.some(row => row.copyId === copyId) || previous.prepared.pendingSso || previous.prepared.pendingFolderKey)
+            throw new Error('Bitwarden 整批传输尚未确认或关联尚未就绪。');
+        } else if (previous.stage === 'prepared' && previous.sourceSnapshotSha256 !== await bitwardenCopySourceHash(state, previous.sourceItemIds))
           throw new Error('Bitwarden 迁移来源已变化，请重新预览。');
         const next = advanceBitwardenCipherCopy(previous, revision, progress);
         journal[index] = next; state.bitwardenCipherCopies = journal;

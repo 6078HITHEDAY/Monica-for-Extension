@@ -11,7 +11,7 @@ import { parsePortablePasskeyPrivateKey } from '../../passkey/private-key-portab
 export const BITWARDEN_ITEM_SYNC_BATCH_LIMIT = 100;
 
 export interface BitwardenDurableSyncVault {
-  readState(activity?: boolean): Promise<Pick<VaultState, "items" | "mutationQueue" | "providerMutationReceipts" | "passwordProjectRemovals"> & Partial<Pick<VaultState, "providerConflicts">>>;
+  readState(activity?: boolean): Promise<Pick<VaultState, "items" | "mutationQueue" | "providerMutationReceipts" | "passwordProjectRemovals"> & Partial<Pick<VaultState, "providerConflicts" | "bitwardenBatchTransfers">>>;
   prepareProviderMutationReceipts(receipts: ProviderMutationReceipt[]): Promise<void>;
   markProviderMutationReceiptsAttempted(providerId: string, mutationIds: string[]): Promise<void>;
   commitProviderMutationReceipts(providerId: string, acknowledgements: ProviderAcknowledgedMutation[]): Promise<void>;
@@ -92,6 +92,8 @@ export class BitwardenDurableSyncCoordinator {
     signal?.throwIfAborted();
 
     let state = await this.vault.readState(false);
+    if (state.bitwardenBatchTransfers?.some(row => row.target.id === account.id && row.status === 'writing'))
+      throw new Error('Bitwarden 还有未完成的整批传输，请先恢复。');
     if (state.providerConflicts?.some(row => row.providerId === account.id && row.requiresExplicitResolution))
       throw new Error('Bitwarden 恢复保留了需要明确选择的凭据冲突，请先处理后再同步。');
     const passwordProjectRemovals = structuredClone(state.passwordProjectRemovals);

@@ -27,6 +27,7 @@ const emit = defineEmits<{
   emptyRemote: [provider: ProviderAccount];
   resolveConflict: [conflict: ProviderConflictSummary, resolution: ProviderConflictResolution];
   folders: [provider: ProviderAccount];
+  transfer: [provider: ProviderAccount];
   collections: [provider: ProviderAccount];
   relogin: [provider: ProviderAccount];
   logout: [provider: ProviderAccount];
@@ -201,6 +202,7 @@ function toggleConflicts() {
           <m3e-button v-else variant="filled" type="button" :disabled="busy || !authenticated" @click="emit('sync', provider)"><m3e-icon slot="icon" name="sync"></m3e-icon>{{ queueFailed ? tr('重试同步') : tr('立即同步') }}</m3e-button>
         </div>
         <div class="source-actions-routing" :aria-label="tr('Bitwarden 路由管理')">
+          <m3e-button variant="tonal" type="button" :disabled="busy || activeSync || !authenticated" @click="emit('transfer', provider)"><m3e-icon slot="icon" name="drive_file_move"></m3e-icon>{{ tr('批量传输') }}</m3e-button>
           <m3e-button variant="tonal" type="button" :disabled="busy || activeSync" @click="emit('folders', provider)"><m3e-icon slot="icon" name="folder_managed"></m3e-icon>{{ tr('管理文件夹') }}</m3e-button>
           <m3e-button variant="tonal" type="button" :disabled="busy || activeSync" @click="emit('collections', provider)"><m3e-icon slot="icon" name="folder_shared"></m3e-icon>{{ tr('管理 Collection') }}</m3e-button>
         </div>

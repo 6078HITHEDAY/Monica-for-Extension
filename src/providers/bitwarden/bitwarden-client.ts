@@ -381,6 +381,15 @@ export class BitwardenClient {
     return this.authorizedJson(session, "/folders", { method: "POST", headers: jsonHeaders(), body: JSON.stringify(payload), signal }, "创建 Bitwarden 文件夹失败");
   }
 
+  createFolderOnce(session: BitwardenSessionConfig, payload: BitwardenFolderRequest, signal?: AbortSignal): Promise<{ session: BitwardenSessionConfig; payload: Record<string, unknown> }> {
+    return this.authorizedRequest(session, '/folders', { method: 'POST', headers: jsonHeaders(), body: JSON.stringify(payload), signal },
+      '创建 Bitwarden 传输文件夹失败', async (response, requestSignal) => {
+        const result = await this.responseJson(response, this.limits().maxVaultResponseBytes, 'Bitwarden 文件夹响应', requestSignal);
+        if (!response.ok) throw bitwardenHttpError('创建 Bitwarden 传输文件夹失败', response, result);
+        return result;
+      }, false);
+  }
+
   updateFolder(session: BitwardenSessionConfig, folderId: string, payload: BitwardenFolderRequest, signal?: AbortSignal): Promise<{ session: BitwardenSessionConfig; payload: Record<string, unknown> }> {
     assertPathId(folderId, "文件夹");
     return this.authorizedJson(session, `/folders/${encodeURIComponent(folderId)}`, { method: "PUT", headers: jsonHeaders(), body: JSON.stringify(payload), signal }, "更新 Bitwarden 文件夹失败");
