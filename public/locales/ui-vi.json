@@ -3434,5 +3434,6 @@
   "取消未写入操作": "Hủy thao tác chưa ghi",
   "在同一数据库中移动": "Di chuyển trong cùng cơ sở dữ liệu",
   "文件夹分页未完成，请减少目录数量后重试。": "Danh sách thư mục vượt quá giới hạn hỗ trợ. Hãy giảm số thư mục rồi thử lại.",
+  "本地项目可移入 Bitwarden；其他来源请使用复制。目标完整保存后才会移除本地来源。": "Có thể di chuyển các mục cục bộ sang Bitwarden. Với nguồn khác, hãy dùng Sao chép. Bản gốc cục bộ chỉ bị xóa sau khi dữ liệu ở đích được lưu và xác minh đầy đủ.",
   "Bitwarden 暂支持复制；无法完整保存的项目会在预览中说明原因。": "Bitwarden hiện hỗ trợ sao chép. Bản xem trước giải thích những mục không thể được bảo toàn đầy đủ."
 }

@@ -103,7 +103,6 @@ watch(
 );
 
 watch(targetProviderId, () => {
-  if (targetProvider.value?.kind === 'bitwarden') action.value = 'copy';
   targetCollectionId.value = "";
   void loadCollections();
 });
@@ -451,9 +450,9 @@ function errorMessage(cause: unknown): string {
             </div>
           </div>
 
-          <fieldset class="batch-action-picker"><legend>{{ tr('操作') }}</legend><m3e-radio-group class="batch-action-segments" :aria-label="tr('操作')"><label v-choice-label><m3e-radio :checked.prop="action === 'copy'" @input="action = 'copy'"   value="copy" :disabled="planning || executing" /><span><m3e-icon name="content_copy"></m3e-icon><strong>{{ tr('复制') }}</strong><small>{{ tr('创建独立项目') }}</small></span></label><label v-choice-label><m3e-radio :checked.prop="action === 'move'" @input="action = 'move'"   value="move" :disabled="planning || executing || targetProvider?.kind === 'bitwarden'" /><span><m3e-icon name="drive_file_move"></m3e-icon><strong>{{ tr('移动') }}</strong><small>{{ targetProvider?.kind === 'keepass' ? tr('在同一数据库中移动') : tr('完成后移除来源绑定') }}</small></span></label></m3e-radio-group></fieldset>
+          <fieldset class="batch-action-picker"><legend>{{ tr('操作') }}</legend><m3e-radio-group class="batch-action-segments" :aria-label="tr('操作')"><label v-choice-label><m3e-radio :checked.prop="action === 'copy'" @input="action = 'copy'"   value="copy" :disabled="planning || executing" /><span><m3e-icon name="content_copy"></m3e-icon><strong>{{ tr('复制') }}</strong><small>{{ tr('创建独立项目') }}</small></span></label><label v-choice-label><m3e-radio :checked.prop="action === 'move'" @input="action = 'move'"   value="move" :disabled="planning || executing" /><span><m3e-icon name="drive_file_move"></m3e-icon><strong>{{ tr('移动') }}</strong><small>{{ targetProvider?.kind === 'keepass' ? tr('在同一数据库中移动') : tr('完成后移除来源绑定') }}</small></span></label></m3e-radio-group></fieldset>
 
-          <p v-if="targetProvider?.kind === 'bitwarden'" class="batch-inline-note">{{ tr('Bitwarden 暂支持复制；无法完整保存的项目会在预览中说明原因。') }}</p>
+          <p v-if="targetProvider?.kind === 'bitwarden'" class="batch-inline-note">{{ tr('本地项目可移入 Bitwarden；其他来源请使用复制。目标完整保存后才会移除本地来源。') }}</p>
 
           <div class="batch-folder-section">
             <div class="batch-subheading"><div><strong>{{ tr('目标文件夹') }}</strong></div><m3e-button variant="text" type="button" :disabled="collectionsLoading || planning || executing || !targetReady" @click="loadCollections"><m3e-icon slot="icon" name="refresh"></m3e-icon>{{ tr('刷新') }}</m3e-button></div>
@@ -809,7 +808,7 @@ function errorMessage(cause: unknown): string {
 }
 
 .batch-warning {
-  color: var(--md-sys-color-on-tertiary-container, var(--app-text));
+  color: var(--md-sys-color-on-surface-variant, var(--app-muted));
 }
 
 .batch-warning m3e-icon,

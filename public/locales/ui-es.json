@@ -3434,5 +3434,6 @@
   "取消未写入操作": "Cancelar operación sin guardar",
   "在同一数据库中移动": "Mover dentro de esta base de datos",
   "文件夹分页未完成，请减少目录数量后重试。": "La lista de carpetas supera el límite. Reduzca el número de carpetas e inténtelo de nuevo.",
+  "本地项目可移入 Bitwarden；其他来源请使用复制。目标完整保存后才会移除本地来源。": "Los elementos locales se pueden mover a Bitwarden. Para otros orígenes, usa Copiar. Los originales locales solo se eliminan cuando el destino se ha guardado y verificado por completo.",
   "Bitwarden 暂支持复制；无法完整保存的项目会在预览中说明原因。": "Bitwarden permite copiar por ahora. La vista previa explica qué elementos no se pueden conservar por completo."
 }

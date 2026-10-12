@@ -21,14 +21,14 @@ const targetKey = { encKey: new Uint8Array(32).fill(20), macKey: new Uint8Array(
 const target: ProviderAccount = { id: 'destination', kind: 'bitwarden', name: 'Synthetic destination', enabled: true, isDefaultSaveTarget: false,
   config: { apiUrl: 'https://example.invalid/api', vaultKeyEnc: bytesToBase64(targetKey.encKey), vaultKeyMac: bytesToBase64(targetKey.macKey) } };
 
-async function fixture() {
+async function fixture(action: 'copy' | 'move' = 'copy') {
   const base = createLoginItem({ title: 'Same title', password: 'Base password' });
   const sso = { ...createLoginItem({ title: 'Same title', password: '' }), loginType: 'SSO' as const, ssoProvider: 'github', ssoRefEntryId: 7, ssoRefLogicalId: ssoLogicalId(base) };
   const storage = new MemoryVaultStorage(), sessions = new MemoryVaultSessionStore(), keys = new MemoryVaultDeviceKeyStore();
   let vault = new SecureVaultService(storage, sessions, Date.now, keys);
   await vault.setup('', [base, sso]); await vault.upsertProvider(target);
   const state = await vault.readState();
-  const request = normalizeBitwardenBatchRequest({ itemIds: [sso.id], targetProviderId: target.id, action: 'copy', preserveCategories: false });
+  const request = normalizeBitwardenBatchRequest({ itemIds: [sso.id], targetProviderId: target.id, action, preserveCategories: false });
   const copies: BitwardenCipherCopyRecord[] = [];
   for (const source of [sso, base]) {
     const native = { ...await encodeBitwardenCipher(source, sourceKey), id: source.id, revisionDate: source.updatedAt };
@@ -37,9 +37,9 @@ async function fixture() {
     copies.push({ version: 1, revision: 0, target, prepared, sourceItemIds: [source.id],
       sourceSnapshotSha256: await bitwardenBatchSourceHash(state, [source.id]), files: [], attachmentReceipts: [], stage: 'prepared', batchOperationId: request.operationId });
   }
-  const batch: BitwardenBatchIntent = { version: 1, request, requestHash: await hash(request), snapshotHash: await bitwardenBatchSnapshotHash(state, request),
+  const batch: BitwardenBatchIntent = { version: action === 'move' ? 2 : 1, request, requestHash: await hash(request), snapshotHash: await bitwardenBatchSnapshotHash(state, request),
     target, status: 'writing', plan: { ...request, items: [sso, base].map(item => ({ sourceItemId: item.id, kind: item.kind, title: item.title,
-      sourcePath: [], targetPath: [], pathIncomplete: false, effectiveAction: 'copy' })), transferableCount: 2, blockedCount: 0, requiresMoveConfirmation: false, warnings: [] },
+      sourcePath: [], targetPath: [], pathIncomplete: false, effectiveAction: action })), transferableCount: 2, blockedCount: 0, requiresMoveConfirmation: action === 'move', warnings: [] },
     units: [{ copyId: copies[0].prepared.copyId, sources: [{ id: sso.id, kind: 'login' }], ssoTargetCopyId: copies[1].prepared.copyId },
       { copyId: copies[1].prepared.copyId, sources: [{ id: base.id, kind: 'login' }] }] };
   const raw: Record<string, unknown>[] = [];
@@ -110,8 +110,8 @@ it('rejects changed sources, omitted dependencies, a substituted source kind, or
   await expect(f.stage()).rejects.toThrow('已变化'); expect(f.remote.create).not.toHaveBeenCalled();
 });
 
-async function completedFixture() {
-  const f = await fixture(); await f.stage();
+async function completedFixture(action: 'copy' | 'move' = 'copy') {
+  const f = await fixture(action); await f.stage();
   const one = await f.run(f.copies[1].prepared.copyId), two = await f.run(f.copies[0].prepared.copyId);
   const copies = [one, two], state = await f.vault.readState(), items = [...state.items, ...copies.flatMap(row => row.verifiedItems!)];
   const records = await Promise.all(f.raw.map(raw => createSourceRecord({ providerId: target.id, remoteId: String(raw.id),
@@ -120,6 +120,52 @@ async function completedFixture() {
   return { f, copies, state, items, records, guard,
     adopt: () => f.vault.applyProviderSync(target.id, items, undefined, [], records, state.items, [], [], false, [], guard) };
 }
+
+it('removes local sources only in the same encrypted commit as complete target adoption', async () => {
+  const a = await completedFixture('move');
+  expect((await a.f.vault.readState()).items).toEqual([a.f.base, a.f.sso]);
+  const write = vi.spyOn(a.f.storage, 'write'); await a.adopt(); expect(write).toHaveBeenCalledTimes(1);
+  const state = await a.f.vault.readState(); expect(state.items).toHaveLength(2);
+  expect(state.items.every(item => item.providerRefs[0]?.providerId === target.id)).toBe(true);
+  expect(state.bitwardenBatchTransfers![0]).toMatchObject({ version: 2, status: 'completed', result: { action: 'move', completedCount: 2 } });
+  const before = await a.f.storage.read(); a.f.restart(); await a.adopt(); expect(await a.f.storage.read()).toEqual(before);
+});
+
+it.each(['abort', 'lost-reply'] as const)('recovers local move adoption after %s without a partial deletion', async mode => {
+  const a = await completedFixture('move'), before = await a.f.storage.read(), real = a.f.storage.write.bind(a.f.storage);
+  const write = vi.spyOn(a.f.storage, 'write').mockImplementationOnce(async envelope => {
+    if (mode === 'lost-reply') await real(envelope); throw new Error(mode);
+  });
+  await expect(a.adopt()).rejects.toThrow(mode); write.mockRestore();
+  if (mode === 'abort') expect(await a.f.storage.read()).toEqual(before);
+  a.f.restart(); await a.adopt();
+  const state = await a.f.vault.readState(); expect(state.items).toHaveLength(2);
+  expect(state.items.every(item => ![a.f.base.id, a.f.sso.id].includes(item.id))).toBe(true);
+  expect(state.bitwardenBatchTransfers![0].status).toBe('completed'); expect(a.f.remote.create).toHaveBeenCalledTimes(2);
+});
+
+it.each(['source-edit', 'source-delete', 'new-dependent', 'source-rebound'] as const)('preserves sources and target receipts when %s occurs before final move commit', async mode => {
+  const a = await completedFixture('move');
+  if (mode === 'source-edit') await a.f.vault.upsertItem({ ...a.f.base, password: 'Later edit' });
+  if (mode === 'source-delete') await a.f.vault.deleteItem(a.f.base.id);
+  if (mode === 'new-dependent') await a.f.vault.upsertItem({ ...a.f.sso, id: crypto.randomUUID(), title: 'New dependent' });
+  if (mode === 'source-rebound') {
+    await a.f.vault.upsertProvider({ id: 'dav', kind: 'monica-webdav', name: 'Synthetic', enabled: true, isDefaultSaveTarget: false, config: {} });
+    await a.f.vault.upsertItem({ ...a.f.base, providerRefs: [{ providerId: 'dav' }] });
+  }
+  const before = await a.f.storage.read(); await expect(a.adopt()).rejects.toThrow();
+  expect(await a.f.storage.read()).toEqual(before); expect((await a.f.vault.readState()).bitwardenBatchTransfers![0].status).toBe('writing');
+  expect(a.f.raw).toHaveLength(2);
+});
+
+it('refuses a forged local move for a remote source before any target staging', async () => {
+  const f = await fixture('move');
+  await f.vault.upsertProvider({ id: 'dav', kind: 'monica-webdav', name: 'Synthetic', enabled: true, isDefaultSaveTarget: false, config: {} });
+  await f.vault.upsertItem({ ...f.base, providerRefs: [{ providerId: 'dav', remoteId: 'passwords/password_1.json' }] });
+  const state = await f.vault.readState();
+  f.batch.snapshotHash = await bitwardenBatchSnapshotHash(state, f.batch.request);
+  await expect(f.stage()).rejects.toThrow(); expect(f.remote.create).not.toHaveBeenCalled();
+});
 
 it('adopts the entire verified graph and completion in one encrypted write, with restart-safe replay', async () => {
   const a = await completedFixture(), write = vi.spyOn(a.f.storage, 'write');

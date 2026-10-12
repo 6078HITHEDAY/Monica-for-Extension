@@ -1,5 +1,6 @@
 import { expect, it, vi } from 'vitest';
-import { createLoginItem, type ProviderAccount, type VaultItem } from '../../core/model';
+import { createLoginItem, type ProviderAccount, type VaultItem, createEmptyVaultState, type PasskeyItem } from '../../core/model';
+import { assertBitwardenLocalMoveSource, readBitwardenBatches } from '../../core/bitwarden-batch-transfer';
 import { SecureVaultService } from '../../security/secure-vault-service';
 import { MemoryVaultStorage } from '../../security/vault-storage';
 import { MemoryVaultSessionStore } from '../../security/vault-session';
@@ -91,4 +92,52 @@ it('rejects loss of protected/custom field semantics instead of comparing only n
   await expect(assertBitwardenPortableProjection(source, { ...source, customFields: [{ ...source.customFields[0], protected: false }] })).rejects.toThrow('customFields');
   const boolean = { ...source, customFields: [{ ...source.customFields[0], fieldType: 'BOOLEAN' as const }] };
   await expect(assertBitwardenPortableProjection(boolean, source)).rejects.toThrow('customFields');
+});
+
+it('expands incoming SSO dependents for a move and requires confirmation before any writes', async () => {
+  const f = await fixture(), input = { ...f.request, itemIds: [f.base.id], action: 'move' as const };
+  const plan = await f.coordinator.plan(input);
+  expect(plan.transferableCount).toBe(2); expect(plan.requiresMoveConfirmation).toBe(true);
+  const request = { ...input, operationId: plan.operationId, operationCreatedAt: plan.operationCreatedAt };
+  await expect(f.coordinator.execute(request)).rejects.toThrow('先确认'); expect(f.remote.create).not.toHaveBeenCalled(); expect(f.folderRemote.create).not.toHaveBeenCalled();
+  const result = await f.coordinator.execute({ ...request, confirmed: true });
+  expect(result).toMatchObject({ action: 'move', completedCount: 2 });
+  expect((await f.vault.readState()).items.map(item => item.id)).not.toContain(f.base.id);
+  expect((await f.vault.readState()).items.map(item => item.id)).not.toContain(f.sso.id);
+});
+
+it('resumes an already confirmed local move after a lost Cipher reply', async () => {
+  const f = await fixture(), input = { ...f.request, action: 'move' as const }, plan = await f.coordinator.plan(input);
+  const request = { ...input, operationId: plan.operationId, operationCreatedAt: plan.operationCreatedAt };
+  const create = vi.mocked(f.remote.create).getMockImplementation()!;
+  vi.mocked(f.remote.create).mockImplementationOnce(async payload => { await create(payload); throw new Error('Lost reply'); });
+  await expect(f.coordinator.execute({ ...request, confirmed: true })).rejects.toThrow('Lost reply');
+  expect((await f.vault.readState()).items.map(item => item.id)).toContain(f.base.id);
+  f.restart(); expect(await f.coordinator.execute(request)).toMatchObject({ completedCount: 2, action: 'move' });
+  expect(f.raw).toHaveLength(2); expect((await f.vault.readState()).items).toHaveLength(2);
+});
+
+it.each(['[{"credentialId":"dXNlcg"}]', '[{}]', '{broken'])('preserves Passkeys with matching or ambiguous local bindings: %s', raw => {
+  const state = createEmptyVaultState(), item = { id: 'key', kind: 'passkey', credentialId: 'dXNlcg', providerRefs: [] } as unknown as PasskeyItem;
+  state.items = [item, { ...createLoginItem({ title: 'Owner' }), passkeyBindings: raw }];
+  expect(() => assertBitwardenLocalMoveSource(state, item)).toThrow('关联');
+});
+
+it('does not treat remote bindings as local-only records and accepts unrelated valid local metadata', () => {
+  const state = createEmptyVaultState(), item = { id: 'key', kind: 'passkey', credentialId: 'dXNlcg', providerRefs: [] } as unknown as PasskeyItem;
+  state.items = [item, { ...createLoginItem({ title: 'Unrelated' }), passkeyBindings: '[{"credentialId":"b3RoZXI"}]' }];
+  expect(() => assertBitwardenLocalMoveSource(state, item)).not.toThrow();
+  item.providerRefs = [{ providerId: 'remote' }];
+  expect(() => assertBitwardenLocalMoveSource(state, item)).toThrow('跨库移动');
+});
+
+it('keeps old copy receipt versions distinct from newly authorized moves', async () => {
+  const f = await fixture(), input = { ...f.request, action: 'move' as const }, plan = await f.coordinator.plan(input);
+  await f.coordinator.execute({ ...input, operationId: plan.operationId, operationCreatedAt: plan.operationCreatedAt, confirmed: true });
+  const batch = (await f.vault.readState()).bitwardenBatchTransfers![0];
+  expect(() => readBitwardenBatches([{ ...batch, version: 1 }])).toThrow();
+  const changed = structuredClone(batch); changed.plan.requiresMoveConfirmation = false;
+  expect(() => readBitwardenBatches([changed])).toThrow();
+  const mismatched = structuredClone(batch); mismatched.result!.items[0].effectiveAction = 'copy';
+  expect(() => readBitwardenBatches([mismatched])).toThrow();
 });

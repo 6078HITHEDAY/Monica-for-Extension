@@ -1,7 +1,7 @@
 import type { ProviderAccount, VaultItem, VaultState } from '../../core/model';
 import type { ProviderAdapter } from '../../core/provider';
 import { sameProviderBinding } from '../../core/provider';
-import { bitwardenBatchOrder, bitwardenBatchSnapshotHash, bitwardenBatchSourceHash, normalizeBitwardenBatchRequest, readBitwardenBatches,
+import { assertBitwardenLocalMoveSource, bitwardenBatchOrder, bitwardenBatchSnapshotHash, bitwardenBatchSourceHash, normalizeBitwardenBatchRequest, readBitwardenBatches,
   type BitwardenBatchIntent, type BitwardenBatchFolder } from '../../core/bitwarden-batch-transfer';
 import type { BitwardenCipherCopyRecord } from '../../core/bitwarden-transfer-journal';
 import { bitwardenTransferSelection } from './bitwarden-transfer-selection';
@@ -42,7 +42,7 @@ export class BitwardenBatchTransferCoordinator {
     return this.dependencies.exclusive(request.targetProviderId, async () => {
       this.check(generation); const state = await this.vault.readState(false), target = this.target(state, request.targetProviderId);
       if (readBitwardenBatches(state.bitwardenBatchTransfers).some(row => row.target.id === target.id && row.status === 'writing')) throw new Error('Bitwarden 有待恢复的整批传输，请先恢复。');
-      const snapshotHash = await bitwardenBatchSnapshotHash(state, request), selection = bitwardenTransferSelection(request.itemIds, state.items, state.providers);
+      const snapshotHash = await bitwardenBatchSnapshotHash(state, request), selection = bitwardenTransferSelection(request.itemIds, state.items, state.providers, request.action);
       const selected = selection.selectedIds.map(id => state.items.find(row => row.id === id)!);
       if (selected.some(row => !row)) throw new Error('所选来源不存在。');
       const key = new BitwardenClient().vaultKey(target.config as BitwardenSessionConfig);
@@ -62,7 +62,7 @@ export class BitwardenBatchTransferCoordinator {
         }
         for (const [identity, items] of groups) {
           try {
-            if (request.action !== 'copy') throw new Error('Bitwarden 跨库移动的来源删除恢复尚未完成，请使用复制。');
+            if (request.action === 'move') items.forEach(item => assertBitwardenLocalMoveSource(state, item));
             const sourceSnapshotSha256 = await bitwardenBatchSourceHash(state, items.map(row => row.id));
             const resource = await this.dependencies.resource(state, items, request.preserveCategories);
             try {
@@ -108,12 +108,12 @@ export class BitwardenBatchTransferCoordinator {
         try { bitwardenBatchOrder(accepted); } catch (error) { accepted.forEach(row => row.sources.forEach(source => blocked.set(source.id, message(error)))); }
         const finalUnits = accepted.filter(row => !row.sources.some(source => blocked.has(source.id)));
         const plan: Mdbx2BatchTransferPlanResult = { ...request, items: selected.map(row => ({ sourceItemId: row.id, title: row.title, kind: row.kind,
-          effectiveAction: 'copy', blockedReason: blocked.get(row.id), sourcePath: paths.get(row.id) || [],
+          effectiveAction: request.action, blockedReason: blocked.get(row.id), sourcePath: paths.get(row.id) || [],
           targetPath: [parent?.name, ...(paths.get(row.id) || [])].filter((s): s is string => !!s), pathIncomplete: false })),
-          blockedCount: blocked.size, transferableCount: selected.length - blocked.size, requiresMoveConfirmation: false, warnings: [] };
+          blockedCount: blocked.size, transferableCount: selected.length - blocked.size, requiresMoveConfirmation: request.action === 'move', warnings: [] };
         if (snapshotHash !== await bitwardenBatchSnapshotHash(await this.vault.readState(false), request)) throw new Error('生成预览期间来源或目标已变化，请重试。');
         this.check(generation);
-        const batch: BitwardenBatchIntent = { version: 1, request, requestHash: await hash(request), target: structuredClone(target), snapshotHash, plan,
+        const batch: BitwardenBatchIntent = { version: request.action === 'move' ? 2 : 1, request, requestHash: await hash(request), target: structuredClone(target), snapshotHash, plan,
           units: finalUnits, folders: folders.filter(row => finalUnits.some(unit => unit.folderKey === row.key)), status: 'writing' };
         this.forget(request.operationId);
         while (this.plans.size >= 4) this.forget(this.plans.keys().next().value!);
@@ -134,6 +134,7 @@ export class BitwardenBatchTransferCoordinator {
       if (batch?.status === 'completed') return batch.result!;
       const sessionId = await this.vault.passkeySessionId(); if (!sessionId) throw new Error('密码库已锁定。');
       if (!batch) {
+        if (request.action === 'move' && input.confirmed !== true) throw new Error('请先确认移动；目标完整保存后才会移除本地来源。');
         const saved = this.plans.get(request.operationId);
         if (!saved || saved.batch.requestHash !== requestHash || !saved.batch.plan.transferableCount) throw new Error('传输预览已过期或没有可复制项目，请重新预览。');
         if (saved.batch.snapshotHash !== await bitwardenBatchSnapshotHash(state, request)) throw new Error('预览后来源或目标已变化，请重新预览。');

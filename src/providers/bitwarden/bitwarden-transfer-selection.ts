@@ -4,7 +4,7 @@ import { mdbx2TransferDependencies } from '../mdbx2/mdbx2-transfer-dependencies'
 
 /** A native Cipher is one copy unit. Expand its login, OTP and every FIDO2
  * sibling before following password-project/SSO/note dependencies again. */
-export function bitwardenTransferSelection(ids: string[], items: VaultItem[], providers: ProviderAccount[]) {
+export function bitwardenTransferSelection(ids: string[], items: VaultItem[], providers: ProviderAccount[], action: 'copy' | 'move' = 'copy') {
   const accounts = new Set(providers.filter(row => row.kind === 'bitwarden').map(row => row.id));
   const nativeKey = (item: VaultItem) => item.providerRefs.flatMap(ref => {
     const cipher = ref.remoteId && bitwardenProjectCipherId(ref.remoteId);
@@ -13,13 +13,13 @@ export function bitwardenTransferSelection(ids: string[], items: VaultItem[], pr
   const members = new Map<string, string[]>();
   for (const item of items) for (const key of nativeKey(item)) members.set(key, [...(members.get(key) || []), item.id]);
   let selected = new Set(ids);
-  let dependency = mdbx2TransferDependencies([...selected], items, 'copy');
+  let dependency = mdbx2TransferDependencies([...selected], items, action);
   for (;;) {
     const before = selected.size; selected = new Set(dependency.selectedIds);
     for (const item of items) if (selected.has(item.id)) for (const key of nativeKey(item))
       for (const id of members.get(key)!) selected.add(id);
     if (selected.size > 200) throw new Error('包含完整 Bitwarden 记录及关联项目后超过单次 200 项上限。');
-    dependency = mdbx2TransferDependencies([...selected], items, 'copy');
+    dependency = mdbx2TransferDependencies([...selected], items, action);
     if (dependency.selectedIds.length === before) break;
   }
   // Add native membership edges to the already-expanded connected components.

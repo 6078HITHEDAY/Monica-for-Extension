@@ -19,7 +19,7 @@ import { readKeePassTransfers, assertKeePassTransferBindings, keePassTransferSna
 import { readBitwardenCipherCopies, validateBitwardenCopyFiles, advanceBitwardenCipherCopy, assertBitwardenCopyTarget,
   bitwardenCopySourceHash, bitwardenCopyIntent, type BitwardenCipherCopyRecord } from '../core/bitwarden-transfer-journal';
 import type { BitwardenCopySessionStore } from '../providers/bitwarden/bitwarden-transfer-execution';
-import { readBitwardenBatches, bitwardenBatchSnapshotHash, bitwardenBatchSourceHash, assertBitwardenBatchCopies, verifyBitwardenBatchReadback,
+import { readBitwardenBatches, bitwardenBatchSnapshotHash, bitwardenBatchSourceHash, assertBitwardenBatchCopies, assertBitwardenLocalMoveCurrent, verifyBitwardenBatchReadback,
   bitwardenBatchResult, type BitwardenBatchIntent } from '../core/bitwarden-batch-transfer';
 import type { BitwardenBatchStore } from '../providers/bitwarden/bitwarden-batch-folders';
 import { bitwardenTransferSelection } from '../providers/bitwarden/bitwarden-transfer-selection';
@@ -915,6 +915,7 @@ export class SecureVaultService {
     const bitwardenBatches = guard.bitwardenBatchTransfer ? readBitwardenBatches(state.bitwardenBatchTransfers) : [];
     const bitwardenBatch = guard.bitwardenBatchTransfer && bitwardenBatches.find(row => row.request.operationId === guard.bitwardenBatchTransfer!.operationId);
     const bitwardenCopies = guard.bitwardenBatchTransfer ? readBitwardenCipherCopies(state.bitwardenCipherCopies) : [];
+    let bitwardenMoveSources = new Set<string>();
     if (guard.bitwardenBatchTransfer) {
       await this.assertLocalTransferSession(guard.bitwardenBatchTransfer.sessionId);
       if (!bitwardenBatch || bitwardenBatch.status === 'cancelled' || bitwardenBatch.target.id !== providerId
@@ -926,6 +927,7 @@ export class SecureVaultService {
       const ownerKey = new BitwardenClient().vaultKey(provider.config as BitwardenSessionConfig);
       try { await verifyBitwardenBatchReadback(bitwardenBatch, bitwardenCopies, sourceRecords, items, ownerKey); }
       finally { ownerKey.encKey.fill(0); ownerKey.macKey.fill(0); }
+      bitwardenMoveSources = await assertBitwardenLocalMoveCurrent(state, bitwardenBatch, bitwardenCopies);
     }
     if (guard.keePassTransfer) {
       if (!transfer || transfer.status === 'cancelled' || transfer.target.id !== providerId) throw new Error('KeePass 传输恢复记录不存在或已取消。');
@@ -1085,6 +1087,12 @@ export class SecureVaultService {
     if (bitwardenBatch) {
       if (persistedConflicts.length) throw new Error('Bitwarden 整批入库遇到后续编辑，已保留恢复记录。');
       bitwardenBatch.result = bitwardenBatchResult(bitwardenBatch, bitwardenCopies, state.items); bitwardenBatch.status = 'completed';
+      if (bitwardenMoveSources.size) {
+        state.items = state.items.filter(item => !bitwardenMoveSources.has(item.id));
+        state.localItemAttachments = (state.localItemAttachments || []).filter(file => !bitwardenMoveSources.has(file.itemId));
+        state.localItemOrigins = (state.localItemOrigins || []).filter(origin => !bitwardenMoveSources.has(origin.itemId));
+        state.settings.lockedAutofillItemIds = (state.settings.lockedAutofillItemIds || []).filter(id => !bitwardenMoveSources.has(id));
+      }
       state.bitwardenBatchTransfers = readBitwardenBatches(bitwardenBatches);
     }
     state.updatedAt = new Date(this.now()).toISOString();
@@ -2596,13 +2604,14 @@ export class SecureVaultService {
         throw new Error('Bitwarden 目标有未完成传输或恢复记录已满。');
       assertBitwardenCopyTarget(state, copies[0]); assertBitwardenBatchCopies(state, batch, copies);
       if (batch.snapshotHash !== await bitwardenBatchSnapshotHash(state, batch.request)) throw new Error('整批预览后来源或目标已变化，请重新预览。');
-      const selected = bitwardenTransferSelection(batch.request.itemIds, state.items, state.providers);
+      const selected = bitwardenTransferSelection(batch.request.itemIds, state.items, state.providers, batch.request.action);
       if (selected.selectedIds.length !== batch.plan.items.length || selected.selectedIds.some(id => !batch.plan.items.some(row => row.sourceItemId === id))
         || selected.components.some(group => group.some(id => batch.plan.items.find(row => row.sourceItemId === id)?.blockedReason)
           && group.some(id => !batch.plan.items.find(row => row.sourceItemId === id)?.blockedReason)))
         throw new Error('Bitwarden 整批计划缺少完整项目或关联，已停止创建。');
       for (const copy of copies) if (copy.sourceSnapshotSha256 !== await bitwardenBatchSourceHash(state, copy.sourceItemIds))
         throw new Error('Bitwarden 整批来源快照不匹配。');
+      await assertBitwardenLocalMoveCurrent(state, batch, copies);
       state.bitwardenBatchTransfers = [...batches, batch]; state.bitwardenCipherCopies = [...journal, ...copies];
       state.updatedAt = new Date(this.now()).toISOString(); await this.persist(state, key, envelope.kdf); return structuredClone(batch);
     });

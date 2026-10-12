@@ -26,9 +26,10 @@ const options = { locale: 'zh-CN', colorScheme: 'dark' as const, viewport: { wid
 async function send(page: Page, request: object): Promise<any> { const response = await page.evaluate(input => chrome.runtime.sendMessage(input), request);
   expect(response.ok, response.error).toBe(true); return response.data; }
 
-for (const sourceKind of ['local', 'mdbx', 'keepass', 'webdav'] as const) test(`a browser-created ${sourceKind} Passkey survives Bitwarden copy interruption and authenticates on a fresh Edge client`, async ({}, info) => {
+for (const sourceKind of ['local', 'local-move', 'mdbx', 'keepass', 'webdav'] as const) test(`a browser-created ${sourceKind} Passkey survives Bitwarden transfer interruption and authenticates on a fresh Edge client`, async ({}, info) => {
   test.skip(sourceKind === 'mdbx' && !process.env.MONICA_317_NATIVE_PASSKEY_FIXTURE, 'Requires an explicitly selected verified synthetic MDBX fixture');
   test.setTimeout(180_000);
+  const local = sourceKind === 'local' || sourceKind === 'local-move', moving = sourceKind === 'local-move', withProject = sourceKind !== 'local';
   let nativeHost: Awaited<ReturnType<typeof temporaryNativeHost>> | undefined, sourceProviderId: string | undefined;
   const appData = path.resolve('.tmp', `mdbx-bitwarden-${randomUUID().slice(0, 12)}`, 'appdata');
   if (sourceKind === 'mdbx') await mkdir(appData, { recursive: true });
@@ -37,7 +38,7 @@ for (const sourceKind of ['local', 'mdbx', 'keepass', 'webdav'] as const) test(`
   const protectedKey = await new BitwardenClient().protectVaultKey(key,
     await stretchBitwardenMasterKey(await deriveBitwardenMasterKey(password, email, { type: 0, iterations: 10_000 })), new Uint8Array(16));
   const rows: Record<string, unknown>[] = [], unexpected: string[] = []; let posts = 0;
-  const projectId = randomUUID(), credentialGroupId = randomUUID(), expectedCopies = sourceKind === 'local' ? 2 : 3;
+  const projectId = randomUUID(), credentialGroupId = randomUUID(), expectedCopies = withProject ? 3 : 2;
   const secondRecovery = sourceKind === 'keepass' ? 'Second recovery' : 'Recovery';
   const backups = new Map<string, Buffer>(), davMethods: string[] = [];
   if (sourceKind === 'webdav') backups.set('monica_backup_initial.enc.zip', Buffer.from(await encryptAndroidBackup(zipSync({}), 'Synthetic WebDAV backup')));
@@ -112,7 +113,7 @@ for (const sourceKind of ['local', 'mdbx', 'keepass', 'webdav'] as const) test(`
       <button id="register">Register</button><button id="login">Sign in</button><output id="result"></output><script>
       window.credentialId='';register.onclick=async()=>{try{const c=await navigator.credentials.create({publicKey:PublicKeyCredential.parseCreationOptionsFromJSON({
         challenge:'${challenge}',rp:{id:'portable.example.test',name:'Portable passkey'},user:{id:'dXNlcg',name:'synthetic',displayName:'Synthetic'},
-        pubKeyCredParams:[{type:'public-key',alg:-7}],authenticatorSelection:{residentKey:'${sourceKind === 'local' ? 'required' : 'discouraged'}',userVerification:'required'}})});
+        pubKeyCredParams:[{type:'public-key',alg:-7}],authenticatorSelection:{residentKey:'${local ? 'required' : 'discouraged'}',userVerification:'required'}})});
         window.registration=c.toJSON();result.textContent='registered';}catch(e){result.textContent=e.name+':'+e.message;}};
       login.onclick=async()=>{try{const c=await navigator.credentials.get({publicKey:PublicKeyCredential.parseRequestOptionsFromJSON({challenge:'${challenge}',
         rpId:'portable.example.test',allowCredentials:[{type:'public-key',id:credentialId}],userVerification:'discouraged'})});
@@ -187,7 +188,7 @@ for (const sourceKind of ['local', 'mdbx', 'keepass', 'webdav'] as const) test(`
     let website = await context!.newPage(); await website.goto(origin);
     await website.locator('#register').click(); await confirm(website, true); await expect(website.locator('#result')).toHaveText('registered');
     const original = (await send(page, { type: 'VAULT_LIST_ITEMS' }) as VaultItem[]).find(row => row.kind === 'passkey' && row.rpId === 'portable.example.test') as PasskeyItem;
-    expect(original).toMatchObject({ sourceMode: 'browser-local', signCount: 0, userVerificationRequired: true, discoverable: sourceKind === 'local' });
+    expect(original).toMatchObject({ sourceMode: 'browser-local', signCount: 0, userVerificationRequired: true, discoverable: local });
     expect(original.providerRefs.map(row => row.providerId)).toEqual(sourceProviderId && sourceKind !== 'webdav' ? [sourceProviderId] : []);
     if (sourceKind === 'webdav') {
       // Legacy snapshot providers are not direct WebAuthn registration targets.
@@ -204,19 +205,20 @@ for (const sourceKind of ['local', 'mdbx', 'keepass', 'webdav'] as const) test(`
       loginType: 'PASSWORD', appPackageName: 'test.portable', appName: 'Portable', email: 'user@example.test', phone: '+000123',
       addressLine: 'Synthetic street', city: 'City', state: 'State', zipCode: '1234', country: 'XX',
       customFields: [{ name: 'Recovery', value: 'first', protected: true }, { name: secondRecovery, value: 'second', protected: true, fieldType: 'HIDDEN' }],
-      passwordHistory: sourceKind === 'local' || sourceKind === 'webdav' ? [{ password: 'synthetic-older', lastUsedAt: stamp }] : undefined,
+      passwordHistory: local || sourceKind === 'webdav' ? [{ password: 'synthetic-older', lastUsedAt: stamp }] : undefined,
       providerRefs: sourceProviderId ? [{ providerId: sourceProviderId }] : [], mdbxFolderId: original.mdbxFolderId };
-    if (sourceProviderId) { rich.passwordGroupId = projectId; rich.customFields.push(projectField(0)); }
+    if (withProject) { rich.passwordGroupId = projectId; rich.customFields.push(projectField(0)); }
     await send(page, { type: 'VAULT_UPSERT_ITEM', item: rich });
-    if (sourceProviderId) {
+    if (withProject) {
       await send(page, { type: 'VAULT_UPSERT_ITEM', item: { ...rich, id: randomUUID(), title: 'Second project account',
         username: 'second', password: 'synthetic-second-secret', customFields: [projectField(1)] } });
-      await send(page, { type: 'PROVIDER_SYNC', providerId: sourceProviderId });
-      const upload = await send(page, { type: 'PROVIDER_ATTACHMENT_UPLOAD_BEGIN', providerId: sourceProviderId, itemId: rich.id,
+      if (sourceProviderId) await send(page, { type: 'PROVIDER_SYNC', providerId: sourceProviderId });
+      const attachmentProvider = sourceProviderId || 'local';
+      const upload = await send(page, { type: 'PROVIDER_ATTACHMENT_UPLOAD_BEGIN', providerId: attachmentProvider, itemId: rich.id,
         fileName: 'recovery.txt', sizeBytes: attachment.length, sha256: createHash('sha256').update(attachment).digest('hex') });
-      await send(page, { type: 'PROVIDER_ATTACHMENT_UPLOAD_CHUNK', providerId: sourceProviderId, transferId: upload.transferId, offset: 0, dataBase64: attachment.toString('base64') });
-      await send(page, { type: 'PROVIDER_ATTACHMENT_UPLOAD_FINISH', providerId: sourceProviderId, itemId: rich.id, transferId: upload.transferId });
-      await send(page, { type: 'PROVIDER_SYNC', providerId: sourceProviderId });
+      await send(page, { type: 'PROVIDER_ATTACHMENT_UPLOAD_CHUNK', providerId: attachmentProvider, transferId: upload.transferId, offset: 0, dataBase64: attachment.toString('base64') });
+      await send(page, { type: 'PROVIDER_ATTACHMENT_UPLOAD_FINISH', providerId: attachmentProvider, itemId: rich.id, transferId: upload.transferId });
+      if (sourceProviderId) await send(page, { type: 'PROVIDER_SYNC', providerId: sourceProviderId });
     }
     // Native sync adds committed remote identity and revision. Compare against
     // that committed source snapshot, while original key bytes stay anchored to registration.
@@ -233,19 +235,37 @@ for (const sourceKind of ['local', 'mdbx', 'keepass', 'webdav'] as const) test(`
       .getByRole('button', { name: '批量传输', exact: true }).click();
     const dialog = dialogContent(page, { name: '复制或移动项目' });
     await dialog.getByRole('checkbox', { name: /Portable passkey/ }).check(); await dialog.getByRole('checkbox', { name: /Rich portable password/ }).check();
+    if (moving) await dialog.locator('.batch-action-picker label').filter({ hasText: '移动' }).click();
     const davStart = davMethods.length;
     await dialog.getByRole('button', { name: '检查并生成计划', exact: true }).click();
     await expect(dialog.getByText(`${expectedCopies} 个可传输，0 个被阻断`, { exact: true })).toBeVisible();
     if (sourceKind === 'webdav') expect(davMethods.slice(davStart)).toEqual(['PROPFIND', 'GET', 'PROPFIND']);
-    await dialog.getByRole('button', { name: '执行复制', exact: true }).click();
+    if (moving) {
+      await dialog.locator('label').filter({ hasText: '我确认执行移动' }).click();
+      await page.screenshot({ path: info.outputPath('move-confirmation.png'), fullPage: true });
+      await page.setViewportSize({ width: 375, height: 820 });
+      await dialog.locator('label').filter({ hasText: '我确认执行移动' }).scrollIntoViewIfNeeded();
+      expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+      await page.screenshot({ path: info.outputPath('move-confirmation-narrow.png') });
+      await page.setViewportSize(options.viewport);
+    }
+    await dialog.getByRole('button', { name: moving ? '确认并移动' : '执行复制', exact: true }).click();
     await expect(dialog.getByRole('button', { name: '恢复传输', exact: true })).toBeVisible(); expect(posts).toBe(1);
     const pending = await send(page, { type: 'BITWARDEN_PENDING_TRANSFERS', providerId }); expect(pending).toHaveLength(1);
+    if (moving) for (const source of sourcesBeforeCopy) expect((await send(page, { type: 'VAULT_LIST_ITEMS' }) as VaultItem[]).find(row => row.id === source.id)).toEqual(source);
     await send(page, { type: 'VAULT_LOCK' }); await context!.close(); context = undefined;
     page = await open('original'); await send(page, { type: 'VAULT_UNLOCK', masterPassword: password });
     expect(await send(page, { type: 'MDBX2_BATCH_TRANSFER_EXECUTE', input: pending[0].request })).toMatchObject({ completedCount: expectedCopies, failedCount: 0 });
     expect(posts).toBe(expectedCopies);
     const afterCopy = await send(page, { type: 'VAULT_LIST_ITEMS' }) as VaultItem[];
-    for (const source of sourcesBeforeCopy) expect(afterCopy.find(row => row.id === source.id)).toEqual(source);
+    for (const source of sourcesBeforeCopy) expect(afterCopy.find(row => row.id === source.id)).toEqual(moving ? undefined : source);
+    if (moving) {
+      const completed = await send(page, { type: 'MDBX2_BATCH_TRANSFER_EXECUTE', input: pending[0].request });
+      expect(completed).toMatchObject({ action: 'move', completedCount: 3 }); expect(posts).toBe(3);
+      expect(await send(page, { type: 'BITWARDEN_PENDING_TRANSFERS', providerId })).toEqual([]);
+      const removedFile = await page.evaluate(input => chrome.runtime.sendMessage(input), { type: 'PROVIDER_ATTACHMENT_LIST', providerId: 'local', itemId: rich.id });
+      expect(removedFile.ok).toBe(false);
+    }
     if (sourceKind === 'webdav') {
       expect(archiveHashes()).toEqual(archivesBeforeCopy);
       expect(davMethods.slice(davStart)).toEqual(['PROPFIND', 'GET', 'PROPFIND', 'PROPFIND', 'GET', 'PROPFIND']);
@@ -257,7 +277,7 @@ for (const sourceKind of ['local', 'mdbx', 'keepass', 'webdav'] as const) test(`
     await send(page, { type: 'PROVIDER_SYNC', providerId: fresh.providerId });
     const imported: VaultItem[] = await send(page, { type: 'VAULT_LIST_ITEMS' });
     const passkey = imported.find(row => row.kind === 'passkey') as PasskeyItem;
-    expect(passkey).toMatchObject({ credentialId: original.credentialId, signCount: 0, userVerificationRequired: true, discoverable: sourceKind === 'local' });
+    expect(passkey).toMatchObject({ credentialId: original.credentialId, signCount: 0, userVerificationRequired: true, discoverable: local });
     expect(Buffer.from(passkey.privateKeyPkcs8!, 'base64')).toEqual(Buffer.from(original.privateKeyPkcs8!, 'base64'));
     const passwordItem = imported.find(row => row.title === rich.title) as LoginItem;
     for (const field of ['username','password','uris','passwordHistory','appPackageName','appName','email','phone','addressLine','city','state','zipCode','country'] as const)
@@ -266,7 +286,7 @@ for (const sourceKind of ['local', 'mdbx', 'keepass', 'webdav'] as const) test(`
     expect(passwordItem.customFields.filter(row => row.name !== PROJECT_CREDENTIAL_FIELD)).toEqual([{ name: 'Recovery', value: 'first', protected: true }, { name: secondRecovery, value: 'second', protected: true },
       { name: BITWARDEN_TRANSFER_MARKER, value: expect.any(String), protected: true }]);
     expect(JSON.parse(passwordItem.customFields.find(row => row.name === BITWARDEN_TRANSFER_MARKER)!.value)).toMatchObject({ version: 1, operationId: pending[0].request.operationId });
-    if (sourceProviderId) {
+    if (withProject) {
       const sibling = imported.find(row => row.title === 'Second project account') as LoginItem;
       expect(sibling).toMatchObject({ username: 'second', password: 'synthetic-second-secret', passwordGroupId: passwordItem.passwordGroupId });
       expect(passwordItem.passwordGroupId).toBeTruthy(); expect(passwordItem.passwordGroupId).not.toBe(projectId);
@@ -303,9 +323,9 @@ for (const sourceKind of ['local', 'mdbx', 'keepass', 'webdav'] as const) test(`
       createPublicKey({ key: Buffer.from(original.publicKey, 'base64'), format: 'der', type: 'spki' }), Buffer.from(assertion.response.signature, 'base64url'))).toBe(true);
     expect(posts).toBe(expectedCopies); expect(unexpected).toEqual([]);
     await info.attach('acceptance', { contentType: 'application/json', body: JSON.stringify({ browserRegistration: true, interruptedCreate: true,
-      fullRestart: true, independentFreshClient: true, preservedSources: true, remoteCiphers: posts, zeroCounter: true,
-      sourceKind, verificationRequiredWhenRpDiscourages: true, independentlyVerifiedAssertion: true, richPasswordFields: true, nativeAttachment: !!sourceProviderId,
-      nativeProjectMembers: sourceProviderId ? 2 : 0, freshClientAttachmentRead: !!sourceProviderId }) });
+      fullRestart: true, independentFreshClient: true, preservedSources: !moving, removedOnlyAfterVerification: moving, remoteCiphers: posts, zeroCounter: true,
+      sourceKind, verificationRequiredWhenRpDiscourages: true, independentlyVerifiedAssertion: true, richPasswordFields: true, nativeAttachment: withProject,
+      nativeProjectMembers: withProject ? 2 : 0, freshClientAttachmentRead: withProject }) });
   } finally {
     try { await context?.close(); } finally {
       try { await nativeHost?.restore(); } finally {

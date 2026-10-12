@@ -10,6 +10,8 @@ import { verifyBitwardenTransferCipher } from '../providers/bitwarden/bitwarden-
 import { bitwardenComparablePayload } from '../providers/bitwarden/bitwarden-durable-sync';
 import type { BitwardenSymmetricKey } from '../providers/bitwarden/bitwarden-crypto';
 import { parseLosslessJson } from './lossless-json';
+import { isLocalTransferItem } from './local-transfer';
+import { readPasskeyBindings } from './passkey-bindings';
 
 export type BitwardenBatchRequest = Omit<Mdbx2BatchTransferRequest, 'operationId' | 'operationCreatedAt' | 'confirmed'> & { operationId: string; operationCreatedAt: string };
 export interface BitwardenBatchUnit {
@@ -27,7 +29,7 @@ export interface BitwardenBatchFolder {
   targetId?: string;
 }
 export interface BitwardenBatchIntent {
-  version: 1;
+  version: 1 | 2;
   request: BitwardenBatchRequest;
   requestHash: string;
   plan: Mdbx2BatchTransferPlanResult;
@@ -73,19 +75,20 @@ export function readBitwardenBatches(value: unknown): BitwardenBatchIntent[] {
   const seen = new Set<string>();
   return value.map(raw => {
     const row = raw as BitwardenBatchIntent, request = normalizeBitwardenBatchRequest(row?.request);
-    if (row.version !== 1 || !row.request.operationId || !row.request.operationCreatedAt || seen.has(request.operationId)
+    if (!(row.version === 1 && request.action === 'copy' || row.version === 2 && request.action === 'move')
+      || !row.request.operationId || !row.request.operationCreatedAt || seen.has(request.operationId)
       || row.target?.kind !== 'bitwarden' || row.target.id !== request.targetProviderId || row.target.enabled !== true
       || !digest(row.requestHash) || !digest(row.snapshotHash) || !['writing', 'completed', 'cancelled'].includes(row.status)
-      || !Array.isArray(row.units) || !row.units.length || row.units.length > 200 || request.action !== 'copy'
+      || !Array.isArray(row.units) || !row.units.length || row.units.length > 200
       || row.units.some(unit => !unit || !id(unit.copyId) || !Array.isArray(unit.sources) || !unit.sources.length || unit.sources.length > 200
         || unit.sources.some(source => !source || !id(source.id) || !['login','totp','passkey','secure-note','card','identity','api-token','billing-address','payment-account'].includes(source.kind)
           || source.kind === 'passkey' && !id(source.credentialId)) || unit.ssoTargetCopyId !== undefined && !id(unit.ssoTargetCopyId))
       || !row.plan || row.plan.operationId !== request.operationId || row.plan.targetProviderId !== request.targetProviderId
       || row.plan.action !== request.action || row.plan.operationCreatedAt !== request.operationCreatedAt
       || row.plan.preserveCategories !== request.preserveCategories || row.plan.targetCollectionId !== request.targetCollectionId
-      || !Array.isArray(row.plan.items) || !row.plan.items.length || row.plan.items.length > 200 || row.plan.requiresMoveConfirmation !== false
+      || !Array.isArray(row.plan.items) || !row.plan.items.length || row.plan.items.length > 200 || row.plan.requiresMoveConfirmation !== (request.action === 'move')
       || !Array.isArray(row.plan.warnings) || row.plan.warnings.some(value => typeof value !== 'string')
-      || row.plan.items.some(item => !item || !id(item.sourceItemId) || typeof item.title !== 'string' || item.effectiveAction !== 'copy'
+      || row.plan.items.some(item => !item || !id(item.sourceItemId) || typeof item.title !== 'string' || item.effectiveAction !== request.action
         || typeof item.pathIncomplete !== 'boolean' || !Array.isArray(item.sourcePath) || !Array.isArray(item.targetPath)
         || [...item.sourcePath, ...item.targetPath].some(value => typeof value !== 'string')
         || item.blockedReason !== undefined && !id(item.blockedReason))) throw invalid();
@@ -105,9 +108,9 @@ export function readBitwardenBatches(value: unknown): BitwardenBatchIntent[] {
       || row.plan.transferableCount !== accepted.length || row.plan.blockedCount !== row.plan.items.length - accepted.length
       || row.status !== 'completed' && row.result !== undefined
       || row.status === 'completed' && (!row.result || row.result.operationId !== request.operationId || row.result.targetProviderId !== request.targetProviderId
-        || row.result.action !== 'copy' || row.result.completedCount !== accepted.length || row.result.failedCount !== 0
+        || row.result.action !== request.action || row.result.completedCount !== accepted.length || row.result.failedCount !== 0
         || row.result.blockedCount !== row.plan.blockedCount || !Array.isArray(row.result.items) || row.result.items.length !== row.plan.items.length
-        || row.result.items.some((item,index) => item.sourceItemId !== row.plan.items[index].sourceItemId
+        || row.result.items.some((item,index) => item.sourceItemId !== row.plan.items[index].sourceItemId || item.effectiveAction !== request.action
           || item.status !== (row.plan.items[index].blockedReason ? 'blocked' : 'completed') || item.status === 'completed' && !id(item.targetItemId)))) throw invalid();
     row.units.forEach(unit => assertMdbx2TransferOperationId(unit.copyId)); bitwardenBatchOrder(row.units);
     seen.add(request.operationId); return structuredClone(row);
@@ -115,7 +118,7 @@ export function readBitwardenBatches(value: unknown): BitwardenBatchIntent[] {
 }
 
 export async function bitwardenBatchSnapshotHash(state: VaultState, request: BitwardenBatchRequest): Promise<string> {
-  const ids = bitwardenTransferSelection(request.itemIds, state.items, state.providers).selectedIds;
+  const ids = bitwardenTransferSelection(request.itemIds, state.items, state.providers, request.action).selectedIds;
   const target = state.providers.find(row => row.id === request.targetProviderId);
   if (target?.kind !== 'bitwarden' || !target.enabled || state.mutationQueue.some(row => row.providerId === target.id)
     || state.providerConflicts.some(row => row.providerId === target.id)) throw new Error('Bitwarden 目标不可用或仍有未完成修改，请先同步并处理冲突。');
@@ -183,10 +186,49 @@ export function bitwardenBatchResult(batch: BitwardenBatchIntent, copies: Bitwar
     }
   }
   if (new Set(targets.values()).size !== targets.size) throw invalid();
-  return { operationId: batch.request.operationId, action: 'copy', targetProviderId: batch.target.id,
-    items: batch.plan.items.map(row => ({ sourceItemId: row.sourceItemId, kind: row.kind, title: row.title, effectiveAction: 'copy',
+  return { operationId: batch.request.operationId, action: batch.request.action, targetProviderId: batch.target.id,
+    items: batch.plan.items.map(row => ({ sourceItemId: row.sourceItemId, kind: row.kind, title: row.title, effectiveAction: batch.request.action,
       status: row.blockedReason ? 'blocked' : 'completed', targetItemId: targets.get(row.sourceItemId), retryable: false, error: row.blockedReason })),
     completedCount: targets.size, blockedCount: batch.plan.blockedCount, failedCount: 0, warnings: batch.plan.warnings };
+}
+
+/** Local removal joins target adoption in one encrypted write. Remote sources
+ * require their own durable native deletion receipts and are never unbound here. */
+export function assertBitwardenLocalMoveSource(state: VaultState, item: VaultItem): void {
+  if (!isLocalTransferItem(item, state.providers) || (state.localItemOrigins || []).some(row => row.itemId === item.id && row.records.length))
+    throw new Error('此来源的跨库移动尚未接入删除恢复，请使用复制；来源已保留。');
+  if (item.kind === 'passkey') {
+    for (const owner of state.items) {
+      if (owner.deletedAt || owner.kind !== 'login' || !isLocalTransferItem(owner, state.providers) || !owner.passkeyBindings) continue;
+      let bindings;
+      try { bindings = readPasskeyBindings(owner.passkeyBindings); } catch { throw new Error('本地 Passkey 关联无法确认，已保留来源。'); }
+      if (bindings.some(binding => !normalizeCredentialId(binding.credentialId || '')
+        || normalizeCredentialId(binding.credentialId || '') === normalizeCredentialId(item.credentialId)))
+        throw new Error('本地 Passkey 仍有关联密码，关联迁移尚未完成，请使用复制。');
+    }
+  }
+}
+
+/** Recheck after the final network read, while holding the local mutation lock.
+ * A new dependent or an edit since staging must never be removed by an old plan. */
+export async function assertBitwardenLocalMoveCurrent(state: VaultState, batch: BitwardenBatchIntent, copies: BitwardenCipherCopyRecord[]): Promise<Set<string>> {
+  const ids = new Set(batch.units.flatMap(unit => unit.sources.map(source => source.id)));
+  if (batch.request.action !== 'move') return new Set();
+  const selection = bitwardenTransferSelection(batch.request.itemIds, state.items, state.providers, 'move');
+  if (selection.selectedIds.length !== batch.plan.items.length || selection.selectedIds.some(id => !batch.plan.items.some(row => row.sourceItemId === id))
+    || selection.components.some(group => group.some(id => ids.has(id)) && group.some(id => !ids.has(id))))
+    throw new Error('移动期间项目或关联已变化，已保留来源和目标副本。');
+  for (const unit of batch.units) {
+    const copy = copies.find(row => row.prepared.copyId === unit.copyId);
+    if (!copy || copy.sourceSnapshotSha256 !== await bitwardenBatchSourceHash(state, unit.sources.map(source => source.id)))
+      throw new Error('移动期间来源已变化，已保留来源和目标副本。');
+    for (const source of unit.sources) {
+      const item = state.items.find(row => row.id === source.id);
+      if (!item) throw invalid();
+      assertBitwardenLocalMoveSource(state, item);
+    }
+  }
+  return ids;
 }
 
 /** Fresh authenticated provider data must still describe the verified files and
