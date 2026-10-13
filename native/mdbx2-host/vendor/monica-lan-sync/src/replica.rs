@@ -22,6 +22,7 @@ struct Record {
     origins: BTreeSet<String>,
     writer: String,
     deleted: bool,
+    #[serde(deserialize_with = "crate::json::deserialize")]
     data: Value,
 }
 
@@ -56,6 +57,7 @@ struct Local {
     scope: String,
     guard: String,
     deleted: bool,
+    #[serde(deserialize_with = "crate::json::deserialize")]
     data: Value,
 }
 
@@ -749,9 +751,14 @@ pub(super) fn request(value: &Value) -> Result<Value> {
             Ok(json!({}))
         }
         "replica_scan_batch" => {
+            // Decode raw user fields from JSON text; Value's deserializer treats
+            // literal private marker keys as serde internals.
+            let entries_json = Zeroizing::new(
+                serde_json::to_vec(value.get("entries").ok_or("invalid_request")?)
+                    .map_err(|_| "invalid_record")?,
+            );
             let entries: Vec<Local> =
-                serde_json::from_value(value.get("entries").cloned().ok_or("invalid_request")?)
-                    .map_err(|_| "invalid_record")?;
+                serde_json::from_slice(&entries_json).map_err(|_| "invalid_record")?;
             if entries.len() > MAX_BATCH_RECORDS {
                 return Err("replica_limit");
             }
@@ -799,7 +806,9 @@ pub(super) fn request(value: &Value) -> Result<Value> {
                     }
                 }
             }
-            Ok(json!({"items":items}))
+            let mut response = json!({});
+            response["items"] = Value::Array(items);
+            Ok(response)
         }
         "replica_resolve" => {
             let ids = value
@@ -833,7 +842,9 @@ pub(super) fn request(value: &Value) -> Result<Value> {
                 }
                 items.push(item);
             }
-            Ok(json!({"items":items}))
+            let mut response = json!({});
+            response["items"] = Value::Array(items);
+            Ok(response)
         }
         "replica_rebind" => {
             let items = value
@@ -1010,7 +1021,11 @@ pub(super) fn request(value: &Value) -> Result<Value> {
                 if bindings.is_some() && binding.is_none() {
                     continue; // An unavailable source is not a deletion or a new local copy.
                 }
-                let item = json!({"record":record,"local_id":binding.map(|(id,_)|id),"scope":binding.map(|(_,b)|&b.scope),"expected_guard":binding.map(|(_,b)|&b.guard)});
+                let mut item = json!({"local_id":binding.map(|(id,_)|id),"scope":binding.map(|(_,b)|&b.scope),"expected_guard":binding.map(|(_,b)|&b.guard)});
+                let serialized =
+                    Zeroizing::new(serde_json::to_vec(record).map_err(|_| "invalid_record")?);
+                item["record"] =
+                    crate::json::from_slice(&serialized).map_err(|_| "invalid_record")?;
                 bytes += serde_json::to_vec(&item)
                     .map_err(|_| "invalid_record")?
                     .len();
@@ -1023,7 +1038,9 @@ pub(super) fn request(value: &Value) -> Result<Value> {
                 }
                 pending.push(item);
             }
-            Ok(json!({"items":pending,"next_cursor":next_cursor,"total":total}))
+            let mut response = json!({"next_cursor":next_cursor,"total":total});
+            response["items"] = Value::Array(pending);
+            Ok(response)
         }
         "replica_applied" => {
             let mut state = replica.state.clone();

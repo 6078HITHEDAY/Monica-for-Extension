@@ -88,6 +88,58 @@ fn local(local_id: &str, data: Value) -> Value {
 fn device(node: &str, mode: &str) -> Value {
     json!({"device_id":node,"name":node,"sync_mode":mode})
 }
+
+#[test]
+fn nearby_literal_json_fields_survive_scan_and_reopen() {
+    let _serial = SERIAL.lock().unwrap();
+    let mut failures = Vec::new();
+    for (name, literal) in [
+        ("integer", "9007199254740993"),
+        ("decimal", "1.00000000000000001"),
+        ("exponent", "1e999"),
+        ("negative_zero", "-0"),
+        ("proto", r#"{"__proto__":{"literal":true}}"#),
+        (
+            "number_marker",
+            r#"{"$serde_json::private::Number":"literal"}"#,
+        ),
+        ("raw_marker", r#"{"$serde_json::private::RawValue":"null"}"#),
+    ] {
+        let mut a = Host::new();
+        let storage = id();
+        let params = json!({"storage_id":storage,"device_id":"precision","key":URL_SAFE_NO_PAD.encode([17;32])});
+        let replica = handle(&a.call("replica_open", params.clone()));
+        a.call(
+            "replica_scan_begin",
+            json!({"handle":replica,"scopes":["local"]}),
+        );
+        let data = monica_lan_sync::json::from_str(&format!(
+            r#"{{"entry_type":"note","payload":{{"value":{literal}}}}}"#
+        ))
+        .unwrap();
+        let mut entry = local("precision", json!({}));
+        entry["data"] = data;
+        let mut request = json!({"operation":"replica_scan_batch","params":{"handle":replica}});
+        request["params"]["entries"] = Value::Array(vec![entry]);
+        let result = a.nearby.call(request);
+        if let Err(error) = result {
+            failures.push(format!("{name}: {}", error.message));
+            continue;
+        }
+        a.call("replica_scan_end", json!({"handle":replica}));
+        a.call("replica_close", json!({"handle":replica}));
+        let replica = handle(&a.call("replica_open", params));
+        let saved = a.call(
+            "replica_local",
+            json!({"handle":replica,"local_ids":["precision"],"include_data":true}),
+        );
+        let text = serde_json::to_string(&saved).unwrap();
+        if !text.contains(&format!("\"value\":{literal}")) {
+            failures.push(format!("{name}: literal changed"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("; "));
+}
 fn link(start: &Value) -> String {
     start["invitations"][0].as_str().unwrap().into()
 }
@@ -260,7 +312,7 @@ fn framed_buffers_bound_verify_and_zero_lifetime() {
         a.nearby
             .handle("nearby.input.finish", json!({"handle":h}))
             .unwrap(),
-        json!({"value":{}})
+        json!({"json":"{}"})
     );
     assert!(a
         .nearby

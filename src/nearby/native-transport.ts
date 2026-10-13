@@ -1,5 +1,6 @@
 import type { Mdbx2NativeClient } from "../providers/mdbx2/native-client";
 import { base64ToBytes, bytesToBase64 } from "../security/encoding";
+import { parseLosslessJson } from "../core/lossless-json";
 
 export type NearbyOperation =
   | "replica_open" | "replica_close" | "replica_scan_begin" | "replica_scan_batch" | "replica_scan_end"
@@ -47,18 +48,24 @@ export async function nearbySha256(bytes: Uint8Array): Promise<string> {
   finally { copy.fill(0); }
 }
 
-/** Reject values JSON.stringify would silently change or omit. Native causal clocks
- * above JS's safe integer range require a future lossless codec, never rounding. */
-function jsonValue(value: unknown, depth = 0, seen = new Set<object>()): void {
+/** Reject values JSON.stringify would silently change or omit. Raw numeric
+ * lexemes from the shared lossless parser remain raw throughout this boundary. */
+function jsonValue(value: unknown, depth = 0, seen = new Set<object>()): boolean {
   if (depth > 64) throw new NearbyTransportError("request-depth-limit");
-  if (value === null || typeof value === "string" || typeof value === "boolean") return;
-  if (typeof value === "number" && Number.isFinite(value) && (!Number.isInteger(value) || Number.isSafeInteger(value))) return;
+  if (value === null || typeof value === "string" || typeof value === "boolean") return false;
+  if ((JSON as typeof JSON & { isRawJSON?: (value: unknown) => boolean }).isRawJSON?.(value)) {
+    if (!/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[Ee][+-]?\d+)?$/.test((value as { rawJSON: string }).rawJSON)) throw new NearbyTransportError("invalid-json");
+    return true;
+  }
+  if (typeof value === "number" && Number.isFinite(value) && (!Number.isInteger(value) || Number.isSafeInteger(value))) return false;
   if (typeof value !== "object" || !value || seen.has(value)) throw new NearbyTransportError("invalid-json");
   if (!Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) throw new NearbyTransportError("invalid-json");
   seen.add(value);
-  if (Array.isArray(value)) { for (let i = 0; i < value.length; i++) jsonValue(value[i], depth + 1, seen); }
-  else for (const entry of Object.values(value)) jsonValue(entry, depth + 1, seen);
+  let raw = false;
+  if (Array.isArray(value)) { for (let i = 0; i < value.length; i++) raw = jsonValue(value[i], depth + 1, seen) || raw; }
+  else for (const entry of Object.values(value)) raw = jsonValue(entry, depth + 1, seen) || raw;
   seen.delete(value);
+  return raw;
 }
 
 /** Give this class its own native port. Closing/aborting it stops all its LAN
@@ -83,7 +90,7 @@ export class NearbyNativeTransport {
         if (!this.ready) {
           const hello = nearbyObject(await this.client.request("host.hello", {}));
           this.check(signal);
-          if (hello.nearbyTransportVersion !== 1) throw new NearbyTransportError("host-update-required");
+          if (hello.nearbyTransportVersion !== 2) throw new NearbyTransportError("host-update-required");
           this.ready = true;
         }
         return await this.execute(operation, params, signal);
@@ -105,13 +112,15 @@ export class NearbyNativeTransport {
   }
 
   private async execute(operation: NearbyOperation, params: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
-    jsonValue(params);
+    const raw = jsonValue(params);
     const bytes = encoder.encode(JSON.stringify({ operation, params }));
     let upload: string | undefined;
     try {
       if (bytes.length > MAX_INPUT) throw new NearbyTransportError("request-size-limit");
       let result: unknown;
-      if (bytes.length <= INLINE) result = await this.client.request("nearby.call", { operation, params });
+      // Send serialized JSON text through the upload path even for small values.
+      // Browser structured-message serialization must not reinterpret RawJSON.
+      if (bytes.length <= INLINE && !raw) result = await this.client.request("nearby.call", { operation, params });
       else {
         const sha256 = await nearbySha256(bytes); this.check(signal);
         const begin = nearbyObject(await this.client.request("nearby.input.begin", { size: bytes.length, sha256 }));
@@ -137,10 +146,12 @@ export class NearbyNativeTransport {
 
   private async unpack(input: unknown, signal?: AbortSignal): Promise<unknown> {
     const value = nearbyObject(input);
-    if (Object.prototype.hasOwnProperty.call(value, "value")) {
+    if (Object.prototype.hasOwnProperty.call(value, "json")) {
       if (Object.keys(value).length !== 1) throw invalid();
-      jsonValue(value.value);
-      return value.value;
+      if (typeof value.json !== "string" || encoder.encode(value.json).length > INLINE) throw invalid();
+      const parsed = parseLosslessJson(value.json);
+      jsonValue(parsed);
+      return parsed;
     }
     const output = handle(value.handle);
     const length = size(value.size, MAX_OUTPUT);
@@ -161,8 +172,7 @@ export class NearbyNativeTransport {
       }
       if (await nearbySha256(bytes) !== sha256) throw new NearbyTransportError("response-integrity");
       this.check(signal);
-      // Unsafe integer input is rejected before it enters application state.
-      const result: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+      const result: unknown = parseLosslessJson(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
       jsonValue(result);
       return result;
     } finally {

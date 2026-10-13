@@ -40,7 +40,7 @@ const metadata = {
   coreRevision: "90005c8c608c952093a4522ffa507a562e2e39a4",
   runtimeProfile: "android-1.0.315-90005c8-four-overlays",
   runtimeProvenanceSha256: sha256(entries.get("ENGINE-PROVENANCE.json")),
-  nearbyTransportVersion: 1,
+  nearbyTransportVersion: 2,
   nearbyProvenanceSha256: sha256(entries.get("LAN-PROVENANCE.json")),
   source: { commit: sourceCommit, trackedWorktreeClean: sourceTreeClean },
   executable: { file: executableName, size: executableBytes.length, sha256: sha256(executableBytes) },

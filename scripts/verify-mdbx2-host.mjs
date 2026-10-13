@@ -29,9 +29,19 @@ const lanProvenance = JSON.parse(await readFile(resolve(hostRoot, "LAN-PROVENANC
 if (lanProvenance.source.commit !== "15b5ec7203c1ba51e19e298aebf2daca82fa55c2" || lanProvenance.source.directory !== "Monica for Android/rust-lan-sync") throw new Error("Nearby protocol source must match the reviewed Android snapshot.");
 if (!manifest.includes('monica-lan-sync = { path = "vendor/monica-lan-sync" }')) throw new Error("Nearby Host must use the pinned local Android protocol core.");
 if (Object.keys(lanProvenance.files).length !== 11) throw new Error("Nearby source inventory differs.");
+const lanExtensionHashes = {};
+for (const overlay of lanProvenance.extension_overlays || []) {
+  if (!overlay.patch?.startsWith('runtime-patches/') || overlay.patch.includes('..')) throw new Error('Invalid nearby extension overlay path.');
+  if (sha256(await readFile(resolve(hostRoot, overlay.patch))) !== overlay.patch_sha256) throw new Error(`Nearby extension overlay hash differs: ${overlay.id}.`);
+  if (Object.keys(overlay.files).length !== Object.keys(overlay.base_files).length) throw new Error('Nearby extension overlay file inventory differs.');
+  for (const [path, hash] of Object.entries(overlay.files)) {
+    if (!lanProvenance.files[path] || (lanExtensionHashes[path] || lanProvenance.files[path]) !== overlay.base_files[path]) throw new Error(`Nearby extension overlay baseline differs: ${path}.`);
+    lanExtensionHashes[path] = hash;
+  }
+}
 for (const [path, expected] of Object.entries(lanProvenance.files)) {
   if (!/^(?:Cargo\.(?:toml|lock)|LICENSE|src\/[a-z_]+\.rs)$/.test(path)) throw new Error("Invalid nearby provenance path.");
-  if (sha256(normalize(path, await readFile(resolve(hostRoot, "vendor", "monica-lan-sync", path)))) !== expected) throw new Error(`Nearby source differs from Android: ${path}.`);
+  if (sha256(normalize(path, await readFile(resolve(hostRoot, "vendor", "monica-lan-sync", path)))) !== (lanExtensionHashes[path] || expected)) throw new Error(`Nearby source differs from its recorded baseline/overlay: ${path}.`);
 }
 const extensionHashes = {};
 for (const overlay of provenance.extension_overlays || []) {

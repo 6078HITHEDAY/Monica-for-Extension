@@ -68,8 +68,9 @@ fn engine(value: Value) -> Result<Value> {
         serde_json::to_string(&value.0).map_err(|_| failure("nearby-invalid-request"))?,
     );
     let output = Zeroizing::new(monica_lan_sync::request_json(&input));
-    let mut parsed =
-        Secret(serde_json::from_str(&output).map_err(|_| failure("nearby-engine-invalid"))?);
+    let mut parsed = Secret(
+        monica_lan_sync::json::from_str(&output).map_err(|_| failure("nearby-engine-invalid"))?,
+    );
     if parsed.0["ok"] != true {
         let code = parsed.0["error"].as_str().unwrap_or("unavailable");
         // The pinned engine returns constant codes; bound and sanitize defensively.
@@ -337,7 +338,7 @@ impl Nearby {
                 if b.bytes.len() != b.size || digest(&b.bytes) != b.hash {
                     return Err(failure("nearby-buffer-integrity"));
                 }
-                let p = serde_json::from_slice(&b.bytes)
+                let p = monica_lan_sync::json::from_slice(&b.bytes)
                     .map_err(|_| failure("nearby-invalid-request"))?;
                 let result = self.call(p)?;
                 self.pack(result)
@@ -374,12 +375,22 @@ impl Nearby {
     }
 
     fn pack(&mut self, value: Value) -> Result<Value> {
-        let mut value = Secret(value);
+        let value = Secret(value);
         let bytes = Zeroizing::new(
             serde_json::to_vec(&value.0).map_err(|_| failure("nearby-engine-invalid"))?,
         );
         if bytes.len() <= INLINE {
-            return Ok(json!({"value":value.0.take()}));
+            // Chrome parses Native Messaging JSON numbers before JavaScript can
+            // inspect them. Carry the document as text, including small results,
+            // so causal clocks and opaque payload number lexemes cannot round.
+            let envelope = json!({"json":std::str::from_utf8(&bytes).map_err(|_| failure("nearby-engine-invalid"))?});
+            if serde_json::to_vec(&envelope)
+                .map_err(|_| failure("nearby-engine-invalid"))?
+                .len()
+                <= INLINE
+            {
+                return Ok(envelope);
+            }
         }
         if bytes.len() > MAX_BYTES {
             return Err(failure("nearby-buffer-limit"));

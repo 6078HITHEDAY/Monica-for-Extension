@@ -24,6 +24,62 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+/// Preserve user JSON as literal containers and validated number tokens. Serde's
+/// private Number/RawValue marker keys are legal user fields, not type tags.
+/// This extension overlay changes parsing only, never the wire or storage format.
+pub mod json {
+    use serde::{de::Error as _, Deserialize, Deserializer};
+    use serde_json::{value::RawValue, Number, Value};
+    use std::collections::BTreeMap;
+
+    pub fn from_str(input: &str) -> serde_json::Result<Value> {
+        let raw: &RawValue = serde_json::from_str(input)?;
+        from_raw(raw, 0)
+    }
+
+    pub fn from_slice(input: &[u8]) -> serde_json::Result<Value> {
+        let raw: &RawValue = serde_json::from_slice(input)?;
+        from_raw(raw, 0)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Value, D::Error> {
+        let raw = Box::<RawValue>::deserialize(deserializer)?;
+        from_raw(&raw, 0).map_err(serde::de::Error::custom)
+    }
+
+    fn from_raw(raw: &RawValue, depth: usize) -> serde_json::Result<Value> {
+        if depth >= 128 {
+            return Err(serde_json::Error::custom("JSON nesting limit exceeded"));
+        }
+        match raw.get().as_bytes()[0] {
+            b'{' => {
+                let fields: BTreeMap<String, &RawValue> = serde_json::from_str(raw.get())?;
+                fields
+                    .into_iter()
+                    .map(|(key, value)| Ok((key, from_raw(value, depth + 1)?)))
+                    .collect::<serde_json::Result<_>>()
+                    .map(Value::Object)
+            }
+            b'[' => {
+                let elements: Vec<&RawValue> = serde_json::from_str(raw.get())?;
+                elements
+                    .into_iter()
+                    .map(|value| from_raw(value, depth + 1))
+                    .collect::<serde_json::Result<_>>()
+                    .map(Value::Array)
+            }
+            // RawValue validated the complete token. Preserve its lexeme rather
+            // than round through f64 or normalize -0/exponent spelling.
+            b'-' | b'0'..=b'9' => Ok(Value::Number(Number::from_string_unchecked(
+                raw.get().to_owned(),
+            ))),
+            _ => serde_json::from_str(raw.get()),
+        }
+    }
+}
+
 /// Shared by the JSON dispatcher and native ABI wrappers before reading requests.
 pub const MAX_REQUEST_BYTES: usize = 8 * 1024 * 1024;
 const MAX_JOBS: usize = 8;
@@ -577,11 +633,15 @@ pub fn request_json(input: &str) -> String {
         if input.len() > MAX_REQUEST_BYTES {
             return Err("request_too_large");
         }
-        request(serde_json::from_str(input).map_err(|_| "invalid_request")?)
+        request(json::from_str(input).map_err(|_| "invalid_request")?)
     })
     .unwrap_or(Err("unavailable"));
     match result {
-        Ok(data) => json!({"ok": true, "data": data}),
+        Ok(data) => {
+            let mut response = json!({"ok": true});
+            response["data"] = data;
+            response
+        }
         Err(code) => json!({"ok": false, "error": code}),
     }
     .to_string()

@@ -56,7 +56,7 @@ async function verifyArchive(path, checksumPath) {
   assert(metadata.coreRevision === "90005c8c608c952093a4522ffa507a562e2e39a4", "MDBX2 Host metadata core revision mismatch.");
   assert(metadata.runtimeProfile === "android-1.0.315-90005c8-four-overlays", "MDBX2 Host runtime profile mismatch.");
   assert(metadata.runtimeProvenanceSha256 === sha256(entries["ENGINE-PROVENANCE.json"]), "MDBX2 Host runtime provenance hash mismatch.");
-  assert(metadata.nearbyTransportVersion === 1 && metadata.nearbyProvenanceSha256 === sha256(entries["LAN-PROVENANCE.json"]), "Nearby Host provenance hash mismatch.");
+  assert(metadata.nearbyTransportVersion === 2 && metadata.nearbyProvenanceSha256 === sha256(entries["LAN-PROVENANCE.json"]), "Nearby Host provenance hash mismatch.");
   assert(equalBytes(await readFile(resolve(hostRoot, "LAN-PROVENANCE.json")), entries["LAN-PROVENANCE.json"]), "Packaged nearby provenance differs from source.");
   assert(equalBytes(await readFile(resolve(hostRoot, "vendor", "monica-lan-sync", "LICENSE")), entries["LAN-SOURCE-LICENSE"]), "Packaged nearby source license differs.");
   assert(metadata.source?.trackedWorktreeClean === sourceTreeClean && metadata.source?.commit === git("rev-parse", "HEAD"), "MDBX2 Host source evidence mismatch.");

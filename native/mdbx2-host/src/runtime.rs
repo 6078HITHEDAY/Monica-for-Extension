@@ -732,7 +732,7 @@ impl HostRuntime {
             "supportsObjectBatchRestore": true,
             "supportsAtomicObjectAttachmentMove": true,
             "supportsLosslessJson": true,
-            "nearbyTransportVersion": 1,
+            "nearbyTransportVersion": 2,
             "supportsCompleteBackup": true,
             "mdbxRuntimeProfile": "android-1.0.315-90005c8-four-overlays",
             "maxBinaryChunkBytes": MAX_BINARY_CHUNK_BYTES,
