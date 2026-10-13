@@ -4,6 +4,8 @@
 
 ## 中文
 
+- 完成内置 MDBX 浏览器引擎的持久化基础：分块保存、写入中断保护、重启恢复及完整备份，并验证原 Passkey 私钥、计数与原生数据库往返。此项仍为内部基础，尚未接入正式界面；当前版本仍需本机助手，免安装使用流程将在后台生命周期与旧库识别接通后开放。
+
 - 加固附近同步的内部数据传输：保留大整数、高精度小数、负零和特殊字段名，避免浏览器或原生解析器改写内容；完成真实加密连接、附件及重启恢复验证。此项仍为内部基础，尚未开放附近同步界面。
 
 - 修复刚打开锁定页时临时后台连接错误直接显示的问题，后台唤醒期间会有限重试状态检查；解锁和写操作不自动重复。修复生成器点击长度滑块时数值越界、无法生成的问题，密码长度、单词长度和分段长度均支持正常点击、拖动及键盘调整。
@@ -45,6 +47,8 @@
 以上是已实现的改动，完整 Android 对齐仍在进行。传输目前提供本地库、MDBX、KeePass 和 Bitwarden 个人库目标；跨后端原生字段矩阵及外部来源的持久删除恢复尚未补齐，同 Wi-Fi 设备同步仍待接入，不据此宣称所有数据库之间已完成互通。尚未发布新安装包或更新商店。
 
 ## English
+
+- Added the durable foundation for a bundled MDBX browser engine, including incremental block storage, interrupted-write protection, restart recovery and complete backups. Verified original Passkey keys/counters and native database round trips. This remains internal: the current UI still requires Native Host until background lifecycle and legacy-vault routing are integrated.
 
 - Hardened internal nearby data transport to retain large integers, precise decimals, negative zero, and literal special field names. Verified actual encrypted transfer, attachments, and restart recovery. Nearby synchronization remains internal groundwork without a user-facing entry point.
 
