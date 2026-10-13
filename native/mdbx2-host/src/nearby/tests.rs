@@ -90,6 +90,56 @@ fn device(node: &str, mode: &str) -> Value {
 }
 
 #[test]
+fn pairing_snapshot_never_reads_a_source_and_only_skips_matching_pairing_merge() {
+    let _serial = SERIAL.lock().unwrap();
+    let mut a = Host::new();
+    let mut b = Host::new();
+    let ax = a.call("snapshot_pairing", json!({"device_id":"pair-a"}));
+    let bx = b.call("snapshot_pairing", json!({"device_id":"pair-b"}));
+    assert_eq!(ax["revision"], PAIRING_REVISION);
+    assert_eq!(ax["asset_ids"], json!([]));
+    assert!(a.nearby.replicas.is_empty());
+    let started = a.call("start", json!({"snapshot":ax["handle"],"device":device("pair-a","bidirectional"),"listen_address":"127.0.0.1"}));
+    let connected = b.call("connect", json!({"snapshot":bx["handle"],"device":device("pair-b","bidirectional"),"invitation":started["invitations"][0]}));
+    let sa = started["handle"].as_str().unwrap();
+    let sb = connected["handle"].as_str().unwrap();
+    assert_eq!(
+        a.await_phase(sa, "received")["peer"]["revision"],
+        PAIRING_REVISION
+    );
+    b.await_phase(sb, "received");
+    a.call("acknowledge", json!({"handle":sa,"success":true}));
+    b.call("acknowledge", json!({"handle":sb,"success":true}));
+    a.await_phase(sa, "completed");
+    b.await_phase(sb, "completed");
+    a.call("release", json!({"handle":sa}));
+    b.call("release", json!({"handle":sb}));
+    let replica = b.open("pair-b");
+    b.scan(
+        &replica,
+        json!([local(
+            "password",
+            json!({"entry_type":"login","password_plain":"synthetic secret"})
+        )]),
+    );
+    let full = b.snapshot(&replica);
+    let started = a.call("start", json!({"snapshot":ax["handle"],"device":device("pair-a","bidirectional"),"listen_address":"127.0.0.1"}));
+    let connected = b.call("connect", json!({"snapshot":full,"device":device("pair-b","bidirectional"),"invitation":started["invitations"][0]}));
+    let sa = started["handle"].as_str().unwrap();
+    let sb = connected["handle"].as_str().unwrap();
+    a.await_phase(sa, "received");
+    b.await_phase(sb, "received");
+    assert!(a
+        .nearby
+        .call(json!({"operation":"acknowledge","params":{"handle":sa,"success":true}}))
+        .is_err());
+    assert!(b
+        .nearby
+        .call(json!({"operation":"acknowledge","params":{"handle":sb,"success":true}}))
+        .is_err());
+}
+
+#[test]
 fn nearby_literal_json_fields_survive_scan_and_reopen() {
     let _serial = SERIAL.lock().unwrap();
     let mut failures = Vec::new();

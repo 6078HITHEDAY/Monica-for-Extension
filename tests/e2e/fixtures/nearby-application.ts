@@ -11,6 +11,7 @@ import { resolveBoundNote } from '../../../src/core/bound-notes';
 import { resolveSsoAccount } from '../../../src/core/sso-links';
 import { inspectNearbyPasskeyIssues } from '../../../src/nearby/passkey-consent';
 import { nearbyDeviceHello, nearbyPreferencesView, nearbySettingsCounter } from '../../../src/nearby/preferences';
+import { NearbyLocalCoordinator, type NearbyEndpoint } from '../../../src/nearby/local-coordinator';
 
 const master = 'Synthetic nearby application password';
 const storage = new IndexedDbVaultStorage();
@@ -19,8 +20,32 @@ const transport = new NearbyNativeTransport(new Mdbx2NativeClient(createChromeMd
 const ready = async () => { if (await service.status() === 'locked') await service.unlock(master); };
 const owned = new Map<string, { epoch: string; peerId?: string }>();
 const preferences = async () => { await ready(); return service.nearbySessionPreferences((await service.passkeySessionId())!); };
+const coordinator = new NearbyLocalCoordinator(service, () => new NearbyNativeTransport(new Mdbx2NativeClient(createChromeMdbx2NativeRuntime())), '127.0.0.1');
 
 const app = {
+  async coordinatorPair(link?: string) { await ready(); return coordinator.pair(link); },
+  async coordinatorPrepare(id: string) { await ready(); return coordinator.prepare(id); },
+  coordinatorConfirm: (id: string) => coordinator.confirm(id),
+  coordinatorStart: (endpoint?: NearbyEndpoint) => coordinator.start(endpoint),
+  coordinatorClose: () => coordinator.close(),
+  coordinatorStatus: () => coordinator.status(),
+  async coordinatorPoll(loseReply = false) {
+    const original = storage.write.bind(storage);
+    if (loseReply) storage.write = async envelope => { await original(envelope); throw Error('synthetic application reply lost'); };
+    try { return await coordinator.poll(); } finally { storage.write = original; }
+  },
+  async itemIds() { await ready(); return (await service.readState()).items.map(item => ({ id: item.id, title: item.title })); },
+  async seedAdditional(count: number) {
+    if (!Number.isInteger(count) || count < 0 || count > 500) throw Error('synthetic count limit');
+    await ready(); await service.importItems(Array.from({ length: count }, (_, i) => createLoginItem({ title: `Synthetic page item ${i}`, password: `synthetic-${i}` })));
+  },
+  async editAdditional() {
+    await ready(); const items = (await service.readState()).items.filter(item => item.title.startsWith('Synthetic page item '));
+    await service.importItems(items.map(item => ({ ...item, notes: 'reciprocal multi-page edit' })));
+  },
+  async additionalEditCount() {
+    await ready(); return (await service.readState()).items.filter(item => item.title.startsWith('Synthetic page item ') && item.notes === 'reciprocal multi-page edit').length;
+  },
   call: (operation: Parameters<NearbyNativeTransport['call']>[0], params: Record<string, unknown> = {}) => transport.call(operation, params),
   async preferences() {
     const p = await preferences();

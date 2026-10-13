@@ -5,7 +5,7 @@ import { parseLosslessJson } from "../core/lossless-json";
 export type NearbyOperation =
   | "replica_open" | "replica_close" | "replica_scan_begin" | "replica_scan_batch" | "replica_scan_end"
   | "replica_revision" | "replica_local" | "replica_resolve" | "replica_rebind" | "replica_export"
-  | "replica_merge" | "replica_pending" | "replica_applied_batch" | "snapshot_release"
+  | "replica_merge" | "replica_pending" | "replica_applied_batch" | "snapshot_release" | "snapshot_pairing" | "snapshot_receive_only"
   | "asset_append" | "asset_list" | "asset_read" | "start" | "connect" | "progress"
   | "cancel" | "release" | "acknowledge" | "discover" | "discovery_result" | "close_all";
 

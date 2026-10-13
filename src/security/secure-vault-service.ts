@@ -543,6 +543,18 @@ export class SecureVaultService {
   }
 
   /** Internal only: a coordinator must retain its session and current epoch. */
+  async assertNearbySession(epoch: string, sessionId: string): Promise<void> {
+    return this.runExclusive(async () => {
+      await this.assertLocalTransferSession(sessionId);
+      const { envelope, key, session } = await this.unlockedContext();
+      const state = await this.readDecodedSnapshot(envelope, key, session);
+      if (state.nearbyPreferences?.epoch !== epoch || !state.providers.some(provider => provider.id === state.nearbyPreferences?.localProviderId && provider.kind === 'local' && provider.enabled)) {
+        const { NearbyPreferencesError } = await import('../nearby/preferences');
+        throw new NearbyPreferencesError('stale-session');
+      }
+    });
+  }
+
   async nearbySessionPreferences(sessionId: string): Promise<import('../nearby/preferences').NearbyPreferences> {
     return this.runExclusive(async () => {
       const assertSession = () => this.assertLocalTransferSession(sessionId);
@@ -592,16 +604,32 @@ export class SecureVaultService {
   }
 
   async adoptNearbyLocalRecords(input: import('../nearby/local-adoption').NearbyLocalBatch, sessionId: string): Promise<import('../nearby/local-adoption').NearbyLocalAcknowledgement[]> {
+    return (await this.adoptNearbyLocalTransaction(input, sessionId)).acknowledgements;
+  }
+
+  async nearbySavedAcknowledgements(records: readonly import('../nearby/local-adoption').NearbyIncomingRecord[], sessionId: string): Promise<import('../nearby/local-adoption').NearbyLocalAcknowledgement[]> {
+    const input = structuredClone(records);
+    return this.runExclusive(async () => {
+      await this.assertLocalTransferSession(sessionId);
+      const { state } = await this.mutableContext();
+      const { nearbySavedAcknowledgements } = await import('../nearby/local-adoption');
+      const result = await nearbySavedAcknowledgements(state, input);
+      await this.assertLocalTransferSession(sessionId);
+      return result;
+    });
+  }
+
+  async adoptNearbyLocalTransaction(input: import('../nearby/local-adoption').NearbyLocalBatch, sessionId: string): Promise<{ acknowledgements: import('../nearby/local-adoption').NearbyLocalAcknowledgement[]; sourceHash: string }> {
     const batch = structuredClone(input);
     return this.runExclusive(async () => {
       const assertSession = () => this.assertLocalTransferSession(sessionId);
       await assertSession();
       const { state, envelope, key } = await this.mutableContext();
-      const { applyNearbyLocalBatch } = await import('../nearby/local-adoption');
+      const { applyNearbyLocalBatch, nearbyLocalSourceHash } = await import('../nearby/local-adoption');
       const result = await applyNearbyLocalBatch(state, batch, new Date(this.now()).toISOString());
       if (result.changed) await this.persist(result.state, key, envelope.kdf, false, false, assertSession);
       else await assertSession();
-      return structuredClone(result.acknowledgements);
+      return { acknowledgements: structuredClone(result.acknowledgements), sourceHash: await nearbyLocalSourceHash(result.state) };
     });
   }
 

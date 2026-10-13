@@ -11,6 +11,7 @@ exclude = ["vendor/mdbx", "vendor/mdbx/crates/*", "vendor/monica-lan-sync"]
 [dependencies]
 base64 = "0.22"
 fs2 = "=0.4.3"
+getrandom = "=0.2.17"
 md-5 = "0.10"
 mdbx-core = { path = "vendor/mdbx/crates/mdbx-core" }
 mdbx-ffi = { path = "vendor/mdbx/crates/mdbx-ffi" }

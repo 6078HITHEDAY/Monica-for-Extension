@@ -51,6 +51,42 @@ async function batch(service: SecureVaultService, providerId: string): Promise<N
 }
 
 describe('encrypted nearby application adoption', () => {
+  it('retains original guards across batches that normalize legacy local source scopes', async () => {
+    const one = createLoginItem({ title: 'First legacy item' });
+    const two = createLoginItem({ title: 'Later legacy item' });
+    const f = await fixture([one, two]), snapshot = await f.service.captureNearbyLocalRecords();
+    let sourceHash = snapshot.sourceHash;
+    for (const original of snapshot.records) {
+      const records = [{ id: original.global_id, deleted: false, clockJson: '{"remote":1}', dataJson: JSON.stringify({ ...original.data, notes: 'remote edit' }),
+        localId: original.local_id, scope: original.scope, expectedGuard: original.guard }];
+      sourceHash = (await f.service.adoptNearbyLocalTransaction({ providerId: f.providerId, sourceHash, records, assets: [] }, f.sessionId)).sourceHash;
+    }
+    const state = await f.service.readState();
+    expect(state.items.map(item => item.id).sort()).toEqual([one.id, two.id].sort());
+    expect(state.items.every(item => item.notes === 'remote edit')).toBe(true);
+  });
+  it('updates the original local binding and resolves an unchanged local dependency without duplicates', async () => {
+    const note: VaultItem = { ...createLoginItem({ title: 'Original note' }), kind: 'secure-note', content: 'original note content' };
+    const login = { ...createLoginItem({ title: 'Original login', password: 'original secret' }), boundNoteEntryId: `note:${note.id}` };
+    const f = await fixture([login, note]), snapshot = await f.service.captureNearbyLocalRecords();
+    const original = snapshot.records.find(row => row.local_id === `local:${login.id}`)!;
+    const dependency = snapshot.records.find(row => row.local_id === `local:${note.id}`)!;
+    const data = { ...original.data, notes: 'changed on remote device' };
+    const records = [{ id: original.global_id, deleted: false, clockJson: '{"remote":1}', dataJson: JSON.stringify(data),
+      localId: original.local_id, scope: original.scope, expectedGuard: original.guard }];
+    const result = await f.service.adoptNearbyLocalTransaction({ providerId: f.providerId, sourceHash: snapshot.sourceHash, records, assets: [],
+      references: [{ id: dependency.global_id, localId: dependency.local_id }] }, f.sessionId);
+    const state = await f.service.readState(); expect(state.items).toHaveLength(2);
+    const changed = state.items.find(item => item.id === login.id)!;
+    expect(changed).toMatchObject({ password: login.password, notes: 'changed on remote device', boundNoteEntryId: login.boundNoteEntryId });
+    expect(resolveBoundNote(changed as typeof login, state.items)?.id).toBe(note.id);
+    expect(result.acknowledgements[0].localId).toBe(original.local_id);
+    expect(await f.service.nearbyLocalSnapshotHash()).toBe(result.sourceHash);
+    expect(await f.service.nearbySavedAcknowledgements(records, f.sessionId)).toEqual(result.acknowledgements);
+    const before = await f.storage.read();
+    await expect(f.service.adoptNearbyLocalRecords({ providerId: f.providerId, sourceHash: result.sourceHash, records: [{ ...records[0], clockJson: '{"remote":2}' }], assets: [] }, f.sessionId)).rejects.toThrow('local-binding-changed');
+    expect(await f.storage.read()).toEqual(before);
+  });
   it('excludes live external providers and refuses to silently flatten archival source data', async () => {
     const f = await fixture([createLoginItem({ title: 'Local' })]), state = await f.service.readState();
     state.providers.push({ id: 'external', kind: 'bitwarden', enabled: true, name: 'External', config: {}, isDefaultSaveTarget: false });

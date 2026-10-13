@@ -144,6 +144,9 @@ export async function nearbyWireToLocalItem(data: NearbyWireData, target: { id: 
   if (!decoded.item || decoded.item.kind === 'opaque') invalidNearby('unsupported-local-projection');
   let item = decoded.item;
   if (item.kind === 'passkey' && target.previous?.kind === 'passkey') item = preservePasskeyCounterHistory(target.previous, item);
+  // The OTP owner link is carried by the authenticator record on the wire.
+  // A login-only update must not erase this local reverse index.
+  if (item.kind === 'login' && target.previous?.kind === 'login') item.boundTotpItemId = target.previous.boundTotpItemId;
   item.id = target.id; item.providerRefs = [{ providerId: target.providerId }]; item.replicaGroupId = target.id;
   for (const field of ['mdbxFolderId', 'mdbxDatabaseId', 'keepassDatabaseId', 'keepassGroupPath', 'keepassEntryUuid', 'keepassGroupUuid', 'boundNoteId'] as const) delete item[field];
   return item;

@@ -24,6 +24,7 @@ const CHUNK: usize = 256 * 1024;
 const INLINE: usize = 600 * 1024;
 const TTL: Duration = Duration::from_secs(120);
 const MAX_SNAPSHOTS: usize = 8;
+const PAIRING_REVISION: &str = "pairing-only-v1";
 
 type Result<T> = std::result::Result<T, RpcFailure>;
 type Args = Map<String, Value>;
@@ -473,6 +474,8 @@ impl Nearby {
                 Ok(json!({}))
             }
             "replica_export" => self.export(params),
+            "snapshot_pairing" => self.empty_snapshot(params, PAIRING_REVISION),
+            "snapshot_receive_only" => self.empty_snapshot(params, "receive-only-v1"),
             "snapshot_release" => {
                 let mut p = args(params, &["handle"])?;
                 self.snapshots.remove(&token(&mut p, "handle")?);
@@ -635,6 +638,49 @@ impl Nearby {
         Ok(
             json!({"handle":handle,"revision":revision,"asset_ids":result.0["asset_ids"].take(),"pending":result.0["pending"].take()}),
         )
+    }
+
+    // Pair before reading a password source. The empty journal and its keys are
+    // owned by this temporary snapshot; no caller-supplied revision or files.
+    fn empty_snapshot(&mut self, params: Value, revision: &str) -> Result<Value> {
+        let mut p = args(params, &["device_id"])?;
+        let device = text(&mut p, "device_id")?;
+        if self.snapshots.len() >= MAX_SNAPSHOTS {
+            return Err(failure("nearby-snapshot-limit"));
+        }
+        let directory = self.scratch()?;
+        let mut bytes = Zeroizing::new([0u8; 32]);
+        getrandom::getrandom(bytes.as_mut()).map_err(|_| failure("nearby-random-unavailable"))?;
+        let key = Zeroizing::new(URL_SAFE_NO_PAD.encode(bytes.as_ref()));
+        let opened = engine(json!({"operation":"replica_open","device_id":device,
+            "key":*key,"path":directory.path().join("pairing.enc")}))?;
+        let replica = opened["handle"]
+            .as_u64()
+            .ok_or_else(|| failure("nearby-engine-invalid"))?;
+        let exported = engine(json!({"operation":"replica_export","handle":replica,
+            "path":directory.path().join("changes.mdbxsync"),"skip_nonzero_passkeys":true}));
+        let closed = engine(json!({"operation":"replica_close","handle":replica}));
+        let exported = Secret(exported?);
+        closed?;
+        let content_key = exported.0["content_key"]
+            .as_str()
+            .ok_or_else(|| failure("nearby-engine-invalid"))?
+            .to_owned();
+        let handle = id();
+        self.snapshots.insert(
+            handle.clone(),
+            Arc::new(Snapshot {
+                directory,
+                key: Zeroizing::new(content_key),
+                revision: revision.into(),
+                assets: HashSet::new(),
+                finished: HashSet::new(),
+                writing: None,
+                failed: false,
+                frozen: false,
+            }),
+        );
+        Ok(json!({"handle":handle,"revision":revision,"asset_ids":[],"pending":false}))
     }
 
     fn append_asset(&mut self, params: Value) -> Result<Value> {
@@ -807,7 +853,9 @@ impl Nearby {
             let progress = Secret(engine(
                 json!({"operation":"progress","handle":transfer.handle}),
             )?);
-            if progress.0["peer"]["receive_content"] == true {
+            let pairing_only = transfer._snapshot.revision == PAIRING_REVISION
+                && progress.0["peer"]["revision"] == PAIRING_REVISION;
+            if progress.0["peer"]["receive_content"] == true && !pairing_only {
                 let replica = transfer
                     .replica
                     .as_ref()
