@@ -482,6 +482,8 @@ export interface ProviderDiagnosticExport {
 import type { BlockedFieldSignatureRecord } from "../autofill/field-policy";
 
 export interface VaultState {
+  /** Encrypted nearby application receipts; never synchronized as item fields. */
+  nearbyLocalReceipts?: import('../nearby/local-adoption').NearbyLocalReceipt[];
   /** Local encrypted two-phase password removal, never synchronized as item metadata. */
   passwordProjectRemovals?: import("./password-project-removal-journal").PasswordProjectRemovalRecord[];
   mdbx2Restores?: import('./mdbx2-restore-journal').Mdbx2RestoreRecord[];

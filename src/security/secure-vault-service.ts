@@ -539,6 +539,31 @@ export class SecureVaultService {
     return this.readProjection(state => state, activity);
   }
 
+  /** Internal nearby coordinator only; no runtime command accepts these records. */
+  async nearbyLocalSnapshotHash(): Promise<string> {
+    const { nearbyLocalSourceHash } = await import('../nearby/local-adoption');
+    return nearbyLocalSourceHash(await this.readState());
+  }
+
+  async captureNearbyLocalRecords(): Promise<import('../nearby/local-adoption').NearbyLocalSnapshot> {
+    const { captureNearbyLocalSnapshot } = await import('../nearby/local-adoption');
+    return captureNearbyLocalSnapshot(await this.readState());
+  }
+
+  async adoptNearbyLocalRecords(input: import('../nearby/local-adoption').NearbyLocalBatch, sessionId: string): Promise<import('../nearby/local-adoption').NearbyLocalAcknowledgement[]> {
+    const batch = structuredClone(input);
+    return this.runExclusive(async () => {
+      const assertSession = () => this.assertLocalTransferSession(sessionId);
+      await assertSession();
+      const { state, envelope, key } = await this.mutableContext();
+      const { applyNearbyLocalBatch } = await import('../nearby/local-adoption');
+      const result = await applyNearbyLocalBatch(state, batch, new Date(this.now()).toISOString());
+      if (result.changed) await this.persist(result.state, key, envelope.kdf, false, false, assertSession);
+      else await assertSession();
+      return structuredClone(result.acknowledgements);
+    });
+  }
+
   /** Ceremony reads do not need unrelated passwords, source envelopes or journals. */
   async readPasskeyContext(): Promise<{ items: PasskeyItem[]; providers: ProviderAccount[]; settings: VaultState['settings'] }> {
     return this.readProjection(state => ({ items: state.items.filter((item): item is PasskeyItem => item.kind === 'passkey'), providers: state.providers, settings: state.settings }));
