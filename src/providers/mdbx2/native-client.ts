@@ -168,12 +168,12 @@ export class Mdbx2NativeClient {
     private readonly hostLabel = "Monica MDBX2"
   ) {}
 
-  async hello(timeoutMs = 5_000): Promise<Mdbx2HostCapabilities> {
-    return validateMdbx2HostCapabilities(await this.request("host.hello", {}, timeoutMs));
+  async hello(timeoutMs = 5_000, ownerVaultHandle?: string): Promise<Mdbx2HostCapabilities> {
+    return validateMdbx2HostCapabilities(await this.request("host.hello", {}, timeoutMs, ownerVaultHandle));
   }
 
-  private async requireApiTokenSupport(): Promise<void> {
-    if (!(await this.hello()).supportsApiTokenMetadata) throw new Mdbx2NativeHostError("api-token-host-update-required", "本机助手不支持 API 密钥，请更新本机助手。", false);
+  private async requireApiTokenSupport(vaultHandle: string): Promise<void> {
+    if (!(await this.hello(5_000, vaultHandle)).supportsApiTokenMetadata) throw new Mdbx2NativeHostError("api-token-host-update-required", "本机助手不支持 API 密钥，请更新本机助手。", false);
   }
 
   async windowsHelloStatus(bindingId?: string, timeoutMs = 15_000): Promise<Mdbx2WindowsHelloStatus> {
@@ -204,7 +204,8 @@ export class Mdbx2NativeClient {
     sizeBytes: number,
     sha256?: string,
     purpose: Mdbx2InboundTransferPurpose = "vault-bootstrap",
-    timeoutMs = 15_000
+    timeoutMs = 15_000,
+    ownerVaultHandle?: string
   ): Promise<Mdbx2TransferBeginResult> {
     if (!Number.isSafeInteger(sizeBytes) || sizeBytes < 1 || sizeBytes > MDBX2_MAX_INBOUND_FILE_BYTES) {
       throw new Mdbx2NativeHostError("transfer-size-invalid", "MDBX2 文件大小超出允许范围。", false);
@@ -216,7 +217,11 @@ export class Mdbx2NativeClient {
       purpose,
       sizeBytes,
       sha256: sha256 || null
-    }, timeoutMs));
+    }, timeoutMs, ownerVaultHandle));
+  }
+
+  async beginInboundTransferForVault(vaultHandle: string, sizeBytes: number, sha256?: string, purpose: Mdbx2InboundTransferPurpose = 'vault-bootstrap'): Promise<Mdbx2TransferBeginResult> {
+    return this.beginInboundTransfer(sizeBytes, sha256, purpose, 15_000, opaqueHandle(vaultHandle, '保险库'));
   }
 
   async sendInboundChunk(transferId: string, offset: number, bytes: Uint8Array, timeoutMs = 30_000): Promise<Mdbx2TransferChunkResult> {
@@ -247,6 +252,13 @@ export class Mdbx2NativeClient {
     return vaultSessionSummary(await this.request("vault.open", { source: vaultSource(source), credential }, timeoutMs));
   }
 
+  async createVault(password: string, mode: Mdbx2TigaProfile = 'sky'): Promise<Mdbx2VaultSessionSummary> {
+    if (typeof password !== 'string' || !password || new TextEncoder().encode(password).length > 64 * 1024 || !['sky', 'multi', 'power'].includes(mode)) {
+      throw new Mdbx2NativeHostError('params-invalid', 'MDBX 新建参数无效。', false);
+    }
+    return vaultSessionSummary(await this.request('vault.create', { password, mode }, 5 * 60_000));
+  }
+
   async vaultStatus(vaultHandle: string, timeoutMs = 15_000): Promise<Mdbx2VaultRuntimeStatus> {
     const result = objectResult(await this.request("vault.status", { vaultHandle: opaqueHandle(vaultHandle, "保险库") }, timeoutMs), "Native Host 保险库状态响应无效。");
     return {
@@ -264,12 +276,12 @@ export class Mdbx2NativeClient {
   }
 
   async readWriteRevision(vaultHandle: string, timeoutMs = 15_000): Promise<Mdbx2WriteRevision> {
-    await this.requireWriteRevisionSupport();
+    await this.requireWriteRevisionSupport(vaultHandle);
     return writeRevisionResult(await this.request('vault.writeRevision', { vaultHandle: opaqueHandle(vaultHandle, '保险库') }, timeoutMs));
   }
 
-  private async requireWriteRevisionSupport(): Promise<void> {
-    if (!(await this.hello()).supportsVaultWriteRevision) throw new Mdbx2NativeHostError(
+  private async requireWriteRevisionSupport(vaultHandle: string): Promise<void> {
+    if (!(await this.hello(5_000, vaultHandle)).supportsVaultWriteRevision) throw new Mdbx2NativeHostError(
       'vault-revision-host-update-required', '本机助手不支持附件校验后的原子删除，请更新本机助手。', false);
   }
 
@@ -427,9 +439,9 @@ export class Mdbx2NativeClient {
   }
 
   async upsertObject(vaultHandle: string, operationId: string, input: Mdbx2ObjectUpsertInput, timeoutMs = 60_000): Promise<Mdbx2ObjectWriteResult> {
-    if (input.logicalObjectId.startsWith("native:") || input.expectedHeadCommitId) await this.requireInterop315Support();
-    await this.requireAtomicMoveSupport(input);
-    if (input.objectTypeId === "api-token") await this.requireApiTokenSupport();
+    if (input.logicalObjectId.startsWith("native:") || input.expectedHeadCommitId) await this.requireInterop315Support(vaultHandle);
+    await this.requireAtomicMoveSupport(vaultHandle, input);
+    if (input.objectTypeId === "api-token") await this.requireApiTokenSupport(vaultHandle);
     const logicalObjectId = textResult(input.logicalObjectId, 4096, false, "逻辑 Object ID 无效。");
     const objectTypeId = textResult(input.objectTypeId, 512, false, "Object 类型无效。");
     const title = textResult(input.title, 64 * 1024, true, "Object 标题无效。");
@@ -448,20 +460,20 @@ export class Mdbx2NativeClient {
     }, timeoutMs));
   }
 
-  private async requireInterop315Support(): Promise<void> {
-    const capabilities = await this.hello();
+  private async requireInterop315Support(vaultHandle: string): Promise<void> {
+    const capabilities = await this.hello(5_000, vaultHandle);
     if (!capabilities.supportsNativeObjectIdentity || !capabilities.supportsObjectRevisionPreconditions || !capabilities.supportsLosslessJson) throw new Mdbx2NativeHostError("interop-host-update-required", "本机助手需要更新，才能安全保留原生身份与数字精度。", false);
   }
 
-  private async requireAtomicMoveSupport(input: Mdbx2ObjectUpsertInput): Promise<void> {
+  private async requireAtomicMoveSupport(vaultHandle: string, input: Mdbx2ObjectUpsertInput): Promise<void> {
     if (!input.collectionId || !(input.logicalObjectId.startsWith("native:") || input.expectedHeadCommitId)) return;
-    if (!(await this.hello()).supportsAtomicObjectAttachmentMove) throw new Mdbx2NativeHostError(
+    if (!(await this.hello(5_000, vaultHandle)).supportsAtomicObjectAttachmentMove) throw new Mdbx2NativeHostError(
       "attachment-move-host-update-required", "请更新本机助手，以确保项目和附件一起移动。", false);
   }
 
   async deleteObject(vaultHandle: string, operationId: string, logicalObjectId: string, expectedHeadCommitId?: string, timeoutMs = 60_000): Promise<Mdbx2ObjectDeleteResult> {
-    if (logicalObjectId.startsWith("native:") || expectedHeadCommitId) await this.requireInterop315Support();
-    if (logicalObjectId.startsWith("api-token:")) await this.requireApiTokenSupport();
+    if (logicalObjectId.startsWith("native:") || expectedHeadCommitId) await this.requireInterop315Support(vaultHandle);
+    if (logicalObjectId.startsWith("api-token:")) await this.requireApiTokenSupport(vaultHandle);
     return objectDeleteResult(await this.request("object.delete", {
       vaultHandle: opaqueHandle(vaultHandle, "保险库"),
       operationId: opaqueHandle(operationId, "操作"),
@@ -471,7 +483,7 @@ export class Mdbx2NativeClient {
   }
 
   async restoreObject(vaultHandle: string, operationScope: string, input: Mdbx2ObjectRestoreInput, timeoutMs = 120_000): Promise<Mdbx2ObjectRestoreResult> {
-    const capabilities = await this.hello();
+    const capabilities = await this.hello(5_000, vaultHandle);
     if (!capabilities.supportsObjectRestore || !capabilities.supportsVaultWriteRevision) throw new Mdbx2NativeHostError(
       'object-restore-host-update-required', '本机助手不支持保留原始内容的恢复，请更新本机助手。', false);
     const result = await this.request('object.restore', {
@@ -496,7 +508,7 @@ export class Mdbx2NativeClient {
     if (new Set(objects.map(row => row.objectId)).size !== objects.length) throw invalid();
     const params = { vaultHandle: opaqueHandle(vaultHandle, '保险库'), operationScope: sha256Value(operationScope, '操作范围'),
       objects, writeRevision: writeRevisionResult(input.writeRevision) };
-    const capabilities = await this.hello();
+    const capabilities = await this.hello(5_000, vaultHandle);
     if (!capabilities.supportsObjectBatchRestore || !capabilities.supportsVaultWriteRevision) throw new Mdbx2NativeHostError(
       'object-restore-host-update-required', '本机助手不支持整组恢复，请更新本机助手。', false);
     const value = objectResult(await this.request('object.restoreBatch', params, timeoutMs), '批量恢复响应无效。');
@@ -519,11 +531,11 @@ export class Mdbx2NativeClient {
     const revision = writeRevision === undefined ? undefined : writeRevisionResult(writeRevision);
     if (revision) {
       if (mutations.some(mutation => mutation.kind !== 'delete')) throw new Mdbx2NativeHostError('object-batch-invalid', '数据库提交校验当前仅支持删除操作。', false);
-      await this.requireWriteRevisionSupport();
+      await this.requireWriteRevisionSupport(vaultHandle);
     }
-    if (mutations.some(mutation => mutation.logicalObjectId?.startsWith("api-token:") || (mutation.kind === "upsert" && mutation.objectTypeId === "api-token"))) await this.requireApiTokenSupport();
-    if (mutations.some(mutation => mutation.logicalObjectId?.startsWith("native:") || mutation.expectedHeadCommitId)) await this.requireInterop315Support();
-    for (const mutation of mutations) if (mutation.kind === "upsert") await this.requireAtomicMoveSupport(mutation);
+    if (mutations.some(mutation => mutation.logicalObjectId?.startsWith("api-token:") || (mutation.kind === "upsert" && mutation.objectTypeId === "api-token"))) await this.requireApiTokenSupport(vaultHandle);
+    if (mutations.some(mutation => mutation.logicalObjectId?.startsWith("native:") || mutation.expectedHeadCommitId)) await this.requireInterop315Support(vaultHandle);
+    for (const mutation of mutations) if (mutation.kind === "upsert") await this.requireAtomicMoveSupport(vaultHandle, mutation);
     const normalized = mutations.map((mutation): Mdbx2ObjectMutationInput => {
       const logicalObjectId = textResult(mutation.logicalObjectId, 4096, false, "逻辑 Object ID 无效。");
       if (mutation.kind === "delete") return { kind: "delete", logicalObjectId, expectedHeadCommitId: mutation.expectedHeadCommitId };
@@ -921,7 +933,7 @@ export class Mdbx2NativeClient {
   }
 
   async prepareCompleteBackup(vaultHandle: string): Promise<Mdbx2CompleteBackupDescriptor> {
-    if (!(await this.hello()).supportsCompleteBackup) throw new Mdbx2NativeHostError(
+    if (!(await this.hello(5_000, vaultHandle)).supportsCompleteBackup) throw new Mdbx2NativeHostError(
       "complete-backup-host-update-required", "请更新本机助手后使用 MDBX2 完整备份。", false);
     return completeBackupDescriptor(await this.request("vault.export.begin", {
       vaultHandle: opaqueHandle(vaultHandle, "保险库")
@@ -1132,13 +1144,14 @@ export class Mdbx2NativeClient {
     return booleanResult(value.aborted, "Native Host MDBX2 Blob 中止状态无效。");
   }
 
-  async probe(timeoutMs = 5_000): Promise<Mdbx2HostStatus> {
+  /** Read capabilities without retiring a shared browser Worker lease. */
+  async status(timeoutMs = 5_000, ownerVaultHandle?: string): Promise<Mdbx2HostStatus> {
     try {
-      const capabilities = await this.hello(timeoutMs);
+      const capabilities = await this.hello(timeoutMs, ownerVaultHandle);
       return {
         availability: "ready",
         hostName: MDBX2_NATIVE_HOST_NAME,
-        message: "Monica MDBX2 Native Host 已安装并通过版本检查。",
+        message: "Monica MDBX2 连接已就绪并通过版本检查。",
         capabilities
       };
     } catch (error) {
@@ -1152,12 +1165,17 @@ export class Mdbx2NativeClient {
         hostName: MDBX2_NATIVE_HOST_NAME,
         message: nativeError.message
       };
-    } finally {
-      this.close();
     }
   }
 
-  async request(method: Mdbx2NativeMethod, params: Record<string, unknown>, timeoutMs = 15_000): Promise<unknown> {
+  /** Only for a disposable client. Shared application clients use status(). */
+  async probe(timeoutMs = 5_000): Promise<Mdbx2HostStatus> {
+    try { return await this.status(timeoutMs); } finally { this.close(); }
+  }
+
+  // ownerVaultHandle is local routing context for unbound operations. The
+  // native implementation deliberately never includes it in the wire request.
+  async request(method: Mdbx2NativeMethod, params: Record<string, unknown>, timeoutMs = 15_000, _ownerVaultHandle?: string): Promise<unknown> {
     if (!Number.isFinite(timeoutMs) || timeoutMs < 100 || timeoutMs > 5 * 60_000) {
       throw new Mdbx2NativeHostError("native-timeout-invalid", "Native Host 请求超时设置无效。", false);
     }

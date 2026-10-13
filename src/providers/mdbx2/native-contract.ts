@@ -112,6 +112,7 @@ export type Mdbx2NativeMethod =
   | "transfer.abort"
   | "vault.inspect"
   | "vault.open"
+  | "vault.create"
   | "vault.status"
   | "vault.writeRevision"
   | "vault.diagnostics"

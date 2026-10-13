@@ -4,7 +4,7 @@
 
 ## 中文
 
-- 完成内置 MDBX 浏览器引擎的持久化和后台连接基础：分块保存、写入中断保护、重启恢复及完整备份，并验证原 Passkey 私钥、计数与原生数据库往返。专用 Worker 独占数据库，普通页面不能接管连接。此项尚未接入正式界面；当前版本仍需本机助手，免安装使用流程将在旧库后端识别与应用接入完成后开放。
+- 完成内置 MDBX 浏览器引擎的持久化、后台连接与旧库路由基础：分块保存、写入中断保护、重启恢复及完整备份，并验证原 Passkey 私钥、计数与原生数据库往返。专用 Worker 独占数据库，普通页面不能接管连接；旧库继续使用原本的引擎，归属冲突或保存失败时停止写入，状态检查不再关闭正在使用的连接。此项尚未接入正式界面；当前版本仍需本机助手，免安装使用流程将在应用接入完成后开放。
 
 - 加固附近同步的内部数据传输：保留大整数、高精度小数、负零和特殊字段名，避免浏览器或原生解析器改写内容；完成真实加密连接、附件及重启恢复验证。此项仍为内部基础，尚未开放附近同步界面。
 
@@ -48,7 +48,7 @@
 
 ## English
 
-- Added durable storage and background connection ownership for a bundled MDBX browser engine, including incremental block storage, interrupted-write protection, restart recovery and complete backups. Verified original Passkey keys/counters and native database round trips. A dedicated Worker owns the database; ordinary pages cannot take over its connection. This remains internal: the current UI still requires Native Host until legacy backend routing and application integration are complete.
+- Added durable storage, background connection ownership and legacy-vault routing for a bundled MDBX browser engine, including incremental block storage, interrupted-write protection, restart recovery and complete backups. Verified original Passkey keys/counters and native database round trips. A dedicated Worker owns the database; ordinary pages cannot take over its connection. Existing vaults keep their original engine, conflicting or unsaved ownership stops writes, and status checks keep live connections open. This remains internal: the current UI still requires Native Host until application integration is complete.
 
 - Hardened internal nearby data transport to retain large integers, precise decimals, negative zero, and literal special field names. Verified actual encrypted transfer, attachments, and restart recovery. Nearby synchronization remains internal groundwork without a user-facing entry point.
 

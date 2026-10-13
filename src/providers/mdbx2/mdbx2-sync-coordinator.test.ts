@@ -204,7 +204,11 @@ describe("MDBX2 Android-compatible WebDAV coordinator", () => {
       syncStateStatus: async () => ({ ...status("device-b"), blockedStreamCount: 0 }),
       prepareSyncSegment: async () => ({ hasSegment: false as const, stateHandle }),
       listSyncStreams: async () => [],
-      beginInboundTransfer: async (sizeBytes: number) => ({ transferId, nextOffset: 0, maxChunkBytes: MDBX2_MAX_BINARY_CHUNK_BYTES }),
+      beginInboundTransfer: async () => { throw new Error("owner-less download must not run"); },
+      beginInboundTransferForVault: async (owner: string, sizeBytes: number) => {
+        expect(owner).toBe(vaultHandle); expect(sizeBytes).toBe(segmentBytes.length);
+        return { transferId, nextOffset: 0, maxChunkBytes: MDBX2_MAX_BINARY_CHUNK_BYTES };
+      },
       sendInboundChunk: async (_id: string, offset: number, bytes: Uint8Array) => {
         expect(offset).toBe(inbound.length);
         const next = new Uint8Array(inbound.length + bytes.length);

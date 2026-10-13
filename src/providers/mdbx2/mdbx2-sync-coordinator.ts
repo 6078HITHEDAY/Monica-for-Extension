@@ -58,6 +58,7 @@ export interface Mdbx2CloudSyncReport {
 
 export interface Mdbx2CloudRuntime {
   beginInboundTransfer(sizeBytes: number, sha256?: string, purpose?: "vault-bootstrap" | "sync-segment"): Promise<Mdbx2TransferBeginResult>;
+  beginInboundTransferForVault?(vaultHandle: string, sizeBytes: number, sha256?: string, purpose?: "vault-bootstrap" | "sync-segment"): Promise<Mdbx2TransferBeginResult>;
   sendInboundChunk(transferId: string, offset: number, bytes: Uint8Array): Promise<Mdbx2TransferChunkResult>;
   finishInboundTransfer(transferId: string): Promise<Mdbx2TransferFinishResult>;
   abortInboundTransfer(transferId: string): Promise<boolean>;
@@ -298,7 +299,7 @@ export class Mdbx2SyncCoordinator {
             break;
           }
           const remote = await requireRemoteFile(context.webdav, descriptor.path, MDBX2_MAX_INBOUND_FILE_BYTES, signal);
-          const transferred = await this.downloadToHost(context.webdav, remote, "sync-segment", signal);
+          const transferred = await this.downloadToHost(context.webdav, remote, "sync-segment", signal, context.input.vaultHandle);
           report.downloadedSegments += 1;
           try {
             const inspected = await this.runtime.inspectSyncSegment(context.input.vaultHandle, transferred.fileHandle);
@@ -456,9 +457,12 @@ export class Mdbx2SyncCoordinator {
     webdav: Mdbx2WebDavClient,
     remote: Required<Pick<Mdbx2WebDavObject, "path" | "sizeBytes">> & Mdbx2WebDavObject,
     purpose: "vault-bootstrap" | "sync-segment",
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    ownerVaultHandle?: string
   ): Promise<Mdbx2TransferFinishResult> {
-    const begun = await this.runtime.beginInboundTransfer(remote.sizeBytes, undefined, purpose);
+    const begun = ownerVaultHandle && this.runtime.beginInboundTransferForVault
+      ? await this.runtime.beginInboundTransferForVault(ownerVaultHandle, remote.sizeBytes, undefined, purpose)
+      : await this.runtime.beginInboundTransfer(remote.sizeBytes, undefined, purpose);
     let finished = false;
     try {
       const downloaded = await webdav.download(remote.path, remote.sizeBytes, async (chunk, offset) => {

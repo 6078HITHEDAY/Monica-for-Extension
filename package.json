@@ -52,7 +52,8 @@
     "release:check": "npm run verify:supply-chain && npm run audit:production && npm run test:mdbx2-host && npm run test:windows-hello:host && npm run lint:mdbx2-host && npm run validate && npm run test:bitwarden-interop && npm run test:security && npm run test:e2e && npm run package:release && npm run package:verify",
     "release:windows": "npm run release:check && npm run package:mdbx2-host && npm run package:verify:mdbx2-host",
     "preview": "vite preview --host 127.0.0.1",
-    "performance:probe": "node scripts/performance-probe.mjs"
+    "performance:probe": "node scripts/performance-probe.mjs",
+    "test:mdbx2-routing": "npm run verify:mdbx2-browser && playwright test tests/e2e/mdbx-browser-router.spec.ts"
   },
   "dependencies": {
     "@m3e/web": "2.6.1",

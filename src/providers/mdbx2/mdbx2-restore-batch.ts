@@ -102,7 +102,7 @@ export class Mdbx2RestoreBatchCoordinator {
         if(JSON.stringify(await this.client.readWriteRevision(binding.vaultHandle))!==JSON.stringify(revision)) throw changed();
       });
     }
-    const capabilities = await this.client.hello();
+    const capabilities = await this.client.hello(5_000, String(provider.config.vaultHandle));
     if (!capabilities.supportsObjectBatchRestore || !capabilities.supportsVaultWriteRevision) throw new Error('本机助手不支持整组恢复，请更新本机助手。');
     const members = mixed?.members || [];
     if (!mixed) for (const source of sources) members.push(await prepareMdbx2RestoreRecord(this.client, source, provider));
