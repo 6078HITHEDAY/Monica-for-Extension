@@ -1,12 +1,13 @@
 import { chooseOption, dialogContent } from "./fixtures/material";
-import { chromium, expect, test } from "@playwright/test";
+import { expect, test } from "@playwright/test";
+import { launchTestContext } from './fixtures/edge';
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
 const extension = path.resolve("dist");
 
 test("large lists remain searchable, pageable and usable for filling", async ({}, testInfo) => {
-  const context = await chromium.launchPersistentContext(testInfo.outputPath("profile"), {
+  const context = await launchTestContext(testInfo.outputPath("profile"), {
     channel: "chromium", headless: true, locale: "en-US", reducedMotion: "reduce", viewport: { width: 1366, height: 900 },
     args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`]
   });
@@ -99,7 +100,7 @@ test("large lists remain searchable, pageable and usable for filling", async ({}
 });
 
 test("removed website components do not retain shadow trees or capture listeners", async ({}, testInfo) => {
-  const context = await chromium.launchPersistentContext(testInfo.outputPath("profile"), {
+  const context = await launchTestContext(testInfo.outputPath("profile"), {
     channel: "chromium", headless: true, locale: "de-DE",
     args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`]
   });
@@ -136,7 +137,7 @@ test("removed website components do not retain shadow trees or capture listeners
 });
 
 test("every bundled icon renders as a complete glyph", async ({}, testInfo) => {
-  const context = await chromium.launchPersistentContext(testInfo.outputPath("profile"), {
+  const context = await launchTestContext(testInfo.outputPath("profile"), {
     channel: "chromium", headless: true, locale: "en-US",
     args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`]
   });

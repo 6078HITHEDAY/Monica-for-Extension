@@ -43,7 +43,7 @@ async function toggle() {
   <section class="inline-autofill-setting" aria-labelledby="inline-autofill-label">
     <div class="inline-autofill-setting-row">
       <strong id="inline-autofill-label">{{ tr('表单旁自动填充') }}</strong>
-      <m3e-switch :checked.prop="enabled" @beforeinput.prevent="toggle" aria-labelledby="inline-autofill-label" aria-describedby="inline-autofill-description" :disabled="!ready || saving" :aria-busy="saving"></m3e-switch>
+      <m3e-switch :checked.prop="enabled" @beforeinput.prevent="toggle" aria-labelledby="inline-autofill-label" aria-describedby="inline-autofill-description" :disabled="!ready" :aria-busy="saving"></m3e-switch>
       <p id="inline-autofill-description">{{ tr('聚焦登录表单时，在输入框旁显示匹配的登录项。') }}</p>
     </div>
     <p v-if="error" class="form-error" role="alert">{{ tr('未能保存自动填充设置，请重试。') }}</p>
@@ -53,6 +53,8 @@ async function toggle() {
 
 <style scoped>
 .inline-autofill-setting { min-width: 0; }
+/* The component supplies its own rounded keyboard focus indicator. */
+.inline-autofill-setting m3e-switch:focus-visible { outline: none; }
 .inline-autofill-setting-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 16px; row-gap: 0; align-items: center; }
 .inline-autofill-setting-row > p { grid-column: 1 / -1; }
 .inline-autofill-setting strong { font-size: 1rem; font-weight: 600; overflow-wrap: anywhere; }

@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { execFile, execFileSync } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { unzipSync } from "fflate";
 
@@ -20,8 +20,9 @@ const archiveName = `monica-mdbx2-host-windows-x64-${cargo.version}.zip`;
 const archivePath = resolve(releaseDir, archiveName);
 await verifyArchive(archivePath, resolve(releaseDir, `${archiveName}.sha256`));
 
-const first = await mkdtemp(join(tmpdir(), "monica-mdbx2-host-a-"));
-const second = await mkdtemp(join(tmpdir(), "monica-mdbx2-host-b-"));
+const verificationTempRoot = await realpath(tmpdir());
+const first = await mkdtemp(join(verificationTempRoot, "monica-mdbx2-host-a-"));
+const second = await mkdtemp(join(verificationTempRoot, "monica-mdbx2-host-b-"));
 try {
   const script = resolve(root, "scripts", "package-mdbx2-host.mjs");
   const dirtyFlag = allowDirty ? ["--allow-dirty"] : [];
@@ -36,7 +37,11 @@ try {
     assert(equalBytes(left, right) && equalBytes(left, released), `${name} is not byte-reproducible.`);
   }
 } finally {
-  await Promise.all([rm(first, { recursive: true, force: true }), rm(second, { recursive: true, force: true })]);
+  for (const directory of [first, second]) {
+    const resolvedDirectory = await realpath(directory);
+    assert(dirname(resolvedDirectory) === verificationTempRoot && /^monica-mdbx2-host-[ab]-/.test(basename(resolvedDirectory)), "Refusing to remove an unexpected verification directory.");
+    await rm(resolvedDirectory, { recursive: true, force: true });
+  }
 }
 console.log(`Verified ${archivePath}: executable, installer policy, hashes and reproducibility.`);
 
