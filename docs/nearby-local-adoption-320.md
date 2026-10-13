@@ -38,6 +38,6 @@ Earlier harness failures remain recorded: missing production crypto-stub alias, 
 
 ## Remaining work
 
-This block does not provide the production coordinator, durable device identity/trust/preferences, manager settings or consent UI. Complete native MDBX catalog/attachment adoption, folder/root metadata adoption, multipage/dependency orchestration, archived local-source adapters and conflict/restore flows remain unfinished. Current local application batches are bounded to 200 records and 512 supplied assets and retain existing local attachment limits. Missing dependencies or unsupported archival origins reject the entire operation rather than acknowledging lost content.
+This block does not provide the production coordinator, manager settings or consent UI. Subsequent encrypted identity/trust/preferences work is recorded in [nearby-preferences-320.md](nearby-preferences-320.md). Complete native MDBX catalog/attachment adoption, folder/root metadata adoption, multipage/dependency orchestration, archived local-source adapters and conflict/restore flows remain unfinished. Current local application batches are bounded to 200 records and 512 supplied assets and retain existing local attachment limits. Missing dependencies or unsupported archival origins reject the entire operation rather than acknowledging lost content.
 
 Current Android/F-Droid application interoperability and the broader direct-OneDrive/backend matrix remain separate acceptance work. Do not treat this internal harness as production UI or current Android acceptance.

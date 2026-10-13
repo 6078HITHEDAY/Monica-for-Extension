@@ -12,6 +12,8 @@
 
 - 补齐附近同步的内部内容映射与本地加密保存，保留密码项目、关联备注／SSO／验证器、附件及未知字段。保存响应丢失后可通过加密回执恢复，不覆盖之后的编辑。受限 Passkey 增加按接收设备与当前会话确认的内部逻辑，保留原密钥、凭据标识和计数。修复接收后编辑 API 密钥导致再次发送误报冲突的问题。完整 MDBX 接收、会话协调及设置入口仍在接入，附近同步尚不能从插件界面使用。
 
+- 附近同步内部增加设备身份与配对信息的加密保存，浏览器重启后保留身份和信任；忘记设备后拒绝旧会话写回。备份恢复会创建新的禁用同步身份，避免不同安装共用设备身份。已验证真实配对、保存响应丢失、两端重启及可信重连；完整功能入口仍未开放。
+
 - 修复刚打开锁定页时临时后台连接错误直接显示的问题，后台唤醒期间会有限重试状态检查；解锁和写操作不自动重复。修复生成器点击长度滑块时数值越界、无法生成的问题，密码长度、单词长度和分段长度均支持正常点击、拖动及键盘调整。
 
 - 接入与 Android 同源的附近设备同步传输核心，完成本机助手的加密配对、收发、附件分块和中断恢复基础。隔离 Edge 验证了重启后的完整数据与原 Passkey 私钥签名，正计数凭据保留在来源并跳过发送。此项目前是内部基础能力，完整密码库流程及设置入口尚未接通，暂不能在插件界面使用附近同步。
@@ -59,6 +61,8 @@
 - Hardened internal nearby data transport to retain large integers, precise decimals, negative zero, and literal special field names. Verified actual encrypted transfer, attachments, and restart recovery. Nearby synchronization remains internal groundwork without a user-facing entry point.
 
 - Added internal nearby content mapping and encrypted local adoption, retaining password projects, linked notes/SSO/authenticators, attachments and unknown fields. Encrypted receipts recover lost save replies without overwriting later edits. Internal restricted-Passkey review is bound to recipients and the current session while preserving original keys, credential identities and counters. Fixed false re-export conflicts after editing a received API token. Complete MDBX adoption, coordination and settings remain in progress; nearby synchronization is still unavailable in the extension UI.
+
+- Internal nearby device identities and pairing trust now persist encrypted across browser restarts. Forgotten peers cannot be restored by stale sessions. Restoring a portable backup initializes a new identity with automatic sync disabled, avoiding shared identities across installations. Verified actual pairing, lost save replies, both-browser restart and trusted reconnection; the complete user-facing feature remains unavailable.
 
 - Recover from temporary background connection failures when opening the lock page with bounded runtime/status retries, without replaying unlocks or writes. Fixed out-of-range values from generator track clicks; password length, word-password length and segment length now support clicks, dragging and keyboard adjustment correctly.
 

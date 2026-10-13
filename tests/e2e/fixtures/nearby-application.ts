@@ -10,15 +10,57 @@ import { createLoginItem, type PasskeyItem, type VaultItem } from '../../../src/
 import { resolveBoundNote } from '../../../src/core/bound-notes';
 import { resolveSsoAccount } from '../../../src/core/sso-links';
 import { inspectNearbyPasskeyIssues } from '../../../src/nearby/passkey-consent';
+import { nearbyDeviceHello, nearbyPreferencesView, nearbySettingsCounter } from '../../../src/nearby/preferences';
 
 const master = 'Synthetic nearby application password';
 const storage = new IndexedDbVaultStorage();
 const service = new SecureVaultService(storage, new ChromeVaultSessionStore(), Date.now, new ChromeVaultDeviceKeyStore());
 const transport = new NearbyNativeTransport(new Mdbx2NativeClient(createChromeMdbx2NativeRuntime()));
 const ready = async () => { if (await service.status() === 'locked') await service.unlock(master); };
+const owned = new Map<string, { epoch: string; peerId?: string }>();
+const preferences = async () => { await ready(); return service.nearbySessionPreferences((await service.passkeySessionId())!); };
 
 const app = {
   call: (operation: Parameters<NearbyNativeTransport['call']>[0], params: Record<string, unknown> = {}) => transport.call(operation, params),
+  async preferences() {
+    const p = await preferences();
+    return { view: nearbyPreferencesView(p), deviceId: p.deviceId,
+      keyHash: await nearbySha256(new TextEncoder().encode(p.replicaKey)), storageHash: await nearbySha256(new TextEncoder().encode(p.replicaStorageId)) };
+  },
+  async openOwnedReplica() {
+    const p = await preferences();
+    return transport.call('replica_open', { storage_id: p.replicaStorageId, device_id: p.deviceId, key: p.replicaKey });
+  },
+  async beginOwned(snapshot: string, invitation?: string, peerId?: string) {
+    const p = await preferences(), peer = p.peers.find(peer => peer.deviceId === peerId);
+    if (peerId && !peer) throw Error('peer forgotten');
+    const params: Record<string, unknown> = { snapshot, device: nearbyDeviceHello(p, peerId) };
+    if (peerId) params.expected_device_id = peerId;
+    if (invitation) params.invitation = invitation;
+    else { params.listen_address = '127.0.0.1'; if (peer) params.trusted_key = peer.trustedKey; }
+    const result = await transport.call(invitation ? 'connect' : 'start', params) as { handle: string };
+    owned.set(result.handle, { epoch: p.epoch, peerId });
+    return result;
+  },
+  async rememberOwned(handle: string, loseReply = false) {
+    const binding = owned.get(handle); if (!binding) throw Error('unknown synthetic session');
+    const status = await transport.call('progress', { handle }) as any;
+    if (status.phase !== 'received') throw Error('not authenticated');
+    const remote = status.peer, p = await preferences(), old = p.peers.find(peer => peer.deviceId === remote.device_id);
+    if (binding.peerId && binding.peerId !== remote.device_id || remote.content_type !== 'vault' || remote.vault_content_version !== 2) throw Error('unexpected peer');
+    const original = storage.write.bind(storage);
+    if (loseReply) storage.write = async envelope => { await original(envelope); throw Error('synthetic trust response lost'); };
+    try {
+      return await service.updateNearbyPreferences({ kind: 'remember', enrollment: !binding.peerId, peer: {
+        deviceId: remote.device_id, name: remote.name, pairId: old?.pairId ?? remote.pairing.pair_id,
+        trustedKey: old?.trustedKey ?? remote.pairing.trusted_key, lastSyncedAt: Date.now(),
+        sentRevision: '', receivedRevision: remote.revision, receivedRequest: nearbySettingsCounter(remote.sync_request)
+      } }, binding.epoch, (await service.passkeySessionId())!);
+    } finally { storage.write = original; }
+  },
+  async forgetOwned(peerId: string) {
+    const p = await preferences(); return service.updateNearbyPreferences({ kind: 'forget', deviceId: peerId }, p.epoch, (await service.passkeySessionId())!);
+  },
   async seed(sender: boolean) {
     if (!sender) { await service.setup(master); return; }
     const one = createLoginItem({ title: 'Nearby project one', username: 'alice', password: 'synthetic-first-password' });

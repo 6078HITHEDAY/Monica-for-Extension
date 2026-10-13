@@ -482,6 +482,8 @@ export interface ProviderDiagnosticExport {
 import type { BlockedFieldSignatureRecord } from "../autofill/field-policy";
 
 export interface VaultState {
+  /** Local device identity and peer trust; excluded when restoring a portable backup. */
+  nearbyPreferences?: import('../nearby/preferences').NearbyPreferences;
   /** Encrypted nearby application receipts; never synchronized as item fields. */
   nearbyLocalReceipts?: import('../nearby/local-adoption').NearbyLocalReceipt[];
   /** Local encrypted two-phase password removal, never synchronized as item metadata. */

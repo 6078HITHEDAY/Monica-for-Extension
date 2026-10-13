@@ -496,6 +496,9 @@ export class SecureVaultService {
       // Windows Hello is bound to the current Windows profile and vault
       // envelope; portable backups must never advertise a foreign binding.
       delete restoredState.settings.windowsHello;
+      // A portable restore is another device/replica. Retain content receipts,
+      // but require a new nearby identity and explicit pairing on this device.
+      delete restoredState.nearbyPreferences;
       // A portable backup cannot grant device-local access on another installation.
       restoredState.settings.lockedAutofillItemIds = [];
 
@@ -537,6 +540,44 @@ export class SecureVaultService {
 
   async readState(activity = false): Promise<VaultState> {
     return this.readProjection(state => state, activity);
+  }
+
+  /** Internal only: a coordinator must retain its session and current epoch. */
+  async nearbySessionPreferences(sessionId: string): Promise<import('../nearby/preferences').NearbyPreferences> {
+    return this.runExclusive(async () => {
+      const assertSession = () => this.assertLocalTransferSession(sessionId);
+      await assertSession();
+      const { state, envelope, key } = await this.mutableContext();
+      const { readNearbyPreferences, createNearbyPreferences, NearbyPreferencesError } = await import('../nearby/preferences');
+      let preferences = readNearbyPreferences(state.nearbyPreferences);
+      if (!preferences) {
+        const locals = state.providers.filter(provider => provider.kind === 'local' && provider.enabled);
+        if (locals.length !== 1) throw new NearbyPreferencesError('local-provider-required');
+        preferences = createNearbyPreferences(locals[0]); state.nearbyPreferences = preferences;
+        await this.persist(state, key, envelope.kdf, false, false, assertSession);
+      } else if (!state.providers.some(provider => provider.id === preferences!.localProviderId && provider.kind === 'local' && provider.enabled)) {
+        throw new NearbyPreferencesError('local-provider-required');
+      }
+      await assertSession();
+      return structuredClone(preferences);
+    });
+  }
+
+  async updateNearbyPreferences(change: import('../nearby/preferences').NearbyPreferencesChange, expectedEpoch: string, sessionId: string): Promise<import('../nearby/preferences').NearbyPreferencesView> {
+    const input = structuredClone(change);
+    return this.runExclusive(async () => {
+      const assertSession = () => this.assertLocalTransferSession(sessionId);
+      await assertSession();
+      const { state, envelope, key } = await this.mutableContext();
+      const { readNearbyPreferences, changeNearbyPreferences, nearbyPreferencesView, NearbyPreferencesError } = await import('../nearby/preferences');
+      const previous = readNearbyPreferences(state.nearbyPreferences);
+      if (!previous) throw new NearbyPreferencesError('not-initialized');
+      if (!state.providers.some(provider => provider.id === previous.localProviderId && provider.kind === 'local' && provider.enabled)) throw new NearbyPreferencesError('local-provider-required');
+      const preferences = changeNearbyPreferences(previous, input, expectedEpoch);
+      state.nearbyPreferences = preferences;
+      await this.persist(state, key, envelope.kdf, false, false, assertSession);
+      return nearbyPreferencesView(preferences);
+    });
   }
 
   /** Internal nearby coordinator only; no runtime command accepts these records. */

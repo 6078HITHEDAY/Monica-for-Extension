@@ -55,7 +55,7 @@ export function readNearbyLocalReceipts(value: unknown): NearbyLocalReceipt[] {
  * origin archives and pending cross-provider work. No secrets leave the caller. */
 export async function nearbyLocalSourceHash(state: VaultState): Promise<string> {
   return hash({ items: state.items.filter(item => isLocalTransferItem(item, state.providers)),
-    providers: state.providers.filter(provider => provider.kind === 'local'), attachments: state.localItemAttachments ?? [],
+    providers: state.providers.filter(provider => provider.kind === 'local'), nearbyEpoch: state.nearbyPreferences?.epoch ?? null, attachments: state.localItemAttachments ?? [],
     origins: state.localItemOrigins ?? [], folders: state.localTransferFolders ?? [], receipts: readNearbyLocalReceipts(state.nearbyLocalReceipts),
     removals: state.passwordProjectRemovals ?? [], transfers: state.bitwardenBatchTransfers ?? [], queue: state.mutationQueue, conflicts: state.providerConflicts });
 }
