@@ -555,9 +555,9 @@ export class SecureVaultService {
     });
   }
 
-  async nearbySessionPreferences(sessionId: string): Promise<import('../nearby/preferences').NearbyPreferences> {
+  async nearbySessionPreferences(sessionId: string, assertActive?: () => void): Promise<import('../nearby/preferences').NearbyPreferences> {
     return this.runExclusive(async () => {
-      const assertSession = () => this.assertLocalTransferSession(sessionId);
+      const assertSession = async () => { assertActive?.(); await this.assertLocalTransferSession(sessionId); assertActive?.(); };
       await assertSession();
       const { state, envelope, key } = await this.mutableContext();
       const { readNearbyPreferences, createNearbyPreferences, NearbyPreferencesError } = await import('../nearby/preferences');
@@ -575,10 +575,10 @@ export class SecureVaultService {
     });
   }
 
-  async updateNearbyPreferences(change: import('../nearby/preferences').NearbyPreferencesChange, expectedEpoch: string, sessionId: string): Promise<import('../nearby/preferences').NearbyPreferencesView> {
+  async updateNearbyPreferences(change: import('../nearby/preferences').NearbyPreferencesChange, expectedEpoch: string, sessionId: string, assertActive?: () => void): Promise<import('../nearby/preferences').NearbyPreferencesView> {
     const input = structuredClone(change);
     return this.runExclusive(async () => {
-      const assertSession = () => this.assertLocalTransferSession(sessionId);
+      const assertSession = async () => { assertActive?.(); await this.assertLocalTransferSession(sessionId); assertActive?.(); };
       await assertSession();
       const { state, envelope, key } = await this.mutableContext();
       const { readNearbyPreferences, changeNearbyPreferences, nearbyPreferencesView, NearbyPreferencesError } = await import('../nearby/preferences');
@@ -619,10 +619,10 @@ export class SecureVaultService {
     });
   }
 
-  async adoptNearbyLocalTransaction(input: import('../nearby/local-adoption').NearbyLocalBatch, sessionId: string): Promise<{ acknowledgements: import('../nearby/local-adoption').NearbyLocalAcknowledgement[]; sourceHash: string }> {
+  async adoptNearbyLocalTransaction(input: import('../nearby/local-adoption').NearbyLocalBatch, sessionId: string, assertActive?: () => void): Promise<{ acknowledgements: import('../nearby/local-adoption').NearbyLocalAcknowledgement[]; sourceHash: string }> {
     const batch = structuredClone(input);
     return this.runExclusive(async () => {
-      const assertSession = () => this.assertLocalTransferSession(sessionId);
+      const assertSession = async () => { assertActive?.(); await this.assertLocalTransferSession(sessionId); assertActive?.(); };
       await assertSession();
       const { state, envelope, key } = await this.mutableContext();
       const { applyNearbyLocalBatch, nearbyLocalSourceHash } = await import('../nearby/local-adoption');

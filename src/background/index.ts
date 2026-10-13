@@ -134,12 +134,25 @@ import { BitwardenNotifications } from "../providers/bitwarden/bitwarden-notific
 import { BitwardenPasswordProjectRemovalCoordinator } from '../providers/bitwarden/bitwarden-project-removal';
 import { BitwardenProjectRemovalRuntime } from './bitwarden-project-removal-runtime';
 import { AUTO_SYNC_PREFERENCES_KEY, readAutomaticSyncEnabled } from "../providers/sync-preferences";
+import { NearbyManagerOwner } from './nearby-owner';
+import { NearbyLocalCoordinator } from '../nearby/local-coordinator';
+import { NearbyNativeTransport } from '../nearby/native-transport';
 
 const LEGACY_VAULT_KEY = "monica.extension.credentials.v1";
 const AUTO_LOCK_ALARM = "monica-vault-auto-lock";
 const AUTO_SYNC_ALARM = "monica-provider-auto-sync";
 const PAUSED_SYNC_KEY = "monica.sync.paused.v1";
-const service = new SecureVaultService(new IndexedDbVaultStorage(), new ChromeVaultSessionStore(), () => Date.now(), new ChromeVaultDeviceKeyStore(), new LockedAutofillCache(new IndexedDbLockedAutofillStorage()));
+const vaultSessions = new ChromeVaultSessionStore();
+const service = new SecureVaultService(new IndexedDbVaultStorage(), vaultSessions, () => Date.now(), new ChromeVaultDeviceKeyStore(), new LockedAutofillCache(new IndexedDbLockedAutofillStorage()));
+const nearbyOwner = new NearbyManagerOwner({
+  runtimeId: chrome.runtime.id, extensionRoot: chrome.runtime.getURL(''), store: service,
+  readSession: async () => { const session = await vaultSessions.read(); return session ? { id: session.id, expiresAt: session.expiresAt } : null; },
+  createCoordinator: assertActive => new NearbyLocalCoordinator(service,
+    () => new NearbyNativeTransport(new Mdbx2NativeClient(createChromeMdbx2NativeRuntime())), undefined, assertActive),
+  changed: () => publishVaultChanged()
+});
+chrome.runtime.onConnect.addListener(port => nearbyOwner.attach(port));
+chrome.runtime.onSuspend.addListener(() => nearbyOwner.close('background-suspended'));
 const passkeyUserVerification = new PasskeyUserVerification(password => service.verifyMasterPasswordForPasskey(password));
 const providers = new ProviderRegistry();
 const monicaWebDavProvider = new MonicaWebDavProvider();
@@ -535,8 +548,9 @@ void configureSessionStorageAccess(chrome.storage.session.setAccessLevel?.bind(c
 chrome.storage.onChanged.addListener((changes, area) => {
   const change = changes["monica.secureVault.session.v1"];
   const previous = change?.oldValue as { id?: unknown; rawKey?: unknown } | undefined;
-  const next = change?.newValue as { id?: unknown; rawKey?: unknown } | undefined;
+  const next = change?.newValue as { id?: string; rawKey?: unknown; expiresAt: number } | undefined;
   if (area === "session" && change && (!next || previous?.rawKey !== next.rawKey || previous?.id !== next.id)) {
+    nearbyOwner.close('session-changed');
     service.clearDecryptedState();
     keePassRecoveryDownloads.clear();
     oneDriveSessions.clear();
@@ -548,6 +562,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
     stopAutomaticSync();
     void reconcileAutomaticSync().catch(() => undefined);
   }
+  if (area === 'session' && change) nearbyOwner.sessionChanged(next ? { id: next.id, expiresAt: next.expiresAt } : null);
 });
 
 chrome.runtime.onConnect.addListener(port => {
@@ -603,6 +618,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === AUTO_LOCK_ALARM) {
     void purgeExpiredPasskeySessionState().catch(() => undefined);
     void service.status().then((status) => {
+      if (status !== 'unlocked') nearbyOwner.close('vault-locked');
       if (status !== "unlocked") pendingCredentialCaptures.clear();
       if (status !== "unlocked") void clearPendingUsernameContexts();
       if (status !== "unlocked") void clearPendingPasskeyRequests(true);
@@ -704,6 +720,7 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
     }
     case "VAULT_HELLO_ENROLL": {
       assertManagerPage(sender);
+      nearbyOwner.close('protection-changed');
       const binding = await service.enrollWindowsHello(
         (bindingId) => windowsHelloNativeClient.enrollWindowsHello(bindingId),
         (bindingId) => windowsHelloNativeClient.revokeWindowsHello(bindingId).then(() => undefined)
@@ -713,6 +730,7 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
     case "VAULT_HELLO_REVOKE": {
       assertManagerPage(sender);
       if (request.confirmed !== true) throw new Error("撤销 Windows Hello 需要明确确认。");
+      nearbyOwner.close('protection-changed');
       return service.revokeWindowsHello((bindingId) => windowsHelloNativeClient.revokeWindowsHello(bindingId).then(() => undefined));
     }
     case "VAULT_SETUP": {
@@ -728,6 +746,7 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
     }
     case "VAULT_LOCK": {
       assertExtensionPage(sender);
+      nearbyOwner.close('vault-locked');
       keePassRecoveryDownloads.clear();
       abortProviderSyncs();
       void mdbx2LocalFileExports.clear();
@@ -746,12 +765,14 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
     }
     case "VAULT_CHANGE_MASTER_PASSWORD":
       assertExtensionPage(sender);
+      nearbyOwner.close('protection-changed');
       return service.changeMasterPassword(request.currentPassword, request.newPassword);
     case "VAULT_EXPORT_ENCRYPTED":
       assertExtensionPage(sender);
       return service.exportEncryptedBackup(request.backupPassword);
     case "VAULT_RESTORE_ENCRYPTED": {
       assertExtensionPage(sender);
+      nearbyOwner.close('vault-restored');
       localTransfers.clear(); keePassTransfers.clear(); bitwardenBatchTransfers.clear(); localAttachments.clear();
       const replacedHelloBindingId = request.replaceExisting ? await service.windowsHelloBindingIdForRuntime() : undefined;
       abortProviderSyncs();
@@ -2745,6 +2766,7 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
     }
     case "PROVIDER_REMOVE":
       assertManagerPage(sender);
+      nearbyOwner.close('provider-changed');
       return providerOperations.run(request.providerId, () => runKeePassMutationExclusive(request.providerId, async () => {
       void mdbx2LocalFileExports.clear();
       activeProviderSyncs.get(request.providerId)?.abort(new DOMException("密码源已移除", "AbortError"));

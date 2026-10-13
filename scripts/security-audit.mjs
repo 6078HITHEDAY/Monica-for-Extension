@@ -59,6 +59,27 @@ const background = await readFile(resolve(root, "dist/background.js"), "utf8");
 if (!background.includes("TRUSTED_CONTEXTS")) throw new Error("Session storage is not restricted to trusted contexts.");
 if (!background.includes("WEB_PAGE_REQUEST_TYPES") && !background.includes("CREDENTIAL_CAPTURE")) throw new Error("Background page-command allowlist is missing from the release.");
 const backgroundSource = await readFile(resolve(root, "src/background/index.ts"), "utf8");
+// onConnect APIs do not appear in ExtensionRequest. Audit their ownership separately.
+const nearbyOwnerSource = await readFile(resolve(root, 'src/background/nearby-owner.ts'), 'utf8');
+const nearbyContractSource = await readFile(resolve(root, 'src/nearby/manager-contract.ts'), 'utf8');
+for (const guard of ['assertTrustedManagerPage(sender,', 'sender.frameId !== 0', 'sender.documentId',
+  'sender.documentLifecycle', 'this.lease !== lease', 'request.id <= lease.lastId', 'if (lease.busy)',
+  'lease.coordinator?.close()', 'clearTimeout(lease.timer)', "this.close('session-expired')", 'readNearbyManagerRequest(value)']) {
+  if (!nearbyOwnerSource.includes(guard)) throw new Error(`Nearby manager ownership guard is missing: ${guard}`);
+}
+if (nearbyOwnerSource.indexOf('assertTrustedManagerPage(sender,') > nearbyOwnerSource.indexOf('port.onMessage.addListener(lease.message)'))
+  throw new Error('Nearby manager sender must be authenticated before registering messages.');
+if (!nearbyContractSource.includes("'monica-nearby-manager-v1'") || !nearbyContractSource.includes('default: invalid();'))
+  throw new Error('Nearby manager port/strict request validation is missing.');
+for (const field of ['trustedKey', 'replicaKey', 'privateKey', 'dataJson', 'snapshot', 'handle']) {
+  if (new RegExp(`\\b${field}\\??\\s*:`).test(nearbyContractSource)) throw new Error(`Nearby manager accepts a forbidden raw field: ${field}`);
+}
+for (const hook of ['chrome.runtime.onConnect.addListener(port => nearbyOwner.attach(port))',
+  "chrome.runtime.onSuspend.addListener(() => nearbyOwner.close('background-suspended'))",
+  "nearbyOwner.close('session-changed')", "nearbyOwner.close('vault-locked')", "nearbyOwner.close('vault-restored')",
+  "nearbyOwner.close('protection-changed')", "nearbyOwner.close('provider-changed')", 'nearbyOwner.sessionChanged(']) {
+  if (!backgroundSource.includes(hook)) throw new Error(`Nearby production cancellation hook is missing: ${hook}`);
+}
 if (!backgroundSource.includes('if (isBrowserMdbxControlMessage(message)) return false;')) throw new Error('MDBX offscreen control messages must bypass the generic reply handler.');
 if (!backgroundSource.includes("if (!WEB_PAGE_REQUEST_TYPES.has(request.type)) assertExtensionPage(sender);")) throw new Error("Privileged runtime commands are not default-denied.");
 if (!backgroundSource.includes('case "MDBX2_HOST_STATUS"') || backgroundSource.includes('case "MDBX_OPEN"')) throw new Error("MDBX Native Messaging review requires MDBX2-only privileged commands.");
@@ -141,3 +162,4 @@ for (const name of ["content.js", "main-world.js"]) {
 }
 console.log("Security audit passed: encrypted/trusted runtime output contains no fixture secrets or source maps.");
 console.log(`Parsed ${declaredTypes.size} runtime commands, including ${projectCommands.length} manager-only password project commands.`);
+console.log('Audited the dedicated nearby manager port: document ownership, bounded requests, redaction and lifecycle cancellation.');

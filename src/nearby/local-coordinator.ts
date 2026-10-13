@@ -77,7 +77,8 @@ export class NearbyLocalCoordinator {
   private tail: Promise<unknown> = Promise.resolve();
   private generation = 0;
 
-  constructor(private readonly store: Store, private readonly factory: () => NearbyNativeTransport, private readonly listenAddress?: string) {}
+  constructor(private readonly store: Store, private readonly factory: () => NearbyNativeTransport, private readonly listenAddress?: string,
+    private readonly assertOwner?: () => void) {}
   status(): NearbyCoordinatorView { return structuredClone(this.view); }
   close(): void {
     this.generation++;
@@ -90,6 +91,7 @@ export class NearbyLocalCoordinator {
     const generation = this.generation;
     const result = this.tail.then(async () => {
       try {
+        this.assertOwner?.();
         if (generation !== this.generation) failure('session-closed');
         const result = await action();
         if (generation !== this.generation) failure('session-closed');
@@ -103,10 +105,18 @@ export class NearbyLocalCoordinator {
     this.tail = result.catch(() => {}); return result;
   }
   private async guard(source = false): Promise<void> {
+    this.assertOwner?.();
     if (this.abort.signal.aborted || !this.preferences || !this.sessionId) failure('session-closed');
     await this.store.assertNearbySession(this.preferences.epoch, this.sessionId);
     if (this.abort.signal.aborted) failure('session-closed');
     if (source && this.sourceHash !== await this.store.nearbyLocalSnapshotHash()) failure('source-changed');
+    this.assertOwner?.();
+    if (this.abort.signal.aborted) failure('session-closed');
+  }
+  /** Retain the exact operation generation across an encrypted store transaction. */
+  private transactionGuard(): () => void {
+    const generation = this.generation;
+    return () => { this.assertOwner?.(); if (generation !== this.generation) failure('session-closed'); };
   }
   private async call(operation: NearbyOperation, input: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
     await this.guard();
@@ -119,7 +129,7 @@ export class NearbyLocalCoordinator {
     const previousSession = this.sessionId, previousStorage = this.preferences?.replicaStorageId;
     this.sessionId = await this.store.passkeySessionId() ?? failure('vault-locked');
     if (generation !== this.generation) failure('session-closed');
-    this.preferences = await this.store.nearbySessionPreferences(this.sessionId);
+    this.preferences = await this.store.nearbySessionPreferences(this.sessionId, this.transactionGuard());
     if (generation !== this.generation) failure('session-closed');
     if (this.transport && (previousSession !== this.sessionId || previousStorage !== this.preferences.replicaStorageId)) {
       this.abort.abort(); this.transport.close(); this.transport = undefined;
@@ -277,7 +287,7 @@ export class NearbyLocalCoordinator {
         }
       }
       await this.guard(true);
-      const result = await this.store.adoptNearbyLocalTransaction({ providerId: this.preferences!.localProviderId, sourceHash: this.sourceHash!, records, references, assets: [...assets.values()] }, this.sessionId!);
+      const result = await this.store.adoptNearbyLocalTransaction({ providerId: this.preferences!.localProviderId, sourceHash: this.sourceHash!, records, references, assets: [...assets.values()] }, this.sessionId!, this.transactionGuard());
       this.sourceHash = result.sourceHash; await this.guard(true); await this.applyAcknowledgements(result.acknowledgements);
       this.view.applied = (this.view.applied ?? 0) + records.length;
     }
@@ -291,12 +301,12 @@ export class NearbyLocalCoordinator {
       lastSyncedAt: this.enrolling ? 0 : Math.max(Date.now(), this.peer?.lastSyncedAt ?? 0),
       sentRevision: this.enrolling ? '' : this.revision, receivedRevision: this.enrolling ? '' : string(remote.revision),
       receivedRequest: this.enrolling ? '0' : nearbySettingsCounter(remote.sync_request) };
-    const view = await this.store.updateNearbyPreferences({ kind: 'remember', peer, enrollment: this.enrolling }, p.epoch, this.sessionId!);
+    const view = await this.store.updateNearbyPreferences({ kind: 'remember', peer, enrollment: this.enrolling }, p.epoch, this.sessionId!, this.transactionGuard());
     this.preferences = { ...p, epoch: view.epoch, peers: [...p.peers.filter(entry => entry.deviceId !== id), peer] };
     await this.guard();
     const interval = await this.store.updateNearbyPreferences({ kind: 'remote-interval', peerId: id, pairId: peer.pairId,
       seconds: Number(wireInteger(remote.interval_seconds, 86400n)), version: nearbySettingsCounter(remote.settings_version), writer: string(remote.settings_writer, 64)
-    }, this.preferences.epoch, this.sessionId!);
+    }, this.preferences.epoch, this.sessionId!, this.transactionGuard());
     this.preferences.epoch = interval.epoch;
     await this.guard(); this.view.peerId = id; this.view.peerName = peer.name;
   }

@@ -1,5 +1,7 @@
 # Nearby local session coordinator
 
+Follow-up: production ownership and immediate lifecycle cancellation are now implemented and verified in [Nearby production manager ownership](nearby-manager-owner-320.md). The earlier evidence and historical boundaries below describe the original coordinator block.
+
 Internal implementation, 2026-10-15; extension development version 0.1.37. This block connects the encrypted local store, consent, authenticated Native Messaging transport and durable acknowledgements. It does not expose nearby synchronization in the extension UI or establish current Android application acceptance.
 
 The coordinator owns a dedicated native port. Pairing uses a temporary empty native journal with Android's `pairing-only-v1` revision and never captures password content. Only two authenticated pairing-only snapshots bypass application merge. Content transfers still require native merge and complete local adoption before success is acknowledged. Receive-only sessions also use an empty snapshot; pending recovery cannot accidentally export unadopted remote changes.
