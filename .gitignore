@@ -13,6 +13,7 @@ test-results/
 .DS_Store
 native/mdbx2-host/target/
 native/mdbx2-host/vendor/mdbx/target/
+native/mdbx2-host/vendor/monica-lan-sync/target/
 .codex-tmp/
 
 # Local credentials, password databases and browser profiles are never source assets.
