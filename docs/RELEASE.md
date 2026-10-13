@@ -5,6 +5,7 @@
 - Node.js 22
 - 使用仓库中的 `package-lock.json` 执行 `npm ci`
 - 干净的 Git 工作区和受支持的 Chromium E2E 环境
+- 内置 MDBX 包：Rust 1.97.0（提交 `2d8144b7880597b6e6d3dfd63a9a9efae3f533d3`）及 Emscripten 4.0.18；Native Host 继续使用其原来的 Rust 1.86.0。先加载本地 SDK 环境，运行 `cargo +1.97.0 fetch --locked --manifest-path native/mdbx2-browser/Cargo.toml --target wasm32-unknown-emscripten` 和 `npm run build:mdbx2-browser`。随后普通 `npm run build` 复用并验证产物，不重复编译 Rust。CI 已加入对应源码构建步骤。
 
 ## 完整门禁
 

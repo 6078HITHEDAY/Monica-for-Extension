@@ -94,7 +94,7 @@ Monica 的 Chrome/Edge Manifest V3 浏览器插件。管理界面复用并独立
 
 API 密钥独立保存服务商、令牌、可选 API 地址、备注、自定义字段及收藏。密钥与受保护字段默认隐藏，不进入列表摘要、搜索索引或网站自动填充。
 
-本地库可直接使用；与 Android 同步时选择 MDBX2 密码源，并将本机助手更新到 0.1.1。扩展沿用 Android 的原生 api-token 对象 UUID、载荷结构和标签，保留未知字段、稳定的自定义字段 ID、备注与收藏。扩展的归档状态放在 Android 可保留的附加标签字段中；Android 当前不显示这一归档标记。普通 WebDAV JSON 备份、Bitwarden 和 KeePass 不提供此原生类型的无损映射，因此不作为 API 密钥的保存目标。
+本地库可直接使用；当前开发构建已内置 MDBX 引擎，可直接新建或导入数据库并配置 WebDAV。已有本机助手中的工作副本仍使用其原来的存储位置。与 Android 同步 API 密钥时选择 MDBX2 密码源。扩展沿用 Android 的原生 api-token 对象 UUID、载荷结构和标签，保留未知字段、稳定的自定义字段 ID、备注与收藏。扩展的归档状态放在 Android 可保留的附加标签字段中；Android 当前不显示这一归档标记。普通 WebDAV JSON 备份、Bitwarden 和 KeePass 不提供此原生类型的无损映射，因此不作为 API 密钥的保存目标。
 
 ### 常用账号免解锁填写
 

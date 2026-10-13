@@ -60,6 +60,8 @@ import { BitwardenFolderError, BitwardenFolderService, type BitwardenFolderMutat
 import { BitwardenCollectionError, BitwardenCollectionService, type BitwardenCollectionMutationResult } from "../providers/bitwarden/bitwarden-collections";
 import { BitwardenSendError, BitwardenSendService, type BitwardenSendFileInput } from "../providers/bitwarden/bitwarden-sends";
 import { Mdbx2NativeClient, createChromeMdbx2NativeRuntime } from "../providers/mdbx2/native-client";
+import { Mdbx2BackendRouter } from '../providers/mdbx2/backend-router';
+import { createBrowserMdbx2Runtime, isBrowserMdbxControlMessage } from '../providers/mdbx2/browser/runtime';
 import { Mdbx2LocalFileExports } from "../providers/mdbx2/local-file-export";
 import { Mdbx2RestoreCoordinator } from '../providers/mdbx2/mdbx2-restore';
 import { Mdbx2RestoreBatchCoordinator } from '../providers/mdbx2/mdbx2-restore-batch';
@@ -145,7 +147,8 @@ providers.register(monicaWebDavProvider);
 const bitwardenProvider = new BitwardenProvider();
 providers.register(bitwardenProvider);
 const bitwardenDurableSync = new BitwardenDurableSyncCoordinator(bitwardenProvider, service);
-const mdbx2NativeClient = new Mdbx2NativeClient(createChromeMdbx2NativeRuntime());
+const mdbx2NativeClient = new Mdbx2BackendRouter(createChromeMdbx2NativeRuntime(), createBrowserMdbx2Runtime(), undefined,
+  (handle, role) => service.cachedMdbx2HandleBackend(handle, role));
 const mdbx2Restores = new Mdbx2RestoreCoordinator(mdbx2NativeClient, service);
 const mdbx2RestoreBatches = new Mdbx2RestoreBatchCoordinator(mdbx2NativeClient, service);
 const providerOperations = new ProviderOperationQueue();
@@ -618,6 +621,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 
 chrome.runtime.onMessage.addListener((message: ExtensionRequest, sender, sendResponse: (response: ExtensionResponse) => void) => {
+  if (isBrowserMdbxControlMessage(message)) return false;
   handleRequest(message, sender)
     .then((data) => {
       if (["VAULT_DELETE_ITEM", "VAULT_DELETE_PASSWORD_GROUP", "VAULT_CONSUME_HOTP", "VAULT_UNARCHIVE_ITEM", "VAULT_DELETE_PASSWORD_HISTORY", "VAULT_UPSERT_ITEM", "VAULT_SAVE_PASSWORD_GROUP", "VAULT_SET_PASSWORD_COVER", "VAULT_SET_PASSWORD_STACK", "VAULT_PASSWORD_PROJECT_REMOVE", "VAULT_PASSWORD_PROJECT_REMOVAL_RESUME", "VAULT_PASSWORD_PROJECT_REMOVAL_CANCEL", "VAULT_KEEPASS_PROJECT_REMOVE", "VAULT_KEEPASS_PROJECT_REMOVAL_RESUME", "VAULT_KEEPASS_PROJECT_REMOVAL_CANCEL", "VAULT_PASSWORD_PROJECT_RESTORE", "VAULT_PASSWORD_PROJECT_RESTORE_RESUME", "VAULT_SET_LOCKED_AUTOFILL", "VAULT_RESTORE_ENCRYPTED", "AUTOFILL_SITE_POLICY_SET", "AUTOFILL_FIELD_POLICY_SET_CURRENT", "AUTOFILL_FIELD_POLICY_REMOVE"].includes(message.type)) void dismissInlineMenus();
@@ -1430,9 +1434,12 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
       bitwardenSendUploadInputs.delete(request.transferId);
       return bitwardenSendUploads.abort(request.transferId);
     }
-    case "MDBX2_HOST_STATUS":
+    case "MDBX2_HOST_STATUS": {
       assertManagerPage(sender);
-      return new Mdbx2NativeClient(createChromeMdbx2NativeRuntime()).probe();
+      const handle = request.providerId ? await requireMdbx2VaultHandle(request.providerId) : undefined;
+      const status = await mdbx2NativeClient.status(15_000, handle);
+      return { ...status, runtimeBackend: handle ? await mdbx2NativeClient.backendForVault(handle) : 'browser' };
+    }
     case "MDBX2_FILE_EXPORT_BEGIN":
       assertManagerPage(sender);
       return mdbx2LocalFileExports.begin(request.providerId, mdbx2ExportOwner(sender));
@@ -1463,6 +1470,8 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
       return mdbx2NativeClient.inspectVault(request.source);
     case "MDBX2_VAULT_OPEN": {
       assertManagerPage(sender);
+      const sessionId = await service.passkeySessionId();
+      if (!sessionId) throw new VaultLockedError();
       const existing = request.input.providerId ? await service.getProvider(request.input.providerId) : undefined;
       if (existing && existing.kind !== "mdbx2") throw new Error("所选密码源不是 MDBX2 保险库。");
       const existingHandle = typeof existing?.config.vaultHandle === "string" ? existing.config.vaultHandle : undefined;
@@ -1478,6 +1487,7 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
         isDefaultSaveTarget: Boolean(request.input.isDefaultSaveTarget),
         config: {
           ...existing?.config,
+          ...(!existing ? { runtimeBackend: await mdbx2NativeClient.backendForVault(session.vaultHandle) } : {}),
           mdbxGeneration: 2,
           formatVersion: "MDBX-2",
           vaultHandle: session.vaultHandle,
@@ -1489,11 +1499,26 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
         lastError: undefined
       };
       try {
-        return { account: await service.upsertProvider(account), session };
+        return { account: await service.upsertProvider(account, true, existing, { sessionId }), session };
       } catch (error) {
         await mdbx2NativeClient.lockVault(session.vaultHandle).catch(() => undefined);
         throw error;
       }
+    }
+    case "MDBX2_VAULT_CREATE": {
+      assertManagerPage(sender);
+      const sessionId = await service.passkeySessionId();
+      if (!sessionId) throw new VaultLockedError();
+      const name = request.input.name.trim();
+      if (!name || name.length > 200) throw new Error('请填写不超过 200 个字符的数据库名称。');
+      const session = await mdbx2NativeClient.createVault(request.input.password);
+      try {
+        const account: ProviderAccount = { id: crypto.randomUUID(), kind: 'mdbx2', name, enabled: true,
+          isDefaultSaveTarget: request.input.isDefaultSaveTarget === true,
+          config: { runtimeBackend: 'browser', mdbxGeneration: 2, formatVersion: 'MDBX-2', vaultHandle: session.vaultHandle,
+            nativeVaultId: session.vaultId, schemaVersion: session.schemaVersion, hostVerifiedAt: new Date().toISOString() } };
+        return { account: await service.upsertProvider(account, true, undefined, { sessionId }), session };
+      } catch (error) { await mdbx2NativeClient.lockVault(session.vaultHandle).catch(() => undefined); throw error; }
     }
     case "MDBX2_VAULT_STATUS": {
       assertManagerPage(sender);

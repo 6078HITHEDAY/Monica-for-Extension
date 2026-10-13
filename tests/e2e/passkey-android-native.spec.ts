@@ -3,6 +3,7 @@ import { createHash, createPublicKey, verify } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { launchEdgeContext } from "./fixtures/edge";
+import { chooseOption } from './fixtures/material';
 import { temporaryNativeHost } from "./fixtures/native-host";
 import type { PasskeyItem, ProviderAccount } from "../../src/core/model";
 import { decodeMdbx2Object } from "../../src/providers/mdbx2/mdbx2-item-codec";
@@ -103,6 +104,7 @@ test(`actual Android MDBX Passkeys authenticate in Edge through Native Host and 
     await manager.getByRole("button", { name: "密码源", exact: true }).click();
     await manager.locator("m3e-list-action").filter({ hasText: "连接 MDBX2 保险库" }).click();
     const dialog = manager.locator('.mdbx2-dialog[role="dialog"]');
+    await chooseOption(dialog.locator('m3e-select').first(), 'local');
     await dialog.getByLabel("显示名称", { exact: true }).fill(sourceName);
     await dialog.getByLabel("MDBX2 可移植备份", { exact: true }).setInputFiles(source);
     await dialog.getByLabel("保险库密码（可留空）", { exact: true }).fill(databasePassword);

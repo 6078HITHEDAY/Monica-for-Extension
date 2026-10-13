@@ -1,3 +1,4 @@
+import { chooseOption } from './fixtures/material';
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 import { createHash, createPublicKey, randomUUID, verify } from "node:crypto";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
@@ -53,6 +54,7 @@ test("real Edge complete MDBX backup restores password projects, external attach
       await page.locator("m3e-list-action").filter({ hasText: "连接 MDBX2 保险库" }).click();
       const dialog = page.locator('.mdbx2-dialog[role="dialog"]');
       await dialog.getByLabel("显示名称", { exact: true }).fill(name);
+      await chooseOption(dialog.locator('m3e-select').first(), 'local');
       await dialog.getByLabel("MDBX2 可移植备份", { exact: true }).setInputFiles(file);
       await page.setViewportSize({ width, height: 960 }); return dialog;
     };
@@ -65,6 +67,7 @@ test("real Edge complete MDBX backup restores password projects, external attach
       expect(provider?.kind).toBe("mdbx2"); return provider;
     };
     let provider = await importFile(originalFile, "完整备份来源");
+    evidence.runtimeBackend = provider.config.runtimeBackend;
     await sources();
     await expect(page.getByText("含外部附件时导出完整备份 ZIP，可在插件中直接打开。Android 暂不支持直接恢复此 ZIP，请保留完整备份。", { exact: true })).toBeVisible();
     const list = () => send(page, { type: "VAULT_LIST_ITEMS" }) as Promise<VaultItem[]>;
@@ -110,7 +113,23 @@ test("real Edge complete MDBX backup restores password projects, external attach
     for (const name of blobs) { expect(name).toMatch(/^vault\.mdbx\.blobs\/[0-9a-f]{2}\/[0-9a-f]{2}\/[0-9a-f]{64}$/); expect(hash(files[name])).toBe(name.split("/").at(-1)); }
     await expect(page.getByText("完整备份已导出并校验，包含数据库和附件。恢复时使用原数据库密码。", { exact: true })).toBeVisible();
     await page.screenshot({ path: info.outputPath("complete-backup-source.png"), fullPage: true });
-    expect((await readdir(path.join(appData("source"), "Monica Extension/MDBX2"))).filter(name => name.startsWith("complete-backup-"))).toEqual([]);
+    if (provider.config.runtimeBackend === 'browser') {
+      const paths = await page.evaluate(() => new Promise<string[]>((resolve, reject) => {
+        const request = indexedDB.open('monica-extension-mdbx-browser-v1', 1);
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const db = request.result, tx = db.transaction('catalog');
+          const read = tx.objectStore('catalog').get('active'); let paths: string[];
+          read.onsuccess = () => { paths = [...read.result.files, ...read.result.directories].map(row => row.path); };
+          tx.oncomplete = () => { db.close(); resolve(paths); };
+          tx.onabort = () => { db.close(); reject(tx.error); };
+        };
+      }));
+      expect(paths.length).toBeGreaterThan(0);
+      expect(paths.filter(name => /(?:^|\/)complete-backup-/.test(name))).toEqual([]);
+    } else {
+      expect((await readdir(path.join(appData("source"), "Monica Extension/MDBX2"))).filter(name => name.startsWith("complete-backup-"))).toEqual([]);
+    }
     evidence.archive = { path: archive.output, sha256: hash(archive.bytes), fileCount: Object.keys(files).length, blobCount: blobs.length, bytes: archive.bytes.length };
     await writeFile(path.join(runRoot, "expected-native-objects.json"), JSON.stringify(originals, null, 2));
     await writeFile(path.join(runRoot, "expected-items.json"), JSON.stringify(before, null, 2));
@@ -121,7 +140,7 @@ test("real Edge complete MDBX backup restores password projects, external attach
     const providersBeforeImport = await send(page, { type: "PROVIDER_LIST" });
     let dialog = await openImport(archive.output, "完整备份恢复", 320);
     expect(await dialog.locator('.mdbx2-host-row').evaluate(node => node.scrollHeight <= node.clientHeight + 1)).toBe(true);
-    expect(await dialog.evaluate(node => node.querySelector('.mdbx2-mode-picker')!.getBoundingClientRect().top >= node.querySelector('.mdbx2-host-row')!.getBoundingClientRect().bottom)).toBe(true);
+    expect(await dialog.evaluate(node => node.querySelector('m3e-select')!.getBoundingClientRect().top >= node.querySelector('.mdbx2-host-row')!.getBoundingClientRect().bottom)).toBe(true);
     await page.screenshot({ path: info.outputPath("complete-restore-cancel-320.png") });
     await page.evaluate(() => { (window as any).cancelEvents = []; for (const type of ["pointerdown", "pointerup", "click"]) document.addEventListener(type, event => { (window as any).cancelEvents.push({ type, path: event.composedPath().filter(node => node instanceof HTMLElement).slice(0, 5).map(node => (node as HTMLElement).localName + ':' + (node as HTMLElement).textContent?.slice(0, 35)) }); }, true); });
     await dialog.getByRole("button", { name: "取消", exact: true }).click();
@@ -173,7 +192,7 @@ test("real Edge complete MDBX backup restores password projects, external attach
     await card().getByRole("button", { name: "解锁并设置", exact: true }).click(); dialog = page.locator('.mdbx2-dialog[role="dialog"]');
     await dialog.getByLabel("保险库密码（可留空）", { exact: true }).fill(databasePassword); await dialog.getByRole("button", { name: "解锁本机副本", exact: true }).click();
     await expect(dialog.getByRole("button", { name: "解锁本机副本", exact: true })).toHaveCount(0); await dialog.getByRole("button", { name: "取消", exact: true }).click();
-    await send(page, { type: "PROVIDER_SYNC", providerId: provider.id }); await verifyRestored(); evidence.phases.push("browser-and-native-host-restart-exact-readback");
+    await send(page, { type: "PROVIDER_SYNC", providerId: provider.id }); await verifyRestored(); evidence.phases.push("browser-and-database-engine-restart-exact-readback");
     // Authenticate with the original Edge-created RSA key after archive restore/restart.
     const key = originalKeys.at(-1); const challenge = Buffer.alloc(32, 87).toString("base64url");
     await context.route(`https://${rp}/**`, route => route.fulfill({ contentType: "text/html", body: `<!doctype html><button id="login">Sign in</button><output id="result"></output><script>login.onclick=async()=>{try{const c=await navigator.credentials.get({publicKey:PublicKeyCredential.parseRequestOptionsFromJSON({challenge:'${challenge}',rpId:'${rp}',userVerification:'required',allowCredentials:[{type:'public-key',id:'${key.credentialId}'}],timeout:60000})});window.assertion=c.toJSON();result.textContent='authenticated';}catch(e){result.textContent=e.name+':'+e.message;}}</script>` }));

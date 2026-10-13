@@ -14,7 +14,9 @@ if (manifest.externally_connectable || manifest.optional_permissions || manifest
 // _favicon endpoint remains absent from web-accessible resources below.
 // sidePanel reuses the same trusted manager path and locked session; opening is an
 // explicit popup click and does not grant a webpage access to the manager.
-if (JSON.stringify(manifest.permissions) !== JSON.stringify(["alarms", "cookies", "favicon", "identity", "nativeMessaging", "sidePanel", "storage", "webNavigation"])) throw new Error("Release manifest permission set changed without a security review.");
+// offscreen runs the bundled MDBX Worker. Its URL and background sender are
+// authenticated; neither the document nor engine files are web-accessible.
+if (JSON.stringify(manifest.permissions) !== JSON.stringify(["alarms", "cookies", "favicon", "identity", "nativeMessaging", "offscreen", "sidePanel", "storage", "webNavigation"])) throw new Error("Release manifest permission set changed without a security review.");
 if (manifest.side_panel?.default_path !== "index.html?surface=sidepanel" || manifest.action?.default_popup !== "popup.html") throw new Error("Side panel must reuse the reviewed manager without replacing the action popup.");
 if (JSON.stringify(manifest.host_permissions) !== JSON.stringify(["http://*/*", "https://*/*"])) throw new Error("Release manifest host access changed without a security review.");
 const csp = manifest.content_security_policy?.extension_pages || "";
@@ -57,6 +59,7 @@ const background = await readFile(resolve(root, "dist/background.js"), "utf8");
 if (!background.includes("TRUSTED_CONTEXTS")) throw new Error("Session storage is not restricted to trusted contexts.");
 if (!background.includes("WEB_PAGE_REQUEST_TYPES") && !background.includes("CREDENTIAL_CAPTURE")) throw new Error("Background page-command allowlist is missing from the release.");
 const backgroundSource = await readFile(resolve(root, "src/background/index.ts"), "utf8");
+if (!backgroundSource.includes('if (isBrowserMdbxControlMessage(message)) return false;')) throw new Error('MDBX offscreen control messages must bypass the generic reply handler.');
 if (!backgroundSource.includes("if (!WEB_PAGE_REQUEST_TYPES.has(request.type)) assertExtensionPage(sender);")) throw new Error("Privileged runtime commands are not default-denied.");
 if (!backgroundSource.includes('case "MDBX2_HOST_STATUS"') || backgroundSource.includes('case "MDBX_OPEN"')) throw new Error("MDBX Native Messaging review requires MDBX2-only privileged commands.");
 const pageTypes = ["CREDENTIAL_CAPTURE", "CREDENTIAL_PENDING", "CREDENTIAL_ACCEPT", "CREDENTIAL_DISMISS", "PASSKEY_BEGIN", "PASSKEY_UNLOCK_CONTINUE", "PASSKEY_ACCEPT", "PASSKEY_DISMISS"];

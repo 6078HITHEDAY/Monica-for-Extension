@@ -29,7 +29,8 @@ export class Mdbx2BackendRouter extends Mdbx2NativeClient {
   private readonly browser: Mdbx2NativeClient;
   private readonly known = new Map<string, Mdbx2HandleOrigin>();
   private epoch = 0;
-  constructor(nativeRuntime: Mdbx2NativeRuntime, browserRuntime: Mdbx2NativeRuntime, private readonly origins: Mdbx2OriginStore = new IndexedDbMdbx2OriginStore()) {
+  constructor(nativeRuntime: Mdbx2NativeRuntime, browserRuntime: Mdbx2NativeRuntime, private readonly origins: Mdbx2OriginStore = new IndexedDbMdbx2OriginStore(),
+    private readonly accountOrigin?: (handle: string, role: Mdbx2HandleRole) => Mdbx2Backend | undefined) {
     super(nativeRuntime); this.native = new Mdbx2NativeClient(nativeRuntime); this.browser = new Mdbx2NativeClient(browserRuntime);
   }
   override close(): void { this.epoch++; super.close(); this.native.close(); this.browser.close(); this.known.clear(); }
@@ -43,6 +44,17 @@ export class Mdbx2BackendRouter extends Mdbx2NativeClient {
   private async route(handles: Mdbx2OwnedHandle[]): Promise<Mdbx2Backend> {
     const missing = [...new Set(handles.filter(item => !this.known.has(item.handle)).map(item => item.handle))];
     for (const [handle, row] of await this.origins.read(missing)) this.known.set(handle, row);
+    // The encrypted account is a second durable source of ownership. Restore a
+    // missing index, but never overwrite a conflicting origin. This callback
+    // must be synchronous: native verification can run inside a vault mutation.
+    for (const item of handles) {
+      const expected = this.accountOrigin?.(item.handle, item.role), row = this.known.get(item.handle);
+      if (expected && row?.backend && expected !== row.backend) throw mdbx2RoutingError();
+      if (expected && (!row || !row.roles.includes(item.role))) {
+        await this.origins.bind(expected, [item]);
+        this.known.set(item.handle, { version: 1, backend: expected, roles: [...new Set([...(row?.roles || []), item.role])] });
+      }
+    }
     let backend: Mdbx2Backend | undefined;
     for (const item of handles) {
       const row = this.known.get(item.handle);

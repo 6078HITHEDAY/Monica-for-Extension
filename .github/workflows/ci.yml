@@ -24,6 +24,17 @@ jobs:
       - run: npm run verify:toolchain
       - run: npm ci --ignore-scripts
       - run: npx playwright install --with-deps chromium
+      - name: Build the pinned browser MDBX engine
+        shell: bash
+        run: |
+          rustup toolchain install 1.97.0 --profile minimal --target wasm32-unknown-emscripten
+          git clone --no-checkout https://github.com/emscripten-core/emsdk.git .tmp/emsdk
+          git -C .tmp/emsdk checkout --detach eb5eb4b3b2b792f44ded198bfe615c985da5be2c
+          python .tmp/emsdk/emsdk.py install 4.0.18
+          python .tmp/emsdk/emsdk.py activate 4.0.18
+          source .tmp/emsdk/emsdk_env.sh
+          cargo +1.97.0 fetch --locked --manifest-path native/mdbx2-browser/Cargo.toml --target wasm32-unknown-emscripten
+          npm run build:mdbx2-browser
       - run: npm run release:check
       - run: npm run package:verify
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -54,6 +65,23 @@ jobs:
       - run: npm run verify:supply-chain
       - run: npm run test:mdbx2-host
       - run: npm run lint:mdbx2-host
+      - name: Build the pinned browser MDBX engine
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.97.0 --profile minimal --target wasm32-unknown-emscripten
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git clone --no-checkout https://github.com/emscripten-core/emsdk.git .tmp/emsdk
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git -C .tmp/emsdk checkout --detach eb5eb4b3b2b792f44ded198bfe615c985da5be2c
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python .tmp/emsdk/emsdk.py install 4.0.18
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python .tmp/emsdk/emsdk.py activate 4.0.18
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          . .tmp/emsdk/emsdk_env.ps1
+          cargo +1.97.0 fetch --locked --manifest-path native/mdbx2-browser/Cargo.toml --target wasm32-unknown-emscripten
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build:mdbx2-browser
       - run: npm run build
       - run: npx playwright test tests/e2e/passkey-windows-hello.spec.ts
       - run: npm run package:mdbx2-host

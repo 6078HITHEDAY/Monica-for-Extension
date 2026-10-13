@@ -253,9 +253,10 @@ const mdbx2DialogOpen = ref(false);
 const mdbx2BatchTransferDialogOpen = ref(false);
 const mdbx2BatchTransferTargetProviderId = ref<string | undefined>();
 const batchTransferScope = ref<{ label: string; itemIds: string[] }>();
-const mdbx2DialogMode = ref<"local" | "remote">("local");
+const mdbx2DialogMode = ref<"create" | "local" | "remote">("create");
 const editingMdbx2Id = ref<string | undefined>();
 const mdbx2HostStatus = ref<Mdbx2HostStatus | null>(null);
+const mdbx2HostStatuses = ref<Record<string, Mdbx2HostStatus>>({});
 const mdbx2RuntimeStatuses = ref<Record<string, Mdbx2VaultRuntimeStatus>>({});
 const mdbx2SyncStatuses = ref<Record<string, Mdbx2ManagerSyncStatus>>({});
 const mdbx2Busy = ref<"" | "lock" | "export">("");
@@ -967,24 +968,14 @@ async function refreshMdbx2Statuses(accounts = providers.value) {
     mdbx2SyncStatuses.value = {};
     return;
   }
-  try {
-    const host = await vaultClient.mdbx2HostStatus();
-    mdbx2HostStatus.value = host;
-    if (host.availability !== "ready") {
-      mdbx2RuntimeStatuses.value = {};
-      mdbx2SyncStatuses.value = {};
-      return;
-    }
-  } catch {
-    mdbx2RuntimeStatuses.value = {};
-    mdbx2SyncStatuses.value = {};
-    return;
-  }
   const entries = await Promise.all(mdbx2Accounts.map(async (provider) => {
+    const host = await vaultClient.mdbx2HostStatus(provider.id).catch(() => undefined);
+    if (!host || host.availability !== "ready") return { providerId: provider.id, host };
     const runtime = await vaultClient.mdbx2VaultStatus(provider.id).catch(() => undefined);
     const sync = await vaultClient.mdbx2SyncStatus(provider.id).catch(() => undefined);
-    return { providerId: provider.id, runtime, sync };
+    return { providerId: provider.id, runtime, sync, host };
   }));
+  mdbx2HostStatuses.value = Object.fromEntries(entries.flatMap(entry => entry.host ? [[entry.providerId, entry.host]] : []));
   mdbx2RuntimeStatuses.value = Object.fromEntries(entries.flatMap((entry) => entry.runtime ? [[entry.providerId, entry.runtime]] : []));
   mdbx2SyncStatuses.value = Object.fromEntries(entries.flatMap((entry) => entry.sync ? [[entry.providerId, entry.sync]] : []));
 }
@@ -1709,7 +1700,7 @@ async function removeCredential(item: LoginItem) {
   showNotice(tr('登录项已删除。'));
 }
 
-function openMdbx2Dialog(provider?: ProviderAccount, mode: "local" | "remote" = "local") {
+function openMdbx2Dialog(provider?: ProviderAccount, mode: "create" | "local" | "remote" = "create") {
   editingMdbx2Id.value = provider?.id;
   mdbx2DialogMode.value = mode;
   mdbx2DialogOpen.value = true;
@@ -1766,7 +1757,7 @@ function mdbx2StateLabel(provider: ProviderAccount): string {
   const runtime = mdbx2RuntimeFor(provider.id);
   const sync = mdbx2SyncFor(provider.id);
   if (provider.lastError || conflictsFor(provider.id).length || sync?.blockedStreamCount) return tr('需要处理');
-  if (mdbx2HostStatus.value && mdbx2HostStatus.value.availability !== "ready") return tr('Host 未就绪');
+  if (mdbx2HostStatuses.value[provider.id]?.availability !== "ready") return tr('数据库暂不可用');
   if (!runtime?.available) return tr('本机副本缺失');
   if (!runtime.open) return tr('已锁定');
   if (queueFor(provider.id)?.pending) return tr('待同步');
@@ -2994,7 +2985,7 @@ function errorCode(error: unknown): string | undefined {
 
         <section v-else-if="activeSection === 'providers'" class="provider-page">
           <div class="provider-connect-grid" :aria-label="tr('添加密码源')">
-            <m3e-card variant="filled" class="connect-source-card"><m3e-action-list slot="content"><m3e-list-action class="connect-source" @click="openMdbx2Dialog()"><span slot="leading" class="connect-icon"><m3e-icon name="database" /></span>{{ tr('连接 MDBX2 保险库') }}<span slot="supporting-text">{{ tr('打开本机文件或从 WebDAV 增量加入') }}</span><m3e-icon slot="trailing" name="chevron_right" /></m3e-list-action></m3e-action-list></m3e-card>
+            <m3e-card variant="filled" class="connect-source-card"><m3e-action-list slot="content"><m3e-list-action class="connect-source" @click="openMdbx2Dialog()"><span slot="leading" class="connect-icon"><m3e-icon name="database" /></span>{{ tr('连接 MDBX2 保险库') }}<span slot="supporting-text">{{ tr('直接新建、导入备份或从 WebDAV 加入，无需安装组件') }}</span><m3e-icon slot="trailing" name="chevron_right" /></m3e-list-action></m3e-action-list></m3e-card>
             <m3e-card variant="filled" class="connect-source-card"><m3e-action-list slot="content"><m3e-list-action class="connect-source" @click="newWebDav"><span slot="leading" class="connect-icon"><m3e-icon name="folder_copy" /></span>{{ tr('连接 Monica Android WebDAV') }}<span slot="supporting-text">{{ tr('读取并无损写回 Monica_Backups 快照') }}</span><m3e-icon slot="trailing" name="chevron_right" /></m3e-list-action></m3e-action-list></m3e-card>
             <m3e-card variant="filled" class="connect-source-card"><m3e-action-list slot="content"><m3e-list-action class="connect-source" @click="openOneDriveDialog()"><span slot="leading" class="connect-icon"><m3e-icon name="cloud" /></span>{{ tr('连接 OneDrive') }}<span slot="supporting-text">{{ tr('登录 Microsoft 并同步 KDBX 数据库') }}</span><m3e-icon slot="trailing" name="chevron_right" /></m3e-list-action></m3e-action-list></m3e-card>
             <m3e-card variant="filled" class="connect-source-card"><m3e-action-list slot="content"><m3e-list-action class="connect-source" @click="openKeePassDialog()"><span slot="leading" class="connect-icon"><m3e-icon name="key" /></span>{{ tr('连接 KeePass') }}<span slot="supporting-text">{{ tr('打开本地 KDBX 或连接 WebDAV 文件') }}</span><m3e-icon slot="trailing" name="chevron_right" /></m3e-list-action></m3e-action-list></m3e-card>

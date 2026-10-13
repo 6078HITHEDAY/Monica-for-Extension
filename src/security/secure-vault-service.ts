@@ -64,6 +64,8 @@ import { mdbx2RestoreBatchSources, readMdbx2RestoreBatchJournal, readMdbx2Restor
 import { readMdbx2DeletionCancellations, type Mdbx2DeletionCancellation } from '../core/mdbx2-deletion-cancellation';
 import { passwordGroupKey } from '../core/password-groups';
 import type { Mdbx2ObjectsRestoreResult } from '../providers/mdbx2/native-contract';
+import { mdbx2AccountBackend, mdbx2AccountHandleBackend } from '../providers/mdbx2/account-backend';
+import type { Mdbx2HandleRole } from '../providers/mdbx2/backend-origin-store';
 import type { Mdbx2ObjectRestoreResult } from '../providers/mdbx2/native-contract';
 import { mdbx2ItemFingerprint } from '../providers/mdbx2/mdbx2-provider';
 import { readMdbx2MoveJournal, type Mdbx2MoveFinalizationRecord } from "../core/mdbx2-move-journal";
@@ -799,6 +801,11 @@ export class SecureVaultService {
     return this.readProjection(state => state.providers.map(publicProviderAccount));
   }
 
+  /** Background routing only; no I/O, keys or records leave this projection. */
+  cachedMdbx2HandleBackend(handle: string, role: Mdbx2HandleRole) {
+    return mdbx2AccountHandleBackend(this.decodedSnapshot?.state.providers || [], handle, role);
+  }
+
   async getProvider(providerId: string): Promise<ProviderAccount | undefined> {
     const provider = await this.readProjection(state => state.providers.find(candidate => candidate.id === providerId)
       || (providerId === 'local' && state.providers.filter(row => row.kind === 'local').length === 1 ? state.providers.find(row => row.kind === 'local') : undefined));
@@ -831,6 +838,11 @@ export class SecureVaultService {
     const { state, envelope, key } = await this.mutableContext();
     if (guard && (await this.sessions.read())?.id !== guard.sessionId) throw new VaultLockedError();
     const currentProvider = state.providers.find(candidate => candidate.id === provider.id);
+    if (provider.kind === 'mdbx2') {
+      const backend = mdbx2AccountBackend(provider);
+      if (currentProvider?.kind === 'mdbx2' && currentProvider.config.vaultHandle === provider.config.vaultHandle
+        && mdbx2AccountBackend(currentProvider) !== backend) throw new Error('已有 MDBX 密码库不能切换存储位置，请另行导入副本。');
+    }
     if (expectedProvider && (!currentProvider || !sameProviderBinding(expectedProvider, currentProvider))) throw new Error("同步期间密码源配置已变化，请重新同步。");
     // A KDBX sync snapshot predates an OAuth refresh. Keep the independently
     // persisted connection when applying unrelated working-copy metadata.
@@ -3688,6 +3700,7 @@ function publicProviderAccount(provider: ProviderAccount): ProviderAccount {
       config: {
         formatVersion: "MDBX-2",
         vaultHandle: stringConfig(provider, "vaultHandle") || undefined,
+        runtimeBackend: mdbx2AccountBackend(provider),
         schemaVersion: typeof provider.config.schemaVersion === "number" ? provider.config.schemaVersion : undefined,
         webDavBaseUrl: stringConfig(provider, "webDavBaseUrl") || undefined,
         webDavUsername: stringConfig(provider, "webDavUsername") || undefined,

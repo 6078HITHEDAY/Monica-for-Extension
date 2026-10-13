@@ -11,6 +11,7 @@
     "favicon",
     "identity",
     "nativeMessaging",
+    "offscreen",
     "sidePanel",
     "storage",
     "webNavigation"

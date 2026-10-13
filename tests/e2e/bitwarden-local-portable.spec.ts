@@ -4,7 +4,7 @@ import { createHash, createPublicKey, randomUUID, verify } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { launchEdgeContext } from './fixtures/edge';
-import { dialogContent } from './fixtures/material';
+import { dialogContent, chooseOption } from './fixtures/material';
 import { BitwardenClient } from '../../src/providers/bitwarden/bitwarden-client';
 import { deriveBitwardenMasterKey, stretchBitwardenMasterKey } from '../../src/providers/bitwarden/bitwarden-crypto';
 import { createLoginItem, type LoginItem, type PasskeyItem, type VaultItem } from '../../src/core/model';
@@ -180,6 +180,7 @@ for (const sourceKind of ['local', 'local-move', 'local-keep-both', 'mdbx', 'mdb
       await page.locator('m3e-list-action').filter({ hasText: '连接 MDBX2 保险库' }).click();
       const connect = page.locator('.mdbx2-dialog[role="dialog"]');
       await connect.getByLabel('显示名称', { exact: true }).fill('Synthetic MDBX source');
+      await chooseOption(connect.locator('m3e-select').first(), 'local');
       await connect.getByLabel('MDBX2 可移植备份', { exact: true }).setInputFiles(fixture);
       await connect.getByLabel('保险库密码（可留空）', { exact: true }).fill('Synthetic transfer fixture password');
       await connect.locator('label').filter({ hasText: '设为新项目的默认保存目标' }).click();

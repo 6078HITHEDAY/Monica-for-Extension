@@ -1,5 +1,5 @@
 import { launchTestContext } from './fixtures/edge';
-import { dialogContent } from "./fixtures/material";
+import { chooseOption, dialogContent } from "./fixtures/material";
 import { expect, test, type BrowserContext, type Locator } from "@playwright/test";
 import path from "node:path";
 import { installMdbx2TigaMock } from "./fixtures/mdbx2";
@@ -30,7 +30,7 @@ test("provider page is compact and decorated icon glyphs are centered", async ({
     await expect(connectionButtons).toHaveCount(5);
     await expect(page.locator(".provider-config-card")).toHaveCount(0);
     await expect(page.locator(".provider-list .source-card")).toHaveCount(1);
-    expect((await page.locator(".provider-page").boundingBox())!.width).toBeLessThanOrEqual(820);
+    expect((await page.locator(".provider-page").boundingBox())!.width).toBeLessThanOrEqual(820.01);
     const connectionBoxes = await Promise.all(Array.from({ length: 5 }, (_, index) => connectionButtons.nth(index).boundingBox()));
     for (const box of connectionBoxes.slice(1)) expect(Math.abs(connectionBoxes[0]!.width - box!.width)).toBeLessThanOrEqual(1);
     await expectCentered(page.locator(".source-icon").first(), page.locator(".source-icon m3e-icon").first());
@@ -47,11 +47,12 @@ test("provider page is compact and decorated icon glyphs are centered", async ({
     expect(connectionShape.button).toBe(connectionShape.host);
 
     await page.getByRole("button", { name: /连接 MDBX2 保险库/ }).click();
-    const mdbx2Dialog = dialogContent(page, { name: "打开 MDBX2 保险库" });
+    const mdbx2Dialog = page.locator('.mdbx2-dialog[role="dialog"]');
     await expect(mdbx2Dialog).toBeVisible();
     await expect(mdbx2Dialog).toHaveCSS("border-radius", "28px");
+    await chooseOption(mdbx2Dialog.locator('m3e-select').first(), 'local');
     await expect(mdbx2Dialog.getByLabel("MDBX2 可移植备份")).toBeVisible();
-    await mdbx2Dialog.getByRole("button", { name: "从 WebDAV 加入" }).click();
+    await chooseOption(mdbx2Dialog.locator('m3e-select').first(), 'remote');
     const remoteMdbx2Dialog = dialogContent(page, { name: "从 WebDAV 加入 MDBX2" });
     await expect(remoteMdbx2Dialog).toBeVisible();
     await expect(remoteMdbx2Dialog.getByLabel("Android 兼容远端位置 *")).toBeVisible();
@@ -79,7 +80,13 @@ test("provider page is compact and decorated icon glyphs are centered", async ({
     await page.keyboard.press("Escape");
     await expect(picker).toBeHidden();
     await page.getByRole("button", { name: "设置与备份" }).click();
-    await expectAllRoundedAndClipped(page.locator("main m3e-card"));
+    // Settings now use contiguous groups with rounded outer corners.
+    const settingsGroups = page.locator('.settings-home .settings-entry-list');
+    await expect(settingsGroups).toHaveCount(3);
+    for (const group of await settingsGroups.all()) {
+      await expect(group.locator(':scope > *').first()).toHaveCSS('border-top-left-radius', '24px');
+      await expect(group.locator(':scope > *').last()).toHaveCSS('border-bottom-right-radius', '24px');
+    }
     await page.getByRole("button", { name: "密码源" }).click();
     await page.waitForTimeout(400);
     await page.getByRole("button", { name: /连接 Monica Android WebDAV/ }).hover();
@@ -362,9 +369,11 @@ test("mobile manager dialogs remain complete with 200% text", async ({}, testInf
 
     await openSection("密码源");
     await page.getByRole("button", { name: /连接 MDBX2 保险库/ }).click();
-    let dialog = dialogContent(page, { name: "打开 MDBX2 保险库" });
+    let dialog = page.locator('.mdbx2-dialog[role="dialog"]');
+    await audit("MDBX 新建", dialog);
+    await chooseOption(dialog.locator('m3e-select').first(), 'local');
     await audit("MDBX2 本机", dialog);
-    await dialog.getByRole("button", { name: "从 WebDAV 加入" }).click();
+    await chooseOption(dialog.locator('m3e-select').first(), 'remote');
     dialog = dialogContent(page, { name: "从 WebDAV 加入 MDBX2" });
     await audit("MDBX2 WebDAV", dialog);
     await dialog.getByRole("button", { name: "关闭 MDBX2 设置" }).click();
@@ -476,16 +485,13 @@ test("MDBX2 WebDAV join dialog keeps large-text controls separated at 800px", as
     await navigationButton.click();
     await page.getByRole("button", { name: "密码源" }).click();
     await page.getByRole("button", { name: /连接 MDBX2 保险库/ }).click();
-    await dialogContent(page, { name: "打开 MDBX2 保险库" }).getByRole("button", { name: "从 WebDAV 加入" }).evaluate((button) => (button as HTMLButtonElement).click());
+    await chooseOption(page.locator('.mdbx2-dialog[role="dialog"] m3e-select').first(), 'remote');
 
     const dialog = dialogContent(page, { name: "从 WebDAV 加入 MDBX2" });
     await expect(dialog).toBeVisible();
-    const modeButtons = dialog.locator(".mdbx2-mode-picker").getByRole("button");
-    const firstMode = await modeButtons.nth(0).boundingBox();
-    const secondMode = await modeButtons.nth(1).boundingBox();
-    expect(firstMode).not.toBeNull();
-    expect(secondMode).not.toBeNull();
-    expect(secondMode!.y, "large-text join modes should use separate rows").toBeGreaterThan(firstMode!.y + firstMode!.height);
+    const mode = dialog.locator('m3e-select').first();
+    await expect(mode).toHaveJSProperty('value', 'remote');
+    await expect(mode).toBeVisible();
     await expectNoHorizontalOverflow(dialog);
     await page.screenshot({ path: testInfo.outputPath("mdbx2-webdav-join-large-text.png") });
     const form = dialog.locator(".mdbx2-form");

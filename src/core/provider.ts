@@ -73,6 +73,7 @@ export interface ProviderSyncGuard {
 /** Ignore rotating tokens and sync metadata, but never merge results from a replaced source. */
 export function sameProviderBinding(left: ProviderAccount, right: ProviderAccount): boolean {
   if (left.id !== right.id || left.kind !== right.kind) return false;
+  if (left.kind === 'mdbx2' && (left.config.runtimeBackend ?? 'native') !== (right.config.runtimeBackend ?? 'native')) return false;
   if (left.kind === 'keepass' && (left.config.sourceMode === 'local-file' || right.config.sourceMode === 'local-file') &&
       left.config.localFileSourceSha256 !== right.config.localFileSourceSha256) return false;
   if (left.kind === "keepass" && (left.config.sourceMode === "onedrive" || right.config.sourceMode === "onedrive")) {

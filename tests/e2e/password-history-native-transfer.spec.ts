@@ -5,7 +5,7 @@ import path from 'node:path';
 import { createLoginItem, type LoginItem, type ProviderAccount } from '../../src/core/model';
 import { launchEdgeContext } from './fixtures/edge';
 import { temporaryNativeHost } from './fixtures/native-host';
-import { dialogContent } from './fixtures/material';
+import { chooseOption, dialogContent } from './fixtures/material';
 
 const master = 'Synthetic native history transfer password';
 const hash = (bytes: Uint8Array | string) => createHash('sha256').update(bytes).digest('hex');
@@ -44,6 +44,7 @@ test('actual Edge and Native Host block history loss before MDBX transfer and pr
     await page.getByRole('button', { name: '密码源', exact: true }).click();
     await page.locator('m3e-list-action').filter({ hasText: '连接 MDBX2 保险库' }).click();
     const connect = page.locator('.mdbx2-dialog[role="dialog"]');
+    await chooseOption(connect.locator('m3e-select').first(), 'local');
     await connect.getByLabel('显示名称', { exact: true }).fill('History native target');
     await connect.getByLabel('MDBX2 可移植备份', { exact: true }).setInputFiles(fixture);
     await connect.getByLabel('保险库密码（可留空）', { exact: true }).fill('Synthetic transfer fixture password');

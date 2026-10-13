@@ -1045,6 +1045,7 @@ export interface Mdbx2WindowsHelloVerification {
 export type Mdbx2HostAvailability = "ready" | "not-installed" | "incompatible" | "unavailable";
 
 export interface Mdbx2HostStatus {
+  runtimeBackend?: 'native' | 'browser';
   availability: Mdbx2HostAvailability;
   hostName: typeof MDBX2_NATIVE_HOST_NAME;
   message: string;

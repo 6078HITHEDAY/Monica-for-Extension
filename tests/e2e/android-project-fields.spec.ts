@@ -4,7 +4,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { launchEdgeContext } from './fixtures/edge';
 import { temporaryNativeHost } from './fixtures/native-host';
-import { dialogContent } from './fixtures/material';
+import { dialogContent, chooseOption } from './fixtures/material';
 import type { LoginItem, ProviderAccount } from '../../src/core/model';
 
 const fixtureRoot = process.env.MONICA_PROJECT_FIELDS_FIXTURE;
@@ -73,6 +73,7 @@ test('current Android rich project crosses actual Edge native edit and restart',
     await page.locator('m3e-list-action').filter({ hasText: '连接 MDBX2 保险库' }).click();
     const connect = page.locator('.mdbx2-dialog[role="dialog"]');
     await connect.getByLabel('显示名称', { exact: true }).fill('Current Android project');
+    await chooseOption(connect.locator('m3e-select').first(), 'local');
     await connect.getByLabel('MDBX2 可移植备份', { exact: true }).setInputFiles(source);
     await connect.getByLabel('保险库密码（可留空）', { exact: true }).fill(databasePassword);
     await connect.getByRole('button', { name: '验证、解锁并导入', exact: true }).click();

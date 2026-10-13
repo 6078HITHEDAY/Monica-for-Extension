@@ -317,6 +317,7 @@ describe("encrypted vault", () => {
     });
     expect(mdbx2.config).toEqual({
       formatVersion: "MDBX-2",
+      runtimeBackend: "native",
       vaultHandle: "11111111-1111-4111-8111-111111111111",
       schemaVersion: 17,
       webDavBaseUrl: "https://vault.example/dav",

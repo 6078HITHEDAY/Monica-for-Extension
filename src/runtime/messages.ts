@@ -411,7 +411,8 @@ export type ExtensionRequest =
   | { type: "BITWARDEN_SEND_FILE_UPLOAD_CHUNK"; providerId: string; transferId: string; offset: number; dataBase64: string }
   | { type: "BITWARDEN_SEND_FILE_UPLOAD_FINISH"; providerId: string; transferId: string }
   | { type: "BITWARDEN_SEND_FILE_UPLOAD_ABORT"; providerId: string; transferId: string }
-  | { type: "MDBX2_HOST_STATUS" }
+  | { type: "MDBX2_HOST_STATUS"; providerId?: string }
+  | { type: "MDBX2_VAULT_CREATE"; input: { name: string; password: string; isDefaultSaveTarget?: boolean } }
   | { type: "MDBX2_TRANSFER_BEGIN"; sizeBytes: number; sha256?: string }
   | { type: "MDBX2_FILE_EXPORT_BEGIN"; providerId: string }
   | { type: "MDBX2_FILE_EXPORT_READ"; providerId: string; downloadHandle: string; offset: number }

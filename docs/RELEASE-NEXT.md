@@ -4,7 +4,7 @@
 
 ## 中文
 
-- 完成内置 MDBX 浏览器引擎的持久化、后台连接与旧库路由基础：分块保存、写入中断保护、重启恢复及完整备份，并验证原 Passkey 私钥、计数与原生数据库往返。专用 Worker 独占数据库，普通页面不能接管连接；旧库继续使用原本的引擎，归属冲突或保存失败时停止写入，状态检查不再关闭正在使用的连接。此项尚未接入正式界面；当前版本仍需本机助手，免安装使用流程将在应用接入完成后开放。
+- MDBX 数据库引擎现已内置：可直接新建 Sky 密码库、导入本地备份、导出完整备份，并在浏览器重启后重新解锁，无需另装助手。新建界面采用紧凑布局，主要按钮保持可见。旧助手中的工作副本继续使用原存储位置；账户加密保存库的归属，归属冲突时停止操作。引擎支持分块持久化、中断保护与后台独占连接，已验证原 Passkey 密钥和计数保留及原生格式往返。内置引擎的云端同步和完整跨端场景仍在验收。
 
 - 加固附近同步的内部数据传输：保留大整数、高精度小数、负零和特殊字段名，避免浏览器或原生解析器改写内容；完成真实加密连接、附件及重启恢复验证。此项仍为内部基础，尚未开放附近同步界面。
 
@@ -48,7 +48,7 @@
 
 ## English
 
-- Added durable storage, background connection ownership and legacy-vault routing for a bundled MDBX browser engine, including incremental block storage, interrupted-write protection, restart recovery and complete backups. Verified original Passkey keys/counters and native database round trips. A dedicated Worker owns the database; ordinary pages cannot take over its connection. Existing vaults keep their original engine, conflicting or unsaved ownership stops writes, and status checks keep live connections open. This remains internal: the current UI still requires Native Host until application integration is complete.
+- MDBX is now built in: create Sky password databases, import local backups, export complete backups and unlock after browser restarts without installing a helper. The compact creation dialog keeps primary actions visible. Existing helper-backed working copies retain their original storage; encrypted accounts preserve database ownership and conflicting ownership stops operations. The engine provides incremental durable storage, interruption protection and exclusive background ownership. Original Passkey keys/counters and native-format round trips are verified. Cloud sync and complete cross-device scenarios with the bundled engine remain under acceptance testing.
 
 - Hardened internal nearby data transport to retain large integers, precise decimals, negative zero, and literal special field names. Verified actual encrypted transfer, attachments, and restart recovery. Nearby synchronization remains internal groundwork without a user-facing entry point.
 

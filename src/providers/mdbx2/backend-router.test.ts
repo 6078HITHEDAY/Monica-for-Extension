@@ -145,4 +145,18 @@ describe('MDBX backend ownership', () => {
     await expect(f.router.request('health.repair.apply', { vaultHandle: id(1), planHandle: id(3) })).rejects.toMatchObject({ code: 'mdbx-backend-conflict' });
     expect(f.native.calls).toHaveLength(0); f.router.close();
   });
+  it('restores missing vault and state origins from the authenticated account before dispatch', async () => {
+    const f = fixture();
+    const router = new Mdbx2BackendRouter(f.native.value, f.browser.value, f.origins, (handle, role) =>
+      handle === id(1) && role === 'vault' || handle === id(2) && role === 'state' ? 'browser' : undefined);
+    await router.request('sync.state.status', { vaultHandle: id(1), stateHandle: id(2) });
+    expect(f.native.calls).toHaveLength(0); expect(f.browser.calls).toHaveLength(1);
+    expect(f.origins.rows.get(id(1))?.backend).toBe('browser'); expect(f.origins.rows.get(id(2))?.backend).toBe('browser'); router.close();
+  });
+  it('refuses an account origin that conflicts with a previously allocated handle', async () => {
+    const f = fixture(); await f.origins.bind('native', [{ handle: id(1), role: 'vault' }]);
+    const router = new Mdbx2BackendRouter(f.native.value, f.browser.value, f.origins, () => 'browser');
+    await expect(router.request('vault.status', { vaultHandle: id(1) })).rejects.toMatchObject({ code: 'mdbx-backend-conflict' });
+    expect(f.native.calls).toHaveLength(0); expect(f.browser.calls).toHaveLength(0); router.close();
+  });
 });

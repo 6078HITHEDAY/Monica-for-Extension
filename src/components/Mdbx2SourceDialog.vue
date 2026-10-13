@@ -62,7 +62,7 @@ import {
 import { vaultClient } from "../runtime/client";
 import type { Mdbx2ManagerSyncStatus, Mdbx2WebDavSettingsInput } from "../runtime/messages";
 
-type NewSourceMode = "local" | "remote";
+type NewSourceMode = "create" | "local" | "remote";
 type BusyState = "" | "probe" | "upload" | "download" | "open" | "save" | "publish";
 type SnapshotBusyState = "" | "list" | "structure" | "prune-plan" | "prune" | "create" | "delete" | "restore";
 type SnapshotStructureMode = "snapshot" | "compare";
@@ -203,6 +203,7 @@ const form = reactive({
   remotePath: typeof config.remotePath === "string" ? config.remotePath : "",
   unlockMethod: "password" as Mdbx2UnlockMethod,
   vaultPassword: "",
+  confirmVaultPassword: "",
   isDefaultSaveTarget: props.provider?.isDefaultSaveTarget || false
 });
 
@@ -254,10 +255,10 @@ const managerMutationLocked = computed(() => otherManagerMutationLocked.value ||
 const dialogLocked = computed(() => Boolean(busy.value) || otherManagerMutationLocked.value || Boolean(healthRepairBusy.value));
 const dialogTitle = computed(() => {
   if (isExisting.value) return tr('管理 {0}', { 0: activeProvider.value?.name || form.name });
-  return form.mode === "remote" ? tr('从 WebDAV 加入 MDBX2') : tr('打开 MDBX2 保险库');
+  return form.mode === 'create' ? tr('新建 MDBX 数据库') : form.mode === "remote" ? tr('从 WebDAV 加入 MDBX2') : tr('打开 MDBX2 保险库');
 });
 const busyLabel = computed(() => ({
-  probe: tr('正在检查 Native Host…'),
+  probe: tr('正在检查数据库连接…'),
   upload: tr('正在传输本地文件… {0}%', { 0: uploadProgress.value }),
   download: tr('正在下载并校验可移植备份…'),
   open: tr('正在验证、解锁并检查保险库…'),
@@ -272,7 +273,7 @@ async function refreshStatus() {
   busy.value = "probe";
   error.value = "";
   try {
-    const nextHost = await vaultClient.mdbx2HostStatus();
+    const nextHost = await vaultClient.mdbx2HostStatus(providerId.value || undefined);
     hostStatus.value = nextHost;
     emit("hostStatus", nextHost);
     if (!providerId.value || nextHost.availability !== "ready") return;
@@ -561,17 +562,15 @@ function selectSecurityKey(event: Event) {
 }
 
 async function connectNewSource() {
-  if (!hostReady.value) return void (error.value = hostStatus.value?.message || tr('MDBX2 Native Host 尚未就绪。'));
+  if (!hostReady.value) return void (error.value = hostStatus.value?.message || tr('数据库暂未就绪，请重新打开后再试。'));
   error.value = "";
   try {
-    const source = form.mode === "local" ? await stageLocalFile() : await stageRemoteBootstrap();
-    busy.value = "open";
-    const opened = await vaultClient.openMdbx2Vault({
-      name: form.name,
-      source,
-      credential: await buildCredential(),
-      isDefaultSaveTarget: form.isDefaultSaveTarget
-    });
+    if (form.mode === 'create' && (!form.vaultPassword || form.vaultPassword !== form.confirmVaultPassword)) throw new Error(tr('请输入数据库密码，并确保两次输入一致。'));
+    const source = form.mode === 'create' ? undefined : form.mode === 'local' ? await stageLocalFile() : await stageRemoteBootstrap();
+    busy.value = 'open';
+    const opened = form.mode === 'create'
+      ? await vaultClient.createMdbx2Vault({ name: form.name, password: form.vaultPassword, isDefaultSaveTarget: form.isDefaultSaveTarget })
+      : await vaultClient.openMdbx2Vault({ name: form.name, source: source!, credential: await buildCredential(), isDefaultSaveTarget: form.isDefaultSaveTarget });
     pendingSource.value = undefined;
     pendingOriginKey.value = "";
     activeProvider.value = opened.account;
@@ -592,7 +591,7 @@ async function connectNewSource() {
 
     const result = await vaultClient.syncProvider(opened.account.id);
     emit("changed");
-    emit("notice", syncNotice(result, form.mode === "remote" ? tr('MDBX2 WebDAV 已加入并同步。') : tr('MDBX2 本机保险库已打开并导入。')));
+    emit("notice", syncNotice(result, form.mode === 'create' ? tr('MDBX 数据库已创建。') : form.mode === "remote" ? tr('MDBX2 WebDAV 已加入并同步。') : tr('MDBX2 本机保险库已打开并导入。')));
     clearSecrets();
     emit("close");
   } catch (cause) {
@@ -1363,6 +1362,7 @@ function closeDialog() {
 }
 
 function clearSecrets() {
+  form.confirmVaultPassword = "";
   form.vaultPassword = "";
   form.webDavPassword = "";
   securityKeyFile.value = null;
@@ -1422,7 +1422,7 @@ function clearConflicts() {
 
 function hostStateLabel(status: Mdbx2HostStatus | null): string {
   if (!status) return tr('检查中');
-  return ({ ready: tr('Host 已就绪'), "not-installed": tr('Host 未安装'), incompatible: tr('Host 版本不兼容'), unavailable: tr('Host 暂不可用') } as const)[status.availability];
+  return ({ ready: tr('数据库已就绪'), "not-installed": tr('本机助手未安装'), incompatible: tr('数据库引擎版本不兼容'), unavailable: tr('数据库暂不可用') } as const)[status.availability];
 }
 
 function hostStateClass(status: Mdbx2HostStatus | null): string {
@@ -1552,7 +1552,7 @@ function conflictErrorMessage(cause: unknown): string {
       <header>
         <div>
           <h2 id="mdbx2-dialog-title">{{ dialogTitle }}</h2>
-          <p>{{ tr('浏览器保存本机加密工作副本，网盘只交换可移植备份、增量段和加密 Blob。') }}</p>
+          <p>{{ tr('完整备份会保留数据库和附件；WebDAV 用于多设备同步。') }}</p>
         </div>
         <m3e-icon-button data-dialog-close :aria-label="tr('关闭 MDBX2 设置')" :disabled="dialogLocked" @click="closeDialog"><m3e-icon name="close"></m3e-icon></m3e-icon-button>
       </header>
@@ -1560,18 +1560,17 @@ function conflictErrorMessage(cause: unknown): string {
       <form class="provider-form mdbx2-form" @submit.prevent="isExisting ? saveSettings() : connectNewSource()">
         <div class="mdbx2-host-row field-wide" :class="hostStateClass(hostStatus)" role="status" aria-live="polite">
           <m3e-icon :name="hostReady ? 'check_circle' : 'computer'" />
-          <div><strong>{{ hostStateLabel(hostStatus) }}</strong><small>{{ hostStatus?.message || tr('正在检查本地连接服务。') }}</small></div>
-          <small v-if="hostStatus?.capabilities">Host {{ hostStatus.capabilities.hostVersion }} · Core {{ hostStatus.capabilities.mdbxCoreRevision.slice(0, 8) }}</small>
+          <div><strong>{{ hostStateLabel(hostStatus) }}</strong><small>{{ hostReady ? (hostStatus?.runtimeBackend === 'browser' ? tr('已内置，无需安装组件。数据保存在此浏览器。') : tr('此旧副本保存在本机助手中，继续使用原来的存储位置。')) : hostStatus?.message || tr('正在检查数据库连接…') }}</small></div>
         </div>
 
         <template v-if="!isExisting">
-          <fieldset class="mdbx2-mode-picker field-wide">
-            <legend>{{ tr('加入方式') }}</legend>
-            <div>
-              <m3e-button variant="text" type="button" toggle :selected.prop="form.mode === 'local'" @beforeinput.prevent :class="{ active: form.mode === 'local' }" :disabled="Boolean(busy)" @click="setMode('local')"><m3e-icon slot="icon" name="folder_open" />{{ tr('本地 .mdbx 文件') }}</m3e-button>
-              <m3e-button variant="text" type="button" toggle :selected.prop="form.mode === 'remote'" @beforeinput.prevent :class="{ active: form.mode === 'remote' }" :disabled="Boolean(busy)" @click="setMode('remote')"><m3e-icon slot="icon" name="cloud_download" />{{ tr('从 WebDAV 加入') }}</m3e-button>
-            </div>
-          </fieldset>
+          <m3e-form-field v-field-label variant="filled" hide-required-marker class="field field-wide"><label slot="label">{{ tr('加入方式') }}</label>
+            <component :is="materialSelectTag" :disabled="Boolean(busy)" @input="setMode(($event.target as HTMLElement &amp; { value: NewSourceMode }).value)">
+              <component :is="materialOptionTag" value="create" :selected.prop="form.mode === 'create'">{{ tr('新建数据库') }}</component>
+              <component :is="materialOptionTag" value="local" :selected.prop="form.mode === 'local'">{{ tr('本地备份') }}</component>
+              <component :is="materialOptionTag" value="remote" :selected.prop="form.mode === 'remote'">WebDAV</component>
+            </component>
+          </m3e-form-field>
           <m3e-form-field v-field-label variant="filled" hide-required-marker class="field"><label slot="label">{{ tr('显示名称') }}</label><input v-model="form.name" autocomplete="off" autofocus placeholder="Monica MDBX2" /></m3e-form-field>
           <label v-choice-label class="favorite-row"><m3e-checkbox :checked.prop="form.isDefaultSaveTarget" @input="form.isDefaultSaveTarget = ($event.target as HTMLElement &amp; { checked: boolean }).checked"   /><span>{{ tr('设为新项目的默认保存目标') }}</span></label>
         </template>
@@ -1589,10 +1588,16 @@ function conflictErrorMessage(cause: unknown): string {
           <m3e-form-field v-field-label variant="filled" hide-required-marker hide-subscript="never" class="field field-wide"><label slot="label">{{ tr('Android 兼容远端位置 *') }}</label><input v-model="form.remotePath" autocomplete="off" placeholder="Monica/MDBX2/main.mdbx" required /><small slot="hint">{{ tr('此路径就是可移植 .mdbx 文件；日常同步对象自动写入同名') }}<code>.sync</code>{{ tr('目录。') }}</small></m3e-form-field>
         </template>
 
-        <template v-if="!isExisting || !vaultOpen">
+        <template v-if="(!isExisting || !vaultOpen) && form.mode !== 'create'">
           <m3e-form-field v-field-label variant="filled" hide-required-marker class="field"><label slot="label">{{ tr('解锁方式') }}</label><component :is="materialSelectTag" @input="form.unlockMethod = ($event.target as HTMLElement &amp; { value: string }).value" ><component :is="materialOptionTag" :selected.prop="String(form.unlockMethod ?? '') === String('password')" value="password">{{ tr('密码') }}</component><component :is="materialOptionTag" :selected.prop="String(form.unlockMethod ?? '') === String('security-key')" value="security-key">{{ tr('安全密钥') }}</component><component :is="materialOptionTag" :selected.prop="String(form.unlockMethod ?? '') === String('password-security-key')" value="password-security-key">{{ tr('密码 + 安全密钥') }}</component></component></m3e-form-field>
           <m3e-form-field v-field-label variant="filled" hide-required-marker v-if="form.unlockMethod !== 'security-key'" class="field"><label slot="label">{{ tr('保险库密码（可留空）') }}</label><input v-model="form.vaultPassword" :type="revealVaultPassword ? 'text' : 'password'" autocomplete="current-password" /><m3e-button slot="suffix" variant="text" type="button" @click="revealVaultPassword = !revealVaultPassword">{{ revealVaultPassword ? tr('隐藏') : tr('显示') }}</m3e-button></m3e-form-field>
-          <div v-if="needsSecurityKey" class="field field-wide"><span>{{ tr('安全密钥文件 *') }}</span><label class="file-action provider-file-action secondary"><m3e-icon name="key" /><span>{{ securityKeyFile?.name || tr('选择最大 64 KiB 的安全密钥文件') }}</span><input type="file" :aria-label="tr('MDBX2 安全密钥文件')" @change="selectSecurityKey" /></label><small>{{ tr('密码和安全密钥只进入 Native Host 的本次解锁调用，不会保存到插件密码库。') }}</small></div>
+          <div v-if="needsSecurityKey" class="field field-wide"><span>{{ tr('安全密钥文件 *') }}</span><label class="file-action provider-file-action secondary"><m3e-icon name="key" /><span>{{ securityKeyFile?.name || tr('选择最大 64 KiB 的安全密钥文件') }}</span><input type="file" :aria-label="tr('MDBX2 安全密钥文件')" @change="selectSecurityKey" /></label><small>{{ tr('解锁凭据只用于本次打开数据库，不会保存到插件密码库。') }}</small></div>
+        </template>
+
+        <template v-if="!isExisting && form.mode === 'create'">
+          <m3e-form-field v-field-label variant="filled" hide-required-marker class="field"><label slot="label">{{ tr('数据库密码') }}</label><input v-model="form.vaultPassword" type="password" autocomplete="new-password" required /></m3e-form-field>
+          <m3e-form-field v-field-label variant="filled" hide-required-marker class="field"><label slot="label">{{ tr('确认数据库密码') }}</label><input v-model="form.confirmVaultPassword" type="password" autocomplete="new-password" required /></m3e-form-field>
+          <p class="supporting field-wide">{{ tr('使用 Sky 密码保护。请记住此密码，锁定后需要它才能重新打开数据库。') }}</p>
         </template>
 
         <div v-if="inspection" class="mdbx2-inspection field-wide" role="status">
@@ -2357,30 +2362,32 @@ function conflictErrorMessage(cause: unknown): string {
           <div v-if="historyCursor" class="mdbx2-history-more"><m3e-button variant="text" type="button" :disabled="Boolean(historyBusy) || managerMutationLocked || Boolean(pendingHistoryRevert)" @click="loadHistory(false)">{{ tr('加载更早记录') }}</m3e-button></div>
         </section>
 
-        <div class="provider-boundaries field-wide" :aria-label="tr('MDBX2 浏览器能力边界')">
-          <div class="boundary-row"><m3e-icon name="database" /><span>{{ tr('单个 .mdbx 用于首次加入和完整备份；多设备日常修改通过 Commit DAG、state delta、Tombstone 和 Blob 增量交换。') }}</span></div>
-          <div class="boundary-row"><m3e-icon name="encrypted" /><span>{{ tr('Native Host 负责解锁、迁移、健康检查和核心写入；管理页只接收状态摘要与受限句柄。') }}</span></div>
+        <div v-if="isExisting" class="provider-boundaries field-wide" :aria-label="tr('MDBX2 浏览器能力边界')">
+          <div class="boundary-row"><m3e-icon name="database" /><span>{{ tr('完整备份会保留数据库和附件；WebDAV 用于多设备同步。') }}</span></div>
+          <div class="boundary-row"><m3e-icon name="encrypted" /><span>{{ tr('锁定后需要重新解锁数据库。请定期导出完整备份，或配置 WebDAV 同步。') }}</span></div>
         </div>
 
         <div v-if="busy" class="mdbx2-progress field-wide" role="status" aria-live="polite"><progress v-if="busy === 'upload'" :value="uploadProgress" max="100" /><span>{{ busyLabel }}</span></div>
         <p v-if="error" class="form-error field-wide" role="alert">{{ error }}</p>
 
-        <footer class="provider-actions field-wide">
+      </form>
+        <footer class="provider-actions">
           <m3e-button variant="text" type="button" :disabled="dialogLocked" @click="closeDialog">{{ tr('取消') }}</m3e-button>
           <template v-if="isExisting">
             <m3e-button v-if="!vaultOpen" variant="tonal" type="button" :disabled="dialogLocked || !hostReady" @click="unlockExisting">{{ tr('解锁本机副本') }}</m3e-button>
             <m3e-button variant="tonal" type="button" :disabled="dialogLocked || !remoteFieldsComplete" @click="saveSettings">{{ tr('保存设置') }}</m3e-button>
             <m3e-button v-if="canPublish" variant="filled" type="button" :disabled="dialogLocked || !hostReady" @click="publishBootstrap">{{ tr('保存并发布本机保险库') }}</m3e-button>
           </template>
-          <m3e-button v-else variant="filled" type="submit" :disabled="dialogLocked || !hostReady">{{ form.mode === 'remote' ? tr('下载并加入') : tr('验证、解锁并导入') }}</m3e-button>
+          <m3e-button v-else variant="filled" type="button" :disabled="dialogLocked || !hostReady" @click="connectNewSource">{{ form.mode === 'create' ? tr('创建数据库') : form.mode === 'remote' ? tr('下载并加入') : tr('验证、解锁并导入') }}</m3e-button>
         </footer>
-      </form>
     </section>
   </div>
 </template>
 
 <style scoped>
 .mdbx2-dialog { container-type: inline-size; }
+.mdbx2-dialog > .provider-actions { flex: 0 0 auto; position: static; margin-top: 12px; }
+.mdbx2-dialog.new-source-dialog .mdbx2-form { gap: 12px; }
 .mdbx2-form { grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr)); grid-auto-rows: max-content; align-content: start; gap: 16px; }
 .mdbx2-form > * { min-block-size: max-content; }
 .mdbx2-dialog > header { min-width: 0; }
@@ -2398,7 +2405,7 @@ function conflictErrorMessage(cause: unknown): string {
   --m3e-icon-button-default-leading-space: 0px;
   --m3e-icon-button-default-trailing-space: 0px;
 }
-.mdbx2-host-row { min-height: 64px; border: 1px solid var(--md-sys-color-outline-variant, var(--app-outline)); border-radius: 8px; display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 12px 16px; background: var(--md-sys-color-surface-container-highest, var(--app-surface-high)); }
+.mdbx2-host-row { min-height: 64px; border: 1px solid var(--md-sys-color-outline-variant, var(--app-outline)); border-radius: 20px; display: grid; grid-template-columns: 24px minmax(0, 1fr); align-items: center; gap: 12px; padding: 12px 16px; background: var(--md-sys-color-surface-container-highest, var(--app-surface-high)); }
 .mdbx2-host-row > m3e-icon { --m3e-icon-size: 20px; }
 .mdbx2-host-row > div { min-width: 0; display: grid; gap: 2px; }
 .mdbx2-host-row small { color: var(--app-muted); overflow-wrap: anywhere; }
