@@ -4,7 +4,9 @@
 
 ## 中文
 
-- MDBX 数据库引擎现已内置：可直接新建 Sky 密码库、导入本地备份、导出完整备份，并在浏览器重启后重新解锁，无需另装助手。新建界面采用紧凑布局，主要按钮保持可见。旧助手中的工作副本继续使用原存储位置；账户加密保存库的归属，归属冲突时停止操作。引擎支持分块持久化、中断保护与后台独占连接，已验证原 Passkey 密钥和计数保留及原生格式往返。内置引擎的云端同步和完整跨端场景仍在验收。
+- MDBX 数据库引擎现已内置：可直接新建 Sky 密码库、导入本地备份、导出完整备份，并在浏览器重启后重新解锁，无需另装助手。新建界面采用紧凑布局，主要按钮保持可见。旧助手中的工作副本继续使用原存储位置；账户加密保存库的归属，归属冲突时停止操作。引擎支持分块持久化、中断保护与后台独占连接，已验证原 Passkey 密钥和计数保留及原生格式往返。旧助手不可用时，内置数据库仍可独立使用。当前 Android 应用和完整跨端场景仍在验收。
+
+- 内置 MDBX 已通过两个独立浏览器的 WebDAV 同步及重启恢复验证，保留完整密码项目、附件、原 Passkey 密钥和计数。修复首次上传成功但响应丢失后无法恢复的问题；附件下载中断时先完成接收，再发送本地修改。损坏附件会被拒绝并清理其临时接收文件，云端文件更正后可以重新同步，失败时不会提前确认接收完成。
 
 - 加固附近同步的内部数据传输：保留大整数、高精度小数、负零和特殊字段名，避免浏览器或原生解析器改写内容；完成真实加密连接、附件及重启恢复验证。此项仍为内部基础，尚未开放附近同步界面。
 
@@ -48,7 +50,9 @@
 
 ## English
 
-- MDBX is now built in: create Sky password databases, import local backups, export complete backups and unlock after browser restarts without installing a helper. The compact creation dialog keeps primary actions visible. Existing helper-backed working copies retain their original storage; encrypted accounts preserve database ownership and conflicting ownership stops operations. The engine provides incremental durable storage, interruption protection and exclusive background ownership. Original Passkey keys/counters and native-format round trips are verified. Cloud sync and complete cross-device scenarios with the bundled engine remain under acceptance testing.
+- MDBX is now built in: create Sky password databases, import local backups, export complete backups and unlock after browser restarts without installing a helper. The compact creation dialog keeps primary actions visible. Existing helper-backed working copies retain their original storage; encrypted accounts preserve database ownership and conflicting ownership stops operations. The engine provides incremental durable storage, interruption protection and exclusive background ownership. Original Passkey keys/counters and native-format round trips are verified. Browser databases remain usable when the legacy helper is unavailable. Current Android application and complete cross-device scenarios remain under acceptance testing.
+
+- Bundled MDBX now passes WebDAV synchronization and restart recovery between two independent browser clients, preserving complete password projects, attachments and original Passkey keys/counters. Fixed recovery after a successful initial upload loses its response. Interrupted attachment reception finishes before local changes are published. Corrupt attachments are rejected and their partial receive files are cleared, allowing corrected remote files to be synchronized; failed reception is never acknowledged as complete.
 
 - Hardened internal nearby data transport to retain large integers, precise decimals, negative zero, and literal special field names. Verified actual encrypted transfer, attachments, and restart recovery. Nearby synchronization remains internal groundwork without a user-facing entry point.
 

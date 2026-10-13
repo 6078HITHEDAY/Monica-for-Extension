@@ -1609,14 +1609,13 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
     }
     case "MDBX2_BOOTSTRAP_PUBLISH": {
       assertManagerPage(sender);
+      const sessionId = await service.passkeySessionId();
+      if (!sessionId) throw new VaultLockedError();
       const account = await requireMdbx2Account(request.providerId);
       const input = mdbx2CloudSyncInput(account, false);
-      const published = await mdbx2SyncCoordinator.publishBootstrap(input);
-      await service.upsertProvider({
-        ...account,
-        config: { ...account.config, syncStateHandle: published.stateHandle },
-        lastError: undefined
-      });
+      const published = await mdbx2SyncCoordinator.publishBootstrap(input, undefined, stateHandle => service.upsertProvider({
+        ...account, config: { ...account.config, syncStateHandle: stateHandle }, lastError: undefined
+      }, false, account, { sessionId }).then(() => undefined));
       return managerSyncStatus(published.status, true, true);
     }
     case "MDBX2_BOOTSTRAP_REGISTER": {

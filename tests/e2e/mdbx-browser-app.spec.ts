@@ -5,6 +5,8 @@ import path from 'node:path';
 import { launchEdgeContext } from './fixtures/edge';
 import { chooseOption } from './fixtures/material';
 import type { ProviderAccount } from '../../src/core/model';
+import { createEmptyVaultState } from '../../src/core/model';
+import { deriveVaultKey, encryptVaultState } from '../../src/security/vault-crypto';
 
 const master = 'Synthetic browser app master password';
 const password = 'Synthetic MDBX browser database password';
@@ -38,7 +40,15 @@ test('production UI creates and reopens MDBX in the browser without an installed
       port.postMessage({ protocol: 2, requestId: crypto.randomUUID(), method: 'host.hello', params: {} });
     }));
     expect(evidence.nativeUnavailable).not.toBe('available');
-    await send(page, { type: 'VAULT_SETUP', masterPassword: master });
+    // Import an authenticated pre-upgrade account with no backend field. Its
+    // unavailable native helper must not hide or disconnect new browser vaults.
+    const legacyId = randomUUID(), legacyHandle = randomUUID();
+    const state = createEmptyVaultState(new Date().toISOString());
+    state.providers.push({ id: legacyId, name: 'Legacy helper copy', kind: 'mdbx2', enabled: true, isDefaultSaveTarget: false,
+      config: { vaultHandle: legacyHandle, formatVersion: 'MDBX-2' } });
+    const { key, kdf } = await deriveVaultKey(master);
+    const backup = { magic: 'MONICA_EXTENSION_BACKUP', version: 1, exportedAt: new Date().toISOString(), envelope: await encryptVaultState(state, key, kdf) };
+    await send(page, { type: 'VAULT_RESTORE_ENCRYPTED', backup, backupPassword: master });
     await page.evaluate(() => chrome.storage.local.set({ 'monica.sync.preferences.v1': { enabled: false } })); await page.reload();
     await page.getByRole('button', { name: '密码源', exact: true }).click();
     await page.locator('m3e-list-action').filter({ hasText: '连接 MDBX2 保险库' }).click();
@@ -65,8 +75,11 @@ test('production UI creates and reopens MDBX in the browser without an installed
     await read();
     // Repeated status checks must not close the authenticated Worker lease.
     await send(page, { type: 'MDBX2_HOST_STATUS', providerId: provider.id }); await read();
+    const legacyStatus = await send(page, { type: 'MDBX2_HOST_STATUS', providerId: legacyId });
+    expect(legacyStatus).toMatchObject({ runtimeBackend: 'native', availability: 'not-installed' }); await read();
     await page.setViewportSize({ width: 1180, height: 950 }); await page.reload();
     await page.getByRole('button', { name: '密码源', exact: true }).click();
+    await expect(page.locator(`[data-home-provider-id="${legacyId}"]`).getByText('数据库暂不可用', { exact: true })).toBeVisible();
     const card = () => page.locator(`[data-home-provider-id="${provider.id}"]`);
     const downloading = page.waitForEvent('download'); await card().getByRole('button', { name: '导出 MDBX2 完整备份', exact: true }).click();
     const download = await downloading, exported = path.join(run, 'exported.mdbx'); await download.saveAs(exported);
@@ -82,6 +95,8 @@ test('production UI creates and reopens MDBX in the browser without an installed
     await dialog.getByLabel('保险库密码（可留空）', { exact: true }).fill(password);
     await dialog.getByRole('button', { name: '解锁本机副本', exact: true }).click();
     await expect(dialog.getByText('数据库已就绪', { exact: true })).toBeVisible(); await read();
+    const legacy = ((await send(page, { type: 'PROVIDER_LIST' })) as ProviderAccount[]).find(row => row.id === legacyId)!;
+    expect(legacy.config).toMatchObject({ vaultHandle: legacyHandle, runtimeBackend: 'native' });
     await dialog.getByRole('button', { name: '关闭 MDBX2 设置', exact: true }).click();
     // Import the actual exported encrypted file through the user-facing picker.
     await page.locator('m3e-list-action').filter({ hasText: '连接 MDBX2 保险库' }).click(); dialog = page.locator('.mdbx2-dialog[role="dialog"]');
@@ -96,6 +111,6 @@ test('production UI creates and reopens MDBX in the browser without an installed
     expect(JSON.parse(restored.payloadJson).password_plain).toBe('synthetic-browser-ui-secret');
     await page.screenshot({ path: info.outputPath('sources-final.png'), fullPage: true });
     expect(errors).toEqual([]);
-    evidence.status = 'passed'; evidence.createReadExportLockRestartImport = true; evidence.errors = errors;
+    evidence.status = 'passed'; evidence.createReadExportLockRestartImport = true; evidence.legacyUnavailableKeepsBrowserUsable = true; evidence.errors = errors;
   } finally { if (context) await context.close(); await writeFile(info.outputPath('evidence.json'), JSON.stringify(evidence, null, 2)); }
 });

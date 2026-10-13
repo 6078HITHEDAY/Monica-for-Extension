@@ -515,6 +515,14 @@ export interface WebDavRequestLog {
   ifMatch?: string;
 }
 
+export interface WebDavFaultContext {
+  phase: 'before' | 'stored';
+  method: string;
+  path: string;
+  request: IncomingMessage;
+  response: ServerResponse;
+}
+
 export class LocalWebDavServer {
   private readonly entries = new Map<string, RemoteEntry>([["", { directory: true, version: 1 }]]);
   readonly requests: WebDavRequestLog[] = [];
@@ -523,7 +531,8 @@ export class LocalWebDavServer {
 
   constructor(
     readonly username: string,
-    readonly password: string
+    readonly password: string,
+    private readonly intercept?: (context: WebDavFaultContext) => boolean | Promise<boolean>
   ) {}
 
   get baseUrl(): string {
@@ -623,6 +632,7 @@ export class LocalWebDavServer {
         ifNoneMatch: headerValue(request.headers["if-none-match"]),
         ifMatch: headerValue(request.headers["if-match"])
       });
+      if (await this.intercept?.({ phase: 'before', method, path, request, response })) return;
       if (method === "PROPFIND") {
         this.respondPropfind(response, path, headerValue(request.headers.depth) || "0");
         return;
@@ -688,6 +698,7 @@ export class LocalWebDavServer {
         }
         const version = (existing?.version || 0) + 1;
         this.entries.set(path, { directory: false, bytes, version });
+        if (await this.intercept?.({ phase: 'stored', method, path, request, response })) return;
         response.writeHead(existing ? 204 : 201, { ETag: `"v${version}"` });
         response.end();
         return;
