@@ -23,6 +23,34 @@ export class ExtensionRuntimeError extends Error {
 let runtimeChecked = false;
 let runtimeCheck: Promise<void> | undefined;
 
+function transportFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message === 'Could not establish connection. Receiving end does not exist.'
+    || message === 'The message port closed before a response was received.'
+    || message === 'A listener indicated an asynchronous response by returning true, but the message channel closed before a response was received';
+}
+
+function runtimeConnectionError(error: unknown): unknown {
+  runtimeChecked = false;
+  if (error instanceof Error && error.message.includes('Extension context invalidated')) return reloadRequired();
+  return transportFailure(error)
+    ? new ExtensionRuntimeError(translateRuntimeError('暂时无法连接 Monica 后台，请稍后重新打开页面。'), 'RUNTIME_UNAVAILABLE')
+    : error;
+}
+
+async function probeRuntime(): Promise<ExtensionResponse<RuntimeInfo>> {
+  // Only this secret-free, read-only probe is replayed while the worker wakes.
+  const delays = [100, 250, 500, 1000, 2000];
+  for (let attempt = 0; ; attempt++) {
+    try { return await chrome.runtime.sendMessage({ type: 'RUNTIME_INFO' }); }
+    catch (error) {
+      runtimeChecked = false;
+      if (!transportFailure(error) || attempt >= delays.length) throw runtimeConnectionError(error);
+      await new Promise(resolve => setTimeout(resolve, delays[attempt]));
+    }
+  }
+}
+
 function reloadRequired(): ExtensionRuntimeError {
   runtimeChecked = false;
   return new ExtensionRuntimeError(translateRuntimeError("Monica 已更新，请重新加载扩展后再解锁。"), "RUNTIME_RELOAD_REQUIRED");
@@ -41,7 +69,7 @@ async function checkRuntime(force: boolean): Promise<void> {
   if (!runtimeCheck) {
     runtimeChecked = false;
     runtimeCheck = (async () => {
-      const response = await chrome.runtime.sendMessage({ type: "RUNTIME_INFO" }) as ExtensionResponse<RuntimeInfo>;
+      const response = await probeRuntime();
       const info = checkResponse(response);
       if (!info || info.version !== runtimeInfo.version || info.protocolVersion !== runtimeInfo.protocolVersion) throw reloadRequired();
       runtimeChecked = true;
@@ -54,7 +82,17 @@ async function send<T>(request: ExtensionRequest): Promise<T> {
   if (typeof chrome === "undefined" || !chrome.runtime?.sendMessage) throw new Error("请在已安装的 Monica 浏览器插件中打开此页面。");
   // Share one initial check across UI reads; recheck before sending a password.
   await checkRuntime(request.type === "VAULT_SETUP" || request.type === "VAULT_UNLOCK" || request.type === "VAULT_UNLOCK_HELLO");
-  const response = (await chrome.runtime.sendMessage(request)) as ExtensionResponse<T>;
+  let response: ExtensionResponse<T>;
+  try { response = await chrome.runtime.sendMessage(request); }
+  catch (error) {
+    runtimeChecked = false;
+    // A status read may race worker suspension after a successful version check.
+    // Writes, unlocks, authenticator counters and prompts are never replayed.
+    if (request.type !== 'VAULT_STATUS' || !transportFailure(error)) throw runtimeConnectionError(error);
+    await checkRuntime(true);
+    try { response = await chrome.runtime.sendMessage(request); }
+    catch (retryError) { throw runtimeConnectionError(retryError); }
+  }
   return checkResponse(response);
 }
 

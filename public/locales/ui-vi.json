@@ -3447,5 +3447,6 @@
   "请先确认保留两端并按复制完成。": "Hãy xác nhận giữ cả hai và hoàn tất dưới dạng sao chép trước.",
   "传输目标不匹配或已变化。": "Đích truyền không khớp hoặc đã thay đổi.",
   "传输已结束，不能更改恢复方式。": "Quá trình truyền đã kết thúc; không thể đổi cách khôi phục.",
-  "来源删除已进入确认流程或此操作不是移动，暂不能按保留两端完成。": "Việc xóa nguồn đã được cho phép hoặc thao tác này không phải di chuyển. Không thể chọn giữ cả hai."
+  "来源删除已进入确认流程或此操作不是移动，暂不能按保留两端完成。": "Việc xóa nguồn đã được cho phép hoặc thao tác này không phải di chuyển. Không thể chọn giữ cả hai.",
+  "暂时无法连接 Monica 后台，请稍后重新打开页面。": "Dịch vụ nền của Monica tạm thời không khả dụng. Vui lòng mở lại trang này sau giây lát."
 }

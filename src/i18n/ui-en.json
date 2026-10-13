@@ -3447,5 +3447,6 @@
   "请先确认保留两端并按复制完成。": "Confirm keeping both and completing this as a copy first.",
   "传输目标不匹配或已变化。": "The transfer destination does not match or has changed.",
   "传输已结束，不能更改恢复方式。": "This transfer has ended; its recovery mode cannot be changed.",
-  "来源删除已进入确认流程或此操作不是移动，暂不能按保留两端完成。": "Source deletion has already been authorized, or this operation is not a move. Keeping both is unavailable."
+  "来源删除已进入确认流程或此操作不是移动，暂不能按保留两端完成。": "Source deletion has already been authorized, or this operation is not a move. Keeping both is unavailable.",
+  "暂时无法连接 Monica 后台，请稍后重新打开页面。": "Monica’s background service is temporarily unavailable. Please reopen this page shortly."
 }

@@ -1,6 +1,6 @@
 {
   "sourceSha256": "a0b648e4531fd6cb23b0473e47ce39461d8e49c33d4a5fc64023c424ab37fb5d",
-  "fontSha256": "479654837340ad7b33c9312e405df434f874559012f315bd8b39c2ce2154802d",
+  "fontSha256": "6917402e4bbfb90c879e2194df490a41b142d9a2791bc166d72117f1784c74b6",
   "fontTools": "4.60.1",
   "axes": {
     "FILL": [
@@ -224,6 +224,7 @@
     "sync",
     "sync_problem",
     "tag",
+    "target",
     "terminal",
     "text_fields",
     "text_snippet",

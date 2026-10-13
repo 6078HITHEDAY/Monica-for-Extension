@@ -4,6 +4,8 @@
 
 ## 中文
 
+- 修复刚打开锁定页时临时后台连接错误直接显示的问题，后台唤醒期间会有限重试状态检查；解锁和写操作不自动重复。修复生成器点击长度滑块时数值越界、无法生成的问题，密码长度、单词长度和分段长度均支持正常点击、拖动及键盘调整。
+
 - 接入与 Android 同源的附近设备同步传输核心，完成本机助手的加密配对、收发、附件分块和中断恢复基础。隔离 Edge 验证了重启后的完整数据与原 Passkey 私钥签名，正计数凭据保留在来源并跳过发送。此项目前是内部基础能力，实际密码库映射、受限 Passkey 按接收设备确认及设置入口尚未接通，暂不能在插件界面使用附近同步。
 
 - KeePass 移入 Bitwarden 的中断操作现在可从已保存步骤恢复，不会重复创建目标或覆盖后续恢复的来源。开始移除前可明确选择“保留两端，完成复制”；开始移除后固定来源快照，阻止同步、更换来源连接及其他写入覆盖恢复文件。重复连接同一文件、远端变化或目标回读不完整时停止。修复新建条目的空颜色／网址覆盖值导致误报文件变化的问题，保留原凭据 ID、私钥、零计数及已有正计数。
@@ -41,6 +43,8 @@
 以上是已实现的改动，完整 Android 对齐仍在进行。传输目前提供本地库、MDBX、KeePass 和 Bitwarden 个人库目标；跨后端原生字段矩阵及外部来源的持久删除恢复尚未补齐，同 Wi-Fi 设备同步仍待接入，不据此宣称所有数据库之间已完成互通。尚未发布新安装包或更新商店。
 
 ## English
+
+- Recover from temporary background connection failures when opening the lock page with bounded runtime/status retries, without replaying unlocks or writes. Fixed out-of-range values from generator track clicks; password length, word-password length and segment length now support clicks, dragging and keyboard adjustment correctly.
 
 - Added the Android LAN transport core to the Native Host, with encrypted pairing, transfers, chunked attachments and recovery primitives. Isolated Edge acceptance preserves complete data and verifies signatures with the original Passkey after restart; positive-counter credentials remain at the source and are omitted from export. This is an internal foundation: application vault mapping, per-recipient restricted-Passkey consent and settings are still pending, so nearby sync is not yet available in the extension UI.
 

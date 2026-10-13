@@ -3447,5 +3447,6 @@
   "请先确认保留两端并按复制完成。": "Confirma primero que quieres conservar ambos y completar la operación como copia.",
   "传输目标不匹配或已变化。": "El destino de la transferencia no coincide o ha cambiado.",
   "传输已结束，不能更改恢复方式。": "La transferencia ha terminado; no se puede cambiar su modo de recuperación.",
-  "来源删除已进入确认流程或此操作不是移动，暂不能按保留两端完成。": "La eliminación del origen ya se ha autorizado, o esta operación no es un traslado. No se pueden conservar ambos."
+  "来源删除已进入确认流程或此操作不是移动，暂不能按保留两端完成。": "La eliminación del origen ya se ha autorizado, o esta operación no es un traslado. No se pueden conservar ambos.",
+  "暂时无法连接 Monica 后台，请稍后重新打开页面。": "El servicio en segundo plano de Monica no está disponible temporalmente. Vuelve a abrir esta página en unos instantes."
 }

@@ -3447,5 +3447,6 @@
   "请先确认保留两端并按复制完成。": "Bestätige zuerst, beide zu behalten und den Vorgang als Kopie abzuschließen.",
   "传输目标不匹配或已变化。": "Das Übertragungsziel stimmt nicht überein oder wurde geändert.",
   "传输已结束，不能更改恢复方式。": "Diese Übertragung ist beendet. Der Wiederherstellungsmodus kann nicht geändert werden.",
-  "来源删除已进入确认流程或此操作不是移动，暂不能按保留两端完成。": "Die Quelllöschung wurde bereits freigegeben, oder dieser Vorgang ist kein Verschieben. Beide können nicht beibehalten werden."
+  "来源删除已进入确认流程或此操作不是移动，暂不能按保留两端完成。": "Die Quelllöschung wurde bereits freigegeben, oder dieser Vorgang ist kein Verschieben. Beide können nicht beibehalten werden.",
+  "暂时无法连接 Monica 后台，请稍后重新打开页面。": "Der Hintergrunddienst von Monica ist vorübergehend nicht verfügbar. Bitte öffnen Sie diese Seite in Kürze erneut."
 }
