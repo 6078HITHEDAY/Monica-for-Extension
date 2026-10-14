@@ -5,6 +5,10 @@ import { MdbxBrowserFilesystem } from '../../../src/providers/mdbx2/browser/file
 import { readMdbx2ContentMetadata } from '../../../src/providers/mdbx2/content-metadata';
 import { writeMdbx2Content } from '../../../src/providers/mdbx2/content-write';
 import { readMdbx2ContentAttachments, readMdbx2ContentAttachmentBytes } from '../../../src/providers/mdbx2/content-attachments';
+import { Mdbx2NativeClient } from '../../../src/providers/mdbx2/native-client';
+import { captureNearbyNativeSource } from '../../../src/nearby/native-source';
+import { planNearbyNativeMetadata, projectNearbyNativeMetadata } from '../../../src/nearby/native-metadata';
+import { projectNearbyNativeRecords } from '../../../src/nearby/native-records';
 import { Mdbx2NativeHostError, parseMdbx2NativeResponse, validateMdbx2HostCapabilities, type Mdbx2NativeMethod } from '../../../src/providers/mdbx2/native-contract';
 // Packaged by the fixture alongside the production compiled engine.
 // @ts-expect-error A generated, external Emscripten module.
@@ -102,7 +106,7 @@ async function lifecycleSuite() {
   return { noAbortReentry: true, lockReleasedAfterTrap: true };
 }
 async function action(op: string, data: any): Promise<unknown> {
-  if (op === 'content-metadata' || op === 'content-write' || op === 'content-attachments' || op === 'content-attachment-bytes') {
+  if (op === 'content-metadata' || op === 'content-write' || op === 'content-attachments' || op === 'content-attachment-bytes' || op.startsWith('nearby-native-')) {
     const request = async (method: Mdbx2NativeMethod, params: Record<string, unknown> = {}) => {
       const response = parseMdbx2NativeResponse(await session!.request({ protocol: 2, requestId: crypto.randomUUID(), method, params }));
       if (!response) throw Error('Invalid synthetic native response');
@@ -110,6 +114,13 @@ async function action(op: string, data: any): Promise<unknown> {
       return response.result;
     };
     const client = { request, hello: async () => validateMdbx2HostCapabilities(await request('host.hello')) };
+    if (op === 'nearby-native-source') {
+      const typed = new Mdbx2NativeClient({ connectNative() { throw Error('Synthetic fixture must use its compiled engine'); }, disconnectErrorMessage() { return undefined; } });
+      typed.request = request; return captureNearbyNativeSource(typed, data);
+    }
+    if (op === 'nearby-native-metadata') return projectNearbyNativeMetadata(data);
+    if (op === 'nearby-native-project') return projectNearbyNativeRecords(data);
+    if (op === 'nearby-native-plan') return planNearbyNativeMetadata(data.source, data.operationId, data.changes);
     if (op === 'content-attachments') return readMdbx2ContentAttachments(client, data.handle, data.input);
     if (op === 'content-attachment-bytes') {
       const bytes = await readMdbx2ContentAttachmentBytes(client, data.handle, data.input);
