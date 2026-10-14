@@ -14,7 +14,7 @@
 
 内置 MDBX 无需另装组件。Windows Hello、旧助手管理的 MDBX 工作副本继续使用[已发布的可选 Windows Host 0.1.3](https://github.com/Monica-Pass/Monica-for-Extension/releases/tag/v0.1.38)，本版未改动助手。GitHub 发布不代表浏览器商店已更新。
 
-附 SHA-256 校验文件、依赖清单与源码提交证据。[验证范围](../verification/release-0.1.39.md) · [反馈 Bug](https://github.com/Monica-Pass/Monica-for-Extension/issues/new?template=bug.yml)。反馈请提供版本、浏览器、密码源和复现步骤；不要上传真实密码、Passkey 私钥或密码库。安全问题按 [SECURITY.md](https://github.com/Monica-Pass/Monica-for-Extension/blob/main/SECURITY.md) 私下报告。
+下载列表仅保留插件 ZIP 和 SHA-256 校验文件；依赖清单、许可证清单与源码提交证据已包含在 ZIP 内。[验证范围](../verification/release-0.1.39.md) · [反馈 Bug](https://github.com/Monica-Pass/Monica-for-Extension/issues/new?template=bug.yml)。反馈请提供版本、浏览器、密码源和复现步骤；不要上传真实密码、Passkey 私钥或密码库。安全问题按 [SECURITY.md](https://github.com/Monica-Pass/Monica-for-Extension/blob/main/SECURITY.md) 私下报告。
 
 ## English
 
@@ -30,4 +30,4 @@ Extract `monica-extension-0.1.39.zip`. Existing users should replace files in th
 
 Built-in MDBX needs no helper. Windows Hello and existing native-managed working copies continue using the [previously released optional Windows Host 0.1.3](https://github.com/Monica-Pass/Monica-for-Extension/releases/tag/v0.1.38); no helper changes are included here. GitHub publication does not update browser stores.
 
-SHA-256 sidecars, dependency inventory and source-commit evidence are included. [Verification scope](../verification/release-0.1.39.md) · [Report bugs](https://github.com/Monica-Pass/Monica-for-Extension/issues/new?template=bug.yml). Provide versions, backend and reproduction steps, never real passwords, private keys or vaults. Report security issues privately following [SECURITY.md](https://github.com/Monica-Pass/Monica-for-Extension/blob/main/SECURITY.md).
+The download list contains only the extension ZIP and its SHA-256 checksum. Dependency and license inventories and source-commit evidence remain embedded in the ZIP. [Verification scope](../verification/release-0.1.39.md) · [Report bugs](https://github.com/Monica-Pass/Monica-for-Extension/issues/new?template=bug.yml). Provide versions, backend and reproduction steps, never real passwords, private keys or vaults. Report security issues privately following [SECURITY.md](https://github.com/Monica-Pass/Monica-for-Extension/blob/main/SECURITY.md).

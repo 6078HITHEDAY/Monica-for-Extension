@@ -27,3 +27,10 @@ User-authorized stage Preview 0.1.39, reviewed on 2026-10-14. Scope: nearby owne
 Packaging uses a clean version commit, checks every ZIP/dist/unpacked file and compares two independent repackages byte for byte. Embedded evidence and SHA-256 sidecars bind source, lockfile and content. Remote GitHub asset digests/sizes are checked against local files; evidence is retained locally under `.artifacts/release-0139-*`.
 
 No user Chrome, real accounts/vaults, Android changes or new native build. Unaffected 0.1.38 generator/autofill/site-login/Steam/MDBX acceptance is retained as prior evidence, not claimed as rerun here. Nearby UI, full native MDBX adoption, archived origins and current Android/F-Droid, real OneDrive and cross-backend matrices remain incomplete. This does not claim the complete release:windows stable gate. Initial failures and repairs remain recorded.
+
+
+## 2026-10-14 下载附件精简
+
+经用户明确确认，移除发布页三个重复的 JSON 附件。删除前逐项核对远端 SHA-256、大小和 ZIP 内副本，内容完全相同；删除后核对发布页只剩插件 ZIP 和 `.zip.sha256`，两者的资产 ID、大小、摘要及下载 URL 未变。源码标签和已发布 ZIP 未重建；两个 GitHub 自动生成的源码下载项保留。发行说明改为明确告知审计材料已包含在 ZIP 中。上文五附件验证是最初发布时的历史记录。
+
+Evidence: `.artifacts/release-0139-assets-before-simplify.json` and `.artifacts/release-0139-assets-after-simplify.json`. Future publication follows `docs/RELEASE.md`: upload only the install ZIP and checksum; preserve JSON inventories locally/in CI and inside the ZIP.

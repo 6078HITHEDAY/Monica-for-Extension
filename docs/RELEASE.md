@@ -20,6 +20,14 @@ npm run release:check
 
 ## 发布产物
 
+GitHub Release 的公开下载附件只上传插件 ZIP 与对应 `.zip.sha256`。不要使用 `release/*` 通配符上传到 Release；三个独立 JSON 继续留在本地／CI 审计产物中，并已逐字节嵌入 ZIP，无需重复占用公开下载列表。GitHub 自动生成的两个 Source code 下载项保留。若另行发布可选本机助手，同样只上传它的安装 ZIP 和校验文件。
+
+普通用户只需下载插件 ZIP。此规则自 0.1.39 起执行；2026-10-14 经用户确认已移除该版三个重复 JSON 附件，ZIP、校验文件及发布标签保持不变。后续创建 Release 时显式列出两个文件，例如：
+
+```bash
+gh release upload vX.Y.Z release/monica-extension-X.Y.Z.zip release/monica-extension-X.Y.Z.zip.sha256
+```
+
 对版本 `X.Y.Z`，`release/` 中生成：
 
 - `monica-extension-X.Y.Z.zip`：可提交 Chrome/Edge 商店的 MV3 扩展。
