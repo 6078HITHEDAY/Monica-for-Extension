@@ -144,9 +144,50 @@ impl ObjectDisclosureService {
         object_id: &str,
         limits: ObjectDisclosureLimits,
     ) -> StorageResult<Entry> {
+        Self::read_object(conn, object_id, limits, false)
+    }
+
+    /// Synchronization may read retained trash without restoring it. The same
+    /// entry policy, audit transaction and size limits apply before plaintext.
+    /// Ordinary reveal deliberately keeps rejecting deleted objects.
+    pub fn reveal_retained_with_active_session_and_limits(
+        conn: &mut VaultConnection,
+        object_id: &str,
+        device: &DeviceContext,
+        now_unix_secs: i64,
+        limits: ObjectDisclosureLimits,
+    ) -> StorageResult<DisclosedObject> {
+        let session = conn.active_session().cloned();
+        let scope = TigaScope::Entry {
+            entry_id: object_id.to_string(),
+        };
+        let (object, authorization) = TigaService::execute_authorized(
+            conn,
+            &scope,
+            TigaOperation::RevealSecret,
+            TigaAuthorizationContext {
+                session: session.as_ref(),
+                device,
+                now_unix_secs,
+            },
+            || Self::read_object(conn, object_id, limits, true),
+        )?;
+        conn.touch_active_session(now_unix_secs);
+        Ok(DisclosedObject {
+            object,
+            authorization,
+        })
+    }
+
+    fn read_object(
+        conn: &VaultConnection,
+        object_id: &str,
+        limits: ObjectDisclosureLimits,
+        include_deleted: bool,
+    ) -> StorageResult<Entry> {
         let policy_context = EntryRepo::get_policy_context(conn, object_id)?
             .ok_or_else(|| StorageError::NotFound(object_id.to_string()))?;
-        if policy_context.deleted {
+        if policy_context.deleted && !include_deleted {
             return Err(StorageError::ConstraintViolation(
                 "cannot reveal a deleted object".to_string(),
             ));
@@ -170,7 +211,7 @@ impl ObjectDisclosureService {
         }
         let object = EntryRepo::get_by_id(conn, object_id)?
             .ok_or_else(|| StorageError::NotFound(object_id.to_string()))?;
-        if object.deleted {
+        if object.deleted && !include_deleted {
             return Err(StorageError::ConstraintViolation(
                 "cannot reveal a deleted object".to_string(),
             ));

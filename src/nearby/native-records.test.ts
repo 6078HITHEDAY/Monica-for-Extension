@@ -17,6 +17,14 @@ function fixture() {
 }
 
 describe('native nearby application projection', () => {
+  it('distinguishes retained trash from a proven purge marker', async () => {
+    const f = fixture(); f.source.objects[0].summary.deleted = true; f.source.objects[0].record!.deleted = true;
+    let result = requireCompleteNearbyNativeProjection(await projectNearbyNativeRecords(f.source));
+    expect(result.records.find(row => row.global_id === f.id)).toMatchObject({deleted:true,data:{trashed:true,password_plain:f.payload.password}});
+    f.source.objects[0].record!.payloadJson = JSON.stringify({...f.payload,deleted_at:0});
+    result = requireCompleteNearbyNativeProjection(await projectNearbyNativeRecords(f.source));
+    expect(result.records.find(row => row.global_id === f.id)).toMatchObject({deleted:true,data:{}});
+  });
   it('maps expanded passwords, history, folders, precise values and attachment identity', async () => {
     const f = fixture(), result = requireCompleteNearbyNativeProjection(await projectNearbyNativeRecords(f.source));
     const row = result.records.find(row => row.global_id === f.id)!;

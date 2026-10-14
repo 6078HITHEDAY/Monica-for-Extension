@@ -272,7 +272,8 @@ export async function applyNearbyLocalBatch(state: VaultState, input: NearbyLoca
   for (const row of work.filter(row => !row.replay && isNearbyMetadata(row.data))) {
     const files: LocalItemAttachment[] = [];
     const localId = originalMetadata.find(entry => entry.value.recordId === row.record.id || entry.value.localId === row.record.localId)?.value.localId ?? `local:metadata-${row.record.id}`;
-    const retained = row.record.deleted ? originalMetadata.find(entry => entry.value.recordId === row.record.id || entry.value.localId === row.record.localId)?.value.attachments ?? [] : undefined;
+    const retained = row.record.deleted && (row.data.assets === undefined || isNearbyTombstone(wireObject(parseLosslessJson(row.record.dataJson))))
+      ? originalMetadata.find(entry => entry.value.recordId === row.record.id || entry.value.localId === row.record.localId)?.value.attachments : undefined;
     if (retained) files.push(...structuredClone(retained));
     for (const [index, raw] of (retained ? [] : (row.data.assets as unknown[] | undefined) ?? []).entries()) {
       const asset = wireObject(raw), id = wireText(asset.id).toLowerCase(), body = assets.get(id);
@@ -318,7 +319,8 @@ export async function applyNearbyLocalBatch(state: VaultState, input: NearbyLoca
     const savedData = { ...data, trashed: record.deleted || data.trashed === true };
     const item = await nearbyWireToLocalItem(savedData, { id: itemId, providerId: provider.id, now, previous: existing });
     const files: LocalItemAttachment[] = [];
-    const retained = record.deleted && existing ? (next.localItemAttachments ?? []).filter(file => file.itemId === existing.id) : undefined;
+    const retained = record.deleted && existing && (data.assets === undefined || isNearbyTombstone(wireObject(parseLosslessJson(record.dataJson))))
+      ? (next.localItemAttachments ?? []).filter(file => file.itemId === existing.id) : undefined;
     if (retained) files.push(...structuredClone(retained));
     for (const [index, raw] of (retained ? [] : (data.assets as unknown[] | undefined) ?? []).entries()) {
       const asset = wireObject(raw), id = wireText(asset.id).toLowerCase(), body = assets.get(id);

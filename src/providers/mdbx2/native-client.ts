@@ -445,10 +445,10 @@ export class Mdbx2NativeClient {
     }, timeoutMs));
   }
 
-  async revealObject(vaultHandle: string, objectId: string, timeoutMs = 30_000): Promise<Mdbx2ObjectRecord> {
+  async revealObject(vaultHandle: string, objectId: string, timeoutMs = 30_000, syncRetained = false): Promise<Mdbx2ObjectRecord> {
     return objectRecord(await this.request("object.reveal", {
       vaultHandle: opaqueHandle(vaultHandle, "保险库"),
-      objectId: domainIdentity(objectId, "Object")
+      objectId: domainIdentity(objectId, "Object"), ...(syncRetained ? { syncRetained: true } : {})
     }, timeoutMs));
   }
 

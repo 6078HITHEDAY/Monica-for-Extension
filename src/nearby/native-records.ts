@@ -95,6 +95,11 @@ export async function projectNearbyNativeRecords(input: NearbyNativeSource, sign
       const payload = nearbyNativeBusinessPayload(wireObject(parseLosslessJson(record.payloadJson)), type);
       if (payload.device_sync_staging === true) { result.excluded.push({ id, reason: 'staging' }); continue; }
       if (payload.bitwarden_mode === true || payload.keepass_mode === true) { result.excluded.push({ id, reason: 'connector-owned' }); continue; }
+      const guard = await hash({ summary: object.summary, labels: (assignments.get(id) ?? []).map(a => labels.get(a.labelId)),
+        assignments: assignments.get(id) ?? [], relations: relations.get(id) ?? [], attachments: attachments.get(id) ?? [] });
+      if (object.summary.deleted && String(payload.deleted_at) === '0') {
+        add({local_id:`${scope}:${id}`,global_id:id,scope,guard,deleted:true,data:{}}); continue;
+      }
       const ownLabels = (assignments.get(id) ?? []).map(row => {
         const label = labels.get(row.labelId); if (!label || label.deleted || label.payloadJson === null) invalidNearby('native-assignment-unavailable');
         return { name: label.name, payload: label.payloadJson, version: label.payloadSchemaVersion };
@@ -105,11 +110,10 @@ export async function projectNearbyNativeRecords(input: NearbyNativeSource, sign
       });
       const path = paths.get(record.collectionId); if (!path) invalidNearby('native-owner-unavailable');
       const data = await nearbyNativeObjectToWire(record, { folder: path[path.length - 1]?.title ?? '', folder_path: path,
-        labels: ordered(ownLabels), relations: payload.device_sync_pending_relations === undefined ? ordered(ownRelations) : payload.device_sync_pending_relations as unknown[], trashed: false });
+        labels: ordered(ownLabels), relations: payload.device_sync_pending_relations === undefined ? ordered(ownRelations) : payload.device_sync_pending_relations as unknown[], trashed: object.summary.deleted });
       nativeActive(signal);
       const files = attachments.get(id) ?? [], output = withAssets(data, files, payload);
-      const guard = await hash({ summary: object.summary, labels: ownLabels, assignments: assignments.get(id) ?? [], relations: relations.get(id) ?? [], attachments: files });
-      add({ local_id: `${scope}:${id}`, global_id: id, scope, guard, deleted: false, data: output });
+      add({ local_id: `${scope}:${id}`, global_id: id, scope, guard, deleted: object.summary.deleted, data: output });
     } catch (error) {
       if (!(error instanceof NearbyDataError)) throw error;
       result.blockers.push({ id, reason: error.code });

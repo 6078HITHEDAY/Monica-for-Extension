@@ -1707,6 +1707,7 @@ impl HostRuntime {
         let mut params = take_object(params, "object.reveal params must be an object.")?;
         let vault_handle = take_uuid(&mut params, "vaultHandle")?;
         let object_id = take_uuid(&mut params, "objectId")?;
+        let sync_retained = take_optional_bool(&mut params, "syncRetained")?.unwrap_or(false);
         reject_unknown(params)?;
         let vault = self.require_open_vault(&vault_handle)?;
         let summary = vault
@@ -1721,20 +1722,21 @@ impl HostRuntime {
             .ok_or_else(|| {
                 RpcFailure::new("object-not-found", "MDBX2 Object no longer exists.", false)
             })?;
-        let disclosure = vault
-            .reveal_object_with_limits(
-                object_id,
-                MdbxObjectDisclosureLimits {
-                    max_payload_bytes: MAX_OBJECT_PAYLOAD_BYTES as u64,
-                },
+        let limits = MdbxObjectDisclosureLimits {
+            max_payload_bytes: MAX_OBJECT_PAYLOAD_BYTES as u64,
+        };
+        let disclosure = (if sync_retained {
+            vault.reveal_retained_object_for_sync_with_limits(object_id, limits)
+        } else {
+            vault.reveal_object_with_limits(object_id, limits)
+        })
+        .map_err(|_| {
+            RpcFailure::new(
+                "object-reveal-failed",
+                "MDBX2 Object disclosure failed.",
+                false,
             )
-            .map_err(|_| {
-                RpcFailure::new(
-                    "object-reveal-failed",
-                    "MDBX2 Object disclosure failed.",
-                    false,
-                )
-            })?;
+        })?;
         let object = disclosure.object.ok_or_else(|| {
             RpcFailure::new(
                 "object-disclosure-denied",

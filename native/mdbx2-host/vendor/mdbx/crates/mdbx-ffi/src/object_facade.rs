@@ -698,6 +698,27 @@ impl MdbxVault {
         )
     }
 
+    /// Policy-authorized synchronization read including retained trash. Ordinary
+    /// reveal keeps its existing deleted-content rejection.
+    pub fn reveal_retained_object_for_sync_with_limits(
+        &self,
+        object_id: String,
+        limits: MdbxObjectDisclosureLimits,
+    ) -> Result<MdbxObjectDisclosureResult, MdbxFfiError> {
+        let limits = object_disclosure_limits(limits)?;
+        let mut conn = self.conn.lock().map_err(|_| MdbxFfiError::LockPoisoned)?;
+        let device = conservative_ffi_device_context().into_core(&self.device_id);
+        object_disclosure_result(
+            ObjectDisclosureService::reveal_retained_with_active_session_and_limits(
+                &mut conn,
+                &object_id,
+                &device,
+                unix_now(),
+                limits,
+            ),
+        )
+    }
+
     /// MDBX1-compatible complete-payload read. New clients should prefer
     /// `get_object_summary` and an authorized disclosure method.
     pub fn get_object(

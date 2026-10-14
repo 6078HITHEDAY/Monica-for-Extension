@@ -51,6 +51,18 @@ async function batch(service: SecureVaultService, providerId: string): Promise<N
 }
 
 describe('encrypted nearby application adoption', () => {
+  it('adopts a replacement attachment received with retained trash instead of keeping stale bytes',async()=>{
+    const f=await fixture([]),data=await nearbyLocalItemToWire(createLoginItem({title:'Trash file'}),{});
+    const oldBytes=new Uint8Array([1,2,3]),newBytes=new Uint8Array([4,5,6,7]);
+    const oldHash=await nearbySha256(oldBytes),newHash=await nearbySha256(newBytes);
+    data.assets=[{id:oldHash,size:oldBytes.length,file_name:'file.bin',media_type:'application/octet-stream'}];
+    await f.service.adoptNearbyLocalTransaction({providerId:f.providerId,sourceHash:await f.service.nearbyLocalSnapshotHash(),records:[{id:'remote-trash',deleted:false,dataJson:JSON.stringify(data),clockJson:'{"remote":1}'}],assets:[{id:oldHash,dataBase64:bytesToBase64(oldBytes)}]},f.sessionId);
+    const snapshot=await f.service.captureNearbyLocalRecords(),original=snapshot.records.find(row=>row.global_id==='remote-trash')!;
+    const update={...original.data,trashed:true,assets:[{id:newHash,size:newBytes.length,file_name:'changed.bin',media_type:'application/octet-stream'}]};
+    await f.service.adoptNearbyLocalTransaction({providerId:f.providerId,sourceHash:snapshot.sourceHash,records:[{id:'remote-trash',deleted:true,dataJson:JSON.stringify(update),clockJson:'{"remote":2}',localId:original.local_id,scope:original.scope,expectedGuard:original.guard}],assets:[{id:newHash,dataBase64:bytesToBase64(newBytes)}]},f.sessionId);
+    const state=await f.service.readState();expect(state.localItemAttachments).toMatchObject([{fileName:'changed.bin',sha256:newHash,dataBase64:bytesToBase64(newBytes)}]);
+    expect((await f.service.captureNearbyLocalRecords()).assets.map(a=>a.id)).toContain(newHash);
+  });
   it('retains original guards across batches that normalize legacy local source scopes', async () => {
     const one = createLoginItem({ title: 'First legacy item' });
     const two = createLoginItem({ title: 'Later legacy item' });

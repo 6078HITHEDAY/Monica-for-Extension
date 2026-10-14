@@ -5,6 +5,9 @@ import { projectNearbyNativeRecords } from './native-records';
 import { clearNearbyNativeAdoption, planNearbyNativeAdoption, type NearbyNativeBatch } from './native-adoption';
 import type { NearbyNativeSource } from './native-source';
 import type { NearbyIncomingRecord } from './local-adoption';
+import { nearbyNativeObjectToWire } from './application-codec';
+import { parseLosslessJson } from '../core/lossless-json';
+import { nearbyJavaNameUuid } from './native-source';
 
 function fixture() {
   const root = randomUUID(), folder = randomUUID(), other = randomUUID(), id = randomUUID();
@@ -30,6 +33,13 @@ function fixture() {
 }
 
 describe('atomic native nearby adoption', () => {
+  it('restores a disclosed trashed item atomically before applying an incoming restoration', async () => {
+    const f = fixture(); f.source.objects[0].summary.deleted = true; f.source.objects[0].record!.deleted = true;
+    const incoming = await f.bound(f.note()), result = await planNearbyNativeAdoption(f.source, f.batch([incoming]));
+    const commands = result.write.plan.commands;
+    expect(commands.findIndex(c=>c.kind==='object-restore')).toBeLessThan(commands.findIndex(c=>c.kind==='object-update'));
+    expect(commands.some(c=>c.kind==='object-delete')).toBe(false);
+  });
   it('creates a complete project with precise passwords, references, labels and verified attachment bytes', async () => {
     const f = fixture(), noteId = randomUUID(), loginId = randomUUID(), folderId = randomUUID(), file = f.file();
     const note = f.note(), login = normalizeNearbyNativeData({ password: 'mdbx:literal-password', username: 'alice', password_history: [{ password: 'Before' }], custom_fields: [{ title: 'Extra', value: 'secret', is_protected: true }], bound_note_entry_id: noteId }, 'Password', 'Project', 'login');
@@ -99,7 +109,33 @@ describe('atomic native nearby adoption', () => {
     const update = result.write.plan.commands.find(row => row.kind === 'object-update'); if (update?.kind !== 'object-update') throw Error('Missing update');
     expect(JSON.parse(update.payloadJson)).toMatchObject({ device_sync_assets: stored, item_data: JSON.stringify({ imagePath: `mdbx:${fileId}` }) });
   });
-  it.each(['guard', 'scope', 'source', 'identity', 'reference', 'asset-hash', 'asset-size', 'unknown-field', 'type', 'clock'])('refuses %s before returning a writable plan', async problem => {
+  it('preserves unknown top-level wire fields without replacing known fields or rounding numbers', async () => {
+    const f=fixture(),data=f.note();data.future=parseLosslessJson('{"big":9007199254740993,"decimal":1.00000000000000001}');
+    const plan=await planNearbyNativeAdoption(f.source,f.batch([await f.bound(data)]));
+    const update=plan.write.plan.commands.find(row=>row.kind==='object-update');if(update?.kind!=='object-update')throw Error('No update');
+    const projected=await nearbyNativeObjectToWire({...f.source.objects[0].record!,payloadJson:update.payloadJson},{folder:''});
+    expect(JSON.stringify(projected.future)).toBe('{"big":9007199254740993,"decimal":1.00000000000000001}');
+    expect(projected.payload).not.toHaveProperty('device_sync_wire_extras');
+  });
+  it('persists a first-sync purge using root metadata and consumes it when the actual content arrives', async()=>{
+    const f=fixture(),id=randomUUID(),record={id,deleted:true,dataJson:'{}',clockJson:'{"peer":1}'};
+    const plan=await planNearbyNativeAdoption(f.source,f.batch([record]));
+    const created=plan.write.plan.commands.find(row=>row.kind==='label-create');if(created?.kind!=='label-create')throw Error('No purge marker');
+    expect(JSON.parse(created.payloadJson)).toMatchObject({owner:id,deleted:true,data:{},tag_ids:[]});
+    expect(plan.write.plan.commands.some(row=>row.kind==='object-create')).toBe(false);
+    f.source.metadata.labels.push({...f.base,labelId:created.labelId,collectionId:created.collectionId,name:created.name,payloadJson:created.payloadJson,payloadSchemaVersion:created.payloadSchemaVersion});
+    const row=(await projectNearbyNativeRecords(f.source)).records.find(row=>row.global_id===id)!;expect(row.data).toEqual({});
+    const data=normalizeNearbyNativeData({password:'restored-secret'},'Restored','','login');
+    const restore=await planNearbyNativeAdoption(f.source,f.batch([{...f.incoming(data,id),localId:row.local_id,scope:row.scope,expectedGuard:row.guard}]));
+    expect(restore.write.plan.commands).toContainEqual({kind:'label-delete',labelId:created.labelId});
+    expect(restore.write.plan.commands.find(row=>row.kind==='object-create')).toMatchObject({objectTypeId:'login',objectId:id});
+  });
+  it('routes legacy title-only folders using the same deterministic identity as Android',async()=>{
+    const f=fixture(),data=f.note();data.folder='Legacy folder';
+    const plan=await planNearbyNativeAdoption(f.source,f.batch([f.incoming(data)]));
+    expect(plan.write.plan.commands).toContainEqual({kind:'collection-create',collectionId:await nearbyJavaNameUuid(`device-folder:${f.root}:Legacy folder`),title:'Legacy folder',parentId:f.root});
+  });
+  it.each(['guard', 'scope', 'source', 'identity', 'reference', 'asset-hash', 'asset-size', 'type', 'clock'])('refuses %s before returning a writable plan', async problem => {
     const f = fixture(), data = f.note(), record: NearbyIncomingRecord = await f.bound(data), batch = f.batch([record]);
     if (problem === 'guard') record.expectedGuard = 'f'.repeat(64);
     if (problem === 'scope') record.scope = 'local';
@@ -107,7 +143,6 @@ describe('atomic native nearby adoption', () => {
     if (problem === 'identity') { delete record.localId; delete record.scope; delete record.expectedGuard; }
     if (problem === 'reference') data.relations = [{ target: randomUUID(), kind: 'com.monica.reference', payload: '{}', version: 1 }];
     if (problem === 'asset-hash' || problem === 'asset-size') { const file = f.file(); data.assets = [{ ...file.descriptor, ...(problem === 'asset-size' ? { size: 999 } : {}) }]; batch.assets = [{ ...file.supplied, dataBase64: problem === 'asset-hash' ? Buffer.alloc(file.bytes.length).toString('base64') : file.supplied.dataBase64 }]; }
-    if (problem === 'unknown-field') data.unknown = 'must not disappear';
     if (problem === 'type') { data.entry_type = 'steam-mafile'; data.payload = { mafile_json: '{}' }; }
     if (problem === 'clock') record.clockJson = '{}';
     record.dataJson = JSON.stringify(data); await expect(planNearbyNativeAdoption(f.source, batch)).rejects.toThrow();

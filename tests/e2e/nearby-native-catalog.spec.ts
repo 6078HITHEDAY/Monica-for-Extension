@@ -74,8 +74,8 @@ test('native nearby catalog adopts folder and root metadata while preserving ori
     expect(meta.find(row => row.id === rootOwner)).toMatchObject({ deleted: true, data: {} });
     expect(source.metadata.labels.find(row => row.labelId === freeTagId)?.deleted).toBe(false);
     expect(source.metadata.labels.find(row => row.labelId === unassignedId)?.deleted).toBe(false);
-    expect(source.objects.find(row => row.summary.objectId === trashId)).toMatchObject({ summary: { deleted: true }, record: null });
-    expect(projection.blockers).toContainEqual({ id: trashId, reason: 'deleted-content-unavailable' });
+    expect(source.objects.find(row => row.summary.objectId === trashId)).toMatchObject({ summary: { deleted: true }, record: {deleted:true} });
+    expect(projection.records.find(row => row.global_id === trashId)).toMatchObject({deleted:true,data:{trashed:true,payload:{item_data:'synthetic retained text'}}});
     expect(await call('verify-key', { payload: source.objects.find(row => row.summary.objectId === objectId)!.record!.payloadJson, expected: { id: credential, hash: createHash('sha256').update(privateKey).digest('hex'), publicKey, counter: 0 } })).toBe(true);
     const file = source.attachments.find(row => row.attachmentId === folderAsset)!;
     expect(await call('content-attachment-bytes', { handle, input: { writeRevision: source.writeRevision, attachment: file } })).toEqual({ sizeBytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') });

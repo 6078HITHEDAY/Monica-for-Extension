@@ -50,7 +50,7 @@ export async function collectNearbyPending(transport: NearbyNativeTransport, han
 /** Complete projects/dependencies stay in one local transaction. Independent
  * components share batches; oversize connected projects fail before any write. */
 export function groupNearbyPending(records: readonly NearbyIncomingRecord[], canonicalIds: ReadonlyMap<string, string> = new Map(),
-  localGroups: ReadonlyMap<string, string> = new Map(), maximum = 200): NearbyIncomingRecord[][] {
+  localGroups: ReadonlyMap<string, string> = new Map(), maximum = 200, combine = true): NearbyIncomingRecord[][] {
   const byId = new Map(records.map(row => [row.id, row])), parents = new Map(records.map(row => [row.id, row.id]));
   const find = (id: string): string => {
     let root = id; while (parents.get(root) !== root) root = parents.get(root)!;
@@ -82,6 +82,7 @@ export function groupNearbyPending(records: readonly NearbyIncomingRecord[], can
     .sort((a, b) => Number(a.metadata) - Number(b.metadata)).map(group => group.records);
   for (const group of ordered) {
     if (group.length > maximum) invalidNearby('project-batch-limit');
+    if (!combine) { batches.push(group); continue; }
     if (current.length + group.length > maximum) { batches.push(current); current = []; }
     current.push(...group);
   }

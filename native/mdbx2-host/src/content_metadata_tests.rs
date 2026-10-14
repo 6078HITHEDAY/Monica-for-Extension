@@ -76,6 +76,50 @@ fn content_metadata_preserves_full_payload_and_revision() {
     );
 }
 
+#[test]
+fn retained_sync_disclosure_preserves_trash_without_restoring_or_bypassing_power() {
+    for mode in [mdbx_ffi::MdbxTigaMode::Multi, mdbx_ffi::MdbxTigaMode::Power] {
+        let (_root, mut runtime) = runtime();
+        let power = matches!(mode, mdbx_ffi::MdbxTigaMode::Power);
+        let handle =
+            open_test_vault_with_tiga_mode(&mut runtime, "synthetic retained password", mode);
+        let row = upsert_test_login(&mut runtime, &handle, "retained-sync", "Retained secret");
+        let vault = runtime.require_open_vault(&handle).unwrap();
+        vault
+            .execute_write_operation(
+                fresh_uuid(),
+                "synthetic-delete".into(),
+                vec![MdbxWriteCommand::DeleteEntry {
+                    entry_id: row["objectId"].as_str().unwrap().into(),
+                    project_id: row["collectionId"].as_str().unwrap().into(),
+                }],
+            )
+            .unwrap();
+        let revision = vault.read_write_revision().unwrap();
+        assert!(runtime
+            .handle(
+                "object.reveal",
+                json!({"vaultHandle":handle,"objectId":row["objectId"]})
+            )
+            .is_err());
+        let disclosed = runtime.handle(
+            "object.reveal",
+            json!({"vaultHandle":handle,"objectId":row["objectId"],"syncRetained":true}),
+        );
+        if power {
+            assert_eq!(disclosed.unwrap_err().code, "object-disclosure-denied");
+        } else {
+            let disclosed = disclosed.unwrap();
+            assert_eq!(disclosed["deleted"], true);
+            assert!(disclosed["payloadJson"]
+                .as_str()
+                .unwrap()
+                .contains("snapshot-test-secret"));
+        }
+        assert_eq!(vault.read_write_revision().unwrap(), revision);
+    }
+}
+
 fn metadata_fixture(runtime: &mut HostRuntime, handle: &str, payload: &str) -> Value {
     let object = upsert_test_login(
         runtime,

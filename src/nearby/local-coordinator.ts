@@ -9,6 +9,7 @@ import { NearbyNativeTransport, NearbyTransportError, appendNearbyAsset, readNea
 import { NearbyPasskeyConsent, type NearbyPasskeyReview } from './passkey-consent';
 import { nearbyDeviceHello, nearbySettingsCounter, type NearbyPreferences, type NearbySavedPeer } from './preferences';
 import { collectNearbyPending, groupNearbyPending, nearbyApplicationReferences } from './pending';
+import { adoptNearbyNativeGroups } from './native-batches';
 import type { NearbyIncomingRecord, NearbyLocalAcknowledgement } from './local-adoption';
 import { NearbyDataError, wireInteger, wireObject, wireText } from './wire-shape';
 
@@ -391,10 +392,11 @@ export class NearbyLocalCoordinator {
       }
     }
     const localGroups = pending.some(row => row.deleted) ? new Map(await this.source!.groups(pending)) : undefined;
-    for (const records of groupNearbyPending(pending, canonicalIds, localGroups, this.source!.native ? 32 : 200).slice(0, this.source!.native ? 1 : undefined)) {
+    for (const batch of groupNearbyPending(pending, canonicalIds, localGroups, this.source!.native ? 128 : 200).slice(0, this.source!.native ? 1 : undefined)) {
+      const adopt = async (records: NearbyIncomingRecord[]) => {
       const saved = new Set((await this.source!.saved(records)).map(row => row.recordId));
       const assets = new Map<string, { id: string; dataBase64: string }>(); let bytesTotal = 0;
-      for (const record of records) if (!record.deleted && !saved.has(record.id)) {
+      for (const record of records) if (!saved.has(record.id)) {
         const data = wireObject(parseLosslessJson(record.dataJson));
         for (const raw of (data.assets as unknown[] | undefined) ?? []) {
           const asset = wireObject(raw), id = string(asset.id, 64).toLowerCase(), size = Number(wireInteger(asset.size, 16n * 1024n * 1024n));
@@ -408,6 +410,9 @@ export class NearbyLocalCoordinator {
       const result = await this.source!.adopt({ providerId: this.preferences!.localProviderId, sourceHash: this.sourceHash!, records, references, assets: [...assets.values()] });
       this.sourceHash = result.sourceHash; await this.guard(true); await this.applyAcknowledgements(result.acknowledgements);
       this.view.applied = (this.view.applied ?? 0) + records.length;
+      };
+      if (this.source!.native) await adoptNearbyNativeGroups(groupNearbyPending(batch, canonicalIds, localGroups, 128, false), adopt);
+      else await adopt(batch);
     }
     } while (this.source!.native);
     if ((await this.call('replica_revision', { handle: this.replica })).pending !== false) failure('pending-adoption-required');

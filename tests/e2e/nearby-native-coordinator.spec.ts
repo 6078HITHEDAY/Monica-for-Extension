@@ -66,7 +66,14 @@ test('production Wi-Fi coordinator receives into bundled MDBX and returns native
     const login=createLoginItem({title:'Nearby original',username:'alice',password:'synthetic preserved password'});login.customFields=[{name:'extra',value:'keep original',protected:true}];
     const key=await createPasskey({origin:'https://example.test',challenge:Buffer.alloc(32,3).toString('base64url'),rpName:'Synthetic',userId:'dXNlcg',userName:'alice',userDisplayName:'Alice',algorithms:[-7],excludeCredentialIds:[]});
     const passkey:PasskeyItem={...createLoginItem({title:'Nearby original Passkey'}),kind:'passkey',rpId:key.rpId,rpName:'Synthetic',userHandle:'dXNlcg',userName:'alice',userDisplayName:'Alice',credentialId:key.credentialId,publicKey:key.publicKeySpki,privateKeyPkcs8:key.privateKeyPkcs8,signCount:0,algorithm:-7,discoverable:true,backupEligible:true,sourceMode:'browser-local'};
-    await runtime(a,{type:'VAULT_IMPORT_ITEMS',items:[login,passkey]});await connect(a);await connect(b);
+    const groupId=crypto.randomUUID(),bulk=Array.from({length:140},(_,i)=>({...createLoginItem({title:`Batch ${i}`,password:`synthetic-${i}`}),...(i<40?{passwordGroupId:groupId}:{})}));
+    await runtime(a,{type:'VAULT_IMPORT_ITEMS',items:[login,passkey,...bulk]});
+    const localProvider=(await runtime(a,{type:'PROVIDER_LIST'})).find((p:any)=>p.kind==='local').id;
+    const fileBytes=Buffer.alloc(600000,137),fileHash=createHash('sha256').update(fileBytes).digest('hex');
+    const upload=await runtime(a,{type:'PROVIDER_ATTACHMENT_UPLOAD_BEGIN',providerId:localProvider,itemId:login.id,fileName:'preserved.bin',mediaType:'application/octet-stream',sizeBytes:fileBytes.length,sha256:fileHash});
+    for(let offset=0;offset<fileBytes.length;offset+=128000)await runtime(a,{type:'PROVIDER_ATTACHMENT_UPLOAD_CHUNK',providerId:localProvider,transferId:upload.transferId,offset,dataBase64:fileBytes.subarray(offset,offset+128000).toString('base64')});
+    await runtime(a,{type:'PROVIDER_ATTACHMENT_UPLOAD_FINISH',providerId:localProvider,itemId:login.id,transferId:upload.transferId});
+    await connect(a);await connect(b);
     const p=await command(b,{type:'preferences'});await command(b,{type:'update',epoch:p.epoch,change:{kind:'source',providerId}});
     const complete=async()=>expect.poll(async()=>{const result=await Promise.all([command(a,{type:'progress'}),command(b,{type:'progress'})]);return result.map(v=>v.phase);},{timeout:45000}).toEqual(['completed','completed']);
     const pair=await command(a,{type:'pair'});await command(b,{type:'pair',invitation:pair.pairing.invitations[0]});await complete();
@@ -84,9 +91,22 @@ test('production Wi-Fi coordinator receives into bundled MDBX and returns native
     const challenge=Buffer.from('real native adoption signature');expect(verify('sha256',challenge,createPublicKey({key:Buffer.from(passkey.publicKey!,'base64'),format:'der',type:'spki'}),sign('sha256',challenge,createPrivateKey({key:Buffer.from(keyPayload.private_key_alias,'base64'),format:'der',type:'pkcs8'})))).toBe(true);
     const payload=JSON.parse(original.payloadJson);payload.password_plain='synthetic reciprocal password';
     await runtime(b,{type:'MDBX2_OBJECT_UPSERT',providerId,operationId:crypto.randomUUID(),input:{logicalObjectId:`native:${saved.objectId}`,collectionId:saved.collectionId,objectTypeId:'login',title:saved.title,payloadJson:JSON.stringify(payload),payloadSchemaVersion:1,expectedHeadCommitId:original.headCommitId}});
-    await exchange();const items=await runtime(a,{type:'VAULT_LIST_ITEMS'});expect(items.filter((row:any)=>row.kind==='login')).toHaveLength(1);expect(items.find((row:any)=>row.kind==='login').password).toBe('synthetic reciprocal password');
+    await exchange();const items=await runtime(a,{type:'VAULT_LIST_ITEMS'});expect(items.filter((row:any)=>row.kind==='login')).toHaveLength(141);expect(items.find((row:any)=>row.id===login.id).password).toBe('synthetic reciprocal password');
     const beforeRepeat=await runtime(b,{type:'MDBX2_OBJECT_LIST',providerId,collectionId:saved.collectionId});
     await exchange(true);expect(await runtime(b,{type:'MDBX2_OBJECT_LIST',providerId,collectionId:saved.collectionId})).toEqual(beforeRepeat);const again=await runtime(a,{type:'VAULT_LIST_ITEMS'});expect(again).toHaveLength(items.length);
-    evidence.status='passed';evidence.signature=true;evidence.stableRepeatedSync=true;
+    const current=await runtime(b,{type:'MDBX2_OBJECT_REVEAL',providerId,objectId:saved.objectId});
+    await runtime(b,{type:'MDBX2_OBJECT_DELETE',providerId,operationId:crypto.randomUUID(),logicalObjectId:`native:${saved.objectId}`,expectedHeadCommitId:current.headCommitId});
+    await exchange();expect((await runtime(a,{type:'VAULT_LIST_ITEMS'})).some((row:any)=>row.id===login.id)).toBe(false);
+    await runtime(a,{type:'VAULT_RESTORE_ITEM',itemId:login.id});
+    await exchange();
+    expect(JSON.parse((await runtime(b,{type:'MDBX2_OBJECT_REVEAL',providerId,objectId:saved.objectId})).payloadJson).password_plain).toBe('synthetic reciprocal password');
+    expect((await runtime(a,{type:'VAULT_LIST_ITEMS'})).filter((row:any)=>row.id===login.id)).toHaveLength(1);
+    const files=await runtime(a,{type:'PROVIDER_ATTACHMENT_LIST',providerId:localProvider,itemId:login.id});expect(files.items).toHaveLength(1);
+    const read=await runtime(a,{type:'PROVIDER_ATTACHMENT_READ_BEGIN',providerId:localProvider,itemId:login.id,attachmentId:files.items[0].attachmentId});
+    const readBytes:Buffer[]=[];for(let offset=0;offset<fileBytes.length;){const part=await runtime(a,{type:'PROVIDER_ATTACHMENT_READ_CHUNK',providerId:localProvider,readHandle:read.readHandle,offset,maxBytes:128000});const bytes=Buffer.from(part.dataBase64,'base64');expect(bytes.length).toBeGreaterThan(0);readBytes.push(bytes);offset+=bytes.length;}
+    await runtime(a,{type:'PROVIDER_ATTACHMENT_READ_RELEASE',providerId:localProvider,readHandle:read.readHandle});
+    expect(createHash('sha256').update(Buffer.concat(readBytes)).digest('hex')).toBe(fileHash);
+    evidence.trashAttachmentBytes=fileBytes.length;evidence.trashAttachmentHash=true;
+    evidence.status='passed';evidence.signature=true;evidence.stableRepeatedSync=true;evidence.connectedProjectRecords=40;evidence.totalItemRecords=142;
   }finally{for(const c of contexts)await c.close();await registration?.restore();await writeFile(path.join(run,'evidence.json'),JSON.stringify(evidence,null,2));}
 });

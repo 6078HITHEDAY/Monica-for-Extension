@@ -335,6 +335,20 @@
       "files": {
         "crates/mdbx-ffi/src/write_facade.rs": "95ef3cbd1b7d3f0361cc18fc800e7da7c5d9d59e02ba3f411b3dd169ede9c3e1"
       }
+    },
+    {
+      "id": "retained-sync-disclosure",
+      "patch": "runtime-patches/extension-retained-sync-disclosure.patch",
+      "patch_sha256": "453bd48f9c184295be0dddc6023588b8b4816dbcac8d2bc67b3243e1e87aa1f4",
+      "description": "Explicit synchronization disclosure of retained trashed objects with unchanged Tiga entry authorization, audit and payload limits. Ordinary reveal still rejects deleted content; no storage format or Android change.",
+      "base_files": {
+        "crates/mdbx-storage/src/object_disclosure.rs": "8729fb3518ae489f7f3826283d09f06aff4d90f60e44a28cfb3fe19f3395526a",
+        "crates/mdbx-ffi/src/object_facade.rs": "ee5b058330aeb7c6d950c8fbbc295ecfaba350264ede56208e108f76fc24e594"
+      },
+      "files": {
+        "crates/mdbx-storage/src/object_disclosure.rs": "4e2ea8eb26cac83aa1e70cb24df233095caab7442c67d755e7d3a6b126e5bd43",
+        "crates/mdbx-ffi/src/object_facade.rs": "1edf5bd7586441b65bf725e45a99f274840da7e90bc08fbabf7e5e54a2b9f41e"
+      }
     }
   ]
 }

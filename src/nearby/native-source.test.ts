@@ -15,7 +15,7 @@ function fixture() {
     readWriteRevision: vi.fn(async () => ({ ...revision })),
     listCollections: vi.fn(async (_handle, input) => ({ items: input?.deleted ? [] : [{ ...collection }] })),
     listObjects: vi.fn(async (_handle, _owner, input) => ({ items: [{ ...(input?.deleted ? deleted : active) }] })),
-    revealObject: vi.fn(async () => ({ ...record })),
+    revealObject: vi.fn(async (_handle: string, id: string, _timeout?: number, retained?: boolean) => ({ ...record, ...(id === deleted.objectId && retained ? deleted : {}) })),
     readContentMetadata: vi.fn(async () => structuredClone(metadata)),
     readContentAttachments: vi.fn(async () => ({ writeRevision: { ...revision }, attachments: [] }))
   } satisfies NearbyNativeClient;
@@ -30,12 +30,13 @@ describe('complete nearby native source inventory', () => {
     expect(await nearbyNativeRootId(f.revision.vaultId)).toBe(expected);
     const result = await f.read(); expect(result.rootId).toBe(expected); expect(result.rootId).not.toBe(f.collection.collectionId);
   });
-  it('retains unknown schemas, exact payload lexemes, unassigned labels and undisclosed deleted rows', async () => {
+  it('retains unknown schemas, exact payload lexemes, unassigned labels and explicitly disclosed trash', async () => {
     const f = fixture(), result = await f.read();
     expect(result.objects.find(row => row.summary.objectId === f.active.objectId)?.record?.payloadJson).toBe(f.record.payloadJson);
-    expect(result.objects.find(row => row.summary.objectId === f.deleted.objectId)).toEqual({ summary: f.deleted, record: null });
-    expect(result.metadata).toEqual(f.metadata); expect(f.client.revealObject).toHaveBeenCalledTimes(1);
-    expect(f.client.revealObject).toHaveBeenCalledWith(f.handle, f.active.objectId);
+    expect(result.objects.find(row => row.summary.objectId === f.deleted.objectId)).toEqual({ summary: f.deleted, record: {...f.record,...f.deleted} });
+    expect(result.metadata).toEqual(f.metadata); expect(f.client.revealObject).toHaveBeenCalledTimes(2);
+    expect(f.client.revealObject).toHaveBeenCalledWith(f.handle, f.active.objectId, 30_000, false);
+    expect(f.client.revealObject).toHaveBeenCalledWith(f.handle, f.deleted.objectId, 30_000, true);
     expect(f.client.readContentMetadata).toHaveBeenCalledWith(f.handle, { writeRevision: f.revision, collectionIds: [f.collection.collectionId], objectIds: [f.active.objectId, f.deleted.objectId] }, undefined);
   });
   it('snapshots provider/handle before awaiting the engine', async () => {

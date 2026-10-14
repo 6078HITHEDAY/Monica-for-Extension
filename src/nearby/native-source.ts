@@ -30,7 +30,10 @@ export function assertNativeRevision(actual: Mdbx2WriteRevision, expected: Mdbx2
 /** Matches Java UUID.nameUUIDFromBytes, without a namespace prefix. MD5 here
  * derives an Android routing identity, never a security digest or key. */
 export async function nearbyNativeRootId(vaultId: string): Promise<string> {
-  const digest = await md5(`monica-root:${nativeId(vaultId)}`);
+  return nearbyJavaNameUuid(`monica-root:${nativeId(vaultId)}`);
+}
+export async function nearbyJavaNameUuid(name: string): Promise<string> {
+  const digest = await md5(name);
   const bytes = Uint8Array.from({ length: 16 }, (_, i) => parseInt(digest.slice(i * 2, i * 2 + 2), 16));
   bytes[6] = (bytes[6] & 15) | 0x30; bytes[8] = (bytes[8] & 63) | 0x80;
   const hex = [...bytes].map(b => b.toString(16).padStart(2, '0')).join('');
@@ -72,7 +75,7 @@ export async function captureNearbyNativeSource(client: NearbyNativeClient, inpu
     nativeId(row.objectId); nativeId(row.headCommitId);
     if (row.collectionId !== owner.collectionId || row.deleted !== deleted || objectIds.has(row.objectId) || objectIds.size >= 10_000) invalidNearby('native-object-catalog');
     objectIds.add(row.objectId);
-    const record = deleted ? null : await client.revealObject(handle, row.objectId); nativeActive(signal);
+    const record = await client.revealObject(handle, row.objectId, 30_000, deleted); nativeActive(signal);
     if (record) {
       if (record.objectId !== row.objectId || record.collectionId !== row.collectionId || record.objectTypeId !== row.objectTypeId || record.title !== row.title || record.deleted !== row.deleted || record.payloadSchemaVersion !== row.payloadSchemaVersion || record.headCommitId !== undefined && record.headCommitId !== row.headCommitId) invalidNearby('native-source-changed');
       if (new TextEncoder().encode(record.payloadJson).length > 1024 * 1024) invalidNearby('native-payload-limit');

@@ -8,7 +8,7 @@ import { captureNearbyNativeSource, nativeActive } from './native-source';
 import { projectNearbyNativeRecords, requireCompleteNearbyNativeProjection } from './native-records';
 import { nearbyNativeIntent, restoreNearbyNativeWrite, savedNativeAcknowledgements, type NearbyNativeIntent } from './native-journal';
 import type { NearbySourceAdapter } from './source-adapter';
-import { invalidNearby } from './wire-shape';
+import { invalidNearby, wireObject } from './wire-shape';
 
 type Store = Pick<SecureVaultService, 'getProvider' | 'readNearbyNativeJournal' | 'stageNearbyNativeIntent' | 'finishNearbyNativeIntent'>;
 export function nativeNearbySource(options: {
@@ -60,7 +60,15 @@ export function nativeNearbySource(options: {
     }),
     recover: () => options.exclusive(async () => { const j = await journal(); return j?.intent ? apply(j.intent) : []; }),
     saved: async records => savedNativeAcknowledgements(await journal(), records),
-    groups: async () => [],
+    groups: records => options.exclusive(async () => {
+      const projection = requireCompleteNearbyNativeProjection(await projectNearbyNativeRecords(await capture(), signal));
+      const byLocal = new Map(projection.records.map(row=>[row.local_id,row.data]));
+      return records.flatMap(record=>{
+        const data=record.localId ? byLocal.get(record.localId) : undefined;
+        const group=data?.extensions === undefined ? undefined : wireObject(data.extensions).password_group_id;
+        return typeof group==='string' && group ? [[record.id,group] as [string,string]] : [];
+      });
+    }),
     adopt: batch => options.exclusive(async () => {
       if ((await journal())?.intent) invalidNearby('native-recovery-required');
       const source = await capture(); active();

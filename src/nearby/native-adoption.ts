@@ -6,8 +6,8 @@ import { nearbyWireToNativeObject } from './application-codec';
 import type { NearbyIncomingRecord } from './local-adoption';
 import { NATIVE_FOLDER_TITLE, NATIVE_PROJECT_TAG, NATIVE_ROOT_TAGS, planNearbyNativeMetadata, projectNearbyNativeMetadata, type NearbyNativeMetadataChange } from './native-metadata';
 import { projectNearbyNativeRecords } from './native-records';
-import { nativeActive, nativeId, type NearbyNativeSource } from './native-source';
-import { invalidNearby, nearbyNativeBusinessPayload, PASSWORD_FIELDS, remapNearbyAssetPaths, remapNearbyReferences, validateNearbyWireData,
+import { nativeActive, nativeId, nearbyJavaNameUuid, type NearbyNativeSource } from './native-source';
+import { invalidNearby, nearbyNativeBusinessPayload, remapNearbyAssetPaths, remapNearbyReferences, validateNearbyWireData,
   wireInteger, wireObject, type NearbyWireData } from './wire-shape';
 
 export interface NearbyNativeBatch {
@@ -60,6 +60,7 @@ export async function planNearbyNativeAdoption(input: NearbyNativeSource, incomi
   const metadata = new Map((await projectNearbyNativeMetadata(source)).map(row => [row.id, row]));
   nativeActive(signal);
   const ids = new Set<string>(), targets = new Set<string>(), mapping = new Map<string, string>();
+  const consumedPurges: string[] = [];
   const work: { record: NearbyIncomingRecord; id: string; kind: 'object' | 'folder' | 'root'; data: NearbyWireData; tombstone: boolean; localId: string }[] = [];
   for (const record of [...batch.records].sort(order)) {
     if (!identity.test(record.id) || ids.has(record.id) || typeof record.deleted !== 'boolean' || typeof record.dataJson !== 'string' || record.dataJson.length > 1024 * 1024) invalidNearby('native-adoption-record');
@@ -75,8 +76,19 @@ export async function planNearbyNativeAdoption(input: NearbyNativeSource, incomi
       const suffix = localId.slice(scope.length + 1);
       kind = suffix.startsWith('metadata:') ? 'root' : suffix.startsWith('folder:') ? 'folder' : 'object';
       id = suffix.slice(kind === 'root' ? 9 : kind === 'folder' ? 7 : 0);
+      if (kind === 'root' && old.deleted && Object.keys(old.data).length === 0 && !tombstone && data.entry_type !== 'vault-metadata') {
+        // First-seen purges live in Android-compatible root metadata. Consume
+        // that marker atomically when real content later arrives, without ever
+        // inventing an object type or changing an existing native object's type.
+        const marker=source.metadata.labels.find(label=>!label.deleted && label.collectionId===source.rootId && label.payloadJson!==null && (()=>{try{const p=wireObject(parseLosslessJson(label.payloadJson!));return p.kind===NATIVE_ROOT_TAGS && p.owner===id;}catch{return false;}})());
+        if(!marker)invalidNearby('native-purge-marker-missing');consumedPurges.push(marker.labelId);
+        kind=data.entry_type==='folder'?'folder':'object';
+        id=/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(record.id)?record.id:await mdbx2TransferUuid(source.rootId,`nearby-record:${record.id}`);
+        if(summaries.has(id)||source.collections.some(row=>row.collectionId===id))invalidNearby('native-identity-collision');
+        localId=`${scope}:${kind==='folder'?'folder:':''}${id}`;
+      }
     } else {
-      kind = data.entry_type === 'folder' ? 'folder' : data.entry_type === 'vault-metadata' ? 'root' : 'object';
+      kind = tombstone || data.entry_type === 'vault-metadata' ? 'root' : data.entry_type === 'folder' ? 'folder' : 'object';
       id = kind === 'root' ? record.id : /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(record.id) ? record.id : await mdbx2TransferUuid(source.rootId, `nearby-record:${record.id}`);
       localId = `${scope}:${kind === 'root' ? 'metadata:' : kind === 'folder' ? 'folder:' : ''}${id}`;
       if (summaries.has(id) || metadata.has(id) || source.collections.some(row => row.collectionId === id)) invalidNearby('native-identity-collision');
@@ -108,11 +120,18 @@ export async function planNearbyNativeAdoption(input: NearbyNativeSource, incomi
   }
   const metaChanges = new Map<string, NearbyNativeMetadataChange>();
   for (const row of work.filter(row => row.kind !== 'object')) metaChanges.set(row.id, { kind: row.kind as 'folder' | 'root', id: row.id,
-    expectedGuard: row.record.expectedGuard ?? null, deleted: row.record.deleted, data: row.data });
+    expectedGuard: row.localId===row.record.localId ? row.record.expectedGuard ?? null : null, deleted: row.record.deleted, data: row.data });
   const ownerById = new Map<string, string>();
   for (const row of work.filter(row => row.kind === 'object' && !row.tombstone)) {
     const path = row.data.folder_path === undefined ? [] : rows(row.data.folder_path);
-    if (!path.length && row.data.folder) invalidNearby('native-folder-path-required');
+    if (!path.length && row.data.folder) {
+      // Match Android's legacy deterministic name identity. Do not guess between
+      // duplicate titles or silently attach content to a nested namesake.
+      const candidates = source.collections.filter(c=>!c.deleted && c.collectionId!==source.rootId && (!c.groupId || c.groupId===source.rootId) && c.title===row.data.folder);
+      if(candidates.length>1)invalidNearby('native-folder-title-ambiguous');
+      path.push({id:candidates[0]?.collectionId ?? await nearbyJavaNameUuid(`device-folder:${source.rootId}:${row.data.folder}`),title:row.data.folder,parent:null});
+      row.data.folder_path=path;
+    }
     let parent: string | null = null;
     for (let index = 0; index < path.length; index++) {
       const node = path[index], id = nativeId(node.id);
@@ -128,8 +147,10 @@ export async function planNearbyNativeAdoption(input: NearbyNativeSource, incomi
     }
     ownerById.set(row.id, parent ?? source.rootId);
   }
-  const commands: Mdbx2ContentCommand[] = await planNearbyNativeMetadata(source, operation, [...metaChanges.values()]);
-  if (!source.collections.some(row => row.collectionId === source.rootId) && !commands.some(row => row.kind === 'collection-create' && row.collectionId === source.rootId) && work.some(row => row.kind === 'object' && !row.tombstone)) commands.unshift({ kind: 'collection-create', collectionId: source.rootId, title: '.monica-root', parentId: null });
+  const metadataSource = consumedPurges.length ? { ...source, metadata: { ...source.metadata, labels: source.metadata.labels.filter(label=>!consumedPurges.includes(label.labelId)) } } : source;
+  const commands: Mdbx2ContentCommand[] = await planNearbyNativeMetadata(metadataSource, operation, [...metaChanges.values()]);
+  commands.push(...consumedPurges.map(labelId=>({kind:'label-delete' as const,labelId})));
+  if (!source.collections.some(row => row.collectionId === source.rootId) && !commands.some(row => row.kind === 'collection-create' && row.collectionId === source.rootId) && work.some(row => row.kind === 'object')) commands.unshift({ kind: 'collection-create', collectionId: source.rootId, title: '.monica-root', parentId: null });
   const late: Mdbx2ContentCommand[] = [], fileCommands: Mdbx2ContentWriteInput['plan']['attachments'][number][] = [], buffers: { id: string; bytes: Uint8Array }[] = [];
   const supplied = new Map<string, string>(), loaded = new Map<string, { id: string; bytes: Uint8Array }>();
   let total = 0, copies = 0;
@@ -155,10 +176,11 @@ export async function planNearbyNativeAdoption(input: NearbyNativeSource, incomi
       nativeActive(signal);
       const previous = summaries.get(row.id), before = previous?.summary;
       if (before && !previous?.record) invalidNearby('deleted-content-unavailable');
-      if (before && !row.tombstone && (before.objectTypeId === 'steam_mafile' ? 'steam-mafile' : before.objectTypeId) !== row.data.entry_type) invalidNearby('native-object-type-changed');
       const oldPayload = previous?.record ? wireObject(parseLosslessJson(previous.record.payloadJson)) : undefined;
+      if (before && !row.tombstone && (before.objectTypeId === 'steam_mafile' ? 'steam-mafile' : before.objectTypeId) !== row.data.entry_type) invalidNearby('native-object-type-changed');
       const files = source.attachments.filter(file => file.objectId === row.id && !file.deleted), assignments = source.metadata.assignments.filter(a => a.objectId === row.id && !a.deleted);
       const relations = source.metadata.relations.filter(r => r.sourceObjectId === row.id && !r.deleted);
+      if (before?.deleted) commands.push({kind:'object-restore',objectId:row.id,collectionId:before.collectionId});
       if (row.tombstone) {
         if (!before) invalidNearby('native-tombstone-target-missing');
         const empty: Record<string, unknown> = { kind: ['login', 'ssh-key'].includes(before.objectTypeId) ? 'password' : before.objectTypeId, password_plain: '', item_data: '', deleted_at: 0, monica_entry_id: row.id };
@@ -175,10 +197,6 @@ export async function planNearbyNativeAdoption(input: NearbyNativeSource, incomi
         if (!label || label.payloadJson === null) invalidNearby('native-assignment-unavailable');
         return { name: label.name, payload: label.payloadJson, version: label.payloadSchemaVersion };
       });
-      const known = ['title', 'folder', 'entry_type', 'folder_path', 'labels', 'relations', 'assets', 'trashed', 'password_history'];
-      if (['login', 'ssh-key'].includes(data.entry_type)) known.push('extensions', 'login_type', 'is_archived', 'archived_at', 'custom_fields', ...PASSWORD_FIELDS);
-      else known.push('payload');
-      exactFields(data, known);
       const raw = oldPayload ? nearbyNativeBusinessPayload(oldPayload, data.entry_type) : {};
       const saved = rows(raw.device_sync_assets ?? []), descriptors = data.assets === undefined ? undefined : rows(data.assets);
       if (descriptors && descriptors.length > 64) invalidNearby('native-asset-limit');

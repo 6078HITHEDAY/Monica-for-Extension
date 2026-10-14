@@ -6,7 +6,7 @@ import { passkeyKeyMaterialHint } from '../passkey/private-key-portability';
 import { API_TOKEN_METADATA_SCHEMA, decodeApiTokenMetadata } from '../core/api-token';
 import { assertPasskeyCounterNotRegressed, preservePasskeyCounterHistory } from '../passkey/ownership-policy';
 import { prepareNearbyPasskey, retainNearbyPasskey } from './passkey-material';
-import { invalidNearby, NEARBY_ENTRY_TYPES, nearbyNativeBusinessPayload, nearbyNativePayload, normalizeNearbyNativeData,
+import { invalidNearby, NEARBY_ENTRY_TYPES, PASSWORD_FIELDS, nearbyNativeBusinessPayload, nearbyNativePayload, normalizeNearbyNativeData,
   validateNearbyWireData, wireObject, type NearbyEntryType, type NearbyWireData } from './wire-shape';
 
 /** Raw relationship/asset metadata from the authenticated source catalog. The
@@ -23,6 +23,12 @@ export interface NearbyContentMetadata {
 }
 const API_FIELDS = 'monica:api-token:fields:v1';
 const API_FAVORITE = 'monica:api-token:favorite:v1';
+const WIRE_EXTRAS = 'device_sync_wire_extras';
+function wireExtras(data: Record<string, unknown>, type: string): Record<string, unknown> {
+  const known = new Set<string>(['title', 'folder', 'entry_type', 'folder_path', 'labels', 'relations', 'assets', 'trashed', 'password_history',
+    ...(['login','ssh-key'].includes(type) ? ['extensions', 'login_type', 'is_archived', 'archived_at', 'custom_fields', ...PASSWORD_FIELDS] : ['payload'])]);
+  return Object.fromEntries(Object.entries(data).filter(([key])=>!known.has(key)));
+}
 
 function entryType(type: string): NearbyEntryType {
   const normalized = type === 'steam_mafile' ? 'steam-mafile' : type;
@@ -39,12 +45,14 @@ async function preparePayload(source: Record<string, unknown>): Promise<Record<s
 export async function nearbyNativeObjectToWire(record: Mdbx2ObjectRecord, metadata: NearbyContentMetadata): Promise<NearbyWireData> {
   if (record.payloadSchemaVersion !== 1) invalidNearby('unsupported-content-version');
   const type = entryType(record.objectTypeId);
-  let payload = nearbyNativeBusinessPayload(wireObject(parseLosslessJson(record.payloadJson)), type);
+  const original = wireObject(parseLosslessJson(record.payloadJson));
+  let payload = nearbyNativeBusinessPayload(original, type);
   // Native passwords can contain old installation-local encryption. Exporting
   // such a string as a password is not decryption and is never inferred here.
   if ((type === 'login' || type === 'ssh-key') && payload.monica_password_encoding != null && payload.monica_password_encoding !== 'plaintext-v1') invalidNearby('password-encoding');
   if (type === 'passkey') payload = await preparePayload(payload);
-  const data = normalizeNearbyNativeData(payload, record.title, metadata.folder ?? '', type);
+  const data = { ...(original[WIRE_EXTRAS] === undefined ? {} : wireExtras(wireObject(original[WIRE_EXTRAS]), type)),
+    ...normalizeNearbyNativeData(payload, record.title, metadata.folder ?? '', type) };
   for (const key of ['folder_path', 'labels', 'relations', 'assets', 'password_history', 'trashed'] as const) {
     if (metadata[key] !== undefined) data[key] = cloneLosslessJson(metadata[key]);
   }
@@ -125,6 +133,12 @@ export async function nearbyWireToNativeObject(input: NearbyWireData, target: Ne
     result.payloadJson = JSON.stringify(data.payload);
     result.apiTokenMetadataJson = fields.length ? String(fields[0].payload) : JSON.stringify({ schema: API_TOKEN_METADATA_SCHEMA, notes: '', custom_fields: [] });
     result.apiTokenFavorite = labels.some(label => label.name === API_FAVORITE);
+  }
+  const previous = target.previousPayload?.[WIRE_EXTRAS];
+  const extras = { ...(previous === undefined ? {} : wireExtras(wireObject(previous), data.entry_type)), ...wireExtras(data, data.entry_type) };
+  if (Object.keys(extras).length) {
+    const payload = wireObject(parseLosslessJson(result.payloadJson)); payload[WIRE_EXTRAS] = extras;
+    result.payloadJson = JSON.stringify(payload);
   }
   return result;
 }

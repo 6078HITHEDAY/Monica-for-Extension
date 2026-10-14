@@ -94,6 +94,14 @@ test('native nearby adoption commits complete records and assets, preserves Pass
     expect(file).toMatchObject({ collectionId: secondFolder, contentHash: updatedHash, fileName: 'renamed.bin', objectId: loginId });
     expect(await call('content-attachment-bytes', { handle, input: { writeRevision: source.writeRevision, attachment: file } })).toEqual({ sizeBytes: updatedBytes.length, sha256: updatedHash });
     expect(await call('verify-key', { payload: source.objects.find(row => row.summary.objectId === passkeyId)!.record!.payloadJson, expected: { id: credential, hash: createHash('sha256').update(privateKey).digest('hex'), publicKey, counter: 19 } })).toBe(true);
+    const purgeId=randomUUID(),purged=await call('nearby-native-adopt-plan',{source,batch:{operationId:randomUUID(),sourceHash:source.sourceHash,records:[{id:purgeId,deleted:true,clockJson:'{"peer":1}',dataJson:'{}'}],assets:[]}});
+    await call('content-write',{handle,input:purged.write});source=await capture();projection=await call('nearby-native-project',source);
+    const empty=projection.records.find(row=>row.global_id===purgeId)!;expect(empty).toMatchObject({deleted:true,data:{}});
+    const restored=normalizeNearbyNativeData({password:'restored-placeholder-secret'},'Restored','Legacy title','login');restored.future={preserved:'exact unknown field'};
+    const restore=await call('nearby-native-adopt-plan',{source,batch:{operationId:randomUUID(),sourceHash:source.sourceHash,records:[{...record(purgeId,restored,2),localId:empty.local_id,scope:empty.scope,expectedGuard:empty.guard}],assets:[]}});
+    await call('content-write',{handle,input:restore.write});source=await capture();projection=await call('nearby-native-project',source);
+    expect(projection.records.find(row=>row.global_id===purgeId)).toMatchObject({deleted:false,data:{entry_type:'login',folder:'Legacy title',password_plain:'restored-placeholder-secret',future:{preserved:'exact unknown field'}}});
+    evidence.firstSyncPurgeRestoration=true;evidence.legacyFolder=true;evidence.unknownWireFields=true;
     await call('nearby-native-journal-scan', [privateKey.toString('base64'), 'synthetic-unchanged-password', 'synthetic-field']);
     await call('scan', [password, privateKey.toString('base64'), 'synthetic-unchanged-password', 'synthetic-field']); await call('close');
     Object.assign(evidence, { status: 'passed', originalPasskeySignature: true, counter19Preserved: true, attachmentIdentityAndHash: true, crossFolderMove: true, atomicFailure: true,
