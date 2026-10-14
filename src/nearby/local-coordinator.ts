@@ -6,10 +6,10 @@ import { NearbyPasskeyConsent, type NearbyPasskeyReview } from './passkey-consen
 import { nearbyDeviceHello, nearbySettingsCounter, type NearbyPreferences, type NearbySavedPeer } from './preferences';
 import { collectNearbyPending, groupNearbyPending, nearbyApplicationReferences } from './pending';
 import type { NearbyIncomingRecord, NearbyLocalAcknowledgement, NearbyLocalSnapshot } from './local-adoption';
-import { wireInteger, wireObject, wireText } from './wire-shape';
+import { NearbyDataError, wireInteger, wireObject, wireText } from './wire-shape';
 
 type Store = Pick<SecureVaultService, 'passkeySessionId' | 'nearbySessionPreferences' | 'assertNearbySession' | 'updateNearbyPreferences'
-  | 'captureNearbyLocalRecords' | 'nearbyLocalSnapshotHash' | 'nearbySavedAcknowledgements' | 'adoptNearbyLocalTransaction'>;
+  | 'captureNearbyLocalRecords' | 'nearbyLocalSnapshotHash' | 'nearbySavedAcknowledgements' | 'nearbyPendingPasswordGroups' | 'adoptNearbyLocalTransaction'>;
 export interface NearbyEndpoint { addresses: string[]; port: number }
 export interface NearbyCoordinatorView {
   phase: 'idle' | 'pairing' | 'preparing' | 'review' | 'ready' | 'transferring' | 'saving' | 'completed' | 'failed' | 'cancelled';
@@ -98,7 +98,7 @@ export class NearbyLocalCoordinator {
         return result;
       }
       catch (error) {
-        const code = error instanceof NearbyCoordinatorError ? error.code : 'operation-failed';
+        const code = error instanceof NearbyCoordinatorError || error instanceof NearbyDataError ? error.code : 'operation-failed';
         this.close(); this.view = { phase: 'failed', error: code }; throw new NearbyCoordinatorError(code);
       }
     });
@@ -273,10 +273,11 @@ export class NearbyLocalCoordinator {
         if (localId) references.push({ id, localId });
       }
     }
-    for (const records of groupNearbyPending(pending, canonicalIds)) {
+    const localGroups = pending.some(row => row.deleted) ? new Map(await this.store.nearbyPendingPasswordGroups(pending, this.sessionId!)) : undefined;
+    for (const records of groupNearbyPending(pending, canonicalIds, localGroups)) {
       const saved = new Set((await this.store.nearbySavedAcknowledgements(records, this.sessionId!)).map(row => row.recordId));
       const assets = new Map<string, { id: string; dataBase64: string }>(); let bytesTotal = 0;
-      for (const record of records) if (!saved.has(record.id)) {
+      for (const record of records) if (!record.deleted && !saved.has(record.id)) {
         const data = wireObject(parseLosslessJson(record.dataJson));
         for (const raw of (data.assets as unknown[] | undefined) ?? []) {
           const asset = wireObject(raw), id = string(asset.id, 64).toLowerCase(), size = Number(wireInteger(asset.size, 16n * 1024n * 1024n));

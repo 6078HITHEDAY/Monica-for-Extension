@@ -486,6 +486,8 @@ export interface VaultState {
   nearbyPreferences?: import('../nearby/preferences').NearbyPreferences;
   /** Encrypted nearby application receipts; never synchronized as item fields. */
   nearbyLocalReceipts?: import('../nearby/local-adoption').NearbyLocalReceipt[];
+  /** Lossless nearby folders/root metadata and their encrypted adoption receipts. */
+  nearbyLocalMetadata?: import('../nearby/local-metadata').NearbyLocalMetadata[];
   /** Local encrypted two-phase password removal, never synchronized as item metadata. */
   passwordProjectRemovals?: import("./password-project-removal-journal").PasswordProjectRemovalRecord[];
   mdbx2Restores?: import('./mdbx2-restore-journal').Mdbx2RestoreRecord[];

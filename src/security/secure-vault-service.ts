@@ -13,7 +13,7 @@ import { assertKeePassRestoreProject, keePassRestoreProject, readKeePassProjectR
 import { mdbx2PasswordHistoryTransferBlockReason } from '../providers/mdbx2/mdbx2-batch-transfer';
 import { providerSourceRecordsFor, replaceProviderSourceRecords, validProviderMutationReceipt } from "../core/migrations";
 import { sourceRecordsBudgetError } from "../core/source-records";
-import { applyLocalTransferBatch, prepareLocalTransferBatch, type LocalTransferBatch, type LocalTransferRequest, type LocalTransferResource } from '../core/local-transfer';
+import { applyLocalTransferBatch, isLocalTransferItem, prepareLocalTransferBatch, type LocalTransferBatch, type LocalTransferRequest, type LocalTransferResource } from '../core/local-transfer';
 import { applyLocalAttachmentMutation, localAttachmentOwner, type LocalAttachmentMutation } from '../core/local-attachments';
 import { readKeePassTransfers, assertKeePassTransferBindings, keePassTransferSnapshotHash, keePassTransferResult, type KeePassTransferIntent } from '../core/keepass-transfer-journal';
 import { readBitwardenCipherCopies, validateBitwardenCopyFiles, advanceBitwardenCipherCopy, assertBitwardenCopyTarget,
@@ -499,6 +499,8 @@ export class SecureVaultService {
       // A portable restore is another device/replica. Retain content receipts,
       // but require a new nearby identity and explicit pairing on this device.
       delete restoredState.nearbyPreferences;
+      const { invalidateNearbyReplayForRestore } = await import('../nearby/local-adoption');
+      invalidateNearbyReplayForRestore(restoredState);
       // A portable backup cannot grant device-local access on another installation.
       restoredState.settings.lockedAutofillItemIds = [];
 
@@ -616,6 +618,27 @@ export class SecureVaultService {
       const result = await nearbySavedAcknowledgements(state, input);
       await this.assertLocalTransferSession(sessionId);
       return result;
+    });
+  }
+
+  /** Empty Android tombstones carry no project field. Recover only grouping
+   * identities from the authenticated local binding before batching deletions. */
+  async nearbyPendingPasswordGroups(records: readonly import('../nearby/local-adoption').NearbyIncomingRecord[], sessionId: string): Promise<Array<[string, string]>> {
+    const input = records.filter(row => row.deleted).map(row => ({ id: row.id, localId: row.localId }));
+    return this.runExclusive(async () => {
+      await this.assertLocalTransferSession(sessionId);
+      const { envelope, key, session } = await this.unlockedContext();
+      const state = await this.readDecodedSnapshot(envelope, key, session);
+      const { readNearbyLocalReceipts } = await import('../nearby/local-adoption');
+      const receipts = new Map(readNearbyLocalReceipts(state.nearbyLocalReceipts).map(row => [row.recordId, row.itemId]));
+      const items = new Map(state.items.map(item => [item.id, item]));
+      const result: Array<[string, string]> = [];
+      for (const row of input) {
+        const id = row.localId?.startsWith('local:') ? row.localId.slice(6) : receipts.get(row.id);
+        const item = id && items.get(id);
+        if (item && item.kind === 'login' && item.passwordGroupId && isLocalTransferItem(item, state.providers)) result.push([row.id, item.passwordGroupId]);
+      }
+      await this.assertLocalTransferSession(sessionId); return result;
     });
   }
 

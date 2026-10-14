@@ -4,6 +4,7 @@ import { isLocalTransferItem, validateLocalAttachments, type LocalItemAttachment
 import { mdbx2TransferOperationScope as hash } from '../providers/mdbx2/mdbx2-transfer-identity';
 import { normalizeCredentialId } from '../passkey/source-policy';
 import { nearbyLocalItemToWire, nearbyWireToLocalItem } from './application-codec';
+import { captureNearbyMetadata, isNearbyMetadata, isNearbyTombstone, nearbyCategoryKey, nextNearbyCategoryId, readNearbyLocalMetadata, stageNearbyMetadata } from './local-metadata';
 import { invalidNearby, validateNearbyWireData, wireInteger, wireObject, wireText, type NearbyWireData } from './wire-shape';
 
 export interface NearbyIncomingRecord {
@@ -17,6 +18,8 @@ export interface NearbyLocalAcknowledgement {
 export interface NearbyLocalReceipt {
   version: 1; providerId: string; recordId: string; itemId: string; fingerprint: string;
   dataJson: string; baseline: VaultItem; acknowledgement: NearbyLocalAcknowledgement;
+  /** Portable restore keeps content identity but starts a different native replica history. */
+  replayInvalidated?: boolean;
 }
 export interface NearbyLocalBatch {
   providerId: string;
@@ -50,10 +53,18 @@ export function readNearbyLocalReceipts(value: unknown): NearbyLocalReceipt[] {
       || typeof row.itemId !== 'string' || baseline.id !== row.itemId || typeof row.fingerprint !== 'string' || !digestPattern.test(row.fingerprint)
       || ack.recordId !== row.recordId || ack.localId !== `local:${row.itemId}` || ack.scope !== 'local' || typeof ack.guard !== 'string' || !digestPattern.test(ack.guard)
       || typeof row.dataJson !== 'string' || row.dataJson.length > 1024 * 1024 || typeof ack.dataJson !== 'string' || ack.dataJson.length > 1024 * 1024) invalidNearby('receipt-invalid');
+    if (row.replayInvalidated !== undefined && typeof row.replayInvalidated !== 'boolean') invalidNearby('receipt-invalid');
     if (ids.has(row.recordId)) invalidNearby('receipt-duplicate'); ids.add(row.recordId);
     clock(wireText(ack.clockJson)); validateNearbyWireData(parseLosslessJson(row.dataJson)); validateNearbyWireData(parseLosslessJson(ack.dataJson));
   }
   return structuredClone(value) as NearbyLocalReceipt[];
+}
+
+/** A portable restore never replays acknowledgements from another replica.
+ * Baselines and portable IDs still carry every original field and key. */
+export function invalidateNearbyReplayForRestore(state: VaultState): void {
+  if (state.nearbyLocalReceipts) state.nearbyLocalReceipts = readNearbyLocalReceipts(state.nearbyLocalReceipts).map(row => ({ ...row, replayInvalidated: true }));
+  if (state.nearbyLocalMetadata) state.nearbyLocalMetadata = readNearbyLocalMetadata(state.nearbyLocalMetadata).map(row => ({ ...row, replayInvalidated: true }));
 }
 
 /** Bind incoming adoption to the exact local snapshot, including attachments,
@@ -61,7 +72,7 @@ export function readNearbyLocalReceipts(value: unknown): NearbyLocalReceipt[] {
 export async function nearbyLocalSourceHash(state: VaultState): Promise<string> {
   return hash({ items: state.items.filter(item => isLocalTransferItem(item, state.providers)),
     providers: state.providers.filter(provider => provider.kind === 'local'), nearbyEpoch: state.nearbyPreferences?.epoch ?? null, attachments: state.localItemAttachments ?? [],
-    origins: state.localItemOrigins ?? [], folders: state.localTransferFolders ?? [], receipts: readNearbyLocalReceipts(state.nearbyLocalReceipts),
+    origins: state.localItemOrigins ?? [], folders: state.localTransferFolders ?? [], receipts: readNearbyLocalReceipts(state.nearbyLocalReceipts), metadata: readNearbyLocalMetadata(state.nearbyLocalMetadata),
     removals: state.passwordProjectRemovals ?? [], transfers: state.bitwardenBatchTransfers ?? [], queue: state.mutationQueue, conflicts: state.providerConflicts });
 }
 
@@ -88,10 +99,12 @@ async function matchesItemGuard(item: VaultItem, attachments: LocalItemAttachmen
 const recordFingerprint = (record: NearbyIncomingRecord) => hash({ id: record.id, clockJson: record.clockJson, dataJson: record.dataJson, deleted: record.deleted });
 export async function nearbySavedAcknowledgements(state: VaultState, records: readonly NearbyIncomingRecord[]): Promise<NearbyLocalAcknowledgement[]> {
   const receipts = new Map(readNearbyLocalReceipts(state.nearbyLocalReceipts).map(row => [row.recordId, row]));
+  const metadata = new Map(readNearbyLocalMetadata(state.nearbyLocalMetadata).map(row => [row.recordId, row]));
   const result: NearbyLocalAcknowledgement[] = [];
   for (const record of records) {
-    const receipt = receipts.get(record.id);
-    if (receipt?.fingerprint === await recordFingerprint(record)) result.push(structuredClone(receipt.acknowledgement));
+    if (receipts.has(record.id) && metadata.has(record.id)) invalidNearby('duplicate-record-target');
+    const receipt = receipts.get(record.id) ?? metadata.get(record.id);
+    if (receipt?.acknowledgement && !receipt.replayInvalidated && receipt.fingerprint === await recordFingerprint(record)) result.push(structuredClone(receipt.acknowledgement));
   }
   return result;
 }
@@ -108,6 +121,7 @@ function uuidFromDigest(digest: string): string { return `${digest.slice(0, 8)}-
  * retain their separate sync policy; a failed row rejects the entire scan. */
 export async function captureNearbyLocalSnapshot(state: VaultState): Promise<NearbyLocalSnapshot> {
   const receipts = readNearbyLocalReceipts(state.nearbyLocalReceipts), locals = state.items.filter(item => isLocalTransferItem(item, state.providers));
+  const metadata = await captureNearbyMetadata(state);
   const identities = new Map<string, string>(), references = new Map<string, string>();
   for (const item of locals) {
     requireUncontended(state, item.id);
@@ -137,6 +151,8 @@ export async function captureNearbyLocalSnapshot(state: VaultState): Promise<Nea
     if (!receipt || receipt.baseline.categoryId !== item.categoryId || receipt.baseline.categoryName !== item.categoryName) {
       folderPath = item.categoryName ? [{ id: uuidFromDigest(await hash(['nearby-local-folder', item.categoryId ?? item.categoryName])), title: item.categoryName, parent: null }] : [];
     }
+    const category = metadata.find(row => !row.value.deleted && row.value.categoryKey === nearbyCategoryKey(item) && row.value.categoryKey !== undefined);
+    if (category) folderPath = wireObject(category.data.payload).path as unknown[];
     const data = await nearbyLocalItemToWire(item, { folder: item.categoryName ?? '', folder_path: folderPath ?? [], assets: descriptors,
       labels: previous?.labels as unknown[] | undefined, relations: previous?.relations as unknown[] | undefined },
     previous && receipt ? { data: previous, item: receipt.baseline } : undefined);
@@ -155,6 +171,14 @@ export async function captureNearbyLocalSnapshot(state: VaultState): Promise<Nea
     }
     validateNearbyWireData(data);
     records.push({ local_id: `local:${item.id}`, global_id: identities.get(item.id)!, scope: 'local', guard: await itemGuard(item, files), deleted: Boolean(item.deletedAt), data });
+  }
+  for (const row of metadata) {
+    if (records.some(record => record.global_id === row.value.recordId || record.local_id === row.value.localId)) invalidNearby('metadata-identity');
+    for (const file of row.value.attachments) {
+      if (assets.has(file.sha256) && assets.get(file.sha256) !== file.dataBase64) invalidNearby('conflicting-asset-content');
+      assets.set(file.sha256, file.dataBase64);
+    }
+    records.push({ local_id: row.value.localId, global_id: row.value.recordId, scope: 'local', guard: row.guard, deleted: row.value.deleted, data: row.data });
   }
   return { sourceHash: await nearbyLocalSourceHash(state), records, assets: [...assets].map(([id, dataBase64]) => ({ id, dataBase64 })) };
 }
@@ -181,6 +205,8 @@ export async function applyNearbyLocalBatch(state: VaultState, input: NearbyLoca
     resolvedReferences.set(reference.id, reference.localId.slice('local:'.length));
   }
   const receipts = readNearbyLocalReceipts(state.nearbyLocalReceipts), byId = new Map(receipts.map(row => [row.recordId, row]));
+  const metadata = readNearbyLocalMetadata(state.nearbyLocalMetadata), metadataById = new Map(metadata.map(row => [row.recordId, row]));
+  const originalMetadata = await captureNearbyMetadata(state);
   const ids = new Set<string>(), assets = new Map<string, string>();
   for (const asset of input.assets) {
     if (!digestPattern.test(asset.id) || assets.has(asset.id) || typeof asset.dataBase64 !== 'string' || asset.dataBase64.length > 24 * 1024 * 1024) invalidNearby('adoption-assets');
@@ -189,31 +215,65 @@ export async function applyNearbyLocalBatch(state: VaultState, input: NearbyLoca
   const work = await Promise.all(input.records.map(async record => {
     if (!idPattern.test(record.id) || ids.has(record.id) || typeof record.deleted !== 'boolean' || typeof record.dataJson !== 'string' || record.dataJson.length > 1024 * 1024) invalidNearby('adoption-record');
     ids.add(record.id);
-    const vector = clock(record.clockJson), data = parseLosslessJson(record.dataJson);
-    validateNearbyWireData(data);
+    const vector = clock(record.clockJson);
+    let data = wireObject(parseLosslessJson(record.dataJson)) as NearbyWireData;
+    if (record.deleted && isNearbyTombstone(data)) {
+      const known = byId.get(record.id)?.dataJson ?? metadataById.get(record.id)?.dataJson
+        ?? originalMetadata.find(row => row.value.localId === record.localId)?.value.dataJson;
+      if (known) data = parseLosslessJson(known) as NearbyWireData;
+      else if (record.localId && !record.localId.startsWith('local:metadata-')) {
+        const source = await captureNearbyLocalSnapshot(state);
+        data = source.records.find(row => row.local_id === record.localId)?.data ?? invalidNearby('tombstone-binding-required');
+      }
+    }
+    if (!(record.deleted && isNearbyTombstone(data))) validateNearbyWireData(data);
     const bound = record.localId !== undefined || record.scope !== undefined || record.expectedGuard !== undefined;
     if (bound && (typeof record.localId !== 'string' || !record.localId.startsWith('local:') || record.scope !== 'local'
       || typeof record.expectedGuard !== 'string' || !digestPattern.test(record.expectedGuard))) invalidNearby('adoption-binding');
     const fingerprint = await recordFingerprint(record), old = byId.get(record.id);
-    if (old && old.providerId !== provider.id) invalidNearby('adoption-provider-changed');
-    if (old?.fingerprint !== fingerprint && old) {
-      const before = clock(old.acknowledgement.clockJson);
+    const oldMetadata = metadataById.get(record.id), previous = old ?? oldMetadata;
+    const restoringTombstone = oldMetadata && isNearbyTombstone(wireObject(parseLosslessJson(oldMetadata.dataJson))) && !isNearbyMetadata(data);
+    if (old && oldMetadata || old && isNearbyMetadata(data) || oldMetadata && !isNearbyMetadata(data) && !restoringTombstone) invalidNearby('metadata-type-changed');
+    if (restoringTombstone && record.localId && !originalMetadata.some(row => row.value.localId === record.localId && row.value.recordId === record.id && row.guard === record.expectedGuard)) invalidNearby('metadata-binding-changed');
+    if (previous && previous.providerId !== provider.id) invalidNearby('adoption-provider-changed');
+    if (previous?.fingerprint !== fingerprint && previous?.acknowledgement && !previous.replayInvalidated) {
+      const before = clock(previous.acknowledgement.clockJson);
       let newer = false;
       for (const [device, count] of before) if ((vector.get(device) ?? 0n) < count) invalidNearby('adoption-clock-regression');
       for (const [device, count] of vector) if (count > (before.get(device) ?? 0n)) newer = true;
       if (!newer) invalidNearby('adoption-clock-conflict');
     }
-    return { record, data, fingerprint, old, replay: old?.fingerprint === fingerprint };
+    return { record, data, fingerprint, old, previous, restoringTombstone, replay: previous?.fingerprint === fingerprint && !previous.replayInvalidated };
   }));
-  if (work.every(row => row.replay)) return { state, acknowledgements: work.map(row => structuredClone(row.old!.acknowledgement)), changed: false };
+  if (work.every(row => row.replay)) return { state, acknowledgements: work.map(row => structuredClone(row.previous!.acknowledgement!)), changed: false };
   if (await nearbyLocalSourceHash(state) !== input.sourceHash) invalidNearby('local-source-changed');
   const next = structuredClone(state), acknowledgements: NearbyLocalAcknowledgement[] = [], changedItems = new Set<string>();
+  const metadataChanges: Array<Awaited<ReturnType<typeof stageNearbyMetadata>>> = [];
+  // Prepare folder membership before projecting items. Do not mutate existing
+  // item guards until every incoming item has passed its original binding check.
+  for (const row of work.filter(row => !row.replay && isNearbyMetadata(row.data))) {
+    const files: LocalItemAttachment[] = [];
+    const localId = originalMetadata.find(entry => entry.value.recordId === row.record.id || entry.value.localId === row.record.localId)?.value.localId ?? `local:metadata-${row.record.id}`;
+    const retained = row.record.deleted ? originalMetadata.find(entry => entry.value.recordId === row.record.id || entry.value.localId === row.record.localId)?.value.attachments ?? [] : undefined;
+    if (retained) files.push(...structuredClone(retained));
+    for (const [index, raw] of (retained ? [] : (row.data.assets as unknown[] | undefined) ?? []).entries()) {
+      const asset = wireObject(raw), id = wireText(asset.id).toLowerCase(), body = assets.get(id);
+      if (body === undefined) invalidNearby('adoption-asset-missing');
+      files.push({ itemId: localId, attachmentId: `nearby-${id}-${index}`, fileName: wireText(asset.file_name), mediaType: wireText(asset.media_type),
+        sizeBytes: Number(wireInteger(asset.size, 16n * 1024n * 1024n)), sha256: id, dataBase64: body, protected: true });
+    }
+    await validateLocalAttachments(files, localId);
+    const metadata = await stageNearbyMetadata(next, originalMetadata, provider.id, row.record, row.data, row.fingerprint, files);
+    metadataChanges.push(metadata); acknowledgements.push(metadata.acknowledgement!);
+  }
   for (const row of work) {
-    if (row.replay) { acknowledgements.push(structuredClone(row.old!.acknowledgement)); continue; }
+    if (row.replay) { acknowledgements.push(structuredClone(row.previous!.acknowledgement!)); continue; }
+    if (isNearbyMetadata(row.data)) continue;
     const { record, data, old } = row;
+    if (row.restoringTombstone) next.nearbyLocalMetadata = readNearbyLocalMetadata(next.nearbyLocalMetadata).filter(entry => entry.recordId !== record.id);
     let existing = old ? next.items.find(item => item.id === old.itemId) : undefined;
     if (old && !existing) invalidNearby('local-item-missing');
-    if (record.localId) {
+    if (record.localId && !row.restoringTombstone) {
       const boundId = record.localId.slice('local:'.length);
       const bound = next.items.find(item => item.id === boundId);
       if (!bound || old && old.itemId !== boundId || !isLocalTransferItem(bound, next.providers)) invalidNearby('local-binding-changed');
@@ -235,7 +295,9 @@ export async function applyNearbyLocalBatch(state: VaultState, input: NearbyLoca
     const savedData = { ...data, trashed: record.deleted || data.trashed === true };
     const item = await nearbyWireToLocalItem(savedData, { id: itemId, providerId: provider.id, now, previous: existing });
     const files: LocalItemAttachment[] = [];
-    for (const [index, raw] of ((data.assets as unknown[] | undefined) ?? []).entries()) {
+    const retained = record.deleted && existing ? (next.localItemAttachments ?? []).filter(file => file.itemId === existing.id) : undefined;
+    if (retained) files.push(...structuredClone(retained));
+    for (const [index, raw] of (retained ? [] : (data.assets as unknown[] | undefined) ?? []).entries()) {
       const asset = wireObject(raw), id = wireText(asset.id).toLowerCase(), body = assets.get(id);
       if (body === undefined) invalidNearby('adoption-asset-missing');
       files.push({ itemId, attachmentId: `nearby-${id}-${index}`, fileName: wireText(asset.file_name), mediaType: wireText(asset.media_type),
@@ -247,21 +309,40 @@ export async function applyNearbyLocalBatch(state: VaultState, input: NearbyLoca
       const identity = path?.length ? path[path.length - 1].id : `legacy:${data.folder}`;
       const origin = `nearby-folder:${identity}`;
       let category = next.localTransferFolders?.find(folder => folder.origin === origin);
-      if (!category) {
-        const maximum = Math.max(0, ...next.items.map(item => item.categoryId ?? 0), ...(next.localTransferFolders ?? []).map(folder => folder.categoryId));
-        if (!Number.isSafeInteger(maximum) || maximum >= Number.MAX_SAFE_INTEGER) invalidNearby('local-category-limit');
-        category = { origin, categoryId: maximum + 1, categoryName: data.folder };
-        next.localTransferFolders = [...(next.localTransferFolders ?? []), category];
+      const known = originalMetadata.find(row => !row.value.deleted && row.data.entry_type === 'folder' && row.value.categoryKey !== undefined
+        && (row.value.recordId === identity || (wireObject(row.data.payload).path as Array<{ id: string }>).slice(-1)[0]?.id === identity));
+      if (!category && known) category = next.localTransferFolders?.find(folder => nearbyCategoryKey(folder) === known.value.categoryKey);
+      if (!category && known?.value.categoryKey?.startsWith('name:')) {
+        // A legacy name-only category has no numeric identity yet. Keep its
+        // exact spelling until the final folder batch can normalize all members.
+        item.categoryId = undefined; item.categoryName = known.data.title;
+      } else {
+        if (!category) {
+          category = { origin, categoryId: known?.value.categoryKey?.startsWith('id:') ? Number(known.value.categoryKey.slice(3)) : nextNearbyCategoryId(next),
+            categoryName: known?.data.title ?? data.folder };
+          next.localTransferFolders = [...(next.localTransferFolders ?? []), category];
+        }
+        item.categoryId = category.categoryId; item.categoryName = category.categoryName;
       }
-      item.categoryId = category.categoryId; item.categoryName = category.categoryName;
     }
     next.items = [...next.items.filter(candidate => candidate.id !== itemId), item];
     next.localItemAttachments = [...(next.localItemAttachments ?? []).filter(file => file.itemId !== itemId), ...files];
     const acknowledgement: NearbyLocalAcknowledgement = { recordId: record.id, clockJson: record.clockJson, localId: `local:${itemId}`, scope: 'local',
       guard: await itemGuard(item, files), dataJson: record.dataJson };
     const receipt: NearbyLocalReceipt = { version: 1, providerId: provider.id, recordId: record.id, itemId, fingerprint: row.fingerprint,
-      dataJson: record.dataJson, baseline: item, acknowledgement };
+      dataJson: JSON.stringify(data), baseline: item, acknowledgement };
+    if (record.deleted && isNearbyTombstone(wireObject(parseLosslessJson(record.dataJson)))) acknowledgement.dataJson = JSON.stringify(data);
     byId.set(record.id, receipt); acknowledgements.push(acknowledgement);
+  }
+  for (const metadata of metadataChanges.filter(row => row.categoryKey !== undefined)) {
+    const previous = originalMetadata.find(row => row.value.localId === metadata.localId)?.value.categoryKey;
+    const folder = next.localTransferFolders?.find(row => nearbyCategoryKey(row) === metadata.categoryKey);
+    for (const item of next.items) if (isLocalTransferItem(item, next.providers)
+      && (nearbyCategoryKey(item) === previous && previous !== undefined || nearbyCategoryKey(item) === metadata.categoryKey)) {
+      requireUncontended(next, item.id);
+      item.categoryId = metadata.deleted ? undefined : folder?.categoryId;
+      item.categoryName = metadata.deleted ? undefined : folder?.categoryName;
+    }
   }
   // Resolve complete project links after every item is staged, so input order
   // cannot disconnect a note, SSO account or bound authenticator.
@@ -285,7 +366,7 @@ export async function applyNearbyLocalBatch(state: VaultState, input: NearbyLoca
     if (!item || !isLocalTransferItem(item, next.providers)) invalidNearby('reference-target-missing');
     return item;
   };
-  for (const row of work.filter(row => !row.replay)) {
+  for (const row of work.filter(row => !row.replay && !isNearbyMetadata(row.data))) {
     const receipt = byId.get(row.record.id)!, item = next.items.find(item => item.id === receipt.itemId)!;
     const payload = wireObject(row.data.entry_type === 'login' || row.data.entry_type === 'ssh-key' ? row.data.extensions ?? {} : row.data.payload);
     if (item.kind === 'login') {
@@ -303,12 +384,24 @@ export async function applyNearbyLocalBatch(state: VaultState, input: NearbyLoca
       item.boundPasswordId = undefined;
     }
   }
-  for (const row of work.filter(row => !row.replay)) {
+  for (const row of work.filter(row => !row.replay && !isNearbyMetadata(row.data))) {
     const receipt = byId.get(row.record.id)!, item = next.items.find(item => item.id === receipt.itemId)!;
     receipt.baseline = structuredClone(item);
     receipt.acknowledgement.guard = await itemGuard(item, (next.localItemAttachments ?? []).filter(file => file.itemId === item.id));
   }
   next.nearbyLocalReceipts = readNearbyLocalReceipts([...byId.values()]);
+  if (metadataChanges.length) {
+    const finalMetadata = await captureNearbyMetadata(next);
+    const savedMetadata = readNearbyLocalMetadata(next.nearbyLocalMetadata);
+    for (const changed of metadataChanges) {
+      const current = finalMetadata.find(row => row.value.localId === changed.localId)!;
+      changed.acknowledgement!.guard = current.guard;
+      changed.acknowledgement!.dataJson = JSON.stringify(current.data);
+      savedMetadata.find(row => row.localId === changed.localId)!.acknowledgement = structuredClone(changed.acknowledgement);
+    }
+    next.nearbyLocalMetadata = readNearbyLocalMetadata(savedMetadata);
+  }
   next.updatedAt = now;
-  return { state: next, acknowledgements, changed: true };
+  const ackById = new Map(acknowledgements.map(row => [row.recordId, row]));
+  return { state: next, acknowledgements: input.records.map(row => ackById.get(row.id)!), changed: true };
 }
