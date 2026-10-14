@@ -4,6 +4,7 @@ import { MdbxBrowserBlockStore, blockHash, type BrowserCommit } from '../../../s
 import { MdbxBrowserFilesystem } from '../../../src/providers/mdbx2/browser/filesystem';
 import { readMdbx2ContentMetadata } from '../../../src/providers/mdbx2/content-metadata';
 import { writeMdbx2Content } from '../../../src/providers/mdbx2/content-write';
+import { readMdbx2ContentAttachments, readMdbx2ContentAttachmentBytes } from '../../../src/providers/mdbx2/content-attachments';
 import { Mdbx2NativeHostError, parseMdbx2NativeResponse, validateMdbx2HostCapabilities, type Mdbx2NativeMethod } from '../../../src/providers/mdbx2/native-contract';
 // Packaged by the fixture alongside the production compiled engine.
 // @ts-expect-error A generated, external Emscripten module.
@@ -101,7 +102,7 @@ async function lifecycleSuite() {
   return { noAbortReentry: true, lockReleasedAfterTrap: true };
 }
 async function action(op: string, data: any): Promise<unknown> {
-  if (op === 'content-metadata' || op === 'content-write') {
+  if (op === 'content-metadata' || op === 'content-write' || op === 'content-attachments' || op === 'content-attachment-bytes') {
     const request = async (method: Mdbx2NativeMethod, params: Record<string, unknown> = {}) => {
       const response = parseMdbx2NativeResponse(await session!.request({ protocol: 2, requestId: crypto.randomUUID(), method, params }));
       if (!response) throw Error('Invalid synthetic native response');
@@ -109,6 +110,12 @@ async function action(op: string, data: any): Promise<unknown> {
       return response.result;
     };
     const client = { request, hello: async () => validateMdbx2HostCapabilities(await request('host.hello')) };
+    if (op === 'content-attachments') return readMdbx2ContentAttachments(client, data.handle, data.input);
+    if (op === 'content-attachment-bytes') {
+      const bytes = await readMdbx2ContentAttachmentBytes(client, data.handle, data.input);
+      try { return { sizeBytes: bytes.length, sha256: [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(byte => byte.toString(16).padStart(2, '0')).join('') }; }
+      finally { bytes.fill(0); }
+    }
     if (op === 'content-write') {
       const input = { ...data.input, assets: data.input.assets.map((row: { id: string; base64: string }) => ({ id: row.id, bytes: Uint8Array.from(atob(row.base64), c => c.charCodeAt(0)) })) };
       return writeMdbx2Content(client, data.handle, input);

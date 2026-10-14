@@ -130,6 +130,7 @@ import {
 } from "./native-contract";
 import { base64ToBytes, bytesToBase64 } from "../../security/encoding";
 import { readMdbx2ContentMetadata, type Mdbx2ContentMetadataInput, type Mdbx2ContentMetadata } from "./content-metadata";
+import { readMdbx2ContentAttachments, readMdbx2ContentAttachmentBytes, type Mdbx2ContentAttachmentsInput, type Mdbx2ContentAttachments, type Mdbx2ContentAttachment } from "./content-attachments";
 
 const MAX_JAVASCRIPT_DATE_UNIX_SECONDS = 8_640_000_000;
 const MAX_UINT32 = 0xffff_ffff;
@@ -283,6 +284,14 @@ export class Mdbx2NativeClient {
 
   readContentMetadata(vaultHandle: string, input: Mdbx2ContentMetadataInput, signal?: AbortSignal): Promise<Mdbx2ContentMetadata> {
     return readMdbx2ContentMetadata(this, vaultHandle, input, signal);
+  }
+
+  readContentAttachments(vaultHandle: string, input: Mdbx2ContentAttachmentsInput, signal?: AbortSignal): Promise<Mdbx2ContentAttachments> {
+    return readMdbx2ContentAttachments(this, vaultHandle, input, signal);
+  }
+
+  readContentAttachmentBytes(vaultHandle: string, input: { writeRevision: Mdbx2WriteRevision; attachment: Mdbx2ContentAttachment }, signal?: AbortSignal): Promise<Uint8Array<ArrayBuffer>> {
+    return readMdbx2ContentAttachmentBytes(this, vaultHandle, input, signal);
   }
 
   private async requireWriteRevisionSupport(vaultHandle: string): Promise<void> {

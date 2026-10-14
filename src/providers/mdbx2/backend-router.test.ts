@@ -37,6 +37,19 @@ function fixture(result: (request: any) => unknown = () => ({})) {
   return { native, browser, origins, router: new Mdbx2BackendRouter(native.value, browser.value, origins) };
 }
 describe('MDBX backend ownership', () => {
+  it('keeps catalog download handles on their owning engine across router restart', async () => {
+    const f = fixture(r => r.method === 'content.attachments.begin' ? { readHandle: id(3), attachmentId: id(4), metadata: { collectionId: id(5) } } : {});
+    await f.origins.bind('browser', [{ handle: id(1), role: 'vault' }]);
+    await f.router.request('content.attachments.list', { vaultHandle: id(1), collectionId: id(5) });
+    await f.router.request('content.attachments.begin', { vaultHandle: id(1), attachmentId: id(4) });
+    expect(f.origins.rows.get(id(3))).toEqual({ version: 1, backend: 'browser', roles: ['read'] });
+    expect(f.origins.rows.has(id(4))).toBe(false); expect(f.origins.rows.has(id(5))).toBe(false);
+    f.router.close();
+    const fresh = new Mdbx2BackendRouter(f.native.value, f.browser.value, f.origins);
+    await fresh.request('attachment.read.chunk', { readHandle: id(3), offset: 0, maxBytes: 1 });
+    await fresh.request('attachment.read.release', { readHandle: id(3) });
+    expect(f.native.calls).toHaveLength(0); expect(f.browser.calls.map(r => r.method)).toEqual(['content.attachments.list', 'content.attachments.begin', 'attachment.read.chunk', 'attachment.read.release']); fresh.close();
+  });
   it('keeps old unknown handles on Native Host and sends new unbound work to the browser', async () => {
     const f = fixture(r => r.method === 'transfer.begin' ? { transferId: id(2), nextOffset: 0, maxChunkBytes: 262144 } : {});
     await f.router.request('vault.status', { vaultHandle: id(1) });

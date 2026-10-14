@@ -28,6 +28,8 @@ use zeroize::Zeroizing;
 mod api_token;
 #[path = "content_metadata.rs"]
 mod content_metadata;
+#[path = "content_attachments.rs"]
+mod content_attachments;
 #[path = "content_write.rs"]
 mod content_write;
 
@@ -666,6 +668,8 @@ impl HostRuntime {
             "collection.restore" => self.collection_restore(params),
             "content.metadata.list" => content_metadata::list(self, params),
             "content.metadata.read" => content_metadata::read(self, params),
+            "content.attachments.list" => content_attachments::list(self, params),
+            "content.attachments.begin" => content_attachments::begin(self, params),
             "content.write.begin" | "content.write.chunk" | "content.write.finish" | "content.write.abort" => content_write::handle(self, method, params),
             "object.list" => self.object_list(params),
             "object.reveal" => self.object_reveal(params),
@@ -738,6 +742,7 @@ impl HostRuntime {
             "supportsObjectRevisionPreconditions": true,
             "supportsVaultWriteRevision": true,
             "supportsContentMetadata": true,
+            "supportsContentAttachments": true,
             "supportsContentWrite": true,
             "supportsObjectRestore": true,
             "supportsObjectBatchRestore": true,
@@ -8143,6 +8148,7 @@ fn path_string(path: &Path) -> Result<String, RpcFailure> {
 mod tests {
     include!("content_write_tests.rs");
     include!("content_metadata_tests.rs");
+    include!("content_attachments_tests.rs");
     use super::*;
     use rusqlite::Connection;
 
