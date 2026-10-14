@@ -5,7 +5,7 @@ import { nearbyPreferencesView, NearbyPreferencesError } from '../nearby/prefere
 import { NEARBY_MANAGER_PORT, readNearbyManagerRequest, type NearbyManagerRequest } from '../nearby/manager-contract';
 
 type Session = { id?: string; expiresAt: number };
-type Store = Pick<SecureVaultService, 'nearbySessionPreferences' | 'updateNearbyPreferences'>;
+type Store = Pick<SecureVaultService, 'nearbySessionPreferences' | 'updateNearbyPreferences' | 'readState'>;
 type Coordinator = Pick<NearbyLocalCoordinator, keyof NearbyLocalCoordinator>;
 interface Lease {
   port: chrome.runtime.Port; session?: Session; coordinator?: Coordinator;
@@ -105,6 +105,10 @@ export class NearbyManagerOwner {
   private async execute(lease: Lease, request: NearbyManagerRequest): Promise<unknown> {
     this.active(lease);
     const assertActive = () => this.active(lease), sessionId = lease.session!.id!;
+    if (request.type === 'sources') {
+      const state = await this.options.store.readState(); assertActive();
+      return state.providers.filter(p => p.enabled && ['local', 'mdbx2'].includes(p.kind)).map(p => ({ id: p.id, name: p.name, kind: p.kind }));
+    }
     if (request.type === 'preferences') {
       const preferences = await this.options.store.nearbySessionPreferences(sessionId, assertActive);
       assertActive(); return nearbyPreferencesView(preferences);
@@ -117,6 +121,8 @@ export class NearbyManagerOwner {
     if (request.type === 'status') return lease.coordinator?.status() ?? { phase: 'idle' };
     const coordinator = lease.coordinator ??= this.options.createCoordinator(assertActive);
     switch (request.type) {
+      case 'discover': return coordinator.discover(request.target);
+      case 'discovery-progress': return coordinator.discoveryProgress();
       case 'pair': return coordinator.pair(request.invitation);
       case 'prepare': return coordinator.prepare(request.peerId);
       case 'confirm': return coordinator.confirm(request.reviewId);

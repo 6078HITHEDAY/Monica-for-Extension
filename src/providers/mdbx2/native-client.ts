@@ -362,7 +362,7 @@ export class Mdbx2NativeClient {
   ): Promise<Mdbx2CollectionMutationResult> {
     return this.collectionMutation("collection.create", vaultHandle, operationId, collectionId, {
       title: collectionTitleValue(title),
-      parentCollectionId: parentCollectionId ? opaqueHandle(parentCollectionId, "父 Collection") : null
+      parentCollectionId: parentCollectionId ? domainIdentity(parentCollectionId, "父 Collection") : null
     }, timeoutMs);
   }
 
@@ -386,7 +386,7 @@ export class Mdbx2NativeClient {
     timeoutMs = 60_000
   ): Promise<Mdbx2CollectionMutationResult> {
     return this.collectionMutation("collection.move", vaultHandle, operationId, collectionId, {
-      parentCollectionId: parentCollectionId ? opaqueHandle(parentCollectionId, "父 Collection") : null
+      parentCollectionId: parentCollectionId ? domainIdentity(parentCollectionId, "父 Collection") : null
     }, timeoutMs);
   }
 
@@ -407,7 +407,7 @@ export class Mdbx2NativeClient {
     timeoutMs = 60_000
   ): Promise<Mdbx2CollectionMutationResult> {
     return this.collectionMutation("collection.restore", vaultHandle, operationId, collectionId, {
-      parentCollectionId: parentCollectionId ? opaqueHandle(parentCollectionId, "父 Collection") : null
+      parentCollectionId: parentCollectionId ? domainIdentity(parentCollectionId, "父 Collection") : null
     }, timeoutMs);
   }
 
@@ -420,7 +420,7 @@ export class Mdbx2NativeClient {
     timeoutMs: number
   ): Promise<Mdbx2CollectionMutationResult> {
     const normalizedOperationId = opaqueHandle(operationId, "Collection 操作");
-    const normalizedCollectionId = opaqueHandle(collectionId, "Collection");
+    const normalizedCollectionId = domainIdentity(collectionId, "Collection");
     const result = collectionMutationResult(await this.request(method, {
       vaultHandle: opaqueHandle(vaultHandle, "保险库"),
       operationId: normalizedOperationId,
@@ -437,7 +437,7 @@ export class Mdbx2NativeClient {
     const pageSize = pageSizeValue(input.pageSize);
     return objectSummaryPage(await this.request("object.list", {
       vaultHandle: opaqueHandle(vaultHandle, "保险库"),
-      collectionId: opaqueHandle(collectionId, "Collection"),
+      collectionId: domainIdentity(collectionId, "Collection"),
       objectTypeId: input.objectTypeId || null,
       deleted: Boolean(input.deleted),
       pageSize,
@@ -448,7 +448,7 @@ export class Mdbx2NativeClient {
   async revealObject(vaultHandle: string, objectId: string, timeoutMs = 30_000): Promise<Mdbx2ObjectRecord> {
     return objectRecord(await this.request("object.reveal", {
       vaultHandle: opaqueHandle(vaultHandle, "保险库"),
-      objectId: opaqueHandle(objectId, "Object")
+      objectId: domainIdentity(objectId, "Object")
     }, timeoutMs));
   }
 
@@ -464,7 +464,7 @@ export class Mdbx2NativeClient {
       vaultHandle: opaqueHandle(vaultHandle, "保险库"),
       operationId: opaqueHandle(operationId, "操作"),
       logicalObjectId,
-      collectionId: input.collectionId ? opaqueHandle(input.collectionId, "Collection") : null,
+      collectionId: input.collectionId ? domainIdentity(input.collectionId, "Collection") : null,
       objectTypeId,
       title,
       payloadJson,
@@ -502,7 +502,7 @@ export class Mdbx2NativeClient {
       'object-restore-host-update-required', '本机助手不支持保留原始内容的恢复，请更新本机助手。', false);
     const result = await this.request('object.restore', {
       vaultHandle: opaqueHandle(vaultHandle, '保险库'), operationScope: sha256Value(operationScope, '操作范围'),
-      objectId: opaqueHandle(input.objectId, 'Object'), collectionId: opaqueHandle(input.collectionId, 'Collection'),
+      objectId: domainIdentity(input.objectId, 'Object'), collectionId: domainIdentity(input.collectionId, 'Collection'),
       objectTypeId: textResult(input.objectTypeId, 512, false, 'Object 类型无效。'),
       expectedHeadCommitId: opaqueHandle(input.expectedHeadCommitId, '提交'), writeRevision: writeRevisionResult(input.writeRevision)
     }, timeoutMs);
@@ -516,8 +516,8 @@ export class Mdbx2NativeClient {
   async restoreObjects(vaultHandle: string, operationScope: string, input: Mdbx2ObjectsRestoreInput, timeoutMs = 120_000): Promise<Mdbx2ObjectsRestoreResult> {
     const invalid = () => new Mdbx2NativeHostError('object-restore-invalid', '批量恢复的项目或响应不一致。', false);
     if (!input || !Array.isArray(input.objects) || !input.objects.length || input.objects.length > MDBX2_MAX_OBJECT_BATCH_MUTATIONS) throw invalid();
-    const objects = input.objects.map(row => ({ objectId: opaqueHandle(row.objectId, 'Object'),
-      collectionId: opaqueHandle(row.collectionId, 'Collection'), objectTypeId: textResult(row.objectTypeId, 512, false, 'Object 类型无效。'),
+    const objects = input.objects.map(row => ({ objectId: domainIdentity(row.objectId, 'Object'),
+      collectionId: domainIdentity(row.collectionId, 'Collection'), objectTypeId: textResult(row.objectTypeId, 512, false, 'Object 类型无效。'),
       expectedHeadCommitId: opaqueHandle(row.expectedHeadCommitId, '提交') }));
     if (new Set(objects.map(row => row.objectId)).size !== objects.length) throw invalid();
     const params = { vaultHandle: opaqueHandle(vaultHandle, '保险库'), operationScope: sha256Value(operationScope, '操作范围'),
@@ -557,7 +557,7 @@ export class Mdbx2NativeClient {
       return {
         kind: "upsert",
         logicalObjectId,
-        collectionId: mutation.collectionId ? opaqueHandle(mutation.collectionId, "Collection") : undefined,
+        collectionId: mutation.collectionId ? domainIdentity(mutation.collectionId, "Collection") : undefined,
         objectTypeId: textResult(mutation.objectTypeId, 512, false, "Object 类型无效。"),
         title: textResult(mutation.title, 64 * 1024, true, "Object 标题无效。"),
         payloadJson: textResult(mutation.payloadJson, MDBX2_MAX_OBJECT_PAYLOAD_BYTES, false, "Object 载荷无效。"),
@@ -794,8 +794,8 @@ export class Mdbx2NativeClient {
   ): Promise<Mdbx2AttachmentSummaryPage> {
     return attachmentSummaryPage(await this.request("attachment.list", {
       vaultHandle: opaqueHandle(vaultHandle, "保险库"),
-      collectionId: opaqueHandle(collectionId, "Collection"),
-      objectId: opaqueHandle(objectId, "Object"),
+      collectionId: domainIdentity(collectionId, "Collection"),
+      objectId: domainIdentity(objectId, "Object"),
       pageSize: attachmentPageSizeValue(input.pageSize),
       cursor: input.cursor ? textResult(input.cursor, 4096, false, "MDBX2 附件游标无效。") : null
     }, timeoutMs));
@@ -1996,11 +1996,11 @@ function collectionSummaryResult(input: unknown): Mdbx2CollectionSummaryPage["it
     "favorite", "archived", "attachmentCount", "headCommitId", "deleted", "updatedAt"
   ], "Native Host Collection 摘要无效。");
   return {
-    collectionId: opaqueHandle(item.collectionId, "Collection"),
+    collectionId: domainIdentity(item.collectionId, "Collection"),
     title: textResult(item.title, 64 * 1024, true, "Collection 标题无效。"),
     collectionTypeId: optionalString(item.collectionTypeId, 512, "Collection 类型"),
     profileSchemaVersion: optionalInteger(item.profileSchemaVersion, "Collection Profile Schema 版本"),
-    groupId: optionalOpaqueHandle(item.groupId, "Collection 分组"),
+    groupId: optionalDomainIdentity(item.groupId, "Collection 分组"),
     iconRef: optionalString(item.iconRef, 4096, "Collection 图标引用"),
     favorite: booleanResult(item.favorite, "Collection 收藏状态无效。"),
     archived: booleanResult(item.archived, "Collection 归档状态无效。"),
@@ -2032,8 +2032,8 @@ function objectSummaryPage(input: unknown): Mdbx2ObjectSummaryPage {
     items: value.items.map((candidate) => {
       const item = objectResult(candidate, "Native Host Object 摘要无效。");
       return {
-        objectId: opaqueHandle(item.objectId, "Object"),
-        collectionId: opaqueHandle(item.collectionId, "Collection"),
+        objectId: domainIdentity(item.objectId, "Object"),
+        collectionId: domainIdentity(item.collectionId, "Collection"),
         objectTypeId: textResult(item.objectTypeId, 512, false, "Object 类型无效。"),
         title: textResult(item.title, 64 * 1024, true, "Object 标题无效。"),
         payloadSchemaVersion: safeInteger(item.payloadSchemaVersion, "Object 载荷 Schema 版本"),
@@ -2052,8 +2052,8 @@ function objectRecord(input: unknown): Mdbx2ObjectRecord {
   // Generic disclosures may contain arrays/scalars or future encodings. The
   // read-only adapter displays original text; this boundary must not hide it.
   return {
-    objectId: opaqueHandle(value.objectId, "Object"),
-    collectionId: opaqueHandle(value.collectionId, "Collection"),
+    objectId: domainIdentity(value.objectId, "Object"),
+    collectionId: domainIdentity(value.collectionId, "Collection"),
     objectTypeId: textResult(value.objectTypeId, 512, false, "Object 类型无效。"),
     title: textResult(value.title, 64 * 1024, true, "Object 标题无效。"),
     payloadJson,
@@ -2081,8 +2081,8 @@ function objectWriteResult(input: unknown): Mdbx2ObjectWriteResult {
     commitId: textResult(value.commitId, 128, false, "Object Commit ID 无效。"),
     alreadyCommitted: booleanResult(value.alreadyCommitted, "Object 幂等状态无效。"),
     logicalObjectId: textResult(value.logicalObjectId, 4096, false, "逻辑 Object ID 无效。"),
-    objectId: opaqueHandle(value.objectId, "Object"),
-    collectionId: opaqueHandle(value.collectionId, "Collection"),
+    objectId: domainIdentity(value.objectId, "Object"),
+    collectionId: domainIdentity(value.collectionId, "Collection"),
     objectTypeId: textResult(value.objectTypeId, 512, false, "Object 类型无效。")
   };
 }
@@ -2095,7 +2095,7 @@ function objectDeleteResult(input: unknown): Mdbx2ObjectDeleteResult {
     commitId: changed ? textResult(value.commitId, 128, false, "Object 删除 Commit ID 无效。") : undefined,
     alreadyCommitted: changed ? booleanResult(value.alreadyCommitted, "Object 删除幂等状态无效。") : undefined,
     logicalObjectId: textResult(value.logicalObjectId, 4096, false, "逻辑 Object ID 无效。"),
-    objectId: opaqueHandle(value.objectId, "Object")
+    objectId: domainIdentity(value.objectId, "Object")
   };
 }
 
@@ -2262,7 +2262,7 @@ function commitDiffResult(input: unknown): Mdbx2CommitDiffResult {
         commitId: opaqueHandle(item.commitId, "Commit"),
         objectType: textResult(item.objectType, 512, false, "MDBX2 Commit Object 类型无效。"),
         objectId: textResult(item.objectId, 128, false, "MDBX2 Commit Object ID 无效。"),
-        collectionId: optionalOpaqueHandle(item.collectionId, "Collection"),
+        collectionId: optionalDomainIdentity(item.collectionId, "Collection"),
         previousTitle: optionalTextResult(item.previousTitle, 64 * 1024, true, "MDBX2 Commit 原标题无效。"),
         currentTitle: optionalTextResult(item.currentTitle, 64 * 1024, true, "MDBX2 Commit 新标题无效。"),
         previousDeleted: optionalBooleanResult(item.previousDeleted, "MDBX2 Commit 原删除状态无效。"),
@@ -2430,7 +2430,7 @@ function conflictSummaryPage(input: unknown): Mdbx2ConflictSummaryPage {
       return {
         conflictId: opaqueHandle(item.conflictId, "冲突"),
         objectType: textResult(item.objectType, 128, false, "MDBX2 冲突 Object 类型无效。"),
-        objectId: opaqueHandle(item.objectId, "冲突 Object"),
+        objectId: domainIdentity(item.objectId, "冲突 Object"),
         displayTitle: optionalTextResult(item.displayTitle, 64 * 1024, true, "MDBX2 冲突标题无效。"),
         contentType: optionalString(item.contentType, 512, "MDBX2 冲突内容类型"),
         conflictingFields: boundedTextArray(item.conflictingFields, 256, 4096, "MDBX2 冲突字段"),
@@ -2449,7 +2449,7 @@ function conflictResolutionResult(input: unknown): Mdbx2ConflictResolutionResult
     alreadyResolved: booleanResult(value.alreadyResolved, "MDBX2 冲突重试状态无效。"),
     conflictId: opaqueHandle(value.conflictId, "冲突"),
     objectType: textResult(value.objectType, 128, false, "MDBX2 冲突 Object 类型无效。"),
-    objectId: opaqueHandle(value.objectId, "冲突 Object"),
+    objectId: domainIdentity(value.objectId, "冲突 Object"),
     choice: conflictResolutionChoiceResult(value.choice),
     resolvedAt: optionalString(value.resolvedAt, 128, "MDBX2 冲突解决时间")
   };
@@ -2481,8 +2481,8 @@ function objectBatchResult(input: unknown): Mdbx2ObjectBatchResult {
         kind,
         changed: booleanResult(item.changed, "Object 批量项目状态无效。"),
         logicalObjectId: textResult(item.logicalObjectId, 4096, false, "逻辑 Object ID 无效。"),
-        objectId: opaqueHandle(item.objectId, "Object"),
-        collectionId: optionalOpaqueHandle(item.collectionId, "Collection"),
+        objectId: domainIdentity(item.objectId, "Object"),
+        collectionId: optionalDomainIdentity(item.collectionId, "Collection"),
         objectTypeId: optionalString(item.objectTypeId, 512, "Object 类型")
       };
     })
@@ -2612,6 +2612,17 @@ function boundedEncodedResultBytes(value: unknown, maximum: number, label: strin
     throw incompatibleResult(`Native Host MDBX2 ${label}超过安全上限。`);
   }
   return encodedBytes;
+}
+
+/** Native logical IDs also contain legacy hash-derived 128-bit UUIDs. Their
+ * version/variant bits are not session-handle authority. Preserve every bit. */
+function domainIdentity(value: unknown, label: string): string {
+  const id = stringResult(value, 36, `${label}身份无效。`);
+  if (!/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(id)) throw incompatibleResult(`${label}身份无效。`);
+  return id;
+}
+function optionalDomainIdentity(value: unknown, label: string): string | undefined {
+  return value === null || value === undefined ? undefined : domainIdentity(value, label);
 }
 
 function opaqueHandle(value: unknown, label: string): string {
@@ -2801,8 +2812,8 @@ function attachmentUploadInput(input: Mdbx2AttachmentUploadBeginInput): Mdbx2Att
   return {
     operationId: opaqueHandle(input.operationId, "附件操作"),
     attachmentId: opaqueHandle(input.attachmentId, "附件"),
-    collectionId: opaqueHandle(input.collectionId, "Collection"),
-    objectId: opaqueHandle(input.objectId, "Object"),
+    collectionId: domainIdentity(input.collectionId, "Collection"),
+    objectId: domainIdentity(input.objectId, "Object"),
     fileName: input.fileName,
     mediaType,
     mode: input.mode,

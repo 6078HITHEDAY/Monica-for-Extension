@@ -1,0 +1,92 @@
+import { test, expect, type Page, type BrowserContext } from '@playwright/test';
+import { mkdir, writeFile, readFile } from 'node:fs/promises';
+import { createHash, createPrivateKey, createPublicKey, sign, verify } from 'node:crypto';
+import { createConnection } from 'node:net';
+import path from 'node:path';
+import { createLoginItem, type PasskeyItem } from '../../src/core/model';
+import { createPasskey } from '../../src/passkey/webauthn-core';
+import { launchEdgeContext } from './fixtures/edge';
+import { temporaryNativeHost } from './fixtures/native-host';
+
+const password = 'Synthetic nearby manager password';
+async function runtime(page: Page, request: unknown): Promise<any> {
+  const result = await page.evaluate(request => chrome.runtime.sendMessage(request), request);
+  expect(result.ok, JSON.stringify(result)).toBe(true); return result.data;
+}
+async function connect(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const port = chrome.runtime.connect({ name: 'monica-nearby-manager-v1' });
+    const state = { port, id: 0, messages: [] as any[], disconnected: false };
+    (window as any).nearbyManagerTest = state;
+    port.onMessage.addListener(value => state.messages.push(value));
+    port.onDisconnect.addListener(() => { void chrome.runtime.lastError; state.disconnected = true; });
+  });
+  await page.waitForFunction(() => (window as any).nearbyManagerTest.messages.some((m: any) => ['ready','closed'].includes(m.type)) || (window as any).nearbyManagerTest.disconnected, undefined, {timeout:15000});
+  expect(await page.evaluate(()=>(window as any).nearbyManagerTest.messages)).toContainEqual({type:'ready'});
+}
+async function command(page: Page, request: Record<string, unknown>): Promise<any> {
+  const id = await page.evaluate(request => {
+    const state = (window as any).nearbyManagerTest; const id = ++state.id; state.port.postMessage({ ...request, id }); return id;
+  }, request);
+  await page.waitForFunction(id => (window as any).nearbyManagerTest.messages.some((m: any) => m.id === id), id);
+  const result = await page.evaluate(id => (window as any).nearbyManagerTest.messages.find((m: any) => m.id === id), id);
+  expect(result.ok, JSON.stringify(result)).toBe(true); return result.data;
+}
+async function closed(page: Page, reason: string) {
+  await page.waitForFunction(reason => (window as any).nearbyManagerTest.messages.some((m: any) => m.type === 'closed' && m.reason === reason), reason);
+}
+async function cancel(page: Page) {
+  await page.evaluate(() => { const s = (window as any).nearbyManagerTest; s.port.postMessage({ id: ++s.id, type: 'cancel' }); });
+  await closed(page, 'cancelled');
+}
+function listening(port: number): Promise<boolean> {
+  return new Promise(resolve => {
+    const socket = createConnection({ host: '127.0.0.1', port });
+    const finish = (open: boolean) => { socket.destroy(); resolve(open); };
+    socket.once('connect', () => finish(true)); socket.once('error', () => finish(false)); socket.setTimeout(500, () => finish(false));
+  });
+}
+
+
+test('production Wi-Fi coordinator receives into bundled MDBX and returns native edits', async ({}, info) => {
+  test.skip(process.platform !== 'win32', 'Installed Edge and Native Messaging'); test.setTimeout(240000);
+  const extension=path.resolve('dist'),run=path.resolve(info.outputPath('isolated'));await mkdir(run,{recursive:true});
+  const contexts:BrowserContext[]=[], evidence:Record<string,any>={status:'failed',productionCoordinator:true,bundledMdbx:true,androidApplicationAcceptance:false};
+  let registration:Awaited<ReturnType<typeof temporaryNativeHost>>|undefined;
+  const launch=async(name:string)=>{
+    const appData=path.join(run,`appdata-${name}`);await mkdir(appData,{recursive:true});
+    const context=await launchEdgeContext(path.join(run,`profile-${name}`),{env:{...process.env,APPDATA:appData,LOCALAPPDATA:appData},args:[`--disable-extensions-except=${extension}`,`--load-extension=${extension}`]});contexts.push(context);
+    const worker=context.serviceWorkers()[0]||await context.waitForEvent('serviceworker'),page=await context.newPage();
+    await page.goto(`chrome-extension://${new URL(worker.url()).host}/index.html`);evidence.edgeVersion=context.browser()?.version();return page;
+  };
+  try{
+    const a=await launch('a');registration=await temporaryNativeHost(new URL(a.url()).host,path.join(run,'native'));const b=await launch('b');
+    for(const page of [a,b])await runtime(page,{type:'VAULT_SETUP',masterPassword:password});
+    const native=await runtime(b,{type:'MDBX2_VAULT_CREATE',input:{name:'Synthetic nearby MDBX',password:'Synthetic native password'}}),providerId=native.account.id;
+    const login=createLoginItem({title:'Nearby original',username:'alice',password:'synthetic preserved password'});login.customFields=[{name:'extra',value:'keep original',protected:true}];
+    const key=await createPasskey({origin:'https://example.test',challenge:Buffer.alloc(32,3).toString('base64url'),rpName:'Synthetic',userId:'dXNlcg',userName:'alice',userDisplayName:'Alice',algorithms:[-7],excludeCredentialIds:[]});
+    const passkey:PasskeyItem={...createLoginItem({title:'Nearby original Passkey'}),kind:'passkey',rpId:key.rpId,rpName:'Synthetic',userHandle:'dXNlcg',userName:'alice',userDisplayName:'Alice',credentialId:key.credentialId,publicKey:key.publicKeySpki,privateKeyPkcs8:key.privateKeyPkcs8,signCount:0,algorithm:-7,discoverable:true,backupEligible:true,sourceMode:'browser-local'};
+    await runtime(a,{type:'VAULT_IMPORT_ITEMS',items:[login,passkey]});await connect(a);await connect(b);
+    const p=await command(b,{type:'preferences'});await command(b,{type:'update',epoch:p.epoch,change:{kind:'source',providerId}});
+    const complete=async()=>expect.poll(async()=>{const result=await Promise.all([command(a,{type:'progress'}),command(b,{type:'progress'})]);return result.map(v=>v.phase);},{timeout:45000}).toEqual(['completed','completed']);
+    const pair=await command(a,{type:'pair'});await command(b,{type:'pair',invitation:pair.pairing.invitations[0]});await complete();
+    const peerA=(await command(a,{type:'status'})).peerId,peerB=(await command(b,{type:'status'})).peerId;
+    const exchange=async(automaticDiscovery=false)=>{
+      for(const [page,peerId]of [[a,peerA],[b,peerB]]as const){const v=await command(page,{type:'prepare',peerId});if(v.phase==='review')await command(page,{type:'confirm',reviewId:v.review.id});else expect(v.phase).toBe('ready');}
+      const transfer=await command(a,{type:'start'});await command(b,{type:'start',...(!automaticDiscovery?{endpoint:transfer.endpoint}:{})});await complete();
+    };
+    await exchange();
+    const collections=await runtime(b,{type:'MDBX2_COLLECTION_LIST',providerId});expect(collections.items.length).toBeGreaterThan(0);
+    let objects:any[]=[];for(const c of collections.items)objects.push(...(await runtime(b,{type:'MDBX2_OBJECT_LIST',providerId,collectionId:c.collectionId})).items);
+    const saved=objects.find(row=>row.title===login.title),savedKey=objects.find(row=>row.title===passkey.title);expect(saved).toBeTruthy();expect(savedKey).toBeTruthy();
+    const original=await runtime(b,{type:'MDBX2_OBJECT_REVEAL',providerId,objectId:saved.objectId}),keyRecord=await runtime(b,{type:'MDBX2_OBJECT_REVEAL',providerId,objectId:savedKey.objectId});
+    const keyPayload=JSON.parse(keyRecord.payloadJson);expect(keyPayload.private_key_alias).toBe(passkey.privateKeyPkcs8);expect(keyPayload.sign_count).toBe(0);
+    const challenge=Buffer.from('real native adoption signature');expect(verify('sha256',challenge,createPublicKey({key:Buffer.from(passkey.publicKey!,'base64'),format:'der',type:'spki'}),sign('sha256',challenge,createPrivateKey({key:Buffer.from(keyPayload.private_key_alias,'base64'),format:'der',type:'pkcs8'})))).toBe(true);
+    const payload=JSON.parse(original.payloadJson);payload.password_plain='synthetic reciprocal password';
+    await runtime(b,{type:'MDBX2_OBJECT_UPSERT',providerId,operationId:crypto.randomUUID(),input:{logicalObjectId:`native:${saved.objectId}`,collectionId:saved.collectionId,objectTypeId:'login',title:saved.title,payloadJson:JSON.stringify(payload),payloadSchemaVersion:1,expectedHeadCommitId:original.headCommitId}});
+    await exchange();const items=await runtime(a,{type:'VAULT_LIST_ITEMS'});expect(items.filter((row:any)=>row.kind==='login')).toHaveLength(1);expect(items.find((row:any)=>row.kind==='login').password).toBe('synthetic reciprocal password');
+    const beforeRepeat=await runtime(b,{type:'MDBX2_OBJECT_LIST',providerId,collectionId:saved.collectionId});
+    await exchange(true);expect(await runtime(b,{type:'MDBX2_OBJECT_LIST',providerId,collectionId:saved.collectionId})).toEqual(beforeRepeat);const again=await runtime(a,{type:'VAULT_LIST_ITEMS'});expect(again).toHaveLength(items.length);
+    evidence.status='passed';evidence.signature=true;evidence.stableRepeatedSync=true;
+  }finally{for(const c of contexts)await c.close();await registration?.restore();await writeFile(path.join(run,'evidence.json'),JSON.stringify(evidence,null,2));}
+});

@@ -17,7 +17,7 @@ test('native nearby adoption commits complete records and assets, preserves Pass
   await writeFile(path.join(extension, 'background.js'), 'chrome.runtime.onInstalled.addListener(()=>{});');
   await writeFile(path.join(extension, 'index.html'), '<!doctype html><title>Synthetic native adoption</title><script src="harness.js"></script>');
   for (const name of ['engine.js', 'monica_mdbx2_browser.wasm']) await copyFile(path.resolve('native/mdbx2-browser/pkg', name), path.join(extension, name));
-  await build({ entryPoints: ['tests/e2e/fixtures/mdbx-browser-worker.ts'], outfile: path.join(extension, 'worker.js'), bundle: true, format: 'esm', target: 'chrome130', external: ['./engine.js'] });
+  await build({ entryPoints: ['tests/e2e/fixtures/mdbx-browser-worker.ts'], outfile: path.join(extension, 'worker.js'), bundle: true, format: 'esm', target: 'chrome130', external: ['./engine.js'], alias: { crypto: path.resolve('scripts/stubs/node-crypto.js') } });
   await writeFile(path.join(extension, 'harness.js'), `const worker=new Worker('./worker.js',{type:'module'}),pending=new Map();worker.onmessage=({data})=>{const p=pending.get(data.id);if(!p)return;pending.delete(data.id);data.error?p.reject(Error(data.error.code+': '+data.error.message)):p.resolve(data.result);};window.probe=(op,data)=>new Promise((resolve,reject)=>{const id=crypto.randomUUID();pending.set(id,{resolve,reject});worker.postMessage({id,op,data});});`);
   let context: BrowserContext | undefined;
   const evidence: Record<string, unknown> = { status: 'failed', productionCoordinator: false, androidApplicationAcceptance: false };
@@ -49,6 +49,9 @@ test('native nearby adoption commits complete records and assets, preserves Pass
     const record = (id: string, data: NearbyWireData, clock = 1): NearbyIncomingRecord => ({ id, clockJson: `{"device":${clock}}`, dataJson: JSON.stringify(data), deleted: false });
     let source = await capture();
     const first = await call('nearby-native-adopt-plan', { source, batch: { operationId: randomUUID(), sourceHash: source.sourceHash, records: [record(loginId, login), record(noteId, note), record(passkeyId, passkey)], assets: [{ id: hash, dataBase64: bytes.toString('base64') }] } });
+    // Crash window: durably stage the real production intent, commit the native
+    // transaction, then lose its acknowledgement before the journal is finished.
+    const staged = await call('nearby-native-journal-stage', {plan:first});
     const receipt = await call('content-write', { handle, input: first.write }); source = await capture();
     let projection = await call('nearby-native-project', source) as NearbyNativeProjection;
     expect(projection.blockers).toEqual([]);
@@ -73,6 +76,14 @@ test('native nearby adoption commits complete records and assets, preserves Pass
     await expect(call('content-write', { handle, input: { ...broken, operationId: randomUUID() } })).rejects.toThrow('content-write-stale');
     await call('close'); await context!.close(); call = await connect(); await call('open', { name: database });
     await rpc('vault.open', { source: { kind: 'vault', handle }, credential: { method: 'password', password } });
+    const beforeRecovery = await capture();
+    const recovered = await call('nearby-native-journal-recover');
+    expect(recovered.before.intent.operationId).toBe(first.write.operationId);
+    expect(recovered.acknowledgements).toEqual(staged.acknowledgements);
+    expect(recovered.journal.intent).toBeUndefined();
+    expect(recovered.journal.acknowledgements).toEqual(staged.acknowledgements);
+    expect((await capture()).writeRevision).toEqual(beforeRecovery.writeRevision);
+    expect((await call('nearby-native-journal-recover')).acknowledgements).toEqual([]);
     const replay = await call('content-write', { handle, input: first.write }); expect(replay).toMatchObject({ alreadyCommitted: true, commitId: receipt.commitId });
     source = await capture(); projection = await call('nearby-native-project', source);
     expect(projection.blockers).toEqual([]);
@@ -83,8 +94,9 @@ test('native nearby adoption commits complete records and assets, preserves Pass
     expect(file).toMatchObject({ collectionId: secondFolder, contentHash: updatedHash, fileName: 'renamed.bin', objectId: loginId });
     expect(await call('content-attachment-bytes', { handle, input: { writeRevision: source.writeRevision, attachment: file } })).toEqual({ sizeBytes: updatedBytes.length, sha256: updatedHash });
     expect(await call('verify-key', { payload: source.objects.find(row => row.summary.objectId === passkeyId)!.record!.payloadJson, expected: { id: credential, hash: createHash('sha256').update(privateKey).digest('hex'), publicKey, counter: 19 } })).toBe(true);
+    await call('nearby-native-journal-scan', [privateKey.toString('base64'), 'synthetic-unchanged-password', 'synthetic-field']);
     await call('scan', [password, privateKey.toString('base64'), 'synthetic-unchanged-password', 'synthetic-field']); await call('close');
     Object.assign(evidence, { status: 'passed', originalPasskeySignature: true, counter19Preserved: true, attachmentIdentityAndHash: true, crossFolderMove: true, atomicFailure: true,
-      receiptReplayAfterLaterCommitAndRestart: true, completeProjection: true, engineBuild: JSON.parse(await readFile('native/mdbx2-browser/pkg/BROWSER-BUILD.json', 'utf8')) });
+      encryptedJournalRecoveryAfterLaterCommitAndRestart: true, receiptReplayAfterLaterCommitAndRestart: true, completeProjection: true, engineBuild: JSON.parse(await readFile('native/mdbx2-browser/pkg/BROWSER-BUILD.json', 'utf8')) });
   } finally { await context?.close(); await writeFile(path.join(run, 'evidence.json'), JSON.stringify(evidence, null, 2)); }
 });

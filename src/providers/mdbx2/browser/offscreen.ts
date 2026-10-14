@@ -16,7 +16,10 @@ void authorized.then(allowed => {
     respond({ ready: true, nonce: message.nonce }); return false;
   });
   chrome.runtime.onConnect.addListener(port => {
-    if (port.name !== MDBX_BROWSER_PORT || !trustedMdbxBackground(port.sender, chrome.runtime) || owner) { port.disconnect(); return; }
+    // Runtime connections fan out to extension documents. Leave other owners'
+    // ports alone (including the nearby manager and live vault UI).
+    if (port.name !== MDBX_BROWSER_PORT) return;
+    if (!trustedMdbxBackground(port.sender, chrome.runtime) || owner) { port.disconnect(); return; }
     accept(port);
   });
 });

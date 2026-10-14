@@ -151,3 +151,48 @@ describe('nearby pagination and complete dependency grouping', () => {
     await expect(collectNearbyPending({ call } as any, handle)).rejects.toThrow();
   });
 });
+
+
+describe('authenticated discovery hints', () => {
+  it('waits for listener cancellation before releasing and connecting to the saved peer', async () => {
+    const f = await fixture(), original = f.transport.call.getMockImplementation()!;
+    let phase = 'waiting';
+    f.transport.call.mockImplementation(async op => {
+      if (op === 'progress') return {phase};
+      if (op === 'discover') return {handle};
+      if (op === 'discovery_result') return {ready:true,result:{devices:[{protocol:'monica-lan',version:2,trusted:true,
+        device_id:peer.deviceId,session:peer.pairId,address:'127.0.0.1',port:12345}]}} as any;
+      if (op === 'release' && phase === 'waiting') throw Error('native session busy');
+      return original(op);
+    });
+    await f.coordinator.prepare(peer.deviceId); await f.coordinator.start();
+    await f.coordinator.poll(); await f.coordinator.poll();
+    expect(f.operations).toContain('cancel'); expect(f.operations).not.toContain('release');
+    await f.coordinator.poll(); expect(f.operations).not.toContain('connect');
+    phase = 'cancelled'; await f.coordinator.poll();
+    expect(f.operations.slice(-2)).toEqual(['release','connect']);
+    expect(f.coordinator.status().phase).toBe('transferring'); f.coordinator.close();
+  });
+  it('uses saved names and matching device/pair identities; never exposes trust keys', async () => {
+    const f=await fixture(); const original=f.transport.call.getMockImplementation()!;
+    f.transport.call.mockImplementation(async op => op==='discover' ? {handle} : op==='discovery_result' ? ({ready:true,result:{devices:[
+      {protocol:'monica-lan',version:2,trusted:true,device_id:peer.deviceId,session:'wrong-pair',address:'10.0.0.2',port:90},
+      {protocol:'monica-lan',version:2,trusted:true,device_id:peer.deviceId,session:peer.pairId,address:'8.8.8.8',port:90},
+      {protocol:'monica-lan',version:2,trusted:true,device_id:peer.deviceId,session:peer.pairId,name:'untrusted name',address:'192.168.1.10',port:9000},
+      {protocol:'monica-lan',version:2,trusted:true,device_id:'unknown',session:peer.pairId,address:'192.168.1.11',port:9000}
+    ]}} as any) : original(op));
+    expect(await f.coordinator.discover()).toEqual({searching:true,devices:[]});
+    const result=await f.coordinator.discoveryProgress();
+    expect(result).toEqual({searching:false,devices:[{deviceId:peer.deviceId,name:peer.name,endpoint:{addresses:['192.168.1.10'],port:9000}}]});
+    expect(JSON.stringify(result)).not.toContain(peer.trustedKey);
+    expect(f.operations).not.toContain('replica_export');f.coordinator.close();
+  });
+  it('rejects WAN probes before native networking',async()=>{
+    const f=await fixture();await expect(f.coordinator.discover('1.1.1.1')).rejects.toThrow('local-network-only');
+    expect(f.transport.call).not.toHaveBeenCalled();
+  });
+  it('does not replace a prepared snapshot with a discovery session',async()=>{
+    const f=await fixture();await f.coordinator.prepare(peer.deviceId);await expect(f.coordinator.discover()).rejects.toThrow('busy');
+    expect(f.operations).not.toContain('discover');
+  });
+});

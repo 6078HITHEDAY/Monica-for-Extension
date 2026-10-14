@@ -1399,3 +1399,19 @@ describe("MDBX2 Native Messaging client", () => {
     });
   });
 });
+
+
+it('preserves legacy hash-derived object IDs while keeping runtime vault handles strict', async () => {
+  const runtime = new FakeRuntime(), client = new Mdbx2NativeClient(runtime);
+  const handle='11111111-1111-4111-8111-111111111111', legacy='12345678-1234-f234-0234-123456789abc';
+  runtime.port.onPost = raw => {
+    const r=raw as {method:string;requestId:string;params:Record<string,unknown>};
+    const object={objectId:legacy,collectionId:legacy,objectTypeId:'note',title:'Synthetic',payloadSchemaVersion:1,headCommitId:handle,deleted:false,updatedAt:'2026-10-14',payloadJson:'{"item_data":"keep"}'};
+    const result=r.method==='object.list' ? {items:[object],nextCursor:null} : object;
+    runtime.port.onMessage.emit({protocol:MDBX2_NATIVE_PROTOCOL_VERSION,requestId:r.requestId,ok:true,result} as never);
+  };
+  expect((await client.listObjects(handle,legacy)).items[0].objectId).toBe(legacy);
+  expect((await client.revealObject(handle,legacy)).objectId).toBe(legacy);
+  await expect(client.revealObject(legacy,legacy)).rejects.toThrow();
+  await expect(client.revealObject(handle,'../../arbitrary')).rejects.toThrow();client.close();
+});

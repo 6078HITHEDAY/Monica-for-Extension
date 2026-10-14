@@ -14,12 +14,13 @@ export function nearbyApplicationReferences(record: NearbyIncomingRecord): strin
       const value = node[field]; if (typeof value === 'string' && idPattern.test(value)) result.add(value);
     }
   }
+  if (Array.isArray(data.relations)) for (const value of data.relations) { const row = wireObject(value); if (typeof row.target === 'string' && idPattern.test(row.target)) result.add(row.target); }
   return [...result];
 }
 
 /** Collect before mutating: stable lexicographic cursors must not skip records
  * while applications acknowledge earlier pages. Native pages are at most 256. */
-export async function collectNearbyPending(transport: NearbyNativeTransport, handle: string, signal?: AbortSignal): Promise<NearbyIncomingRecord[]> {
+export async function collectNearbyPending(transport: NearbyNativeTransport, handle: string, signal?: AbortSignal, scope = 'local'): Promise<NearbyIncomingRecord[]> {
   const records: NearbyIncomingRecord[] = []; let after: string | undefined, total: number | undefined, bytes = 0;
   for (;;) {
     const page = wireObject(await transport.call('replica_pending', { handle, ...(after ? { after } : {}) }, signal));
@@ -33,7 +34,7 @@ export async function collectNearbyPending(transport: NearbyNativeTransport, han
       const value: NearbyIncomingRecord = { id, deleted: record.deleted, clockJson: JSON.stringify(wireObject(record.clock)), dataJson: JSON.stringify(record.data) };
       if (row.local_id != null || row.scope != null || row.expected_guard != null) {
         value.localId = wireText(row.local_id); value.scope = wireText(row.scope); value.expectedGuard = wireText(row.expected_guard);
-        if (!value.localId.startsWith('local:') || value.scope !== 'local' || !/^[a-f0-9]{64}$/.test(value.expectedGuard)) invalidNearby('pending-binding');
+        if (!value.localId.startsWith(`${scope}:`) || value.scope !== scope || !/^[a-f0-9]{64}$/.test(value.expectedGuard)) invalidNearby('pending-binding');
       }
       bytes += new TextEncoder().encode(value.dataJson + value.clockJson).length;
       if (bytes > 48 * 1024 * 1024 || records.length >= 20_000) invalidNearby('pending-limit');
@@ -49,7 +50,7 @@ export async function collectNearbyPending(transport: NearbyNativeTransport, han
 /** Complete projects/dependencies stay in one local transaction. Independent
  * components share batches; oversize connected projects fail before any write. */
 export function groupNearbyPending(records: readonly NearbyIncomingRecord[], canonicalIds: ReadonlyMap<string, string> = new Map(),
-  localGroups: ReadonlyMap<string, string> = new Map()): NearbyIncomingRecord[][] {
+  localGroups: ReadonlyMap<string, string> = new Map(), maximum = 200): NearbyIncomingRecord[][] {
   const byId = new Map(records.map(row => [row.id, row])), parents = new Map(records.map(row => [row.id, row.id]));
   const find = (id: string): string => {
     let root = id; while (parents.get(root) !== root) root = parents.get(root)!;
@@ -80,8 +81,8 @@ export function groupNearbyPending(records: readonly NearbyIncomingRecord[], can
     metadata: records.every(row => isNearbyMetadata(wireObject(parseLosslessJson(row.dataJson)))) }))
     .sort((a, b) => Number(a.metadata) - Number(b.metadata)).map(group => group.records);
   for (const group of ordered) {
-    if (group.length > 200) invalidNearby('project-batch-limit');
-    if (current.length + group.length > 200) { batches.push(current); current = []; }
+    if (group.length > maximum) invalidNearby('project-batch-limit');
+    if (current.length + group.length > maximum) { batches.push(current); current = []; }
     current.push(...group);
   }
   if (current.length) batches.push(current);

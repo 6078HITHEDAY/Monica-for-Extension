@@ -499,6 +499,7 @@ export class SecureVaultService {
       // A portable restore is another device/replica. Retain content receipts,
       // but require a new nearby identity and explicit pairing on this device.
       delete restoredState.nearbyPreferences;
+      delete restoredState.nearbyNativeJournal;
       const { invalidateNearbyReplayForRestore } = await import('../nearby/local-adoption');
       invalidateNearbyReplayForRestore(restoredState);
       // A portable backup cannot grant device-local access on another installation.
@@ -550,7 +551,7 @@ export class SecureVaultService {
       await this.assertLocalTransferSession(sessionId);
       const { envelope, key, session } = await this.unlockedContext();
       const state = await this.readDecodedSnapshot(envelope, key, session);
-      if (state.nearbyPreferences?.epoch !== epoch || !state.providers.some(provider => provider.id === state.nearbyPreferences?.localProviderId && provider.kind === 'local' && provider.enabled)) {
+      if (state.nearbyPreferences?.epoch !== epoch || !state.providers.some(provider => provider.id === state.nearbyPreferences?.localProviderId && ['local', 'mdbx2'].includes(provider.kind) && provider.enabled)) {
         const { NearbyPreferencesError } = await import('../nearby/preferences');
         throw new NearbyPreferencesError('stale-session');
       }
@@ -569,7 +570,7 @@ export class SecureVaultService {
         if (locals.length !== 1) throw new NearbyPreferencesError('local-provider-required');
         preferences = createNearbyPreferences(locals[0]); state.nearbyPreferences = preferences;
         await this.persist(state, key, envelope.kdf, false, false, assertSession);
-      } else if (!state.providers.some(provider => provider.id === preferences!.localProviderId && provider.kind === 'local' && provider.enabled)) {
+      } else if (!state.providers.some(provider => provider.id === preferences!.localProviderId && ['local', 'mdbx2'].includes(provider.kind) && provider.enabled)) {
         throw new NearbyPreferencesError('local-provider-required');
       }
       await assertSession();
@@ -586,11 +587,65 @@ export class SecureVaultService {
       const { readNearbyPreferences, changeNearbyPreferences, nearbyPreferencesView, NearbyPreferencesError } = await import('../nearby/preferences');
       const previous = readNearbyPreferences(state.nearbyPreferences);
       if (!previous) throw new NearbyPreferencesError('not-initialized');
-      if (!state.providers.some(provider => provider.id === previous.localProviderId && provider.kind === 'local' && provider.enabled)) throw new NearbyPreferencesError('local-provider-required');
+      if (!state.providers.some(provider => provider.id === previous.localProviderId && ['local', 'mdbx2'].includes(provider.kind) && provider.enabled)) throw new NearbyPreferencesError('local-provider-required');
+      if (input.kind === 'source') {
+        if (state.nearbyNativeJournal?.intent) throw new NearbyPreferencesError('recovery-required');
+        if (!state.providers.some(p => p.id === input.providerId && p.enabled && ['local', 'mdbx2'].includes(p.kind))) throw new NearbyPreferencesError('source-unavailable');
+      }
       const preferences = changeNearbyPreferences(previous, input, expectedEpoch);
+      if (preferences.replicaStorageId !== previous.replicaStorageId) {
+        delete state.nearbyNativeJournal;
+        const { invalidateNearbyReplayForRestore } = await import('../nearby/local-adoption');
+        invalidateNearbyReplayForRestore(state);
+      }
       state.nearbyPreferences = preferences;
       await this.persist(state, key, envelope.kdf, false, false, assertSession);
       return nearbyPreferencesView(preferences);
+    });
+  }
+
+  /** Internal nearby coordinator only; no runtime command accepts these records. */
+  async readNearbyNativeJournal(sessionId: string): Promise<import('../nearby/native-journal').NearbyNativeJournal | undefined> {
+    return this.runExclusive(async () => {
+      await this.assertLocalTransferSession(sessionId);
+      const { state } = await this.mutableContext();
+      const { readNearbyNativeJournal } = await import('../nearby/native-journal');
+      const result = readNearbyNativeJournal(state.nearbyNativeJournal);
+      await this.assertLocalTransferSession(sessionId); return result;
+    });
+  }
+
+  async stageNearbyNativeIntent(intent: import('../nearby/native-journal').NearbyNativeIntent, epoch: string, sessionId: string, assertActive: () => void): Promise<void> {
+    const input = structuredClone(intent);
+    return this.runExclusive(async () => {
+      const check = async () => { assertActive(); await this.assertLocalTransferSession(sessionId); assertActive(); };
+      await check(); const { state, envelope, key } = await this.mutableContext();
+      const { readNearbyNativeJournal } = await import('../nearby/native-journal');
+      const p = state.nearbyPreferences;
+      if (!p || p.epoch !== epoch || p.replicaStorageId !== input.replicaStorageId || p.localProviderId !== input.providerId) throw new Error('Nearby source changed');
+      const old = readNearbyNativeJournal(state.nearbyNativeJournal);
+      if (old && (old.replicaStorageId !== input.replicaStorageId || old.providerId !== input.providerId || old.vaultId !== input.vaultId)) throw new Error('Nearby journal binding changed');
+      if (old?.intent && JSON.stringify(old.intent) !== JSON.stringify(input)) throw new Error('Nearby recovery required');
+      state.nearbyNativeJournal = readNearbyNativeJournal({ version: 1, providerId: input.providerId, replicaStorageId: input.replicaStorageId,
+        vaultId: input.vaultId, intent: input, acknowledgements: old?.acknowledgements ?? [] });
+      await this.persist(state, key, envelope.kdf, false, false, check);
+    });
+  }
+
+  async finishNearbyNativeIntent(operationId: string, sessionId: string, assertActive: () => void, stale = false): Promise<void> {
+    return this.runExclusive(async () => {
+      const check = async () => { assertActive(); await this.assertLocalTransferSession(sessionId); assertActive(); };
+      await check(); const { state, envelope, key } = await this.mutableContext();
+      const { readNearbyNativeJournal } = await import('../nearby/native-journal');
+      const journal = readNearbyNativeJournal(state.nearbyNativeJournal);
+      if (!journal?.intent || journal.intent.operationId !== operationId) throw new Error('Nearby intent missing');
+      if (!stale) {
+        const map = new Map(journal.acknowledgements.map(a => [a.recordId, a]));
+        for (const a of journal.intent.acknowledgements) map.set(a.recordId, a);
+        journal.acknowledgements = [...map.values()];
+      }
+      delete journal.intent; state.nearbyNativeJournal = readNearbyNativeJournal(journal);
+      await this.persist(state, key, envelope.kdf, false, false, check);
     });
   }
 

@@ -23,6 +23,7 @@ import DisplayModePicker from "./components/DisplayModePicker.vue";
 import SettingsPasswordField from "./components/SettingsPasswordField.vue";
 import AutofillSitePolicyPage from "./components/AutofillSitePolicyPage.vue";
 import SettingsNavigation from "./components/SettingsNavigation.vue";
+import NearbySyncSettings from "./components/NearbySyncSettings.vue";
 import InlineAutofillSettings from "./components/InlineAutofillSettings.vue";
 import AutomaticSyncSettings from "./components/AutomaticSyncSettings.vue";
 import { connectLiveVault } from "./runtime/live-vault";
@@ -300,6 +301,7 @@ const settingsGroups = computed(() => [
 ]);
 const paletteNames: Record<string, string> = {nothing: 'Nothing', monica: 'Monica', ocean: '海洋', forest: '森林', sakura: '樱花', amber: '琥珀'};
 const settingsEntries = computed(() => [
+  {id: 'wifi-sync', group: 'filling', title: tr('Wi-Fi 同步'), description: tr('附近设备配对、加密传输与同步状态'), icon: 'wifi'},
   {id: 'appearance', group: 'general', title: tr('配色'), description: tr(paletteNames[paletteId.value]), icon: 'palette'},
   {id: 'exclusions', group: 'filling', title: tr('自动填充排除项'), description: tr('自动填充 {0} 个 · 保存提示 {1} 个', {0: autofillSitePolicy.value.blockedHosts.length, 1: autofillSitePolicy.value.saveBlockedHosts.length}), icon: 'domain_disabled'},
   {id: 'protection', group: 'vault', title: tr('解锁与保护'), description: (windowsHelloProtectionMode.value === 'device-key' ? tr('设备密钥') : tr('主密码')) + ' · Windows Hello ' + (windowsHelloStatus.value?.vaultEnrolled ? tr('已注册') : tr('未注册')), icon: 'key_vertical'},
@@ -3116,6 +3118,7 @@ function errorCode(error: unknown): string | undefined {
             <div class="settings-control"><span class="settings-control-icon"><m3e-icon name="edit" aria-hidden="true" /></span><InlineAutofillSettings /></div>
           </template>
           <template #appearance><AppearancePanel /></template>
+          <template #wifi-sync><NearbySyncSettings /></template>
           <template #exclusions><AutofillSitePolicyPage @close="settingsPage = 'home'" @saved="refreshAutofillSitePolicy" @busy="settingsChildBusy = $event" /></template>
           <template #protection><section class="settings-content" aria-labelledby="settings-protection-heading"><h2 id="settings-protection-heading">{{ tr('更改保护方式') }}</h2><p class="settings-safety-note">{{ tr('建议使用长而独立的主密码；设备密钥模式依赖浏览器与操作系统保护。') }}</p>
                 <SettingsPasswordField v-model="passwordChange.currentPassword" :label="tr('当前主密码（设备密钥模式留空）')" autocomplete="current-password" />

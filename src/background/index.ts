@@ -1,3 +1,5 @@
+import { localNearbySource } from '../nearby/source-adapter';
+import { nativeNearbySource } from '../nearby/native-adapter';
 import { isLoginItem, createLoginItem, type BillingAddressItem, type CardItem, type IdentityItem, type LoginItem, type PasskeyItem, type PaymentAccountItem, type ProviderAccount, type ProviderConflict, type ProviderConflictSummary, type TotpItem, type VaultItem } from "../core/model";
 import { loginMatchScore, matchingLogins } from "../core/matching";
 import { customIconProjection } from '../core/custom-icon';
@@ -148,7 +150,13 @@ const nearbyOwner = new NearbyManagerOwner({
   runtimeId: chrome.runtime.id, extensionRoot: chrome.runtime.getURL(''), store: service,
   readSession: async () => { const session = await vaultSessions.read(); return session ? { id: session.id, expiresAt: session.expiresAt } : null; },
   createCoordinator: assertActive => new NearbyLocalCoordinator(service,
-    () => new NearbyNativeTransport(new Mdbx2NativeClient(createChromeMdbx2NativeRuntime())), undefined, assertActive),
+    () => new NearbyNativeTransport(new Mdbx2NativeClient(createChromeMdbx2NativeRuntime())), undefined, assertActive, async (p, sessionId, signal, active, epoch) => {
+      const provider = await service.getProvider(p.localProviderId); active();
+      if (provider?.kind === 'local') return localNearbySource(service, sessionId, active);
+      if (provider?.kind !== 'mdbx2') throw new Error('Nearby source unavailable');
+      return nativeNearbySource({ store: service, client: mdbx2NativeClient, providerId: provider.id, replicaStorageId: p.replicaStorageId,
+        sessionId, signal, assertActive: active, epoch, exclusive: work => providerOperations.run(provider.id, work) });
+    }),
   changed: () => publishVaultChanged()
 });
 chrome.runtime.onConnect.addListener(port => nearbyOwner.attach(port));

@@ -484,6 +484,7 @@ import type { BlockedFieldSignatureRecord } from "../autofill/field-policy";
 export interface VaultState {
   /** Local device identity and peer trust; excluded when restoring a portable backup. */
   nearbyPreferences?: import('../nearby/preferences').NearbyPreferences;
+  nearbyNativeJournal?: import('../nearby/native-journal').NearbyNativeJournal;
   /** Encrypted nearby application receipts; never synchronized as item fields. */
   nearbyLocalReceipts?: import('../nearby/local-adoption').NearbyLocalReceipt[];
   /** Lossless nearby folders/root metadata and their encrypted adoption receipts. */

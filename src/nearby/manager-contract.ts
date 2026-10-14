@@ -2,9 +2,10 @@ import type { NearbyEndpoint } from './local-coordinator';
 import type { NearbyPreferencesChange } from './preferences';
 
 export const NEARBY_MANAGER_PORT = 'monica-nearby-manager-v1';
-export type NearbyManagerChange = Extract<NearbyPreferencesChange, { kind: 'preferences' | 'forget' | 'request-sync' }>;
+export type NearbyManagerChange = Extract<NearbyPreferencesChange, { kind: 'preferences' | 'source' | 'forget' | 'request-sync' }>;
 export type NearbyManagerRequest = { id: number } & (
-  | { type: 'status' | 'preferences' | 'progress' | 'cancel' }
+  | { type: 'status' | 'preferences' | 'progress' | 'cancel' | 'discovery-progress' | 'sources' }
+  | { type: 'discover'; target?: string }
   | { type: 'update'; epoch: string; change: NearbyManagerChange }
   | { type: 'pair'; invitation?: string }
   | { type: 'prepare'; peerId: string }
@@ -29,7 +30,11 @@ export function readNearbyManagerRequest(value: unknown): NearbyManagerRequest {
   const p = object(value);
   if (typeof p.id !== 'number' || !Number.isSafeInteger(p.id) || p.id < 1) invalid();
   switch (p.type) {
-    case 'status': case 'preferences': case 'progress': case 'cancel': fields(p, ['id', 'type']); break;
+    case 'status': case 'preferences': case 'progress': case 'cancel': case 'discovery-progress': case 'sources': fields(p, ['id', 'type']); break;
+    case 'discover':
+      fields(p, ['id', 'type', 'target']);
+      if (p.target !== undefined && (typeof p.target !== 'string' || p.target.length > 15)) invalid();
+      break;
     case 'pair':
       fields(p, ['id', 'type', 'invitation']);
       if (p.invitation !== undefined && (typeof p.invitation !== 'string' || p.invitation.length > 512)) invalid();
@@ -58,6 +63,7 @@ export function readNearbyManagerRequest(value: unknown): NearbyManagerRequest {
           if (c.intervalSeconds !== undefined && (typeof c.intervalSeconds !== 'number' || !Number.isInteger(c.intervalSeconds)
             || c.intervalSeconds !== 0 && (c.intervalSeconds < 60 || c.intervalSeconds > 86400))) invalid();
           break;
+        case 'source': fields(c, ['kind', 'providerId']); if (typeof c.providerId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(c.providerId)) invalid(); break;
         case 'forget': fields(c, ['kind', 'deviceId']); text(c.deviceId, identifier); break;
         case 'request-sync': fields(c, ['kind']); break;
         default: invalid();

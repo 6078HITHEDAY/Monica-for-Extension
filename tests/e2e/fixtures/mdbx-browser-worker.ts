@@ -11,6 +11,12 @@ import { planNearbyNativeMetadata, projectNearbyNativeMetadata } from '../../../
 import { projectNearbyNativeRecords } from '../../../src/nearby/native-records';
 import { clearNearbyNativeAdoption, planNearbyNativeAdoption } from '../../../src/nearby/native-adoption';
 import { bytesToBase64 } from '../../../src/security/encoding';
+import { SecureVaultService } from '../../../src/security/secure-vault-service';
+import { IndexedDbVaultStorage } from '../../../src/security/vault-storage';
+import { MemoryVaultSessionStore } from '../../../src/security/vault-session';
+import { MemoryVaultDeviceKeyStore } from '../../../src/security/vault-device-key';
+import { nearbyNativeIntent } from '../../../src/nearby/native-journal';
+import { nativeNearbySource } from '../../../src/nearby/native-adapter';
 import { Mdbx2NativeHostError, parseMdbx2NativeResponse, validateMdbx2HostCapabilities, type Mdbx2NativeMethod } from '../../../src/providers/mdbx2/native-contract';
 // Packaged by the fixture alongside the production compiled engine.
 // @ts-expect-error A generated, external Emscripten module.
@@ -20,6 +26,14 @@ const check = (ok: unknown, reason: string) => { if (!ok) throw Error(reason); }
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 let session: MdbxBrowserSession | undefined;
 let dbName = '';
+const journalStorage = new IndexedDbVaultStorage();
+const journalService = new SecureVaultService(journalStorage, new MemoryVaultSessionStore(), Date.now, new MemoryVaultDeviceKeyStore());
+async function unlockJournal() {
+  const state = await journalService.status();
+  if (state === 'uninitialized') await journalService.setup('synthetic-journal-master-password');
+  else if (state === 'locked') await journalService.unlock('synthetic-journal-master-password');
+  return (await journalService.passkeySessionId())!;
+}
 let abortNext = false;
 let holdBefore = false, holdAfter = false, release: (() => void) | undefined;
 const commits: { generation: number; blocks: number; bytes: number; total: number }[] = [];
@@ -116,6 +130,34 @@ async function action(op: string, data: any): Promise<unknown> {
       return response.result;
     };
     const client = { request, hello: async () => validateMdbx2HostCapabilities(await request('host.hello')) };
+    if (op === 'nearby-native-journal-stage') {
+      const sessionId = await unlockJournal(), plan = data.plan;
+      await journalService.upsertProvider({id:plan.providerId,kind:'mdbx2',enabled:true,isDefaultSaveTarget:false,name:'Synthetic journal source',config:{vaultHandle:plan.vaultHandle}});
+      const previous = await journalService.nearbySessionPreferences(sessionId);
+      await journalService.updateNearbyPreferences({kind:'source',providerId:plan.providerId},previous.epoch,sessionId);
+      const preferences = await journalService.nearbySessionPreferences(sessionId);
+      const nativePlan = {...plan,write:{...plan.write,assets:plan.write.assets.map((a:{id:string;base64:string})=>({id:a.id,bytes:Uint8Array.from(atob(a.base64),c=>c.charCodeAt(0))}))}};
+      try {
+        const intent = await nearbyNativeIntent(nativePlan, preferences.replicaStorageId);
+        await journalService.stageNearbyNativeIntent(intent, preferences.epoch, sessionId, () => {});
+        return { operationId:intent.operationId, acknowledgements:intent.acknowledgements };
+      } finally { clearNearbyNativeAdoption(nativePlan); }
+    }
+    if (op === 'nearby-native-journal-recover') {
+      const sessionId = await unlockJournal(), preferences = await journalService.nearbySessionPreferences(sessionId);
+      const typed = new Mdbx2NativeClient({connectNative(){throw Error('Synthetic fixture must use its compiled engine');},disconnectErrorMessage(){return undefined;}});
+      typed.request = request;
+      const adapter = nativeNearbySource({store:journalService,client:typed,providerId:preferences.localProviderId,replicaStorageId:preferences.replicaStorageId,sessionId,
+        epoch:()=>preferences.epoch,assertActive:()=>{},signal:new AbortController().signal,exclusive:work=>work()});
+      const before = await journalService.readNearbyNativeJournal(sessionId), acknowledgements = await adapter.recover();
+      const journal = await journalService.readNearbyNativeJournal(sessionId);
+      return {before,acknowledgements,journal};
+    }
+    if (op === 'nearby-native-journal-scan') {
+      const envelope = JSON.stringify(await journalStorage.read());
+      check((data as string[]).every(secret=>!envelope.includes(secret)), 'plaintext fixture found in journal storage');
+      return true;
+    }
     if (op === 'nearby-native-source') {
       const typed = new Mdbx2NativeClient({ connectNative() { throw Error('Synthetic fixture must use its compiled engine'); }, disconnectErrorMessage() { return undefined; } });
       typed.request = request; return captureNearbyNativeSource(typed, data);

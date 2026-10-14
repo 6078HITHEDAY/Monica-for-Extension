@@ -5,6 +5,7 @@ import { normalizeHomePreferences } from "./home-preferences";
 import { readBitwardenCipherCopies } from './bitwarden-transfer-journal';
 import { readBitwardenBatches } from './bitwarden-batch-transfer';
 import { readNearbyPreferences } from '../nearby/preferences';
+import { readNearbyNativeJournal } from '../nearby/native-journal';
 import { readNearbyLocalMetadata } from '../nearby/local-metadata';
 
 const URI_MATCH_TYPES = new Set<LoginUriMatchType>(["base-domain", "domain", "starts-with", "exact", "regex", "never"]);
@@ -32,6 +33,7 @@ export function migrateVaultState(input: unknown): VaultState {
 
   return {
     ...raw,
+    ...(raw.nearbyNativeJournal === undefined ? {} : { nearbyNativeJournal: readNearbyNativeJournal(raw.nearbyNativeJournal) }),
     ...(raw.nearbyPreferences === undefined ? {} : { nearbyPreferences: readNearbyPreferences(raw.nearbyPreferences) }),
     ...(raw.nearbyLocalMetadata === undefined ? {} : { nearbyLocalMetadata: readNearbyLocalMetadata(raw.nearbyLocalMetadata) }),
     ...(raw.bitwardenCipherCopies === undefined ? {} : { bitwardenCipherCopies: readBitwardenCipherCopies(raw.bitwardenCipherCopies) }),

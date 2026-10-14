@@ -29,7 +29,7 @@ test('common settings act directly while grouped configuration pages retain focu
     const page = await context.newPage(); await page.goto(`chrome-extension://${new URL(worker.url()).host}/index.html`);
     await setup(page);
     const home = page.locator('[data-settings-page="home"]');
-    const ids = ['appearance', 'exclusions', 'protection', 'backup'];
+    const ids = ['appearance', 'exclusions', 'protection', 'backup', 'wifi-sync'];
     await expect(home.locator('[data-settings-entry]')).toHaveCount(ids.length);
     await expect(home.getByRole('combobox')).toHaveCount(2);
     await expect(home.getByRole('switch')).toHaveCount(2);

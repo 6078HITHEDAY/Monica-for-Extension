@@ -15,7 +15,7 @@ export interface NearbyPreferences {
   /** Automatic networking is opt-in; construction never starts a listener. */
   enabled: boolean; mode: NearbySyncMode; intervalSeconds: number;
   settingsVersion: string; settingsWriter: string; syncRequest: string;
-  /** Only the local adapter is currently available. MDBX selection comes with its catalog adapter. */
+  /** Selected sync source. Field name retained for existing encrypted settings. */
   localProviderId: string;
   peers: NearbySavedPeer[];
 }
@@ -25,6 +25,7 @@ export interface NearbyPreferencesView {
 }
 export type NearbyPreferencesChange =
   | { kind: 'preferences'; name?: string; enabled?: boolean; mode?: NearbySyncMode; intervalSeconds?: number }
+  | { kind: 'source'; providerId: string }
   | { kind: 'forget'; deviceId: string }
   | { kind: 'request-sync' }
   /** Internal coordinator only: obtained from authenticated native progress after application adoption. */
@@ -95,7 +96,7 @@ export function readNearbyPreferences(value: unknown): NearbyPreferences | undef
 }
 
 export function createNearbyPreferences(provider: ProviderAccount): NearbyPreferences {
-  if (!provider.enabled || provider.kind !== 'local') fail('local-provider-required');
+  if (!provider.enabled || !['local', 'mdbx2'].includes(provider.kind)) fail('local-provider-required');
   const bytes = crypto.getRandomValues(new Uint8Array(32));
   try {
     return readNearbyPreferences({ version: 1, epoch: crypto.randomUUID(), deviceId: crypto.randomUUID().replace(/-/g, ''), name: 'Monica Browser',
@@ -123,6 +124,16 @@ export function changeNearbyPreferences(saved: NearbyPreferences, change: Nearby
       if (change.mode !== undefined && change.mode !== p.mode) { p.mode = change.mode; p.syncRequest = increment(p.syncRequest); }
       if (change.intervalSeconds !== undefined && change.intervalSeconds !== p.intervalSeconds) {
         p.intervalSeconds = change.intervalSeconds; p.settingsVersion = increment(p.settingsVersion); p.settingsWriter = p.deviceId;
+      }
+      break;
+    case 'source':
+      fields(input, ['kind', 'providerId']);
+      if (p.peers.length) fail('source-paired');
+      if (typeof change.providerId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(change.providerId)) fail('invalid-identity');
+      if (p.localProviderId !== change.providerId) {
+        p.localProviderId = change.providerId; p.replicaStorageId = crypto.randomUUID();
+        const bytes = crypto.getRandomValues(new Uint8Array(32));
+        try { p.replicaKey = base64url(bytes); } finally { bytes.fill(0); }
       }
       break;
     case 'forget': fields(input, ['kind', 'deviceId']); id(change.deviceId); p.peers = p.peers.filter(peer => peer.deviceId !== change.deviceId); break;

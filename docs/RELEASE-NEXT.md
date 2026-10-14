@@ -1,35 +1,23 @@
-# Monica for Extension — 下一版 / Next release
+# Monica Extension — 下一版 / Next release
 
-> 0.1.39 阶段改动已归档至[发行说明](releases/Monica-Extension-0.1.39.md)及[验证记录](verification/release-0.1.39.md)。0.1.38 历史记录保持原样。 / The 0.1.39 stage is archived; 0.1.38 historical records are unchanged.
+> 0.1.39 已归档至[发行说明](releases/Monica-Extension-0.1.39.md)和[验证记录](verification/release-0.1.39.md)。已发布历史保持原样。
 
 ## 中文
 
-- MDBX 附近同步接收底层补齐密码项目、标签、关联和附件的整笔写入方案，支持带附件移动及原身份替换，保留共享标签和 Passkey 原密钥／计数历史。修复附件替换后因初始大小与当前大小不同而被误判不可用的问题；已验证浏览器重启后恢复原提交回执不会覆盖后续更新。完整接收恢复流程及同步入口仍在开发。
+- 新增 Wi-Fi 同步设置页，支持选择本机或 MDBX 密码库、邀请文本／二维码配对、查找已配对设备、同步方向、页面打开时自动同步、状态显示和取消。配对只建立信任，实际传输另行开始；Passkey 跨端限制需要明确确认。局域网通信需要本机通信组件，MDBX 数据库本身已内置。
+- 接通 MDBX 收发与加密事务恢复：保存原始操作、内容及附件后再写入，重启恢复原回执不会覆盖后续修改。重复同步不重复写入。修复两端同时等待连接时，取消监听尚未完成就释放会话导致的连接失败。
+- MDBX 原生目录、文件夹／根标签、密码项目、标签、关系和附件采用完整目录及版本检查，支持整笔接收、带附件移动和保留附件身份的替换；保留数值精度、Passkey 原密钥、凭据 ID 与零计数／已有正计数历史。修复重名文件夹旧标记导致名称回退，以及附件初始大小与当前大小不同造成的误判。无法完整处理的内容会明确阻止扫描，避免遗漏被误认成删除。
+- 修复 MDBX 后台文档误断开 Wi-Fi 管理端口，以及旧版原生对象 UUID 被误当作会话句柄而拒绝的问题；会话与操作句柄仍使用原有严格校验。取消后的旧操作不再改变新连接状态。
+- 本机项目同步保留原始来源归档，包括精确 JSON、二进制编码、未知格式和历史版本；接收、编辑、重启、便携备份恢复及再次复制均保留原文。归档保持加密，不自动创建远端连接或启用凭据。
 
-- MDBX 附近同步底层补齐原生来源目录、密码项目转换与文件夹／根标签接收规划，保留数值精度、附件身份和 Passkey 原凭据；修复重名文件夹采用带后缀名称后旧标记使名称回退的问题。无法无损处理的记录会阻止整次扫描，避免遗漏被误认成删除。已通过真实浏览器引擎与重启验证，尚未接入完整 MDBX 同步流程及界面。
-
-- MDBX 同步底层补齐文件夹及条目附件目录，保留附件归属、内容摘要与删除记录；分块读取前后检查数据库版本，并校验完整内容摘要，避免同步中途修改导致新旧数据混用。继续执行 Power 与已删除内容的访问限制。此项仍是附近同步的底层准备，尚未完成 Wi-Fi 同步入口。
-
-- MDBX 同步底层新增整笔内容接收：密码项目、文件夹、标签、关系及附件可在同一受版本保护的事务内保存，支持附件单独更新、冲突拒绝和重启后恢复原提交回执。保留 Passkey 原密钥、凭据 ID 与计数，不把连接中断误报为未写入。此项仍是附近同步的底层准备，Wi-Fi 同步入口与完整原生接收流程尚未完成。
-
-- MDBX 同步底层补齐受内容版本保护的标签、关联和关系分页读取；保留未关联标签与删除标记，活动内容分块校验摘要并保留原始数值精度。延续 Power 权限、删除内容不可披露及安全审计策略。此项是附近同步的底层准备，尚未提供可用的 Wi-Fi 同步入口。
-
-- 附近同步现可保留本地项目的原始来源归档，包括原始 JSON／二进制编码、未知格式及历史版本；接收、重启、编辑、便携备份恢复和再次复制均保留原文。修复已有回执遗漏归档的路径，并对仅归档变化的旧快照执行保护检查。归档保持加密且不会自动创建远端连接或启用凭据；此阶段仍无附近同步界面。
-
-完整 Android 对齐仍在开发：附近同步界面与自动调度、完整 MDBX 接收及文件夹／根元数据落库、来源归档的原生还原与不支持类型、跨后端冲突与恢复，以及当前 Android/F-Droid、真实 OneDrive 和跨后端矩阵验收。
+Wi-Fi 完整收尾仍在进行：原生回收站内容、部分原生归档及文件夹附件／配置，以及当前 Android/F-Droid 双向应用验收尚未完成。完整 Android 对齐还包含跨后端冲突、恢复与真实 OneDrive 验收。本记录不表示已发布。
 
 ## English
 
-- MDBX nearby adoption groundwork now plans atomic object, label, relation and attachment writes, including moves and replacement under the original attachment identity. Shared labels and original Passkey keys/counter history are retained. Fixed replaced attachments being rejected when their original and current sizes differ; browser restart tests confirm receipt replay does not overwrite later updates. Complete recovery integration and the synchronization entry point remain in development.
+- Added Wi-Fi sync settings for local and MDBX vaults, invitation text/QR pairing, saved-device discovery, transfer direction, automatic sync while the page is open, status and cancellation. Pairing establishes trust before a separate transfer. Passkey portability restrictions require explicit review. LAN networking uses the local communication helper; MDBX storage is bundled.
+- Connected native MDBX send/receive with encrypted operation recovery. The exact operation, content and assets are saved before writing; recovery after restart retrieves the original receipt without overwriting later edits. Repeated sync performs no duplicate writes. Fixed simultaneous listeners attempting to release a native session before cancellation had completed.
+- Native catalogs, folder/root tags, password records, labels, relations and attachments use complete inventories and revision checks with atomic adoption, attachment moves and identity-preserving replacements. Numeric precision, original Passkey keys/credential IDs and zero or existing positive counter history are preserved. Fixed stale folder-name markers and attachment replacement size mismatches. Incomplete projections explicitly block scanning so omitted content cannot become deletions.
+- Fixed the MDBX offscreen document disconnecting unrelated Wi-Fi manager ports and historical native object UUIDs being rejected as session handles. Runtime session/operation handles keep strict validation. Cancelled operations cannot change a subsequent connection's state.
+- Local-item synchronization retains exact source archives, including JSON, binary-encoded data, unknown formats and historical versions through adoption, edits, restart, portable-backup restore and subsequent copies. Archives stay encrypted and never automatically create remote connections or activate credentials.
 
-- MDBX nearby groundwork now captures native source catalogs, maps password records and plans folder/root-tag adoption while retaining numeric precision, attachment identity and original Passkeys. Fixed stale logical-name markers reverting an intentional rename to a suffixed folder name. Incomplete projections block the scan so omissions cannot become deletions. Verified against the real browser engine and restart; full MDBX synchronization and its UI remain in development.
-
-- MDBX synchronization groundwork now catalogs folder-owned and object-owned attachments with their owners, content hashes and tombstones. Chunked downloads verify the complete hash and database revision to reject concurrent changes. Existing Power and deleted-content restrictions remain enforced; the Wi-Fi synchronization entry point is still in development.
-
-- MDBX synchronization groundwork now supports atomic adoption of objects, folders, labels, relations and attachments under a revision guard, including attachment-only updates, conflict rejection and durable receipt recovery after restart. Original Passkey keys, credential IDs and counters are retained; interrupted connections are not treated as proof that nothing was written. The nearby UI and complete native adoption flow remain in development.
-
-- MDBX synchronization groundwork now includes revision-bound, paged label, assignment and relation reads, retaining unassigned labels and tombstone metadata. Active payload chunks are hash-checked without rounding native numbers. Power restrictions, deleted-content denial and security auditing remain intact. This is a prerequisite for nearby synchronization, not a usable Wi-Fi synchronization entry point.
-
-- Nearby synchronization now preserves local items’ original source archives, including exact JSON/binary-encoded payloads, unknown formats and historical versions through adoption, restart, edits, portable-backup restore and subsequent local copies. Fixes receipt paths that omitted archives and guards stale snapshots when only archival content changes. Archives remain encrypted and never automatically create remote connections or activate credentials; there is still no nearby UI.
-
-Full Android parity remains in development: nearby UI and automatic scheduling; complete MDBX adoption and native folder/root metadata; native restoration of archived origins and unsupported item types; cross-backend conflict/recovery; and current Android/F-Droid, real OneDrive and cross-backend acceptance.
+Wi-Fi closeout remains in progress: retained native trash, some native archives and folder assets/profiles, and current Android/F-Droid bidirectional application acceptance are unfinished. Full Android parity also requires cross-backend conflict/recovery and real OneDrive acceptance. These changes have not been published.

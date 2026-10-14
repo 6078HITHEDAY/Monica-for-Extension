@@ -27,10 +27,10 @@ const owners: NearbyManagerOwner[] = [];
 function fixture() {
   const session = { id: 'session', expiresAt: Date.now() + 60_000 };
   const coordinator = { close: vi.fn(), status: vi.fn(() => ({ phase: 'idle' as const })), pair: vi.fn(async () => ({ phase: 'pairing' as const })),
-    prepare: vi.fn(), confirm: vi.fn(), start: vi.fn(), poll: vi.fn() };
+    discover: vi.fn(), discoveryProgress: vi.fn(), prepare: vi.fn(), confirm: vi.fn(), start: vi.fn(), poll: vi.fn() };
   const options = { runtimeId: sender.id, extensionRoot: root, readSession: vi.fn(async () => session),
     createCoordinator: vi.fn(() => coordinator), changed: vi.fn(),
-    store: { nearbySessionPreferences: vi.fn(), updateNearbyPreferences: vi.fn() } };
+    store: { readState: vi.fn(), nearbySessionPreferences: vi.fn(), updateNearbyPreferences: vi.fn() } };
   const owner = new NearbyManagerOwner(options); owners.push(owner);
   return { owner, options, coordinator, session };
 }

@@ -1,0 +1,392 @@
+{
+  "title": "Monica · Wi-Fi 同步",
+  "brief": "附近设备同步采用紧凑连续列表，外侧24px内侧4px圆角。主页面包括当前密码库、同步方向、页面打开时自动同步和设备列表；配对使用邀请文本及可取消等待；Passkey限制须明确确认。显示真实传输状态和恢复错误。",
+  "frame": "phone",
+  "platform": "web",
+  "paletteKey": "teal",
+  "theme": {
+    "dark": true,
+    "bothModes": true,
+    "contrast": "standard",
+    "shape": "rounded",
+    "font": "system",
+    "emphasized": true,
+    "motion": "standard"
+  },
+  "frames": [
+    {
+      "id": "nearby",
+      "name": "Wi-Fi 同步",
+      "x": 0,
+      "y": 0,
+      "w": 420,
+      "h": 1070
+    }
+  ],
+  "groups": [
+    {
+      "id": "nearby-group-0",
+      "frameId": "nearby",
+      "x": 12,
+      "y": 12,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "nearby-item-0",
+          "kind": "topAppBar",
+          "label": "Wi-Fi 同步",
+          "size": 396,
+          "radius": 4,
+          "variant": "filled",
+          "corners": {
+            "tl": 24,
+            "tr": 24,
+            "bl": 4,
+            "br": 4
+          },
+          "icon": "wifi"
+        }
+      ]
+    },
+    {
+      "id": "nearby-group-1",
+      "frameId": "nearby",
+      "x": 12,
+      "y": 100,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "nearby-item-1",
+          "kind": "listItem",
+          "label": "本机密码库",
+          "size": 396,
+          "radius": 4,
+          "variant": "filled",
+          "corners": {
+            "tl": 4,
+            "tr": 4,
+            "bl": 4,
+            "br": 4
+          },
+          "icon": "database",
+          "supporting": "加密传输到已配对设备"
+        }
+      ]
+    },
+    {
+      "id": "nearby-group-2",
+      "frameId": "nearby",
+      "x": 12,
+      "y": 174,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "nearby-item-2",
+          "kind": "select",
+          "label": "同步方向",
+          "size": 396,
+          "radius": 4,
+          "variant": "filled",
+          "corners": {
+            "tl": 4,
+            "tr": 4,
+            "bl": 4,
+            "br": 4
+          },
+          "supporting": "双向同步",
+          "icon": null,
+          "tabs": [
+            {
+              "label": "双向同步",
+              "icon": null
+            },
+            {
+              "label": "仅发送",
+              "icon": null
+            },
+            {
+              "label": "仅接收",
+              "icon": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "nearby-group-3",
+      "frameId": "nearby",
+      "x": 12,
+      "y": 248,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "nearby-item-3",
+          "kind": "listItem",
+          "label": "页面打开时自动同步",
+          "size": 396,
+          "radius": 4,
+          "variant": "filled",
+          "corners": {
+            "tl": 4,
+            "tr": 4,
+            "bl": 4,
+            "br": 4
+          },
+          "icon": "sync",
+          "supporting": "关闭 · 解锁并保持此页面打开"
+        }
+      ]
+    },
+    {
+      "id": "nearby-group-4",
+      "frameId": "nearby",
+      "x": 12,
+      "y": 322,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "nearby-item-4",
+          "kind": "select",
+          "label": "同步间隔",
+          "size": 396,
+          "radius": 4,
+          "variant": "filled",
+          "corners": {
+            "tl": 4,
+            "tr": 4,
+            "bl": 4,
+            "br": 4
+          },
+          "supporting": "5 分钟",
+          "icon": null,
+          "tabs": [
+            {
+              "label": "关闭",
+              "icon": null
+            },
+            {
+              "label": "1 分钟",
+              "icon": null
+            },
+            {
+              "label": "5 分钟",
+              "icon": null
+            },
+            {
+              "label": "15 分钟",
+              "icon": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "nearby-group-5",
+      "frameId": "nearby",
+      "x": 12,
+      "y": 396,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "nearby-item-5",
+          "kind": "listItem",
+          "label": "已配对设备",
+          "size": 396,
+          "radius": 4,
+          "variant": "filled",
+          "corners": {
+            "tl": 4,
+            "tr": 4,
+            "bl": 4,
+            "br": 4
+          },
+          "icon": "devices",
+          "supporting": "Android · 最近同步 14:20"
+        }
+      ]
+    },
+    {
+      "id": "nearby-group-6",
+      "frameId": "nearby",
+      "x": 12,
+      "y": 470,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "nearby-item-6",
+          "kind": "button",
+          "label": "立即同步",
+          "size": 396,
+          "radius": 4,
+          "variant": "filled",
+          "corners": {
+            "tl": 4,
+            "tr": 4,
+            "bl": 4,
+            "br": 4
+          },
+          "icon": "sync"
+        }
+      ]
+    },
+    {
+      "id": "nearby-group-7",
+      "frameId": "nearby",
+      "x": 12,
+      "y": 528,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "nearby-item-7",
+          "kind": "button",
+          "label": "查找附近设备",
+          "size": 396,
+          "radius": 4,
+          "variant": "filled",
+          "corners": {
+            "tl": 4,
+            "tr": 4,
+            "bl": 4,
+            "br": 4
+          },
+          "icon": "search"
+        }
+      ]
+    },
+    {
+      "id": "nearby-group-8",
+      "frameId": "nearby",
+      "x": 12,
+      "y": 586,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "nearby-item-8",
+          "kind": "textField",
+          "label": "粘贴 Android 的配对邀请",
+          "size": 396,
+          "radius": 4,
+          "variant": "filled",
+          "corners": {
+            "tl": 4,
+            "tr": 4,
+            "bl": 4,
+            "br": 4
+          },
+          "icon": null
+        }
+      ]
+    },
+    {
+      "id": "nearby-group-9",
+      "frameId": "nearby",
+      "x": 12,
+      "y": 660,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "nearby-item-9",
+          "kind": "button",
+          "label": "连接设备",
+          "size": 396,
+          "radius": 4,
+          "variant": "filled",
+          "corners": {
+            "tl": 4,
+            "tr": 4,
+            "bl": 4,
+            "br": 4
+          },
+          "icon": "link"
+        }
+      ]
+    },
+    {
+      "id": "nearby-group-10",
+      "frameId": "nearby",
+      "x": 12,
+      "y": 718,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "nearby-item-10",
+          "kind": "button",
+          "label": "显示本机邀请",
+          "size": 396,
+          "radius": 4,
+          "variant": "filled",
+          "corners": {
+            "tl": 4,
+            "tr": 4,
+            "bl": 4,
+            "br": 4
+          },
+          "icon": "qr_code"
+        }
+      ]
+    },
+    {
+      "id": "nearby-group-11",
+      "frameId": "nearby",
+      "x": 12,
+      "y": 776,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "nearby-item-11",
+          "kind": "listItem",
+          "label": "同步状态",
+          "size": 396,
+          "radius": 4,
+          "variant": "filled",
+          "corners": {
+            "tl": 4,
+            "tr": 4,
+            "bl": 4,
+            "br": 4
+          },
+          "icon": "info",
+          "supporting": "等待设备连接，可随时取消"
+        }
+      ]
+    },
+    {
+      "id": "nearby-group-12",
+      "frameId": "nearby",
+      "x": 12,
+      "y": 850,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "nearby-item-12",
+          "kind": "button",
+          "label": "取消",
+          "size": 396,
+          "radius": 4,
+          "variant": "filled",
+          "corners": {
+            "tl": 4,
+            "tr": 4,
+            "bl": 24,
+            "br": 24
+          },
+          "icon": "close"
+        }
+      ]
+    }
+  ],
+  "dynamicColor": false
+}
