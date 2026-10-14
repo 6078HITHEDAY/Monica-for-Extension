@@ -49,14 +49,18 @@ describe('native nearby application projection', () => {
     const result = await projectNearbyNativeRecords(f.source); expect(result.excluded).toEqual([{ id: f.id, reason: key === 'device_sync_staging' ? 'staging' : 'connector-owned' }]);
     expect(result.records.some(row => row.global_id === f.id)).toBe(false);
   });
-  it.each(['deleted', 'schema', 'type', 'unassigned-label', 'folder-asset', 'root-asset', 'orphan-asset', 'folder-profile', 'unavailable-image', 'unavailable-icon'])('never authorizes an incomplete %s scan', async problem => {
+  it.each(['folder','root'])('projects %s attachments and unassigned labels with their actual ownership',async owner=>{
+    const f=fixture(),id=owner==='root'?f.root:f.owner;
+    f.source.attachments[0].objectId=null;f.source.attachments[0].collectionId=id;
+    f.source.metadata.labels.push({labelId:randomUUID(),collectionId:id,name:'Standalone',payloadSchemaVersion:3,payloadJson:'{"big":9007199254740993}',deleted:false,headCommitId:randomUUID(),updatedAt:''});
+    const projection=requireCompleteNearbyNativeProjection(await projectNearbyNativeRecords(f.source));
+    expect(projection.records.find(row=>row.global_id===id)?.data).toMatchObject({labels:[{name:'Standalone',payload:'{"big":9007199254740993}',version:3}],assets:[{id:'c'.repeat(64),attachment_id:f.assetId}]});
+  });
+  it.each(['deleted', 'schema', 'type', 'orphan-asset', 'folder-profile', 'unavailable-image', 'unavailable-icon'])('never authorizes an incomplete %s scan', async problem => {
     const f = fixture();
     if (problem === 'deleted') { f.source.objects[0].record = null; f.source.objects[0].summary.deleted = true; }
     if (problem === 'schema') f.source.objects[0].record!.payloadSchemaVersion = 9;
     if (problem === 'type') f.source.objects[0].record!.objectTypeId = 'unknown';
-    if (problem === 'unassigned-label') f.source.metadata.labels.push({ labelId: randomUUID(), collectionId: f.owner, name: 'Unknown', payloadSchemaVersion: 1, payloadJson: '{"unknown":true}', deleted: false, headCommitId: randomUUID(), updatedAt: '' });
-    if (problem === 'folder-asset') f.source.attachments[0].objectId = null;
-    if (problem === 'root-asset') { f.source.attachments[0].objectId = null; f.source.attachments[0].collectionId = f.root; }
     if (problem === 'orphan-asset') f.source.attachments[0].objectId = randomUUID();
     if (problem === 'folder-profile') f.source.collections[1].favorite = true;
     if (problem === 'unavailable-image') f.source.objects[0].record!.payloadJson = JSON.stringify({ ...f.payload, custom_icon_value: 'content://unavailable-image' });

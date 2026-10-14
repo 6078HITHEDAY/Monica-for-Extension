@@ -122,6 +122,11 @@ async function lifecycleSuite() {
   return { noAbortReentry: true, lockReleasedAfterTrap: true };
 }
 async function action(op: string, data: any): Promise<unknown> {
+  if(op==='nearby-local-forward'){
+    const sessionId=await unlockJournal(),providerId=(await journalService.readState()).providers.find(p=>p.kind==='local')!.id;
+    await journalService.adoptNearbyLocalTransaction({providerId,sourceHash:await journalService.nearbyLocalSnapshotHash(),records:data.records,assets:data.assets},sessionId);
+    return journalService.captureNearbyLocalRecords();
+  }
   if (op === 'content-metadata' || op === 'content-write' || op === 'content-attachments' || op === 'content-attachment-bytes' || op.startsWith('nearby-native-')) {
     const request = async (method: Mdbx2NativeMethod, params: Record<string, unknown> = {}) => {
       const response = parseMdbx2NativeResponse(await session!.request({ protocol: 2, requestId: crypto.randomUUID(), method, params }));

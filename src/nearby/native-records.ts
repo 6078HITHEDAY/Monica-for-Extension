@@ -2,7 +2,7 @@ import { cloneLosslessJson, parseLosslessJson } from '../core/lossless-json';
 import type { Mdbx2ContentAttachment } from '../providers/mdbx2/content-attachments';
 import { mdbx2TransferOperationScope as hash } from '../providers/mdbx2/mdbx2-transfer-identity';
 import { nearbyNativeObjectToWire } from './application-codec';
-import { NATIVE_FOLDER_TITLE, NATIVE_PROJECT_TAG, NATIVE_ROOT_TAGS, nearbyNativeFolderPaths, projectNearbyNativeMetadata } from './native-metadata';
+import { nearbyNativeFolderPaths, nearbyNativeMetadataContents, projectNearbyNativeMetadata } from './native-metadata';
 import { nativeActive, type NearbyNativeSource } from './native-source';
 import { invalidNearby, NearbyDataError, NEARBY_ENTRY_TYPES, nearbyNativeBusinessPayload, remapNearbyAssetPaths, validateNearbyWireData, wireObject, type NearbyEntryType, type NearbyWireData } from './wire-shape';
 
@@ -20,6 +20,16 @@ const byId = <T>(rows: readonly T[], key: (row: T) => string): Map<string, T[]> 
 };
 const ordered = <T>(rows: readonly T[]) => [...rows].sort((a, b) => { const x = JSON.stringify(a), y = JSON.stringify(b); return x < y ? -1 : x > y ? 1 : 0; });
 
+export function validateNearbyNativeAssetIdentities(descriptors: Record<string, unknown>[]): void {
+  const ids = new Set<string>();
+  for (const descriptor of descriptors) {
+    const id = descriptor.attachment_id;
+    if (id === undefined) continue; // Legacy descriptors did not carry an identity.
+    if (typeof id !== 'string' || !id.length || id.length > 4096 || ids.has(id)) invalidNearby('native-asset-identity');
+    ids.add(id);
+  }
+}
+
 /** Converts supported native content, while returning explicit blockers for
  * content whose lossless archive/restore path is not integrated yet. The source
  * inventory retains every such row and its available original payload. */
@@ -27,6 +37,7 @@ export async function projectNearbyNativeRecords(input: NearbyNativeSource, sign
   const source = cloneLosslessJson(input), scope = `mdbx:${source.providerId}`;
   nativeActive(signal);
   const metadata = await projectNearbyNativeMetadata(source); nativeActive(signal);
+  const metadataContents=nearbyNativeMetadataContents(source);
   const paths = nearbyNativeFolderPaths(source), labels = new Map(source.metadata.labels.map(row => [row.labelId, row]));
   const assignments = byId(source.metadata.assignments.filter(row => !row.deleted), row => row.objectId);
   const relations = byId(source.metadata.relations.filter(row => !row.deleted), row => row.sourceObjectId);
@@ -60,6 +71,7 @@ export async function projectNearbyNativeRecords(input: NearbyNativeSource, sign
       if (typeof imageMap[row.contentHash] === 'string') paths.set(imageMap[row.contentHash] as string, `device-asset:${row.contentHash}`);
       return descriptor;
     });
+    validateNearbyNativeAssetIdentities(data.assets as Record<string, unknown>[]);
     const uploaded = [wireObject(data.extensions ?? {})];
     const itemData = wireObject(data.payload ?? {}).item_data;
     if (typeof itemData === 'string' && itemData.startsWith('{')) uploaded.push(wireObject(parseLosslessJson(itemData)));
@@ -77,12 +89,10 @@ export async function projectNearbyNativeRecords(input: NearbyNativeSource, sign
   };
   for (const row of metadata) {
     let data = row.data;
-    if (Object.keys(data).length && row.kind === 'folder') data = withAssets(data as NearbyWireData, attachments.get(`folder:${row.id}`) ?? []);
+    const contents=metadataContents.get(`${row.kind}:${row.id}`)!;
+    if (Object.keys(data).length) data = withAssets(data as NearbyWireData, contents.assets, contents.saved);
     add({ local_id: row.localId, global_id: row.id, scope, guard: row.guard, deleted: row.deleted, data });
-    if (row.kind === 'folder' && (attachments.get(`folder:${row.id}`) ?? []).some(file => !file.deleted)) result.blockers.push({ id: row.id, reason: 'native-folder-assets-adoption-required' });
-    if (row.kind === 'root' && Array.isArray(data.assets) && data.assets.length) result.blockers.push({ id: row.id, reason: 'native-root-metadata-assets-unavailable' });
   }
-  if ((attachments.get(`folder:${source.rootId}`) ?? []).some(row => !row.deleted)) result.blockers.push({ id: source.rootId, reason: 'native-root-assets-adoption-required' });
   const objectIds = new Set(source.objects.map(row => row.summary.objectId));
   for (const attachment of source.attachments) if (!attachment.deleted && attachment.objectId !== null && !objectIds.has(attachment.objectId)) result.blockers.push({ id: attachment.attachmentId, reason: 'native-orphan-attachment' });
   for (const collection of source.collections) if (collection.favorite || collection.archived || collection.iconRef || (collection.profileSchemaVersion ?? 1) !== 1) result.blockers.push({ id: collection.collectionId, reason: 'native-folder-profile-archive-required' });
@@ -118,11 +128,6 @@ export async function projectNearbyNativeRecords(input: NearbyNativeSource, sign
       if (!(error instanceof NearbyDataError)) throw error;
       result.blockers.push({ id, reason: error.code });
     }
-  }
-  const assigned = new Set(source.metadata.assignments.filter(row => !row.deleted).map(row => row.labelId));
-  for (const label of source.metadata.labels) if (!label.deleted && !assigned.has(label.labelId)) {
-    let kind: unknown; try { kind = wireObject(parseLosslessJson(label.payloadJson!)).kind; } catch { /* retained opaque metadata */ }
-    if (kind !== NATIVE_PROJECT_TAG && kind !== NATIVE_FOLDER_TITLE && !(kind === NATIVE_ROOT_TAGS && label.collectionId === source.rootId)) result.blockers.push({ id: label.labelId, reason: 'unassigned-native-label-archive-required' });
   }
   nativeActive(signal); result.assets = [...assets.values()]; return result;
 }

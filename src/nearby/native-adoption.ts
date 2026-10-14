@@ -4,8 +4,8 @@ import { mdbx2TransferUuid } from '../providers/mdbx2/mdbx2-transfer-identity';
 import type { Mdbx2ContentCommand, Mdbx2ContentWriteInput } from '../providers/mdbx2/content-write';
 import { nearbyWireToNativeObject } from './application-codec';
 import type { NearbyIncomingRecord } from './local-adoption';
-import { NATIVE_FOLDER_TITLE, NATIVE_PROJECT_TAG, NATIVE_ROOT_TAGS, planNearbyNativeMetadata, projectNearbyNativeMetadata, type NearbyNativeMetadataChange } from './native-metadata';
-import { projectNearbyNativeRecords } from './native-records';
+import { NATIVE_FOLDER_DATA, NATIVE_FOLDER_TITLE, NATIVE_PROJECT_TAG, NATIVE_ROOT_TAGS, nearbyNativeMetadataContents, nearbyNativePayloadVersion, planNearbyNativeMetadata, projectNearbyNativeMetadata, validateNearbyNativeLabelPayload, type NearbyNativeMetadataChange } from './native-metadata';
+import { projectNearbyNativeRecords, validateNearbyNativeAssetIdentities } from './native-records';
 import { nativeActive, nativeId, nearbyJavaNameUuid, type NearbyNativeSource } from './native-source';
 import { invalidNearby, nearbyNativeBusinessPayload, remapNearbyAssetPaths, remapNearbyReferences, validateNearbyWireData,
   wireInteger, wireObject, type NearbyWireData } from './wire-shape';
@@ -148,7 +148,12 @@ export async function planNearbyNativeAdoption(input: NearbyNativeSource, incomi
     ownerById.set(row.id, parent ?? source.rootId);
   }
   const metadataSource = consumedPurges.length ? { ...source, metadata: { ...source.metadata, labels: source.metadata.labels.filter(label=>!consumedPurges.includes(label.labelId)) } } : source;
-  const commands: Mdbx2ContentCommand[] = await planNearbyNativeMetadata(metadataSource, operation, [...metaChanges.values()]);
+  const commands: Mdbx2ContentCommand[] = await planNearbyNativeMetadata(metadataSource, operation, [...metaChanges.values()], true);
+  // The current native DeleteProject contract refuses live attachments. Do not
+  // stage an intent that is guaranteed to fail (and then become an uncertain
+  // outcome); preserving attached bytes during folder trash needs native support.
+  for (const command of commands) if (command.kind === 'collection-delete'
+    && source.attachments.some(file => file.collectionId === command.collectionId && !file.deleted)) invalidNearby('native-folder-attachment-trash-unavailable');
   commands.push(...consumedPurges.map(labelId=>({kind:'label-delete' as const,labelId})));
   if (!source.collections.some(row => row.collectionId === source.rootId) && !commands.some(row => row.kind === 'collection-create' && row.collectionId === source.rootId) && work.some(row => row.kind === 'object')) commands.unshift({ kind: 'collection-create', collectionId: source.rootId, title: '.monica-root', parentId: null });
   const late: Mdbx2ContentCommand[] = [], fileCommands: Mdbx2ContentWriteInput['plan']['attachments'][number][] = [], buffers: { id: string; bytes: Uint8Array }[] = [];
@@ -171,7 +176,60 @@ export async function planNearbyNativeAdoption(input: NearbyNativeSource, incomi
     if (value.bytes.length !== size) invalidNearby('native-asset-size');
     copies += size; if (copies > 64 * 1024 * 1024) invalidNearby('native-asset-limit'); return value.id;
   };
+  const prepareAssets = async (data: NearbyWireData, raw: Record<string, unknown>, files: NearbyNativeSource['attachments'], owner: string, recordId: string, objectId: string | null) => {
+      const saved = rows(raw.device_sync_assets ?? []), descriptors = data.assets === undefined ? undefined : rows(data.assets);
+      if (descriptors && descriptors.length > 64) invalidNearby('native-asset-limit');
+      if (descriptors) validateNearbyNativeAssetIdentities(descriptors);
+      const kept = new Set<string>(), stored: Record<string, unknown>[] = [], paths = new Map<string, string>();
+      for (let index = 0; index < (descriptors?.length ?? 0); index++) {
+        const descriptor = descriptors![index], hash = descriptor.id as string, size = Number(wireInteger(descriptor.size, 64n * 1024n * 1024n));
+        for (const flag of ['image', 'icon']) if (descriptor[flag] !== undefined && typeof descriptor[flag] !== 'boolean') invalidNearby('native-asset-map');
+        const original = saved.find(old => typeof descriptor.attachment_id === 'string' && old.attachment_id === descriptor.attachment_id);
+        const file = files.find(file => !kept.has(file.attachmentId) && (file.attachmentId === original?.local_id || file.attachmentId === descriptor.attachment_id))
+          ?? files.find(file => !kept.has(file.attachmentId) && file.contentHash === hash && file.fileName === descriptor.file_name && file.storedSize === size);
+        const id = file?.attachmentId ?? await mdbx2TransferUuid(operation, `attachment:${recordId}:${index}`); kept.add(id);
+        if (!file) fileCommands.push({ kind: 'create', attachmentId: id, collectionId: owner, objectId, fileName: descriptor.file_name as string, mediaType: descriptor.media_type as string, assetId: await load(hash, size) });
+        else {
+          if (file.contentHash !== hash || file.storedSize !== size) fileCommands.push({ kind: 'replace', attachmentId: id, assetId: await load(hash, size) });
+          if (file.fileName !== descriptor.file_name || file.mediaType !== descriptor.media_type) fileCommands.push({ kind: 'rename', attachmentId: id, fileName: descriptor.file_name as string, mediaType: descriptor.media_type as string });
+        }
+        stored.push({ ...descriptor, local_id: id }); paths.set(`device-asset:${hash}`, `mdbx:${id}`);
+      }
+      if (descriptors) { for (const file of files) if (!kept.has(file.attachmentId)) fileCommands.push({ kind: 'delete', attachmentId: file.attachmentId }); }
+      else { for (const file of files) paths.set(`device-asset:${file.contentHash}`, `mdbx:${file.attachmentId}`); }
+      const remapped = remapNearbyAssetPaths(data, path => {
+        if (paths.has(path)) return paths.get(path)!;
+        if (path.startsWith('device-asset:') || /^(?:mdbx:|file:|content:|[A-Za-z]:[\\/]|\/)/.test(path)) invalidNearby('native-asset-reference-unavailable'); return path;
+      });
+    return { remapped, stored, descriptors };
+  };
   try {
+    const metadataContents=nearbyNativeMetadataContents(source);
+    for(const row of work.filter(row=>row.kind!=='object')){
+      const contents=metadataContents.get(`${row.kind}:${row.id}`),owner=row.kind==='root'?source.rootId:row.id;
+      const files=(contents?.assets??[]).filter(file=>!file.deleted);
+      if(row.tombstone){
+        if(row.kind==='root')for(const file of files)fileCommands.push({kind:'delete',attachmentId:file.attachmentId});
+        continue;
+      }
+      const {remapped,stored,descriptors}=await prepareAssets(row.data,contents?.saved??{},files,owner,row.id,null);
+      const markerKind=row.kind==='root'?NATIVE_ROOT_TAGS:NATIVE_FOLDER_DATA;
+      let command=commands.find(c=>{
+        if(c.kind!=='label-create'&&c.kind!=='label-update')return false;
+        if(c.kind==='label-create'?c.name!==markerKind:c.labelId!==contents?.marker?.labelId)return false;
+        const data=wireObject(parseLosslessJson(c.payloadJson));
+        return data.kind===markerKind && (row.kind==='root'?data.owner===row.id:c.kind==='label-create'?c.collectionId===owner:c.labelId===contents?.marker?.labelId);
+      });
+      if(!command){
+        if(!contents?.marker)invalidNearby('native-metadata-marker-missing');
+        command={kind:'label-update',labelId:contents.marker.labelId,name:contents.marker.name,payloadJson:contents.marker.payloadJson!,payloadSchemaVersion:contents.marker.payloadSchemaVersion};
+        commands.push(command);
+      }
+      if(command.kind!=='label-create'&&command.kind!=='label-update')invalidNearby('native-metadata-marker-missing');
+      const marker=wireObject(parseLosslessJson(command.payloadJson));marker.data=remapped;
+      if(descriptors){marker.device_sync_assets=stored;marker.device_sync_images={};}
+      command.payloadJson=JSON.stringify(marker);
+    }
     for (const row of work.filter(row => row.kind === 'object')) {
       nativeActive(signal);
       const previous = summaries.get(row.id), before = previous?.summary;
@@ -198,29 +256,7 @@ export async function planNearbyNativeAdoption(input: NearbyNativeSource, incomi
         return { name: label.name, payload: label.payloadJson, version: label.payloadSchemaVersion };
       });
       const raw = oldPayload ? nearbyNativeBusinessPayload(oldPayload, data.entry_type) : {};
-      const saved = rows(raw.device_sync_assets ?? []), descriptors = data.assets === undefined ? undefined : rows(data.assets);
-      if (descriptors && descriptors.length > 64) invalidNearby('native-asset-limit');
-      const kept = new Set<string>(), stored: Record<string, unknown>[] = [], paths = new Map<string, string>();
-      for (let index = 0; index < (descriptors?.length ?? 0); index++) {
-        const descriptor = descriptors![index], hash = descriptor.id as string, size = Number(wireInteger(descriptor.size, 64n * 1024n * 1024n));
-        for (const flag of ['image', 'icon']) if (descriptor[flag] !== undefined && typeof descriptor[flag] !== 'boolean') invalidNearby('native-asset-map');
-        const original = saved.find(old => typeof descriptor.attachment_id === 'string' && old.attachment_id === descriptor.attachment_id);
-        const file = files.find(file => !kept.has(file.attachmentId) && file.attachmentId === original?.local_id)
-          ?? files.find(file => !kept.has(file.attachmentId) && file.contentHash === hash && file.fileName === descriptor.file_name && file.storedSize === size);
-        const id = file?.attachmentId ?? await mdbx2TransferUuid(operation, `attachment:${row.id}:${index}`); kept.add(id);
-        if (!file) fileCommands.push({ kind: 'create', attachmentId: id, collectionId: owner, objectId: row.id, fileName: descriptor.file_name as string, mediaType: descriptor.media_type as string, assetId: await load(hash, size) });
-        else {
-          if (file.contentHash !== hash || file.storedSize !== size) fileCommands.push({ kind: 'replace', attachmentId: id, assetId: await load(hash, size) });
-          if (file.fileName !== descriptor.file_name || file.mediaType !== descriptor.media_type) fileCommands.push({ kind: 'rename', attachmentId: id, fileName: descriptor.file_name as string, mediaType: descriptor.media_type as string });
-        }
-        stored.push({ ...descriptor, local_id: id }); paths.set(`device-asset:${hash}`, `mdbx:${id}`);
-      }
-      if (descriptors) { for (const file of files) if (!kept.has(file.attachmentId)) fileCommands.push({ kind: 'delete', attachmentId: file.attachmentId }); }
-      else { for (const file of files) paths.set(`device-asset:${file.contentHash}`, `mdbx:${file.attachmentId}`); }
-      const remapped = remapNearbyAssetPaths(data, path => {
-        if (paths.has(path)) return paths.get(path)!;
-        if (path.startsWith('device-asset:') || /^(?:mdbx:|file:|content:|[A-Za-z]:[\\/]|\/)/.test(path)) invalidNearby('native-asset-reference-unavailable'); return path;
-      });
+      const {remapped,stored,descriptors}=await prepareAssets(data,raw,files,owner,row.id,row.id);
       const encoded = await nearbyWireToNativeObject(remapped, { logicalId: row.id, collectionId: owner, previousPayload: oldPayload }); nativeActive(signal);
       const payload = wireObject(parseLosslessJson(encoded.payloadJson));
       if (descriptors) { payload.device_sync_assets = stored; payload.device_sync_images = {}; }
@@ -231,6 +267,8 @@ export async function planNearbyNativeAdoption(input: NearbyNativeSource, incomi
         const keptAssignments = new Set<string>();
         for (const [index, label] of rows(data.labels).entries()) {
           exactFields(label, ['name', 'payload', 'version']);
+          validateNearbyNativeLabelPayload(label.payload as string);
+          nearbyNativePayloadVersion(label.version);
           const match = assignments.find(a => !keptAssignments.has(a.assignmentId) && source.metadata.labels.some(l => l.labelId === a.labelId && !l.deleted && l.collectionId === owner && l.name === label.name && l.payloadJson === label.payload && l.payloadSchemaVersion === Number(wireInteger(label.version, 0xffff_ffffn))));
           if (match) { keptAssignments.add(match.assignmentId); continue; }
           const labelId = await mdbx2TransferUuid(operation, `label:${row.id}:${index}`);
@@ -243,6 +281,9 @@ export async function planNearbyNativeAdoption(input: NearbyNativeSource, incomi
         relations.forEach(r => late.push({ kind: 'relation-delete', relationId: r.relationId }));
         for (const [index, relation] of rows(data.relations).entries()) {
           exactFields(relation, ['target', 'kind', 'payload', 'version']); const target = nativeId(relation.target);
+          nearbyNativePayloadVersion(relation.version);
+          // Relations also use native JSON payloads, without label marker semantics.
+          try { parseLosslessJson(relation.payload as string); } catch { invalidNearby('native-relation-json'); }
           if (!work.some(row => row.id === target && row.kind === 'object' && !row.record.deleted) && (!summaries.has(target) || !existing.has(`${scope}:${target}`) || work.some(row => row.id === target && row.record.deleted))) invalidNearby('native-reference-unavailable');
           late.push({ kind: 'relation-create', relationId: await mdbx2TransferUuid(operation, `relation:${row.id}:${index}`), sourceObjectId: row.id, targetObjectId: target,
             relationKind: relation.kind as string, payloadJson: relation.payload as string, payloadSchemaVersion: Number(wireInteger(relation.version, 0xffff_ffffn)) });
@@ -257,7 +298,7 @@ export async function planNearbyNativeAdoption(input: NearbyNativeSource, incomi
       const label = source.metadata.labels.find(row => row.labelId === id && !row.deleted); if (!label) continue;
       let kind: unknown;
       try { kind = wireObject(parseLosslessJson(label.payloadJson!)).kind; } catch { /* Opaque labels retain their own payload until explicitly replaced. */ }
-      if ([NATIVE_PROJECT_TAG, NATIVE_ROOT_TAGS, NATIVE_FOLDER_TITLE].includes(kind as string)) continue;
+      if ([NATIVE_PROJECT_TAG, NATIVE_ROOT_TAGS, NATIVE_FOLDER_TITLE, NATIVE_FOLDER_DATA].includes(kind as string)) continue;
       if (![...commands, ...late].some(row => row.kind === 'label-delete' && row.labelId === id)) late.push({ kind: 'label-delete', labelId: id });
     }
     const folderDeletes = commands.filter(row => row.kind === 'collection-delete');

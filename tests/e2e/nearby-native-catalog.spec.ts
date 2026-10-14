@@ -57,8 +57,9 @@ test('native nearby catalog adopts folder and root metadata while preserving ori
     expect(source.metadata.labels.find(row => row.labelId === unassignedId)).toMatchObject({ payloadSchemaVersion: 8, payloadJson: '{"future":9007199254740993}' });
     let projection = await call('nearby-native-project', source) as NearbyNativeProjection;
     expect(projection.records.find(row => row.global_id === objectId)?.data).toMatchObject({ entry_type: 'passkey', folder: 'Nested', payload: { private_key_alias: privateKey.toString('base64'), credential_id: credential, sign_count: 0 } });
-    expect(projection.blockers).toHaveLength(2);
-    expect(projection.blockers).toEqual(expect.arrayContaining([{ id: unassignedId, reason: 'unassigned-native-label-archive-required' }, { id: folderB, reason: 'native-folder-assets-adoption-required' }]));
+    expect(projection.blockers).toEqual([]);
+    expect(projection.records.find(row=>row.global_id===child)?.data.labels).toEqual([{name:'Unassigned future metadata',payload:'{"future":9007199254740993}',version:8}]);
+    expect(projection.records.find(row=>row.global_id===folderB)?.data.assets).toMatchObject([{attachment_id:folderAsset,size:bytes.length}]);
     const beforeChange = source;
     const changeOp = randomUUID(), planned = await call('nearby-native-plan', { source, operationId: changeOp, changes: [{ kind: 'root', id: rootOwner, expectedGuard: meta.find(row => row.id === rootOwner)!.guard, deleted: true, data: {} },
       { ...folder(folderA, 'Renamed'), expectedGuard: meta.find(row => row.id === folderA)!.guard },
@@ -81,6 +82,6 @@ test('native nearby catalog adopts folder and root metadata while preserving ori
     expect(await call('content-attachment-bytes', { handle, input: { writeRevision: source.writeRevision, attachment: file } })).toEqual({ sizeBytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') });
     await call('scan', [password, privateKey.toString('base64'), 'synthetic retained text']); await call('close');
     Object.assign(evidence, { status: 'passed', rootOwnerIsolation: true, logicalFolderNames: true, storedNameRenameAfterRestart: true, nativeMetadataAtomicAdoption: true, originalPasskeySignature: true, zeroCounterPreserved: true,
-      unassignedAndDeletedInventory: true, unsupportedScanBlocked: true, actualBrowserRestart: true, assetHashVerified: true, receiptCommit: receipt.commitId, engineBuild: JSON.parse(await readFile('native/mdbx2-browser/pkg/BROWSER-BUILD.json', 'utf8')) });
+      unassignedAndDeletedInventory: true, completeSupportedScan: true, actualBrowserRestart: true, assetHashVerified: true, receiptCommit: receipt.commitId, engineBuild: JSON.parse(await readFile('native/mdbx2-browser/pkg/BROWSER-BUILD.json', 'utf8')) });
   } finally { await context?.close(); await writeFile(path.join(run, 'evidence.json'), JSON.stringify(evidence, null, 2)); }
 });

@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { parseLosslessJson } from '../core/lossless-json';
 import type { Mdbx2ContentLabel } from '../providers/mdbx2/content-metadata';
 import type { Mdbx2CollectionSummary } from '../providers/mdbx2/native-contract';
-import { NATIVE_FOLDER_TITLE, NATIVE_PROJECT_TAG, NATIVE_ROOT_TAGS, nearbyNativeFolderPaths, planNearbyNativeMetadata, projectNearbyNativeMetadata, type NearbyNativeMetadataChange } from './native-metadata';
+import { NATIVE_FOLDER_DATA, NATIVE_FOLDER_TITLE, NATIVE_PROJECT_TAG, NATIVE_ROOT_TAGS, nearbyNativeFolderPaths, planNearbyNativeMetadata, projectNearbyNativeMetadata, type NearbyNativeMetadataChange } from './native-metadata';
 import type { NearbyNativeSource } from './native-source';
 
 function project(id = randomUUID(), title = 'Folder', parent?: string): Mdbx2CollectionSummary {
@@ -69,6 +69,41 @@ describe('Android native metadata mapping', () => {
 });
 
 describe('atomic native metadata adoption planning', () => {
+  it('preserves labels and tags in retained root trash, distinct from a purge',async()=>{
+    const f=fixture(),owner=randomUUID(),tag=f.tag(f.root,'Trash tag'),label=f.label(f.root,'Trash label','{"secret":"kept"}');
+    const data={title:'Root trash',folder:'',entry_type:'vault-metadata' as const,trashed:true,payload:{tags:[{name:tag.name,payload:tag.payloadJson!,version:1}]},labels:[{name:label.name,payload:label.payloadJson!,version:1}]};
+    f.label(f.root,NATIVE_ROOT_TAGS,{kind:NATIVE_ROOT_TAGS,owner,deleted:true,data,tag_ids:[tag.labelId],label_ids:[label.labelId]});
+    const row=(await projectNearbyNativeMetadata(f.source)).find(row=>row.id===owner)!;
+    expect(row).toMatchObject({deleted:true,data});
+    const plan=await planNearbyNativeMetadata(f.source,randomUUID(),[{kind:'root',id:owner,expectedGuard:row.guard,deleted:true,data}]);
+    expect(plan.some(c=>c.kind==='label-delete')).toBe(false);
+  });
+  it('refuses ambiguous and future folder markers instead of dropping saved fields',async()=>{
+    for(const version of [1,2]){
+      const f=fixture();f.label(f.folder.collectionId,NATIVE_FOLDER_DATA,{kind:NATIVE_FOLDER_DATA,...(version===2?{data:f.folderData(f.folder.collectionId,'Work')}:{})},version);
+      await expect(projectNearbyNativeMetadata(f.source)).rejects.toMatchObject({code:'native-folder-data-marker'});
+    }
+  });
+  it('retains unknown folder fields and path metadata while projecting current native names',async()=>{
+    const f=fixture(),data:any=f.folderData(f.folder.collectionId,'Work');
+    data.future=parseLosslessJson('{"n":9007199254740993}');data.payload.extra='kept';data.payload.path[0].future='path-extra';
+    const commands=await planNearbyNativeMetadata(f.source,randomUUID(),[await f.change(f.folder.collectionId,data)]);
+    const marker=commands.find(row=>row.kind==='label-create'&&row.name===NATIVE_FOLDER_DATA);if(marker?.kind!=='label-create')throw Error('No archive');
+    f.label(f.folder.collectionId,marker.name,marker.payloadJson);
+    f.folder.title='Native renamed';
+    const result=(await projectNearbyNativeMetadata(f.source)).find(row=>row.id===f.folder.collectionId)!;
+    expect(result.data).toMatchObject({title:'Native renamed',payload:{extra:'kept',path:[{title:'Native renamed',future:'path-extra'}]}});
+    expect(JSON.stringify(result.data.future)).toBe('{"n":9007199254740993}');
+  });
+  it('partitions standalone root labels and refuses cross-owner claims',async()=>{
+    const f=fixture(),owner=randomUUID(),a=f.label(f.root,'Own','{"a":1}'),b=f.label(f.root,'Peer','{"b":2}');
+    f.label(f.root,NATIVE_ROOT_TAGS,{kind:NATIVE_ROOT_TAGS,owner,deleted:false,data:{title:'Peer',folder:'',entry_type:'vault-metadata',payload:{tags:[]}},tag_ids:[],label_ids:[b.labelId]});
+    const records=await projectNearbyNativeMetadata(f.source);
+    expect(records.find(row=>row.id===owner)?.data.labels).toEqual([{name:b.name,payload:b.payloadJson,version:1}]);
+    expect(records.find(row=>row.id===f.root)?.data.labels).toEqual([{name:a.name,payload:a.payloadJson,version:1}]);
+    f.label(f.root,NATIVE_ROOT_TAGS,{kind:NATIVE_ROOT_TAGS,owner:randomUUID(),deleted:false,data:{title:'Other root',folder:'',entry_type:'vault-metadata',payload:{tags:[]}},tag_ids:[],label_ids:[b.labelId]});
+    await expect(projectNearbyNativeMetadata(f.source)).rejects.toThrow('native-root-ownership');
+  });
   it('updates only the chosen root owner, retaining other owners and unrelated labels', async () => {
     const f = fixture(), a = f.tag(f.root, 'Local'), b = f.tag(f.root, 'Remote'), future = f.label(f.root, 'Unassigned', '{"future":true}'), owner = randomUUID();
     const marker = f.label(f.root, NATIVE_ROOT_TAGS, { kind: NATIVE_ROOT_TAGS, owner, deleted: false, data: { payload: { tags: [] }, title: 'Root', folder: '', entry_type: 'vault-metadata' }, tag_ids: [b.labelId], future_marker: true });
@@ -76,7 +111,7 @@ describe('atomic native metadata adoption planning', () => {
     expect(commands).toContainEqual({ kind: 'label-delete', labelId: b.labelId });
     expect(commands.some(row => 'labelId' in row && [a.labelId, future.labelId].includes(row.labelId))).toBe(false);
     const updated = commands.find(row => row.kind === 'label-update' && row.labelId === marker.labelId)!;
-    expect(updated).toMatchObject({ payloadJson: JSON.stringify({ kind: NATIVE_ROOT_TAGS, owner, deleted: true, data: {}, tag_ids: [], future_marker: true }) });
+    expect(updated).toMatchObject({ payloadJson: JSON.stringify({ kind: NATIVE_ROOT_TAGS, owner, deleted: true, data: {}, tag_ids: [], future_marker: true, label_ids: [] }) });
   });
   it('preserves exact native numeric lexemes inside retained root data', async () => {
     const f = fixture(), owner = randomUUID(), data = parseLosslessJson('{"title":"Root","folder":"","entry_type":"vault-metadata","payload":{"tags":[],"big":9007199254740993,"decimal":1.00000000000000001}}') as NearbyNativeMetadataChange['data'];
@@ -123,10 +158,10 @@ describe('atomic native metadata adoption planning', () => {
     const data = f.folderData(f.folder.collectionId, 'Work'); data.payload.path = [{ id: f.other.collectionId, title: 'Other', parent: null }, { id: f.folder.collectionId, title: 'Work', parent: f.other.collectionId } as any];
     await expect(planNearbyNativeMetadata(f.source, randomUUID(), [await f.change(f.folder.collectionId, data)])).rejects.toMatchObject({ code: 'native-folder-cycle' });
   });
-  it.each(['assets', 'unknown', 'wrong-tag-kind', 'duplicate-record'])('rejects unsupported %s without losing it through an incomplete plan', async problem => {
+  it.each(['assets', 'wrong-tag-kind', 'duplicate-record'])('rejects unsupported %s without losing it through an incomplete plan', async problem => {
     const f = fixture(), data: any = f.folderData(f.folder.collectionId, 'Work');
     if (problem === 'assets') data.assets = [{ id: 'a'.repeat(64), file_name: 'x', media_type: 'x', size: 1 }];
-    if (problem === 'unknown') data.payload.future = { keep: true };
+
     if (problem === 'wrong-tag-kind') data.payload.tags = [{ name: 'x', payload: '{"kind":"future"}', version: 1 }];
     const change = await f.change(f.folder.collectionId, data);
     await expect(planNearbyNativeMetadata(f.source, randomUUID(), problem === 'duplicate-record' ? [change, change] : [change])).rejects.toThrow();

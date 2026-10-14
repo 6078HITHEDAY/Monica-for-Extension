@@ -8,6 +8,20 @@ import { invalidNearby, validateNearbyWireData, wireInteger, wireObject, wireTex
 export const NATIVE_ROOT_TAGS = 'monica-device-root-tags-v2';
 export const NATIVE_FOLDER_TITLE = 'monica-device-folder-title-v2';
 export const NATIVE_PROJECT_TAG = 'monica-project-tag';
+export const NATIVE_FOLDER_DATA = 'monica-device-folder-data-v1';
+/** Validate before an encrypted write intent is staged. Opaque JSON values are
+ * allowed, but malformed JSON and internal ownership-marker injection are not. */
+export function validateNearbyNativeLabelPayload(text: string): void {
+  let value: unknown;
+  try { value = parseLosslessJson(text); } catch { invalidNearby('native-label-json'); }
+  if (value && typeof value === 'object' && !Array.isArray(value)
+    && [NATIVE_PROJECT_TAG, NATIVE_ROOT_TAGS, NATIVE_FOLDER_TITLE, NATIVE_FOLDER_DATA].includes((value as Record<string, unknown>).kind as string)) invalidNearby('native-reserved-label-kind');
+}
+export function nearbyNativePayloadVersion(value: unknown): number {
+  const version = Number(wireInteger(value, 0xffff_ffffn));
+  if (version === 0) invalidNearby('native-payload-version');
+  return version;
+}
 export interface NearbyNativeMetadataRecord {
   kind: 'folder' | 'root'; id: string; localId: string; scope: string; guard: string; deleted: boolean;
   data: NearbyWireData | Record<string, never>;
@@ -57,6 +71,8 @@ function markers(source: NearbyNativeSource): Marker[] {
   for (const label of source.metadata.labels.filter(row => row.collectionId === source.rootId && kind(row) === NATIVE_ROOT_TAGS)) {
     const value = payload(label)!, owner = wireText(value.owner);
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(owner) || owners.has(owner) || typeof value.deleted !== 'boolean' || !Array.isArray(value.tag_ids) || value.tag_ids.length > 8192) invalidNearby('native-root-marker');
+    const data = wireObject(value.data);
+    if ((!value.deleted || Object.keys(data).length) && (data.entry_type !== 'vault-metadata' || !data.payload)) invalidNearby('native-root-marker-type');
     const tagIds = value.tag_ids.map(nativeId); if (new Set(tagIds).size !== tagIds.length) invalidNearby('native-root-marker');
     // Android gives every non-root marker exactly its IDs; root gets the rest.
     // Reject conflicting owners instead of silently duplicating a tag.
@@ -76,30 +92,83 @@ function tagGroups(source: NearbyNativeSource, values: Marker[]): Map<string, Md
 const tags = (values: Mdbx2ContentLabel[]) => [...values].sort((a, b) => compare(a.name, b.name) || compare(a.labelId, b.labelId))
   .map(label => ({ name: label.name, payload: label.payloadJson!, version: label.payloadSchemaVersion }));
 
+export interface NearbyNativeMetadataContents {
+  marker?: Mdbx2ContentLabel;
+  saved: Record<string, unknown>;
+  labels: Mdbx2ContentLabel[];
+  assets: NearbyNativeSource['attachments'];
+}
+/** Root records share a native collection. Saved local IDs partition their
+ * labels/files; unclaimed native content belongs to the vault's own root. */
+export function nearbyNativeMetadataContents(source: NearbyNativeSource): Map<string, NearbyNativeMetadataContents> {
+  const values=markers(source), result=new Map<string,NearbyNativeMetadataContents>();
+  const labelOwners=new Map<string,string>(),assetOwners=new Map<string,string>();
+  const assigned=new Set(source.metadata.assignments.filter(row=>!row.deleted).map(row=>row.labelId));
+  for(const value of values){
+    const labelIds=value.payload.label_ids ?? [],assets=value.payload.device_sync_assets ?? [];
+    if(!Array.isArray(labelIds)||labelIds.length>8192||!Array.isArray(assets)||assets.length>64)invalidNearby('native-root-ownership');
+    for(const [ids,owners] of [[labelIds,labelOwners],[assets.map(a=>wireObject(a).local_id),assetOwners]] as const){
+      const seen=new Set<string>();
+      for(const raw of ids){const id=nativeId(raw);if(seen.has(id))invalidNearby('native-root-ownership');seen.add(id);
+        if(value.owner!==source.rootId){if(owners.has(id)&&owners.get(id)!==value.owner)invalidNearby('native-root-ownership');owners.set(id,value.owner);}}
+    }
+    result.set(`root:${value.owner}`,{marker:value.label,saved:value.payload,labels:[],assets:[]});
+  }
+  if(source.collections.some(row=>row.collectionId===source.rootId)&&!result.has(`root:${source.rootId}`))result.set(`root:${source.rootId}`,{saved:{},labels:[],assets:[]});
+  for(const collection of source.collections.filter(row=>row.collectionId!==source.rootId)){
+    const found=source.metadata.labels.filter(label=>label.collectionId===collection.collectionId && kind(label)===NATIVE_FOLDER_DATA);
+    if(found.length>1)invalidNearby('native-folder-data-marker');
+    if(found.some(label=>label.payloadSchemaVersion!==1 || payload(label)?.data===undefined))invalidNearby('native-folder-data-marker');
+    for (const label of found) {
+      const data = wireObject(payload(label)!.data);
+      validateNearbyWireData(data);
+      if (data.entry_type !== 'folder' || data.folder !== '') invalidNearby('native-folder-data-marker');
+    }
+    result.set(`folder:${collection.collectionId}`,{marker:found[0],saved:found[0]?payload(found[0])!:{},labels:[],assets:[]});
+  }
+  for(const label of source.metadata.labels){
+    if(label.deleted||assigned.has(label.labelId))continue;
+    const type=kind(label);
+    if([NATIVE_PROJECT_TAG,NATIVE_FOLDER_TITLE,NATIVE_FOLDER_DATA].includes(type as string)||type===NATIVE_ROOT_TAGS&&label.collectionId===source.rootId)continue;
+    const key=label.collectionId===source.rootId?`root:${labelOwners.get(label.labelId)??source.rootId}`:`folder:${label.collectionId}`;
+    const contents=result.get(key);if(!contents)invalidNearby('native-metadata-owner-missing');contents.labels.push(label);
+  }
+  for(const asset of source.attachments){
+    if(asset.objectId!==null)continue;
+    const key=asset.collectionId===source.rootId?`root:${assetOwners.get(asset.attachmentId)??source.rootId}`:`folder:${asset.collectionId}`;
+    const contents=result.get(key);if(!contents)invalidNearby('native-metadata-owner-missing');contents.assets.push(asset);
+  }
+  return result;
+}
+
 /** Android-compatible folder/root records. Full source inventory also retains
  * unrelated labels, assignments, profiles and folder assets for adoption. */
 export async function projectNearbyNativeMetadata(input: NearbyNativeSource): Promise<NearbyNativeMetadataRecord[]> {
   const source = cloneLosslessJson(input), paths = nearbyNativeFolderPaths(source), values = markers(source);
   const rootTags = tagGroups(source, values), markerIndex = new Map(values.map(row => [row.owner, row])), labelsByOwner = labelIndex(source);
+  const contents=nearbyNativeMetadataContents(source);
   const folderAssets = new Map<string, typeof source.attachments>();
   for (const asset of source.attachments) if (asset.objectId === null) { const rows = folderAssets.get(asset.collectionId) ?? []; rows.push(asset); folderAssets.set(asset.collectionId, rows); }
   const result: NearbyNativeMetadataRecord[] = [], scope = `mdbx:${source.providerId}`;
   if (source.collections.some(row => row.collectionId === source.rootId)) {
     for (const owner of [...new Set([source.rootId, ...values.map(marker => marker.owner)])].sort(compare)) {
-      const marker = markerIndex.get(owner), owned = rootTags.get(owner) ?? [];
-      const deleted = marker?.payload.deleted === true && owned.length === 0;
-      const data: Record<string, unknown> = deleted ? {} : marker?.payload.data && wireObject(marker.payload.data).payload
+      const marker = markerIndex.get(owner), owned = rootTags.get(owner) ?? [],extra=contents.get(`root:${owner}`)!;
+      const retainedTrash = marker?.payload.deleted === true && wireObject(marker.payload.data ?? {}).trashed === true;
+      const deleted = marker?.payload.deleted === true && (retainedTrash || owned.length === 0 && extra.labels.length===0 && !extra.assets.some(a=>!a.deleted));
+      const data: Record<string, unknown> = deleted && !retainedTrash ? {} : marker?.payload.data && wireObject(marker.payload.data).payload
         ? cloneLosslessJson(wireObject(marker.payload.data)) : { title: 'Vault metadata', folder: '', entry_type: 'vault-metadata', payload: {} };
-      if (!deleted) { wireObject(data.payload).tags = tags(owned); validateNearbyWireData(data); if (data.entry_type !== 'vault-metadata') invalidNearby('native-root-marker-type'); }
+      if (!deleted || retainedTrash) { wireObject(data.payload).tags = tags(owned); if(extra.labels.length||data.labels!==undefined)data.labels=tags(extra.labels); validateNearbyWireData(data); if (data.entry_type !== 'vault-metadata') invalidNearby('native-root-marker-type'); }
       result.push({ kind: 'root', id: owner, localId: `${scope}:metadata:${owner}`, scope, deleted, data: data as NearbyWireData,
-        guard: await hash({ marker: marker?.label ?? null, tags: [...owned].sort((a, b) => compare(a.labelId, b.labelId)) }) });
+        guard: await hash({ marker: marker?.label ?? null, tags: [...owned].sort((a, b) => compare(a.labelId, b.labelId)), labels:extra.labels,attachments:extra.assets }) });
     }
   }
   for (const project of source.collections) {
     const path = paths.get(project.collectionId)!; if (!path.length) continue;
     const labels = (labelsByOwner.get(project.collectionId) ?? []).filter(row => !row.deleted);
-    const data: NearbyWireData = { title: path[path.length - 1].title, folder: '', entry_type: 'folder', trashed: project.deleted,
-      payload: { path, tags: tags(labels.filter(row => kind(row) === NATIVE_PROJECT_TAG)) } };
+    const extra=contents.get(`folder:${project.collectionId}`)!,saved=extra.saved.data===undefined?{}:wireObject(extra.saved.data);
+    const data: NearbyWireData = { ...cloneLosslessJson(saved), title: path[path.length - 1].title, folder: '', entry_type: 'folder', trashed: project.deleted,
+      payload: { ...(saved.payload===undefined?{}:wireObject(saved.payload)), path: path.map(node=>({...(Array.isArray(wireObject(saved.payload??{}).path)?(wireObject(saved.payload??{}).path as unknown[]).map(wireObject).find(old=>old.id===node.id):undefined),...node})), tags: tags(labels.filter(row => kind(row) === NATIVE_PROJECT_TAG)) } };
+    if(extra.labels.length||data.labels!==undefined)data.labels=tags(extra.labels);
     validateNearbyWireData(data);
     result.push({ kind: 'folder', id: project.collectionId, localId: `${scope}:folder:${project.collectionId}`, scope, deleted: project.deleted, data,
       guard: await hash({ project, labels, attachments: folderAssets.get(project.collectionId) ?? [] }) });
@@ -113,7 +182,7 @@ export interface NearbyNativeMetadataChange {
 }
 /** Plan only. Caller commits with source.writeRevision through atomic content
  * write and must persist/recover the native receipt before acknowledging sync. */
-export async function planNearbyNativeMetadata(input: NearbyNativeSource, operationId: string, incoming: readonly NearbyNativeMetadataChange[]): Promise<Mdbx2ContentCommand[]> {
+export async function planNearbyNativeMetadata(input: NearbyNativeSource, operationId: string, incoming: readonly NearbyNativeMetadataChange[], adoptAssets = false): Promise<Mdbx2ContentCommand[]> {
   const source = cloneLosslessJson(input), changes = cloneLosslessJson(incoming), operation = nativeId(operationId);
   if (!Array.isArray(changes) || changes.length > 128) invalidNearby('native-metadata-batch-limit');
   const current = new Map((await projectNearbyNativeMetadata(source)).map(row => [row.id, row]));
@@ -127,15 +196,11 @@ export async function planNearbyNativeMetadata(input: NearbyNativeSource, operat
       validateNearbyWireData(data);
       if (data.entry_type !== (row.kind === 'root' ? 'vault-metadata' : 'folder')) invalidNearby('native-metadata-type');
       // Metadata assets need the shared asset adoption planner; never ignore them.
-      if (Array.isArray(data.assets) && data.assets.length) invalidNearby('native-metadata-assets-required');
+      if (!adoptAssets && Array.isArray(data.assets) && data.assets.length) invalidNearby('native-metadata-assets-required');
       if (row.kind === 'folder') {
-        // Extra folder content needs the archive/adoption path. This planner
-        // must never claim success while dropping fields it cannot materialize.
-        const body = wireObject(data.payload);
-        if (data.folder !== '' || Object.keys(data).some(key => !['title', 'folder', 'entry_type', 'trashed', 'payload', 'assets', 'labels', 'relations'].includes(key))
-          || ['labels', 'relations'].some(key => Array.isArray(data[key]) && (data[key] as unknown[]).length)
-          || Object.keys(body).some(key => !['path', 'tags'].includes(key))
-          || (body.path as Record<string, unknown>[]).some(node => Object.keys(node).some(key => !['id', 'title', 'parent'].includes(key)))) invalidNearby('native-folder-archive-required');
+        // Folder ancestry belongs to payload.path; the object-only folder field
+        // must not silently redirect a metadata record.
+        if (data.folder !== '') invalidNearby('native-folder-archive-required');
       }
     }
   }
@@ -149,13 +214,15 @@ export async function planNearbyNativeMetadata(input: NearbyNativeSource, operat
   }
   const values = markers(source);
   const rootTags = tagGroups(source, values);
-  const reconcile = async (collectionId: string, owner: string, existing: Mdbx2ContentLabel[], desired: unknown): Promise<string[]> => {
+  const contents=nearbyNativeMetadataContents(source);
+  const reconcile = async (collectionId: string, owner: string, existing: Mdbx2ContentLabel[], desired: unknown, onlyTags = true): Promise<string[]> => {
     if (!Array.isArray(desired) || desired.length > 8192) invalidNearby('native-tags');
     const kept = new Set<string>();
     for (let index = 0; index < desired.length; index++) {
-      const tag = wireObject(desired[index]), name = wireText(tag.name), text = wireText(tag.payload), version = Number(wireInteger(tag.version, 0xffff_ffffn));
+      const tag = wireObject(desired[index]), name = wireText(tag.name), text = wireText(tag.payload), version = nearbyNativePayloadVersion(tag.version);
       if (Object.keys(tag).some(key => !['name', 'payload', 'version'].includes(key))) invalidNearby('native-tag-archive-required');
-      if (wireObject(parseLosslessJson(text)).kind !== NATIVE_PROJECT_TAG) invalidNearby('native-tag-kind');
+      if (onlyTags && wireObject(parseLosslessJson(text)).kind !== NATIVE_PROJECT_TAG) invalidNearby('native-tag-kind');
+      if(!onlyTags)validateNearbyNativeLabelPayload(text);
       const old = existing.find(label => !kept.has(label.labelId) && label.name === name), id = old?.labelId ?? await makeId(`tag:${owner}:${index}`); kept.add(id);
       if (!old) commands.push({ kind: 'label-create', labelId: id, collectionId, name, payloadJson: text, payloadSchemaVersion: version });
       else if (old.payloadJson !== text || old.payloadSchemaVersion !== version) commands.push({ kind: 'label-update', labelId: id, name: old.name, payloadJson: text, payloadSchemaVersion: version });
@@ -217,10 +284,20 @@ export async function planNearbyNativeMetadata(input: NearbyNativeSource, operat
       const data = row.data as NearbyWireData;
       if (Object.keys(data).length && wireObject(data.payload).tags !== undefined) await reconcile(row.id, `folder:${row.id}`,
         source.metadata.labels.filter(label => label.collectionId === row.id && kind(label) === NATIVE_PROJECT_TAG), wireObject(data.payload).tags);
+      const extra=contents.get(`folder:${row.id}`);
+      if(data.labels!==undefined)await reconcile(row.id,`folder-label:${row.id}`,extra?.labels??[],data.labels,false);
+      if(Object.keys(data).length){
+        const text=JSON.stringify({...extra?.saved,kind:NATIVE_FOLDER_DATA,data});
+        if(!extra?.marker)commands.push({kind:'label-create',labelId:await makeId(`folder-data:${row.id}`),collectionId:row.id,name:NATIVE_FOLDER_DATA,payloadJson:text,payloadSchemaVersion:1});
+        else if(extra.marker.payloadJson!==text)commands.push({kind:'label-update',labelId:extra.marker.labelId,name:extra.marker.name,payloadJson:text,payloadSchemaVersion:extra.marker.payloadSchemaVersion});
+      }
       if (row.deleted && projects.get(row.id)?.deleted === false) { commands.push({ kind: 'collection-delete', collectionId: row.id }); projects.get(row.id)!.deleted = true; }
     } else {
-      const before = values.find(value => value.owner === row.id), ids = await reconcile(root, `root:${row.id}`, rootTags.get(row.id) ?? [], row.deleted ? [] : wireObject((row.data as NearbyWireData).payload).tags);
-      const text = JSON.stringify({ ...before?.payload, kind: NATIVE_ROOT_TAGS, owner: row.id, deleted: row.deleted, data: row.data, tag_ids: ids });
+      const purge = row.deleted && !Object.keys(row.data).length;
+      const before = values.find(value => value.owner === row.id), ids = await reconcile(root, `root:${row.id}`, rootTags.get(row.id) ?? [], purge ? [] : wireObject((row.data as NearbyWireData).payload).tags);
+      const extra=contents.get(`root:${row.id}`),desired=purge?[]:row.data.labels;
+      const labelIds=desired===undefined?extra?.labels.map(label=>label.labelId)??[]:await reconcile(root,`root-label:${row.id}`,extra?.labels??[],desired,false);
+      const text = JSON.stringify({ ...before?.payload, kind: NATIVE_ROOT_TAGS, owner: row.id, deleted: row.deleted, data: row.data, tag_ids: ids, label_ids:labelIds });
       if (!before) commands.push({ kind: 'label-create', labelId: await makeId(`root-marker:${row.id}`), collectionId: root, name: NATIVE_ROOT_TAGS, payloadJson: text, payloadSchemaVersion: 1 });
       else if (before.label.payloadJson !== text) commands.push({ kind: 'label-update', labelId: before.label.labelId, name: before.label.name, payloadJson: text, payloadSchemaVersion: before.label.payloadSchemaVersion });
     }

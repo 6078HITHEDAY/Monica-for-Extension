@@ -33,6 +33,40 @@ function fixture() {
 }
 
 describe('atomic native nearby adoption', () => {
+  it('refuses folder attachment trash before staging an uncommittable native intent',async()=>{
+    const f=fixture(),file=f.file();f.source.attachments.push({...f.base,attachmentId:randomUUID(),collectionId:f.other,objectId:null,fileName:'file.bin',mediaType:'application/octet-stream',storageMode:'embedded-inline',contentHash:file.descriptor.id,originalSize:file.bytes.length,storedSize:file.bytes.length,chunkCount:1});
+    const row=(await projectNearbyNativeRecords(f.source)).records.find(row=>row.global_id===f.other)!;
+    await expect(planNearbyNativeAdoption(f.source,f.batch([{id:f.other,deleted:true,clockJson:'{"peer":1}',dataJson:JSON.stringify({...row.data,trashed:true}),localId:row.local_id,scope:row.scope,expectedGuard:row.guard}]))).rejects.toMatchObject({code:'native-folder-attachment-trash-unavailable'});
+  });
+  it.each(['folder', 'vault-metadata', 'note'] as const)('rejects duplicate portable attachment IDs in %s before returning an intent', async type => {
+    const f=fixture(),id=randomUUID(),file=f.file();
+    const data:NearbyWireData={title:'Incoming',folder:'',entry_type:type,payload:type==='folder'?{path:[{id,title:'Incoming',parent:null}],tags:[]}:type==='vault-metadata'?{tags:[]}:{item_data:'Note'},assets:[file.descriptor,{...file.descriptor,file_name:'different.bin'}]};
+    const batch=f.batch([f.incoming(data,id)]);batch.assets=[file.supplied];
+    await expect(planNearbyNativeAdoption(f.source,batch)).rejects.toMatchObject({code:'native-asset-identity'});
+  });
+  it.each(['folder', 'vault-metadata', 'note'] as const)('validates %s label JSON and refuses internal ownership markers', async type => {
+    const f=fixture(),id=randomUUID();
+    for(const payload of ['not JSON',JSON.stringify({kind:'monica-device-root-tags-v2',owner:f.root,deleted:true,data:{},tag_ids:[]})]){
+      const data:NearbyWireData={title:'Incoming',folder:'',entry_type:type,payload:type==='folder'?{path:[{id,title:'Incoming',parent:null}],tags:[]}:type==='vault-metadata'?{tags:[]}:{item_data:'Note'},labels:[{name:'Untrusted',payload,version:1}]};
+      await expect(planNearbyNativeAdoption(f.source,f.batch([f.incoming(data,id)]))).rejects.toMatchObject({code:payload==='not JSON'?'native-label-json':'native-reserved-label-kind'});
+    }
+  });
+  it.each(['folder','vault-metadata','note'] as const)('rejects zero native label schema in %s before an intent can be staged',async type=>{
+    const f=fixture(),id=randomUUID(),data:NearbyWireData={title:'Incoming',folder:'',entry_type:type,payload:type==='folder'?{path:[{id,title:'Incoming',parent:null}],tags:[]}:type==='vault-metadata'?{tags:[]}:{item_data:'Note'},labels:[{name:'Invalid version',payload:'{}',version:0}]};
+    await expect(planNearbyNativeAdoption(f.source,f.batch([f.incoming(data,id)]))).rejects.toMatchObject({code:'native-payload-version'});
+  });
+  it('adopts two root owners with identical attachment content without sharing mutable file identities',async()=>{
+    const f=fixture(),a=randomUUID(),b=randomUUID(),file=f.file();
+    const rootData={title:'Root',folder:'',entry_type:'vault-metadata' as const,payload:{tags:[]},assets:[file.descriptor],labels:[{name:'Own label',payload:'{"exact":9007199254740993}',version:4}]};
+    const batch=f.batch([f.incoming(rootData,a),f.incoming(rootData,b)]);batch.assets=[file.supplied];
+    const plan=await planNearbyNativeAdoption(f.source,batch),creates=plan.write.plan.attachments.filter(row=>row.kind==='create');
+    expect(creates).toHaveLength(2);expect(new Set(creates.map(row=>row.attachmentId)).size).toBe(2);
+    expect(creates.every(row=>row.kind==='create'&&row.objectId===null&&row.collectionId===f.root)).toBe(true);
+    const markers=plan.write.plan.commands.filter(row=>row.kind==='label-create'&&row.name==='monica-device-root-tags-v2');
+    expect(markers).toHaveLength(2);
+    for(const marker of markers){if(marker.kind!=='label-create')throw Error();const payload=JSON.parse(marker.payloadJson);expect(payload.device_sync_assets).toHaveLength(1);expect(payload.label_ids).toHaveLength(1);}
+    expect(plan.write.assets).toHaveLength(1);
+  });
   it('restores a disclosed trashed item atomically before applying an incoming restoration', async () => {
     const f = fixture(); f.source.objects[0].summary.deleted = true; f.source.objects[0].record!.deleted = true;
     const incoming = await f.bound(f.note()), result = await planNearbyNativeAdoption(f.source, f.batch([incoming]));
