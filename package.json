@@ -14,6 +14,7 @@
   },
   "type": "module",
   "scripts": {
+    "clean:test-profiles": "powershell.exe -NoProfile -NonInteractive -File scripts/clean-test-profiles.ps1 -AllInactive",
     "dev": "vite --host 127.0.0.1",
     "check": "tsc -b --pretty false && tsc -p tsconfig.interop.json --pretty false",
     "test": "vitest run",

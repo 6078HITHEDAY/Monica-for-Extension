@@ -24,6 +24,12 @@ export async function launchEdgeContext(
   const shortProfile = profiles.get(profile) || path.resolve(".tmp/edge-audit-profiles", randomUUID().slice(0, 18));
   profiles.set(profile, shortProfile);
   await mkdir(shortProfile, { recursive: true });
+  const runId = process.env.MONICA_E2E_PROFILE_RUN_ID;
+  assert.ok(runId, 'Edge acceptance requires the Playwright profile lifecycle setup');
+  await writeFile(path.join(shortProfile, '.monica-e2e-profile.json'), JSON.stringify({
+    kind: 'monica-edge-test-profile-v1', runId,
+    runnerPid: Number(process.env.MONICA_E2E_PROFILE_RUNNER_PID)
+  }));
   const context = await chromium.launchPersistentContext(shortProfile, {
     ...options, channel: "msedge", executablePath, headless: false
   });
