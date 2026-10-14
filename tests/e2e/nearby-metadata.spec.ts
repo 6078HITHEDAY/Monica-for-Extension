@@ -10,6 +10,7 @@ import { nearbyLocalItemToWire } from '../../src/nearby/application-codec';
 import { applyNearbyLocalBatch, nearbyLocalSourceHash, type NearbyIncomingRecord } from '../../src/nearby/local-adoption';
 import { deriveVaultKey, encryptVaultState, decryptVaultState } from '../../src/security/vault-crypto';
 import { parseLosslessJson } from '../../src/core/lossless-json';
+import { createSourceRecord } from '../../src/core/source-records';
 
 const master = 'Synthetic nearby metadata password';
 async function runtime(page: Page, request: unknown): Promise<any> {
@@ -78,6 +79,11 @@ test('production nearby transfers Android-shaped folders root tags and original 
     const empty = createEmptyVaultState(), seed = (await applyNearbyLocalBatch(empty, { providerId: empty.providers[0].id, sourceHash: await nearbyLocalSourceHash(empty), records,
       assets: [{ id: sha, dataBase64: bytes.toString('base64') }] }, new Date().toISOString())).state;
     const { key: backupKey, kdf } = await deriveVaultKey(master);
+    const seedLogin = seed.items.find(item => item.kind === 'login')!;
+    const originRecords = await Promise.all(['bitwarden-cipher', 'keepass-entry', 'future-format'].map((format, index) => createSourceRecord({
+      providerId: `former-${format}`, remoteId: `former-record-${index}`, itemId: 'former-item', revision: 'original-source-revision', format, encoding: 'json',
+      payload: `{ \"opaque\":9007199254740993,\"decimal\":1.00000000000000001,\"raw\":\"${'synthetic archive '.repeat(index === 2 ? 5000 : 1)}\" }` })));
+    seed.localItemOrigins = [{ itemId: seedLogin.id, records: originRecords }];
     await runtime(a, { type: 'VAULT_RESTORE_ENCRYPTED', backupPassword: master, backup: { magic: 'MONICA_EXTENSION_BACKUP', version: 1, exportedAt: new Date().toISOString(), envelope: await encryptVaultState(seed, backupKey, kdf) } });
     await runtime(b, { type: 'VAULT_SETUP', masterPassword: master }); await openPort(a); await openPort(b);
     const pair = await command(a, { type: 'pair' }); await command(b, { type: 'pair', invitation: pair.pairing.invitations[0] }); await complete(a, b);
@@ -95,6 +101,11 @@ test('production nearby transfers Android-shaped folders root tags and original 
     expect(verify('sha256', challenge, createPublicKey({ key: Buffer.from(key.publicKeySpki, 'base64'), format: 'der', type: 'spki' }), signature)).toBe(true);
     evidence.phases.push('actual-noise-preserves-nested-empty-folder-root-tags-empty-tombstone-attachment-and-original-key');
     const login = received.items.find(item => item.kind === 'login')!;
+    expect(received.localItemOrigins).toEqual([{ itemId: login.id, records: expect.arrayContaining(originRecords) }]);
+    expect(received.localItemOrigins![0].records).toHaveLength(3);
+    expect(received.providers).toHaveLength(1); expect(received.sourceRecords).toEqual([]);
+    expect(login.providerRefs).toEqual([{ providerId: received.providers[0].id }]);
+    evidence.phases.push('opaque-source-archives-preserved-without-live-provider-bindings');
     await runtime(b, { type: 'VAULT_UPSERT_ITEM', item: { ...login, notes: 'reciprocal edit' } });
     for (const context of contexts.values()) await context.close(); contexts.clear();
     a = await launch('a'); b = await launch('b');
@@ -104,6 +115,9 @@ test('production nearby transfers Android-shaped folders root tags and original 
     const source = await state(a), target = await state(b);
     expect(source.items.find(item => item.id === seed.items.find(item => item.kind === 'login')!.id)?.notes).toBe('reciprocal edit');
     expect(source.items.filter((item): item is PasskeyItem => item.kind === 'passkey').map(item => item.signCount).sort((a, b) => a - b)).toEqual([0, 19]);
+    expect(source.localItemOrigins).toEqual([{ itemId: seedLogin.id, records: expect.arrayContaining(originRecords) }]);
+    expect(source.localItemOrigins![0].records).toHaveLength(3);
+    expect(target.localItemOrigins).toEqual(received.localItemOrigins);
     expect(target.nearbyLocalMetadata).toHaveLength(4); expect(target.localTransferFolders).toHaveLength(2); expect(target.items.map(item => item.id).sort()).toEqual(received.items.map(item => item.id).sort());
     for (const expected of records.slice(0, 3)) expect(parseLosslessJson(target.nearbyLocalMetadata!.find(row => row.recordId === expected.id)!.dataJson)).toEqual(parseLosslessJson(expected.dataJson));
     evidence.phases.push('both-browser-native-restart-reciprocal-edit-retains-folder-and-content-identities'); evidence.status = 'passed';

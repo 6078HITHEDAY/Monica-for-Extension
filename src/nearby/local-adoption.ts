@@ -1,9 +1,10 @@
-import type { VaultItem, VaultState } from '../core/model';
+import type { ProviderSourceRecord, VaultItem, VaultState } from '../core/model';
 import { parseLosslessJson } from '../core/lossless-json';
 import { isLocalTransferItem, validateLocalAttachments, type LocalItemAttachment } from '../core/local-transfer';
 import { mdbx2TransferOperationScope as hash } from '../providers/mdbx2/mdbx2-transfer-identity';
 import { normalizeCredentialId } from '../passkey/source-policy';
 import { nearbyLocalItemToWire, nearbyWireToLocalItem } from './application-codec';
+import { mergeNearbyOrigins, nearbyLocalOriginIndex, readNearbyOrigins, withNearbyOrigins } from './local-origins';
 import { captureNearbyMetadata, isNearbyMetadata, isNearbyTombstone, nearbyCategoryKey, nextNearbyCategoryId, readNearbyLocalMetadata, stageNearbyMetadata } from './local-metadata';
 import { invalidNearby, validateNearbyWireData, wireInteger, wireObject, wireText, type NearbyWireData } from './wire-shape';
 
@@ -55,9 +56,23 @@ export function readNearbyLocalReceipts(value: unknown): NearbyLocalReceipt[] {
       || typeof row.dataJson !== 'string' || row.dataJson.length > 1024 * 1024 || typeof ack.dataJson !== 'string' || ack.dataJson.length > 1024 * 1024) invalidNearby('receipt-invalid');
     if (row.replayInvalidated !== undefined && typeof row.replayInvalidated !== 'boolean') invalidNearby('receipt-invalid');
     if (ids.has(row.recordId)) invalidNearby('receipt-duplicate'); ids.add(row.recordId);
-    clock(wireText(ack.clockJson)); validateNearbyWireData(parseLosslessJson(row.dataJson)); validateNearbyWireData(parseLosslessJson(ack.dataJson));
+    clock(wireText(ack.clockJson));
+    for (const json of [row.dataJson, ack.dataJson]) {
+      const data = parseLosslessJson(json); validateNearbyWireData(data); readNearbyOrigins(data);
+    }
   }
   return structuredClone(value) as NearbyLocalReceipt[];
+}
+
+function originIndexForState(state: VaultState, receipts: NearbyLocalReceipt[]): Map<string, ProviderSourceRecord[]> {
+  const index = nearbyLocalOriginIndex(state);
+  // Older builds retained unknown labels only in the encrypted receipt. Include
+  // those archives in both guards and adoption, even if a later peer omits them.
+  for (const receipt of receipts) {
+    const origins = readNearbyOrigins(parseLosslessJson(receipt.dataJson) as NearbyWireData);
+    if (origins.length) index.set(receipt.itemId, mergeNearbyOrigins(index.get(receipt.itemId) ?? [], origins));
+  }
+  return index;
 }
 
 /** A portable restore never replays acknowledgements from another replica.
@@ -76,22 +91,24 @@ export async function nearbyLocalSourceHash(state: VaultState): Promise<string> 
     removals: state.passwordProjectRemovals ?? [], transfers: state.bitwardenBatchTransfers ?? [], queue: state.mutationQueue, conflicts: state.providerConflicts });
 }
 
-async function itemGuard(item: VaultItem, attachments: LocalItemAttachment[]): Promise<string> { return hash({ item, attachments }); }
+async function itemGuard(item: VaultItem, attachments: LocalItemAttachment[], origins: ProviderSourceRecord[]): Promise<string> {
+  return hash({ item, attachments, ...(origins.length ? { origins } : {}) });
+}
 
 function bareLocalReferences(item: VaultItem, providerId: string): boolean {
   return item.mdbxDatabaseId == null && item.keepassDatabaseId == null
     && item.providerRefs.every(ref => Object.keys(ref).length === 1 && ref.providerId === providerId);
 }
 
-async function matchesItemGuard(item: VaultItem, attachments: LocalItemAttachment[], expected: string, providerId: string): Promise<boolean> {
-  if (await itemGuard(item, attachments) === expected) return true;
+async function matchesItemGuard(item: VaultItem, attachments: LocalItemAttachment[], expected: string, providerId: string, origins: ProviderSourceRecord[]): Promise<boolean> {
+  if (await itemGuard(item, attachments, origins) === expected) return true;
   // Earlier batches can normalize implicit local scope without changing content.
   // Accept exactly those two historical spellings; all other item fields and
   // attachment bytes must still match the authenticated native guard. The full
   // source hash independently rejects concurrent edits between transactions.
   if (item.providerRefs.length !== 1 || !bareLocalReferences(item, providerId)) return false;
   for (const providerRefs of [[], [{ providerId: 'local' }]]) {
-    if (await itemGuard({ ...item, providerRefs }, attachments) === expected) return true;
+    if (await itemGuard({ ...item, providerRefs }, attachments, origins) === expected) return true;
   }
   return false;
 }
@@ -121,12 +138,11 @@ function uuidFromDigest(digest: string): string { return `${digest.slice(0, 8)}-
  * retain their separate sync policy; a failed row rejects the entire scan. */
 export async function captureNearbyLocalSnapshot(state: VaultState): Promise<NearbyLocalSnapshot> {
   const receipts = readNearbyLocalReceipts(state.nearbyLocalReceipts), locals = state.items.filter(item => isLocalTransferItem(item, state.providers));
-  const metadata = await captureNearbyMetadata(state);
+  const metadata = await captureNearbyMetadata(state), originIndex = originIndexForState(state, receipts);
   const identities = new Map<string, string>(), references = new Map<string, string>();
   for (const item of locals) {
     requireUncontended(state, item.id);
     const receipt = receipts.find(row => row.itemId === item.id);
-    if (!receipt && state.localItemOrigins?.some(origin => origin.itemId === item.id && origin.records.length)) invalidNearby('local-origin-adapter-required');
     const id = receipt?.recordId ?? uuidFromDigest(await hash(['nearby-local', item.id]));
     identities.set(item.id, id);
     references.set(item.id, id); references.set(`password:${item.id}`, id); references.set(`note:${item.id}`, id);
@@ -138,6 +154,7 @@ export async function captureNearbyLocalSnapshot(state: VaultState): Promise<Nea
   const records: NearbyLocalSnapshot['records'] = [], assets = new Map<string, string>();
   for (const item of locals) {
     const receipt = receipts.find(row => row.itemId === item.id), previous = receipt ? wireObject(parseLosslessJson(receipt.dataJson)) as NearbyWireData : undefined;
+    const origins = originIndex.get(item.id) ?? [];
     const files = (state.localItemAttachments ?? []).filter(file => file.itemId === item.id);
     await validateLocalAttachments(files, item.id);
     const descriptors: Record<string, unknown>[] = files.map(file => {
@@ -153,9 +170,9 @@ export async function captureNearbyLocalSnapshot(state: VaultState): Promise<Nea
     }
     const category = metadata.find(row => !row.value.deleted && row.value.categoryKey === nearbyCategoryKey(item) && row.value.categoryKey !== undefined);
     if (category) folderPath = wireObject(category.data.payload).path as unknown[];
-    const data = await nearbyLocalItemToWire(item, { folder: item.categoryName ?? '', folder_path: folderPath ?? [], assets: descriptors,
+    const data = withNearbyOrigins(await nearbyLocalItemToWire(item, { folder: item.categoryName ?? '', folder_path: folderPath ?? [], assets: descriptors,
       labels: previous?.labels as unknown[] | undefined, relations: previous?.relations as unknown[] | undefined },
-    previous && receipt ? { data: previous, item: receipt.baseline } : undefined);
+    previous && receipt ? { data: previous, item: receipt.baseline } : undefined), origins);
     if (item.kind === 'login') {
       const ext = wireObject(data.extensions);
       for (const [value, field] of [[item.boundNoteEntryId, 'bound_note_entry_id'], [item.ssoRefLogicalId, 'sso_ref_entry_id']] as const) {
@@ -170,7 +187,7 @@ export async function captureNearbyLocalSnapshot(state: VaultState): Promise<Nea
       if (owners.length) wireObject(data.payload).bound_password_entry_id = identities.get(owners[0].id);
     }
     validateNearbyWireData(data);
-    records.push({ local_id: `local:${item.id}`, global_id: identities.get(item.id)!, scope: 'local', guard: await itemGuard(item, files), deleted: Boolean(item.deletedAt), data });
+    records.push({ local_id: `local:${item.id}`, global_id: identities.get(item.id)!, scope: 'local', guard: await itemGuard(item, files, origins), deleted: Boolean(item.deletedAt), data });
   }
   for (const row of metadata) {
     if (records.some(record => record.global_id === row.value.recordId || record.local_id === row.value.localId)) invalidNearby('metadata-identity');
@@ -247,6 +264,7 @@ export async function applyNearbyLocalBatch(state: VaultState, input: NearbyLoca
   }));
   if (work.every(row => row.replay)) return { state, acknowledgements: work.map(row => structuredClone(row.previous!.acknowledgement!)), changed: false };
   if (await nearbyLocalSourceHash(state) !== input.sourceHash) invalidNearby('local-source-changed');
+  const originIndex = originIndexForState(state, receipts);
   const next = structuredClone(state), acknowledgements: NearbyLocalAcknowledgement[] = [], changedItems = new Set<string>();
   const metadataChanges: Array<Awaited<ReturnType<typeof stageNearbyMetadata>>> = [];
   // Prepare folder membership before projecting items. Do not mutate existing
@@ -269,7 +287,8 @@ export async function applyNearbyLocalBatch(state: VaultState, input: NearbyLoca
   for (const row of work) {
     if (row.replay) { acknowledgements.push(structuredClone(row.previous!.acknowledgement!)); continue; }
     if (isNearbyMetadata(row.data)) continue;
-    const { record, data, old } = row;
+    const { record, old } = row;
+    let data = row.data;
     if (row.restoringTombstone) next.nearbyLocalMetadata = readNearbyLocalMetadata(next.nearbyLocalMetadata).filter(entry => entry.recordId !== record.id);
     let existing = old ? next.items.find(item => item.id === old.itemId) : undefined;
     if (old && !existing) invalidNearby('local-item-missing');
@@ -277,7 +296,7 @@ export async function applyNearbyLocalBatch(state: VaultState, input: NearbyLoca
       const boundId = record.localId.slice('local:'.length);
       const bound = next.items.find(item => item.id === boundId);
       if (!bound || old && old.itemId !== boundId || !isLocalTransferItem(bound, next.providers)) invalidNearby('local-binding-changed');
-      if (!await matchesItemGuard(bound, (next.localItemAttachments ?? []).filter(file => file.itemId === boundId), record.expectedGuard!, provider.id)) invalidNearby('local-binding-changed');
+      if (!await matchesItemGuard(bound, (next.localItemAttachments ?? []).filter(file => file.itemId === boundId), record.expectedGuard!, provider.id, (originIndex.get(boundId) ?? []))) invalidNearby('local-binding-changed');
       existing = bound;
     }
     if (!existing && data.entry_type === 'passkey') {
@@ -292,6 +311,10 @@ export async function applyNearbyLocalBatch(state: VaultState, input: NearbyLoca
     changedItems.add(itemId);
     if (!existing && next.items.some(item => item.id === itemId)) invalidNearby('local-item-collision');
     requireUncontended(next, itemId);
+    const origins = mergeNearbyOrigins((originIndex.get(itemId) ?? []), readNearbyOrigins(data));
+    data = withNearbyOrigins(data, origins);
+    originIndex.set(itemId, origins);
+    if (origins.length) next.localItemOrigins = [...(next.localItemOrigins ?? []).filter(row => row.itemId !== itemId), { itemId, records: origins }];
     const savedData = { ...data, trashed: record.deleted || data.trashed === true };
     const item = await nearbyWireToLocalItem(savedData, { id: itemId, providerId: provider.id, now, previous: existing });
     const files: LocalItemAttachment[] = [];
@@ -328,7 +351,7 @@ export async function applyNearbyLocalBatch(state: VaultState, input: NearbyLoca
     next.items = [...next.items.filter(candidate => candidate.id !== itemId), item];
     next.localItemAttachments = [...(next.localItemAttachments ?? []).filter(file => file.itemId !== itemId), ...files];
     const acknowledgement: NearbyLocalAcknowledgement = { recordId: record.id, clockJson: record.clockJson, localId: `local:${itemId}`, scope: 'local',
-      guard: await itemGuard(item, files), dataJson: record.dataJson };
+      guard: await itemGuard(item, files, origins), dataJson: origins.length ? JSON.stringify(data) : record.dataJson };
     const receipt: NearbyLocalReceipt = { version: 1, providerId: provider.id, recordId: record.id, itemId, fingerprint: row.fingerprint,
       dataJson: JSON.stringify(data), baseline: item, acknowledgement };
     if (record.deleted && isNearbyTombstone(wireObject(parseLosslessJson(record.dataJson)))) acknowledgement.dataJson = JSON.stringify(data);
@@ -387,7 +410,7 @@ export async function applyNearbyLocalBatch(state: VaultState, input: NearbyLoca
   for (const row of work.filter(row => !row.replay && !isNearbyMetadata(row.data))) {
     const receipt = byId.get(row.record.id)!, item = next.items.find(item => item.id === receipt.itemId)!;
     receipt.baseline = structuredClone(item);
-    receipt.acknowledgement.guard = await itemGuard(item, (next.localItemAttachments ?? []).filter(file => file.itemId === item.id));
+    receipt.acknowledgement.guard = await itemGuard(item, (next.localItemAttachments ?? []).filter(file => file.itemId === item.id), (originIndex.get(item.id) ?? []));
   }
   next.nearbyLocalReceipts = readNearbyLocalReceipts([...byId.values()]);
   if (metadataChanges.length) {

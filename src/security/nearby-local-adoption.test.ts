@@ -87,13 +87,15 @@ describe('encrypted nearby application adoption', () => {
     await expect(f.service.adoptNearbyLocalRecords({ providerId: f.providerId, sourceHash: result.sourceHash, records: [{ ...records[0], clockJson: '{"remote":2}' }], assets: [] }, f.sessionId)).rejects.toThrow('local-binding-changed');
     expect(await f.storage.read()).toEqual(before);
   });
-  it('excludes live external providers and refuses to silently flatten archival source data', async () => {
+  it('excludes live external providers and retains archival source data', async () => {
     const f = await fixture([createLoginItem({ title: 'Local' })]), state = await f.service.readState();
     state.providers.push({ id: 'external', kind: 'bitwarden', enabled: true, name: 'External', config: {}, isDefaultSaveTarget: false });
     state.items.push({ ...createLoginItem({ title: 'External' }), providerRefs: [{ providerId: 'external' }] });
     expect((await captureNearbyLocalSnapshot(state)).records.map(row => row.data.title)).toEqual(['Local']);
     state.localItemOrigins = [{ itemId: state.items[0].id, records: [{ providerId: 'old', remoteId: 'native', format: 'future', encoding: 'json', payload: '{"future":true}', contentHash: 'old' }] }];
-    await expect(captureNearbyLocalSnapshot(state)).rejects.toMatchObject({ code: 'local-origin-adapter-required' });
+    const copied = await captureNearbyLocalSnapshot(state);
+    expect(JSON.stringify(copied.records[0].data.labels)).toContain('future');
+    expect(copied.records).toHaveLength(1);
   });
   it('saves complete projects, note/SSO/OTP associations, raw fields and attachments in one encrypted write', async () => {
     const f = await fixture(), incoming = await batch(f.service, f.providerId), write = vi.spyOn(f.storage, 'write');
