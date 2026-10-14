@@ -9,6 +9,8 @@ import { Mdbx2NativeClient } from '../../../src/providers/mdbx2/native-client';
 import { captureNearbyNativeSource } from '../../../src/nearby/native-source';
 import { planNearbyNativeMetadata, projectNearbyNativeMetadata } from '../../../src/nearby/native-metadata';
 import { projectNearbyNativeRecords } from '../../../src/nearby/native-records';
+import { clearNearbyNativeAdoption, planNearbyNativeAdoption } from '../../../src/nearby/native-adoption';
+import { bytesToBase64 } from '../../../src/security/encoding';
 import { Mdbx2NativeHostError, parseMdbx2NativeResponse, validateMdbx2HostCapabilities, type Mdbx2NativeMethod } from '../../../src/providers/mdbx2/native-contract';
 // Packaged by the fixture alongside the production compiled engine.
 // @ts-expect-error A generated, external Emscripten module.
@@ -121,6 +123,11 @@ async function action(op: string, data: any): Promise<unknown> {
     if (op === 'nearby-native-metadata') return projectNearbyNativeMetadata(data);
     if (op === 'nearby-native-project') return projectNearbyNativeRecords(data);
     if (op === 'nearby-native-plan') return planNearbyNativeMetadata(data.source, data.operationId, data.changes);
+    if (op === 'nearby-native-adopt-plan') {
+      const plan = await planNearbyNativeAdoption(data.source, data.batch);
+      try { return { ...plan, write: { ...plan.write, assets: plan.write.assets.map(asset => ({ id: asset.id, base64: bytesToBase64(asset.bytes) })) } }; }
+      finally { clearNearbyNativeAdoption(plan); }
+    }
     if (op === 'content-attachments') return readMdbx2ContentAttachments(client, data.handle, data.input);
     if (op === 'content-attachment-bytes') {
       const bytes = await readMdbx2ContentAttachmentBytes(client, data.handle, data.input);

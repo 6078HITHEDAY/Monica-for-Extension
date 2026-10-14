@@ -58,4 +58,10 @@ describe('native nearby application projection', () => {
   it('does not mutate the source while deriving a snapshot', async () => {
     const f = fixture(), before = JSON.stringify(f.source); await projectNearbyNativeRecords(f.source); expect(JSON.stringify(f.source)).toBe(before);
   });
+  it('uses current content length after native replacement retains the original creation size', async () => {
+    const f = fixture(); f.source.attachments[0].originalSize = 900;
+    const projection = requireCompleteNearbyNativeProjection(await projectNearbyNativeRecords(f.source));
+    expect(projection.records.find(row => row.global_id === f.id)?.data).toMatchObject({ assets: [{ size: 4 }] });
+    expect(projection.assets[0]).toMatchObject({ originalSize: 900, storedSize: 4 });
+  });
 });

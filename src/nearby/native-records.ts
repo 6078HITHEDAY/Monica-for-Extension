@@ -45,7 +45,9 @@ export async function projectNearbyNativeRecords(input: NearbyNativeSource, sign
     const savedById = byId(saved.map(wireObject), row => typeof row.local_id === 'string' ? row.local_id : '');
     const imageMap = payload.device_sync_images === undefined ? {} : wireObject(payload.device_sync_images);
     data.assets = [...rows].filter(row => !row.deleted).sort((a, b) => a.contentHash < b.contentHash ? -1 : a.contentHash > b.contentHash ? 1 : a.attachmentId < b.attachmentId ? -1 : 1).map(row => {
-      if (row.originalSize !== row.storedSize || row.storedSize > 64 * 1024 * 1024) invalidNearby('native-asset-size');
+      // originalSize is retained creation metadata. Replacing content can change
+      // storedSize without changing it; native disclosure verifies current bytes.
+      if (row.storedSize > 64 * 1024 * 1024) invalidNearby('native-asset-size');
       const previous = savedById.get(row.attachmentId) ?? [];
       if (previous.length > 1) invalidNearby('native-asset-map');
       const old = previous[0], descriptor: Record<string, unknown> = { ...old, id: row.contentHash, attachment_id: typeof old?.attachment_id === 'string' ? old.attachment_id : row.attachmentId,
