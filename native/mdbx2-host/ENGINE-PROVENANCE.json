@@ -309,6 +309,20 @@
       "files": {
         "crates/mdbx-ffi/src/sync_facade.rs": "25bc9ac359bb74fdeb58f73b4f76965da58b4ea31e062358e34bb42b83ea4cd4"
       }
+    },
+    {
+      "id": "content-metadata-tombstones",
+      "patch": "runtime-patches/extension-content-metadata-tombstones.patch",
+      "patch_sha256": "76dc59409ed788c6832ae6115d8e62580b126dcb8223c6e96b8d3db8eb40cfc6",
+      "description": "Extension-only opt-in bounded summary pagination including metadata tombstones, with query-bound cursors. Existing active-only APIs and deleted-payload disclosure policy remain unchanged. No storage format or Android source changes.",
+      "base_files": {
+        "crates/mdbx-storage/src/repo/object_metadata_summary.rs": "850f539ee785de7a80345037f259b6ee9042c43e54b8fc0265a02347353966a1",
+        "crates/mdbx-ffi/src/object_facade.rs": "8ddb80eb7e7499884161bef1909c3203391a5f3b64a0e19266bf3b110f3436a7"
+      },
+      "files": {
+        "crates/mdbx-storage/src/repo/object_metadata_summary.rs": "efb1493d398ed9d60a9ec99d4affaac818c649b7de0f8208159bb7ea786c3eb1",
+        "crates/mdbx-ffi/src/object_facade.rs": "ee5b058330aeb7c6d950c8fbbc295ecfaba350264ede56208e108f76fc24e594"
+      }
     }
   ]
 }

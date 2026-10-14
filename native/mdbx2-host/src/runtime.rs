@@ -26,6 +26,8 @@ use zeroize::Zeroizing;
 
 #[path = "api_token.rs"]
 mod api_token;
+#[path = "content_metadata.rs"]
+mod content_metadata;
 
 #[cfg(test)]
 #[path = "interop315_tests.rs"]
@@ -658,6 +660,8 @@ impl HostRuntime {
             "collection.move" => self.collection_move(params),
             "collection.delete" => self.collection_delete(params),
             "collection.restore" => self.collection_restore(params),
+            "content.metadata.list" => content_metadata::list(self, params),
+            "content.metadata.read" => content_metadata::read(self, params),
             "object.list" => self.object_list(params),
             "object.reveal" => self.object_reveal(params),
             "object.upsert" => self.object_upsert(params),
@@ -728,6 +732,7 @@ impl HostRuntime {
             "supportsNativeObjectIdentity": true,
             "supportsObjectRevisionPreconditions": true,
             "supportsVaultWriteRevision": true,
+            "supportsContentMetadata": true,
             "supportsObjectRestore": true,
             "supportsObjectBatchRestore": true,
             "supportsAtomicObjectAttachmentMove": true,
@@ -8129,6 +8134,7 @@ fn path_string(path: &Path) -> Result<String, RpcFailure> {
 
 #[cfg(test)]
 mod tests {
+    include!("content_metadata_tests.rs");
     use super::*;
     use rusqlite::Connection;
 

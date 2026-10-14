@@ -998,6 +998,35 @@ impl MdbxVault {
         })
     }
 
+    pub fn list_object_relation_summaries_from_including_deleted(
+        &self,
+        source_object_id: String,
+        relation_kind: Option<String>,
+        page_size: u32,
+        cursor: Option<String>,
+    ) -> Result<MdbxObjectRelationSummaryPage, MdbxFfiError> {
+        let conn = self.conn.lock().map_err(|_| MdbxFfiError::LockPoisoned)?;
+        let kind = relation_kind
+            .as_deref()
+            .map(parse_relation_kind)
+            .transpose()?;
+        let page = ObjectMetadataSummaryRepo::list_relations_from_including_deleted(
+            &conn,
+            &source_object_id,
+            kind.as_ref(),
+            page_size as usize,
+            cursor.as_deref(),
+        )?;
+        Ok(MdbxObjectRelationSummaryPage {
+            items: page
+                .items
+                .into_iter()
+                .map(object_relation_summary_from_core)
+                .collect(),
+            next_cursor: page.next_cursor,
+        })
+    }
+
     pub fn list_object_relations_to(
         &self,
         target_object_id: String,
@@ -1186,6 +1215,29 @@ impl MdbxVault {
         })
     }
 
+    pub fn list_object_label_summaries_including_deleted(
+        &self,
+        collection_id: String,
+        page_size: u32,
+        cursor: Option<String>,
+    ) -> Result<MdbxObjectLabelSummaryPage, MdbxFfiError> {
+        let conn = self.conn.lock().map_err(|_| MdbxFfiError::LockPoisoned)?;
+        let page = ObjectMetadataSummaryRepo::list_labels_including_deleted(
+            &conn,
+            &collection_id,
+            page_size as usize,
+            cursor.as_deref(),
+        )?;
+        Ok(MdbxObjectLabelSummaryPage {
+            items: page
+                .items
+                .into_iter()
+                .map(object_label_summary_from_core)
+                .collect::<Result<Vec<_>, _>>()?,
+            next_cursor: page.next_cursor,
+        })
+    }
+
     pub fn update_object_label(
         &self,
         label_id: String,
@@ -1252,6 +1304,29 @@ impl MdbxVault {
     ) -> Result<MdbxObjectLabelAssignmentSummaryPage, MdbxFfiError> {
         let conn = self.conn.lock().map_err(|_| MdbxFfiError::LockPoisoned)?;
         let page = ObjectMetadataSummaryRepo::list_assignments_by_object(
+            &conn,
+            &object_id,
+            page_size as usize,
+            cursor.as_deref(),
+        )?;
+        Ok(MdbxObjectLabelAssignmentSummaryPage {
+            items: page
+                .items
+                .into_iter()
+                .map(object_label_assignment_summary_from_core)
+                .collect(),
+            next_cursor: page.next_cursor,
+        })
+    }
+
+    pub fn list_object_label_assignment_summaries_by_object_including_deleted(
+        &self,
+        object_id: String,
+        page_size: u32,
+        cursor: Option<String>,
+    ) -> Result<MdbxObjectLabelAssignmentSummaryPage, MdbxFfiError> {
+        let conn = self.conn.lock().map_err(|_| MdbxFfiError::LockPoisoned)?;
+        let page = ObjectMetadataSummaryRepo::list_assignments_by_object_including_deleted(
             &conn,
             &object_id,
             page_size as usize,

@@ -23,9 +23,12 @@ const MAX_OBJECT_METADATA_SUMMARY_CURSOR_BYTES: usize = 4096;
 #[serde(rename_all = "kebab-case")]
 enum ObjectMetadataSummaryQuery {
     RelationFrom,
+    RelationFromIncludingDeleted,
     RelationTo,
     LabelsByCollection,
+    LabelsByCollectionIncludingDeleted,
     AssignmentsByObject,
+    AssignmentsByObjectIncludingDeleted,
     AssignmentsByLabel,
 }
 
@@ -113,6 +116,23 @@ impl ObjectMetadataSummaryRepo {
         )
     }
 
+    pub fn list_relations_from_including_deleted(
+        conn: &VaultConnection,
+        source_object_id: &str,
+        relation_kind: Option<&RelationKindId>,
+        page_size: usize,
+        cursor: Option<&str>,
+    ) -> StorageResult<ObjectRelationSummaryPage> {
+        Self::list_relations(
+            conn,
+            ObjectMetadataSummaryQuery::RelationFromIncludingDeleted,
+            source_object_id,
+            relation_kind,
+            page_size,
+            cursor,
+        )
+    }
+
     pub fn list_relations_to(
         conn: &VaultConnection,
         target_object_id: &str,
@@ -144,15 +164,21 @@ impl ObjectMetadataSummaryRepo {
             .map(|value| parse_cursor(value, query, scope_id, relation_kind))
             .transpose()?;
         let endpoint_column = match query {
-            ObjectMetadataSummaryQuery::RelationFrom => "source_object_id",
+            ObjectMetadataSummaryQuery::RelationFrom
+            | ObjectMetadataSummaryQuery::RelationFromIncludingDeleted => "source_object_id",
             ObjectMetadataSummaryQuery::RelationTo => "target_object_id",
             _ => unreachable!("relation page uses a relation query kind"),
+        };
+        let active_filter = if query == ObjectMetadataSummaryQuery::RelationFromIncludingDeleted {
+            "1"
+        } else {
+            "deleted = 0"
         };
         let sql = format!(
             "SELECT relation_id, source_object_id, target_object_id, relation_kind,
                     payload_schema_version, head_commit_id, deleted, updated_at
              FROM object_relations
-             WHERE deleted = 0 AND {endpoint_column} = ?1
+             WHERE {active_filter} AND {endpoint_column} = ?1
                AND (?2 IS NULL OR relation_kind = ?2)
                AND (?3 IS NULL OR updated_at < ?3
                     OR (updated_at = ?3 AND relation_id < ?4))
@@ -224,22 +250,59 @@ impl ObjectMetadataSummaryRepo {
         page_size: usize,
         cursor: Option<&str>,
     ) -> StorageResult<ObjectLabelSummaryPage> {
+        Self::list_labels_query(
+            conn,
+            collection_id,
+            page_size,
+            cursor,
+            ObjectMetadataSummaryQuery::LabelsByCollection,
+        )
+    }
+
+    pub fn list_labels_including_deleted(
+        conn: &VaultConnection,
+        collection_id: &str,
+        page_size: usize,
+        cursor: Option<&str>,
+    ) -> StorageResult<ObjectLabelSummaryPage> {
+        Self::list_labels_query(
+            conn,
+            collection_id,
+            page_size,
+            cursor,
+            ObjectMetadataSummaryQuery::LabelsByCollectionIncludingDeleted,
+        )
+    }
+
+    fn list_labels_query(
+        conn: &VaultConnection,
+        collection_id: &str,
+        page_size: usize,
+        cursor: Option<&str>,
+        query: ObjectMetadataSummaryQuery,
+    ) -> StorageResult<ObjectLabelSummaryPage> {
         validate_page_size(page_size)?;
-        let query = ObjectMetadataSummaryQuery::LabelsByCollection;
         let cursor = cursor
             .map(|value| parse_cursor(value, query, collection_id, None))
             .transpose()?;
-        let mut stmt = conn.inner().prepare(
+        let active_filter =
+            if query == ObjectMetadataSummaryQuery::LabelsByCollectionIncludingDeleted {
+                "1"
+            } else {
+                "deleted = 0"
+            };
+        let sql = format!(
             "SELECT label_id, collection_id, length(name_ct),
                     CASE WHEN length(name_ct) <= ?4 THEN name_ct END,
                     payload_schema_version, head_commit_id, deleted, updated_at
              FROM object_labels
-             WHERE deleted = 0 AND collection_id = ?1
+             WHERE {active_filter} AND collection_id = ?1
                AND (?2 IS NULL OR updated_at < ?2
                     OR (updated_at = ?2 AND label_id < ?3))
              ORDER BY updated_at DESC, label_id DESC
              LIMIT ?5",
-        )?;
+        );
+        let mut stmt = conn.inner().prepare(&sql)?;
         let rows = stmt.query_map(
             rusqlite::params![
                 collection_id,
@@ -285,6 +348,21 @@ impl ObjectMetadataSummaryRepo {
         )
     }
 
+    pub fn list_assignments_by_object_including_deleted(
+        conn: &VaultConnection,
+        object_id: &str,
+        page_size: usize,
+        cursor: Option<&str>,
+    ) -> StorageResult<ObjectLabelAssignmentSummaryPage> {
+        Self::list_assignments(
+            conn,
+            ObjectMetadataSummaryQuery::AssignmentsByObjectIncludingDeleted,
+            object_id,
+            page_size,
+            cursor,
+        )
+    }
+
     pub fn list_assignments_by_label(
         conn: &VaultConnection,
         label_id: &str,
@@ -312,14 +390,21 @@ impl ObjectMetadataSummaryRepo {
             .map(|value| parse_cursor(value, query, scope_id, None))
             .transpose()?;
         let owner_column = match query {
-            ObjectMetadataSummaryQuery::AssignmentsByObject => "object_id",
+            ObjectMetadataSummaryQuery::AssignmentsByObject
+            | ObjectMetadataSummaryQuery::AssignmentsByObjectIncludingDeleted => "object_id",
             ObjectMetadataSummaryQuery::AssignmentsByLabel => "label_id",
             _ => unreachable!("assignment page uses an assignment query kind"),
         };
+        let active_filter =
+            if query == ObjectMetadataSummaryQuery::AssignmentsByObjectIncludingDeleted {
+                "1"
+            } else {
+                "deleted = 0"
+            };
         let sql = format!(
             "SELECT assignment_id, object_id, label_id, head_commit_id, deleted, updated_at
              FROM object_label_assignments
-             WHERE deleted = 0 AND {owner_column} = ?1
+             WHERE {active_filter} AND {owner_column} = ?1
                AND (?2 IS NULL OR updated_at < ?2
                     OR (updated_at = ?2 AND assignment_id < ?3))
              ORDER BY updated_at DESC, assignment_id DESC

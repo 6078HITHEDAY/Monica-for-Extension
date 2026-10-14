@@ -1,0 +1,3 @@
+# Runtime overlay hashes cover exact patch bytes. Unified diff context lines
+# intentionally contain a single space; they are not source trailing whitespace.
+native/mdbx2-host/runtime-patches/*.patch text eol=lf -whitespace
