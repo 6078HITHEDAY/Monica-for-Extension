@@ -323,6 +323,18 @@
         "crates/mdbx-storage/src/repo/object_metadata_summary.rs": "efb1493d398ed9d60a9ec99d4affaac818c649b7de0f8208159bb7ea786c3eb1",
         "crates/mdbx-ffi/src/object_facade.rs": "ee5b058330aeb7c6d950c8fbbc295ecfaba350264ede56208e108f76fc24e594"
       }
+    },
+    {
+      "id": "content-write-adoption",
+      "patch": "runtime-patches/extension-content-write.patch",
+      "patch_sha256": "b782d0af0a640a545e8e216461f2fe9a8517b1287321fabd14c028b6f1e0f51b",
+      "description": "Extension-only revision-guarded atomic content and attachment adoption, including attachment-only operations. Guard and durable intent share BEGIN IMMEDIATE; returns only durable commit receipt without post-commit attachment reads. Existing composite APIs and storage format remain unchanged.",
+      "base_files": {
+        "crates/mdbx-ffi/src/write_facade.rs": "3ebd59cf298a72bd6423a621b4f944c1f9ef55057d9b8bffe321920ccf9e3153"
+      },
+      "files": {
+        "crates/mdbx-ffi/src/write_facade.rs": "95ef3cbd1b7d3f0361cc18fc800e7da7c5d9d59e02ba3f411b3dd169ede9c3e1"
+      }
     }
   ]
 }

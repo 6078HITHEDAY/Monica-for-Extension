@@ -851,3 +851,138 @@ impl MdbxVault {
         )
     }
 }
+
+#[uniffi::export]
+impl MdbxVault {
+    /// Extension-only revision-guarded content adoption. Return the durable
+    /// receipt without reading mutable attachment records after the commit.
+    pub fn execute_content_write_operation_at_revision(
+        &self,
+        operation_id: String,
+        operation_kind: String,
+        commands: Vec<MdbxWriteCommand>,
+        attachment_commands: Vec<MdbxAttachmentBatchCommand>,
+        expected: MdbxWriteRevision,
+        limits: MdbxCompositeWriteOperationLimits,
+    ) -> Result<MdbxWriteOperationResult, MdbxFfiError> {
+        if attachment_commands.is_empty() {
+            return self.execute_write_operation_at_revision(
+                operation_id,
+                operation_kind,
+                commands,
+                expected,
+            );
+        }
+        validate_uuid(&expected.vault_id, "expected vault ID")?;
+        if expected.revision_sha256.len() != 64
+            || !expected
+                .revision_sha256
+                .bytes()
+                .all(|v| v.is_ascii_digit() || (b'a'..=b'f').contains(&v))
+        {
+            return Err(StorageError::Validation("write revision is invalid".to_string()).into());
+        }
+        let commit_kind = if commands.iter().any(|command| {
+            matches!(
+                command,
+                MdbxWriteCommand::RestoreProject { .. }
+                    | MdbxWriteCommand::RestoreEntry { .. }
+                    | MdbxWriteCommand::MoveProject { .. }
+                    | MdbxWriteCommand::MoveEntry { .. }
+            )
+        }) {
+            "multi"
+        } else {
+            "change"
+        };
+        let write_limits = limits.write_limits.into_internal()?;
+        let prepared = if commands.is_empty() {
+            None
+        } else {
+            Some(OperationCoordinator::prepare(
+                WriteOperationRequest::new(
+                    operation_id.clone(),
+                    operation_kind.clone(),
+                    commands.into_iter().map(Into::into).collect(),
+                )
+                .with_limits(write_limits),
+            )?)
+        };
+        let chunk_size = validate_attachment_batch_operation_inputs(
+            &operation_id,
+            &attachment_commands,
+            limits.attachment_limits,
+        )?;
+        let attachment_intent = hash_attachment_batch_intent(
+            &operation_id,
+            &attachment_commands,
+            limits.attachment_limits,
+        );
+        let generic_intent = prepared
+            .as_ref()
+            .map(|value| value.intent_hash())
+            .unwrap_or(b"");
+        let combined = hash_composite_write_intent(
+            &operation_id,
+            &operation_kind,
+            generic_intent,
+            &attachment_intent,
+        );
+        let mut intent = Sha256::new();
+        for part in [
+            b"monica-extension-content-adoption-v1".as_slice(),
+            combined.as_slice(),
+            expected.vault_id.as_bytes(),
+            expected.revision_sha256.as_bytes(),
+        ] {
+            update_attachment_intent_part(&mut intent, part);
+        }
+        let mut changed_objects = prepared
+            .as_ref()
+            .map(|p| p.changed_objects().to_vec())
+            .unwrap_or_default();
+        changed_objects.extend(attachment_batch_changes(&attachment_commands));
+        let operation = CommitOperation::new(
+            operation_id,
+            operation_kind,
+            "main",
+            commit_kind,
+            storage_write_operation_scope(&changed_objects),
+            changed_objects.clone(),
+        )
+        .with_intent_hash(intent.finalize().to_vec());
+        let attachment_ids = attachment_batch_ids(&attachment_commands);
+        let conn = self.conn.lock().map_err(|_| MdbxFfiError::LockPoisoned)?;
+        let ctx = CommitContext::new(self.device_id.clone());
+        let execution = ctx.run_operation(&conn, operation, |scoped| {
+            // BEGIN IMMEDIATE covers both this guard and every mutation. The
+            // core checks an identical committed receipt before this closure.
+            if expected.vault_id != self.vault_id
+                || write_revision_hash(&conn, &self.vault_id)? != expected.revision_sha256
+            {
+                return Err(StorageError::Validation(
+                    "write revision changed".to_string(),
+                ));
+            }
+            if let Some(prepared) = &prepared {
+                prepared.apply(&conn, scoped)?;
+            }
+            execute_attachment_batch_commands(
+                &conn,
+                scoped,
+                attachment_commands,
+                chunk_size,
+                &attachment_ids,
+            )
+        })?;
+        let (commit_id, already_committed) = match execution {
+            OperationExecution::Applied { commit_id, .. } => (commit_id, false),
+            OperationExecution::AlreadyCommitted { commit_id } => (commit_id, true),
+        };
+        Ok(write_operation_result(
+            &changed_objects,
+            commit_id,
+            already_committed,
+        ))
+    }
+}

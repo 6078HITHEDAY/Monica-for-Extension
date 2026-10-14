@@ -3,7 +3,8 @@ import { MdbxBrowserSession } from '../../../src/providers/mdbx2/browser/session
 import { MdbxBrowserBlockStore, blockHash, type BrowserCommit } from '../../../src/providers/mdbx2/browser/block-store';
 import { MdbxBrowserFilesystem } from '../../../src/providers/mdbx2/browser/filesystem';
 import { readMdbx2ContentMetadata } from '../../../src/providers/mdbx2/content-metadata';
-import { parseMdbx2NativeResponse, validateMdbx2HostCapabilities, type Mdbx2NativeMethod } from '../../../src/providers/mdbx2/native-contract';
+import { writeMdbx2Content } from '../../../src/providers/mdbx2/content-write';
+import { Mdbx2NativeHostError, parseMdbx2NativeResponse, validateMdbx2HostCapabilities, type Mdbx2NativeMethod } from '../../../src/providers/mdbx2/native-contract';
 // Packaged by the fixture alongside the production compiled engine.
 // @ts-expect-error A generated, external Emscripten module.
 import create from './engine.js';
@@ -100,14 +101,19 @@ async function lifecycleSuite() {
   return { noAbortReentry: true, lockReleasedAfterTrap: true };
 }
 async function action(op: string, data: any): Promise<unknown> {
-  if (op === 'content-metadata') {
+  if (op === 'content-metadata' || op === 'content-write') {
     const request = async (method: Mdbx2NativeMethod, params: Record<string, unknown> = {}) => {
       const response = parseMdbx2NativeResponse(await session!.request({ protocol: 2, requestId: crypto.randomUUID(), method, params }));
       if (!response) throw Error('Invalid synthetic native response');
-      if (!response.ok) throw Object.assign(Error(response.error.message), response.error);
+      if (!response.ok) throw new Mdbx2NativeHostError(response.error.code, response.error.message, response.error.retryable);
       return response.result;
     };
-    return readMdbx2ContentMetadata({ request, hello: async () => validateMdbx2HostCapabilities(await request('host.hello')) }, data.handle, data.input);
+    const client = { request, hello: async () => validateMdbx2HostCapabilities(await request('host.hello')) };
+    if (op === 'content-write') {
+      const input = { ...data.input, assets: data.input.assets.map((row: { id: string; base64: string }) => ({ id: row.id, bytes: Uint8Array.from(atob(row.base64), c => c.charCodeAt(0)) })) };
+      return writeMdbx2Content(client, data.handle, input);
+    }
+    return readMdbx2ContentMetadata(client, data.handle, data.input);
   }
   if (op === 'open') { dbName = data.name; session = await MdbxBrowserSession.open(create, new ObservedStore(dbName)); return true; }
   if (op === 'rpc') return session!.request(data);

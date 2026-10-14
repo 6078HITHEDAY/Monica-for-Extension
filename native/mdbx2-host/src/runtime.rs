@@ -28,6 +28,8 @@ use zeroize::Zeroizing;
 mod api_token;
 #[path = "content_metadata.rs"]
 mod content_metadata;
+#[path = "content_write.rs"]
+mod content_write;
 
 #[cfg(test)]
 #[path = "interop315_tests.rs"]
@@ -574,6 +576,7 @@ pub struct HostRuntime {
     health_repairs: HealthRepairState,
     attachment_reads: HashMap<String, AttachmentReadSession>,
     attachment_uploads: HashMap<String, AttachmentUploadSession>,
+    content_writes: HashMap<String, content_write::Session>,
     windows_hello: WindowsHelloStore,
     pub(crate) local_exports: crate::local_export::LocalExports,
     nearby: crate::nearby::Nearby,
@@ -629,6 +632,7 @@ impl HostRuntime {
             health_repairs,
             attachment_reads: HashMap::new(),
             attachment_uploads: HashMap::new(),
+            content_writes: HashMap::new(),
             windows_hello: WindowsHelloStore::new(hello_root),
             local_exports: crate::local_export::LocalExports::default(),
             nearby,
@@ -662,6 +666,7 @@ impl HostRuntime {
             "collection.restore" => self.collection_restore(params),
             "content.metadata.list" => content_metadata::list(self, params),
             "content.metadata.read" => content_metadata::read(self, params),
+            "content.write.begin" | "content.write.chunk" | "content.write.finish" | "content.write.abort" => content_write::handle(self, method, params),
             "object.list" => self.object_list(params),
             "object.reveal" => self.object_reveal(params),
             "object.upsert" => self.object_upsert(params),
@@ -733,6 +738,7 @@ impl HostRuntime {
             "supportsObjectRevisionPreconditions": true,
             "supportsVaultWriteRevision": true,
             "supportsContentMetadata": true,
+            "supportsContentWrite": true,
             "supportsObjectRestore": true,
             "supportsObjectBatchRestore": true,
             "supportsAtomicObjectAttachmentMove": true,
@@ -1243,6 +1249,7 @@ impl HostRuntime {
             .retain(|_, session| session.vault_handle != vault_handle);
         self.attachment_uploads
             .retain(|_, session| session.vault_handle != vault_handle);
+        self.content_writes.retain(|_, session| !session.belongs_to(&vault_handle));
         Ok(json!({ "locked": locked }))
     }
 
@@ -8134,6 +8141,7 @@ fn path_string(path: &Path) -> Result<String, RpcFailure> {
 
 #[cfg(test)]
 mod tests {
+    include!("content_write_tests.rs");
     include!("content_metadata_tests.rs");
     use super::*;
     use rusqlite::Connection;

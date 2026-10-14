@@ -117,6 +117,10 @@ export type Mdbx2NativeMethod =
   | "vault.writeRevision"
   | "content.metadata.list"
   | "content.metadata.read"
+  | "content.write.begin"
+  | "content.write.chunk"
+  | "content.write.finish"
+  | "content.write.abort"
   | "vault.diagnostics"
   | "vault.export.begin"
   | "vault.export.read"
@@ -945,6 +949,7 @@ export interface Mdbx2HostCapabilities {
   supportsObjectRevisionPreconditions?: boolean;
   supportsVaultWriteRevision?: boolean;
   supportsContentMetadata?: boolean;
+  supportsContentWrite?: boolean;
   supportsCompleteBackup?: boolean;
   supportsObjectRestore?: boolean;
   supportsObjectBatchRestore?: boolean;
@@ -1168,6 +1173,7 @@ export function validateMdbx2HostCapabilities(input: unknown): Mdbx2HostCapabili
     ...(value.supportsObjectRevisionPreconditions === true ? { supportsObjectRevisionPreconditions: true } : {}),
     ...(value.supportsVaultWriteRevision === true ? { supportsVaultWriteRevision: true } : {}),
     ...(value.supportsContentMetadata === true ? { supportsContentMetadata: true } : {}),
+    ...(value.supportsContentWrite === true ? { supportsContentWrite: true } : {}),
     ...(value.supportsCompleteBackup === true ? { supportsCompleteBackup: true } : {}),
     ...(value.supportsObjectRestore === true ? { supportsObjectRestore: true } : {}),
     ...(value.supportsObjectBatchRestore === true ? { supportsObjectBatchRestore: true } : {}),
