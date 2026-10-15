@@ -36,6 +36,42 @@ function fixture() {
 }
 
 describe('atomic native content staging client', () => {
+  function profileFixture() {
+    const f = fixture();
+    f.input.plan.commands = [{ kind: 'collection-profile-set', collectionId: randomUUID(), collectionTypeId: 'monica.folder',
+      payloadSchemaVersion: 1, allowedObjectTypeIds: ['login', 'passkey'], requiredCapabilityIds: [], assetId: f.input.assets[0].id },
+      { kind: 'collection-presentation', collectionId: randomUUID(), favorite: true, archived: false, iconRef: null }];
+    f.input.plan.attachments = [];
+    f.caps.supportsCollectionProfileWrite = true;
+    return f;
+  }
+  it('stages a full 1MiB binary profile separately from the plan and snapshots its declarations', async () => {
+    const f = profileFixture(); f.input.assets[0].bytes = Uint8Array.from({ length: 1024 * 1024 }, (_, i) => i % 256);
+    const original = structuredClone(f.input);
+    f.hello.mockImplementationOnce(async () => { (f.input.plan.commands[0] as any).allowedObjectTypeIds.push('note'); f.input.assets[0].bytes.fill(7); return f.caps; });
+    expect((await f.write()).commitId).toBe(f.commitId);
+    expect(JSON.parse(f.parts.get('plan')!.toString())).toEqual(original.plan);
+    expect(f.parts.get(original.assets[0].id)!.equals(Buffer.from(original.assets[0].bytes))).toBe(true);
+    expect(f.parts.get('plan')!.length).toBeLessThan(1024);
+  });
+  it('requires explicit profile/presentation support before staging', async () => {
+    const f = profileFixture(); delete f.caps.supportsCollectionProfileWrite;
+    await expect(f.write()).rejects.toMatchObject({ code: 'content-write-host-update-required' }); expect(f.request).not.toHaveBeenCalled();
+  });
+  it.each(['oversized profile', 'repeated profile budget', 'duplicate type', 'duplicate capability', 'too many types', 'too many capabilities', 'invalid schema', 'invalid boolean', 'unknown policy field', 'empty icon'])('rejects %s before any profile staging', async mutation => {
+    const f = profileFixture(), profile = f.input.plan.commands[0] as any, presentation = f.input.plan.commands[1] as any;
+    if (mutation === 'oversized profile') f.input.assets[0].bytes = new Uint8Array(1024 * 1024 + 1);
+    if (mutation === 'repeated profile budget') { f.input.assets[0].bytes = new Uint8Array(1024 * 1024); f.input.plan.commands = Array.from({length:9},()=>profile); }
+    if (mutation === 'duplicate type') profile.allowedObjectTypeIds.push('login');
+    if (mutation === 'duplicate capability') profile.requiredCapabilityIds = ['cap.test', 'cap.test'];
+    if (mutation === 'too many types') profile.allowedObjectTypeIds = Array.from({length:257}, (_,i)=>`type.${i}`);
+    if (mutation === 'too many capabilities') profile.requiredCapabilityIds = Array.from({length:129}, (_,i)=>`cap.${i}`);
+    if (mutation === 'invalid schema') profile.payloadSchemaVersion = 0;
+    if (mutation === 'invalid boolean') presentation.favorite = 'true';
+    if (mutation === 'unknown policy field') presentation.tigaModeOverride = 'sky';
+    if (mutation === 'empty icon') presentation.iconRef = '';
+    await expect(f.write()).rejects.toMatchObject({ code: 'content-write-invalid' }); expect(f.hello).not.toHaveBeenCalled(); expect(f.request).not.toHaveBeenCalled();
+  });
   it('requires explicit retained-folder support before staging, while old commands still work',async()=>{
     const f=fixture();f.input.plan.commands=[{kind:'collection-trash',collectionId:randomUUID()}];
     await expect(f.write()).rejects.toMatchObject({code:'content-write-host-update-required'});expect(f.request).not.toHaveBeenCalled();

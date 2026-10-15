@@ -8,7 +8,7 @@ import path from 'node:path';
 import {launchEdgeContext} from './fixtures/edge';
 import type {NearbyNativeSource} from '../../src/nearby/native-source';
 
-test('bundled native catalog retains opaque collection profiles across encrypted import and browser restart',async({},info)=>{
+test('bundled engine reads and atomically writes opaque profiles across encrypted import and browser restart',async({},info)=>{
   test.skip(process.platform!=='win32','Installed Edge and native fixture');test.setTimeout(180000);
   const run=path.resolve(info.outputPath('isolated')),extension=path.join(run,'extension'),fixture=path.join(run,'native');
   await mkdir(extension,{recursive:true});
@@ -41,11 +41,27 @@ test('bundled native catalog retains opaque collection profiles across encrypted
     const first=await capture();expect(first.profiles).toHaveLength(1);expect(first.profiles![0]).toMatchObject({...expected.metadata,sha256:expected.sha256});
     const payload=Buffer.from(first.profiles![0].payloadBase64,'base64');expect(payload.length).toBe(expected.sizeBytes);expect(payload.every((byte,index)=>byte===index%256)).toBe(true);
     const projection=await call('nearby-native-project',first);expect(projection.blockers).toContainEqual({id:expected.collectionId,reason:'native-folder-profile-archive-required'});
+    const replacement=Buffer.from(Uint8Array.from({length:1024*1024},(_,index)=>(index*37+17)%256)),assetId=randomUUID();
+    const write={handle,input:{operationId:randomUUID(),writeRevision:first.writeRevision,plan:{commands:[
+      {kind:'collection-profile-set',collectionId:expected.collectionId,collectionTypeId:first.profiles![0].collectionTypeId,payloadSchemaVersion:1,
+        allowedObjectTypeIds:first.profiles![0].allowedObjectTypeIds,requiredCapabilityIds:first.profiles![0].requiredCapabilityIds,assetId},
+      {kind:'collection-presentation',collectionId:expected.collectionId,favorite:true,archived:true,iconRef:'key'}],attachments:[]},
+      assets:[{id:assetId,base64:replacement.toString('base64')}]}};
+    const invalid=structuredClone(write);invalid.input.plan.commands[0].collectionTypeId='com.monica.incompatible';
+    await expect(call('content-write',invalid)).rejects.toThrow();expect((await capture()).writeRevision).toEqual(first.writeRevision);
+    const receipt=await call('content-write',write),after=await capture();expect(receipt.alreadyCommitted).toBe(false);
+    expect(Buffer.from(after.profiles![0].payloadBase64,'base64').equals(replacement)).toBe(true);
+    expect(after.profiles![0].createdAt).toBe(first.profiles![0].createdAt);
+    expect(after.collections.find(row=>row.collectionId===expected.collectionId)).toMatchObject({favorite:true,archived:true,iconRef:'key',headCommitId:receipt.commitId});
+    expect(after.objects).toEqual(first.objects);
     await call('scan',[password,'snapshot-test-secret',first.profiles![0].payloadBase64.slice(0,512)]);
     await rpc('vault.lock',{vaultHandle:handle});await expect(capture()).rejects.toThrow();
     await call('close');await context!.close();context=undefined;call=await launch();await call('open',{name:database});
     await rpc('vault.open',{source:{kind:'vault',handle},credential:{method:'password',password}});
-    const restored=await capture();expect(restored.profiles).toEqual(first.profiles);expect(restored.writeRevision).toEqual(first.writeRevision);
-    await call('close');Object.assign(evidence,{status:'passed',binaryBytes:payload.length,exactBytes:true,lockedDenial:true,realBrowserRestart:true,encryptedStorageScan:true,versionOneNoSilentLoss:true});
+    const restored=await capture();expect(restored.profiles).toEqual(after.profiles);expect(restored.writeRevision).toEqual(after.writeRevision);
+    const replay=await call('content-write',write);expect(replay).toMatchObject({alreadyCommitted:true,commitId:receipt.commitId});
+    expect((await capture()).writeRevision).toEqual(after.writeRevision);
+    await call('close');Object.assign(evidence,{status:'passed',binaryBytes:payload.length,writeBytes:replacement.length,atomicProfileWrite:true,presentation:true,
+      typeConflictRollback:true,unchangedObjects:true,identicalReplayAfterRestart:true,exactBytes:true,lockedDenial:true,realBrowserRestart:true,encryptedStorageScan:true,versionOneNoSilentLoss:true});
   }finally{await context?.close();await writeFile(path.join(run,'evidence.json'),JSON.stringify(evidence,null,2));}
 });

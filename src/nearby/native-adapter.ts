@@ -90,7 +90,8 @@ export function nativeNearbySource(options: {
         // A known unsupported engine must not leave a durable intent that can
         // never execute. The writer checks again before native staging.
         const caps = await client.hello(15_000, source.vaultHandle); active();
-        requireMdbx2ContentWriteCapabilities(caps, plan.write.plan.commands.some(row => row.kind === 'collection-trash'));
+        requireMdbx2ContentWriteCapabilities(caps, plan.write.plan.commands.some(row => row.kind === 'collection-trash'),
+          plan.write.plan.commands.some(row => row.kind === 'collection-profile-set' || row.kind === 'collection-presentation'));
         const intent = await nearbyNativeIntent(plan, replicaStorageId); active();
         await store.stageNearbyNativeIntent(intent, options.epoch(), sessionId, active); active();
         const acknowledgements = await apply(intent), after = await client.readWriteRevision(source.vaultHandle); active();

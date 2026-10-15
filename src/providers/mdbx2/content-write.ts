@@ -8,6 +8,8 @@ export type Mdbx2ContentCommand =
   | { kind: 'collection-move' | 'collection-restore'; collectionId: string; parentId?: string | null }
   | { kind: 'collection-delete'; collectionId: string }
   | { kind: 'collection-trash'; collectionId: string }
+  | { kind: 'collection-profile-set'; collectionId: string; collectionTypeId: string; payloadSchemaVersion: number; allowedObjectTypeIds: readonly string[]; requiredCapabilityIds: readonly string[]; assetId: string }
+  | { kind: 'collection-presentation'; collectionId: string; favorite: boolean; archived: boolean; iconRef: string | null }
   | { kind: 'object-create' | 'object-update'; objectId: string; collectionId: string; objectTypeId: string; title: string; payloadJson: string }
   | { kind: 'object-delete' | 'object-restore'; objectId: string; collectionId: string }
   | { kind: 'object-move'; objectId: string; collectionId: string; targetCollectionId: string }
@@ -31,9 +33,10 @@ export interface Mdbx2ContentWriteInput {
   assets: readonly { id: string; bytes: Uint8Array }[];
 }
 export interface Mdbx2ContentWriteReceipt { operationId: string; commitId: string; alreadyCommitted: boolean }
-export function requireMdbx2ContentWriteCapabilities(caps: Mdbx2HostCapabilities, retainedFolderTrash = false): void {
+export function requireMdbx2ContentWriteCapabilities(caps: Mdbx2HostCapabilities, retainedFolderTrash = false, collectionProfileWrite = false): void {
   if (!caps.supportsContentWrite || !caps.supportsVaultWriteRevision) throw new Mdbx2NativeHostError('content-write-host-update-required', '当前 MDBX 引擎不支持安全接收内容，请更新后重试。');
   if (retainedFolderTrash && !caps.supportsRetainedFolderTrash) throw new Mdbx2NativeHostError('content-write-host-update-required', '当前 MDBX 引擎不支持保留文件夹附件，请更新后重试。');
+  if (collectionProfileWrite && !caps.supportsCollectionProfileWrite) throw new Mdbx2NativeHostError('content-write-host-update-required', '当前 MDBX 引擎不支持安全恢复文件夹配置，请更新后重试。');
 }
 export class Mdbx2ContentWriteOutcomeUnknownError extends Mdbx2NativeHostError {
   constructor(readonly operationId: string) {
@@ -69,6 +72,8 @@ const commands: Record<Mdbx2ContentCommand['kind'], [string, string?]> = {
   'collection-create': ['collectionId,title', 'parentId'], 'collection-rename': ['collectionId,title'],
   'collection-move': ['collectionId', 'parentId'], 'collection-restore': ['collectionId', 'parentId'], 'collection-delete': ['collectionId'],
   'collection-trash': ['collectionId'],
+  'collection-profile-set': ['collectionId,collectionTypeId,payloadSchemaVersion,allowedObjectTypeIds,requiredCapabilityIds,assetId'],
+  'collection-presentation': ['collectionId,favorite,archived,iconRef'],
   'object-create': ['objectId,collectionId,objectTypeId,title,payloadJson'], 'object-update': ['objectId,collectionId,objectTypeId,title,payloadJson'],
   'object-delete': ['objectId,collectionId'], 'object-restore': ['objectId,collectionId'], 'object-move': ['objectId,collectionId,targetCollectionId'],
   'label-create': ['labelId,collectionId,name,payloadJson,payloadSchemaVersion'], 'label-update': ['labelId,name,payloadJson,payloadSchemaVersion'],
@@ -89,6 +94,13 @@ function command(value: unknown, fields: Record<string, [string, string?]>): Rec
     if (!Object.prototype.hasOwnProperty.call(row, key)) continue;
     const value = row[key];
     if ((key === 'parentId' || key === 'objectId' || key === 'mediaType') && optional?.split(',').includes(key) && value === null) result[key] = null;
+    else if (key === 'favorite' || key === 'archived') { if (typeof value !== 'boolean') invalid(); result[key] = value; }
+    else if (key === 'iconRef') result[key] = value === null ? null : text(value, 4096);
+    else if (key === 'collectionTypeId') result[key] = text(value, 512);
+    else if (key === 'allowedObjectTypeIds' || key === 'requiredCapabilityIds') {
+      if (!Array.isArray(value) || value.length > (key === 'allowedObjectTypeIds' ? 256 : 128)) invalid();
+      const values = value.map(v => text(v, 512)); if (new Set(values).size !== values.length) invalid(); result[key] = values;
+    }
     else if (key === 'objectTypeId' || key === 'relationKind') result[key] = text(value, 128);
     else if (key.endsWith('Id')) result[key] = uuid(value);
     else if (key === 'payloadSchemaVersion') result[key] = integer(value, 0xffff_ffff, 1);
@@ -120,9 +132,10 @@ export async function writeMdbx2Content(
   });
   const byId = new Map(sources.map(row => [row.id, row]));
   if (byId.size !== sources.length) invalid();
-  const used = new Set<string>(); let copies = 0;
-  for (const row of plan.attachments) if (row.assetId) {
+  const used = new Set<string>(); let copies = 0, profileCopies = 0;
+  for (const row of [...plan.commands, ...plan.attachments]) if (row.assetId) {
     const id = row.assetId as string, source = byId.get(id); if (!source) invalid();
+    if (row.kind === 'collection-profile-set') { profileCopies += source.bytes.byteLength; if (source.bytes.byteLength > 1024 * 1024 || profileCopies > 8 * 1024 * 1024) invalid(); }
     used.add(id); copies += source.bytes.byteLength; if (copies > MAX_ASSETS) invalid();
   }
   if (used.size !== sources.length) invalid();
@@ -135,7 +148,7 @@ export async function writeMdbx2Content(
     for (const source of sources) parts.push({ id: source.id, bytes: new Uint8Array(source.bytes) });
     active();
     const caps = await client.hello(15_000, handle); active();
-    requireMdbx2ContentWriteCapabilities(caps, plan.commands.some(row => row.kind === 'collection-trash'));
+    requireMdbx2ContentWriteCapabilities(caps, plan.commands.some(row => row.kind === 'collection-trash'), plan.commands.some(row => row.kind === 'collection-profile-set' || row.kind === 'collection-presentation'));
     const descriptors = [];
     for (const part of parts) {
       const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', part.bytes as Uint8Array<ArrayBuffer>)); active();

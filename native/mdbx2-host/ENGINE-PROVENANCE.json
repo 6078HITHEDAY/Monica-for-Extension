@@ -363,6 +363,20 @@
         "crates/mdbx-storage/src/repo/operation_coordinator.rs": "11a1a6a60224117db574f58c8634f22e62597296049f5dc7eee95fc0276451a1",
         "crates/mdbx-ffi/src/write_facade.rs": "82475e86793b522702effbeb17b20d693ec803256824d73a17287961ffbae78f"
       }
+    },
+    {
+      "id": "collection-profile-write",
+      "patch": "runtime-patches/extension-collection-profile-write.patch",
+      "patch_sha256": "32d8a295179bb9d36e2bb314ca9829fd9bd80905a471627ea6c04a9f94f7bdb4",
+      "description": "Append atomic collection profile and presentation commands. Preserve original command identities and storage format; validate binary budgets, immutable types, existing and requested capabilities and object restrictions. No capability registration/activation or Tiga override; retain revision guards, rollback, durable replay and native sync delta limits.",
+      "base_files": {
+        "crates/mdbx-storage/src/repo/operation_coordinator.rs": "11a1a6a60224117db574f58c8634f22e62597296049f5dc7eee95fc0276451a1",
+        "crates/mdbx-ffi/src/write_facade.rs": "82475e86793b522702effbeb17b20d693ec803256824d73a17287961ffbae78f"
+      },
+      "files": {
+        "crates/mdbx-storage/src/repo/operation_coordinator.rs": "30c5248d9c1efd6c597a3cffe287cb3641385620391feb6563200ae20ce1a97c",
+        "crates/mdbx-ffi/src/write_facade.rs": "3c11b501ad33395612ed9ce99add8efdf7147403ada8e068fe557185984ed8e6"
+      }
     }
   ]
 }

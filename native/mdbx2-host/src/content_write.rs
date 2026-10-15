@@ -239,13 +239,13 @@ pub(super) fn handle(runtime: &mut HostRuntime, method: &str, value: Value) -> R
             {
                 return Err(invalid());
             }
+            let mut used = HashSet::new();
+            let mut plaintext = 0;
             let commands = commands
                 .iter()
                 .cloned()
-                .map(command)
+                .map(|value| command(value, &session, &mut used, &mut plaintext))
                 .collect::<Result<Vec<_>>>()?;
-            let mut used = HashSet::new();
-            let mut plaintext = 0;
             let attachments = attachments
                 .iter()
                 .cloned()
@@ -288,10 +288,75 @@ fn payload(row: &mut Map<String, Value>) -> Result<String> {
 fn schema(row: &mut Map<String, Value>) -> Result<u32> {
     u32::try_from(take_u64(row, "payloadSchemaVersion")?).map_err(|_| invalid())
 }
-fn command(value: Value) -> Result<MdbxWriteCommand> {
+fn declarations(row: &mut Map<String, Value>, key: &str, maximum: usize) -> Result<Vec<String>> {
+    let value = row.remove(key).ok_or_else(invalid)?;
+    let values = value.as_array().ok_or_else(invalid)?;
+    if values.len() > maximum {
+        return Err(invalid());
+    }
+    let mut seen = HashSet::new();
+    values
+        .iter()
+        .map(|value| {
+            let text = value.as_str().ok_or_else(invalid)?;
+            if text.is_empty() || text.len() > 512 || !seen.insert(text) {
+                return Err(invalid());
+            }
+            Ok(text.to_string())
+        })
+        .collect()
+}
+fn command(
+    value: Value,
+    session: &Session,
+    used: &mut HashSet<String>,
+    total: &mut usize,
+) -> Result<MdbxWriteCommand> {
     let mut row = take_object(value, "Content command must be an object.")?;
     let kind = take_string(&mut row, "kind", 32, false)?;
     let result = match kind.as_str() {
+        "collection-profile-set" => {
+            let project_id = take_uuid(&mut row, "collectionId")?;
+            let collection_type_id = take_string(&mut row, "collectionTypeId", 512, false)?;
+            let payload_schema_version = schema(&mut row)?;
+            let allowed_object_type_ids = declarations(&mut row, "allowedObjectTypeIds", 256)?;
+            let required_capability_ids = declarations(&mut row, "requiredCapabilityIds", 128)?;
+            let id = take_uuid(&mut row, "assetId")?;
+            if payload_schema_version == 0 || !row.is_empty() {
+                return Err(invalid());
+            }
+            let part = session.parts.get(&id).ok_or_else(invalid)?;
+            *total += part.size;
+            // Also bound repeated references before making plaintext copies.
+            if part.size > 1024 * 1024 || *total > 8 * 1024 * 1024 {
+                return Err(invalid());
+            }
+            used.insert(id);
+            MdbxWriteCommand::SetCollectionProfile {
+                project_id,
+                collection_type_id,
+                payload: part.bytes.to_vec(),
+                payload_schema_version,
+                allowed_object_type_ids,
+                required_capability_ids,
+            }
+        }
+        "collection-presentation" => MdbxWriteCommand::UpdateProjectPresentation {
+            project_id: take_uuid(&mut row, "collectionId")?,
+            favorite: row
+                .remove("favorite")
+                .and_then(|v| v.as_bool())
+                .ok_or_else(invalid)?,
+            archived: row
+                .remove("archived")
+                .and_then(|v| v.as_bool())
+                .ok_or_else(invalid)?,
+            icon_ref: match row.remove("iconRef").ok_or_else(invalid)? {
+                Value::Null => None,
+                Value::String(text) if !text.is_empty() && text.len() <= 4096 => Some(text),
+                _ => return Err(invalid()),
+            },
+        },
         "collection-create" => MdbxWriteCommand::CreateProjectWithParent {
             project_id: take_uuid(&mut row, "collectionId")?,
             title: take_string(&mut row, "title", 4096, true)?,

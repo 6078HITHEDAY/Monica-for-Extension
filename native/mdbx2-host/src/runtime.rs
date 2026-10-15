@@ -743,6 +743,7 @@ impl HostRuntime {
             "supportsVaultWriteRevision": true,
             "supportsContentMetadata": true,
             "supportsContentProfiles": true,
+            "supportsCollectionProfileWrite": true,
             "supportsContentAttachments": true,
             "supportsContentWrite": true,
             "supportsRetainedFolderTrash": true,
@@ -8151,6 +8152,7 @@ fn path_string(path: &Path) -> Result<String, RpcFailure> {
 #[cfg(test)]
 mod tests {
     include!("content_write_tests.rs");
+    include!("content_profile_write_tests.rs");
     include!("content_metadata_tests.rs");
     include!("content_attachments_tests.rs");
     use super::*;

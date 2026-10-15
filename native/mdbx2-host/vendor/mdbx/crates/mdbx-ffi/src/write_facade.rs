@@ -120,6 +120,20 @@ pub enum MdbxWriteCommand {
     TrashProjectWithAttachments {
         project_id: String,
     },
+    SetCollectionProfile {
+        project_id: String,
+        collection_type_id: String,
+        payload: Vec<u8>,
+        payload_schema_version: u32,
+        allowed_object_type_ids: Vec<String>,
+        required_capability_ids: Vec<String>,
+    },
+    UpdateProjectPresentation {
+        project_id: String,
+        favorite: bool,
+        archived: bool,
+        icon_ref: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -258,6 +272,32 @@ impl From<MdbxWriteCommand> for StorageWriteCommand {
             MdbxWriteCommand::TrashProjectWithAttachments { project_id } => {
                 Self::TrashProjectWithAttachments { project_id }
             }
+            MdbxWriteCommand::SetCollectionProfile {
+                project_id,
+                collection_type_id,
+                payload,
+                payload_schema_version,
+                allowed_object_type_ids,
+                required_capability_ids,
+            } => Self::SetCollectionProfile {
+                project_id,
+                collection_type_id,
+                payload,
+                payload_schema_version,
+                allowed_object_type_ids,
+                required_capability_ids,
+            },
+            MdbxWriteCommand::UpdateProjectPresentation {
+                project_id,
+                favorite,
+                archived,
+                icon_ref,
+            } => Self::UpdateProjectPresentation {
+                project_id,
+                favorite,
+                archived,
+                icon_ref,
+            },
             MdbxWriteCommand::RestoreProject {
                 project_id,
                 parent_project_id,

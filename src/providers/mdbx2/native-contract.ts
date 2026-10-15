@@ -952,6 +952,7 @@ export interface Mdbx2HostCapabilities {
   supportsVaultWriteRevision?: boolean;
   supportsContentMetadata?: boolean;
   supportsContentProfiles?: boolean;
+  supportsCollectionProfileWrite?: boolean;
   supportsContentAttachments?: boolean;
   supportsContentWrite?: boolean;
   supportsRetainedFolderTrash?: boolean;
@@ -1179,6 +1180,7 @@ export function validateMdbx2HostCapabilities(input: unknown): Mdbx2HostCapabili
     ...(value.supportsVaultWriteRevision === true ? { supportsVaultWriteRevision: true } : {}),
     ...(value.supportsContentMetadata === true ? { supportsContentMetadata: true } : {}),
     ...(value.supportsContentProfiles === true ? { supportsContentProfiles: true } : {}),
+    ...(value.supportsCollectionProfileWrite === true ? { supportsCollectionProfileWrite: true } : {}),
     ...(value.supportsContentAttachments === true ? { supportsContentAttachments: true } : {}),
     ...(value.supportsContentWrite === true ? { supportsContentWrite: true } : {}),
     ...(value.supportsRetainedFolderTrash === true ? { supportsRetainedFolderTrash: true } : {}),
