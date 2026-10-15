@@ -670,7 +670,7 @@ impl HostRuntime {
             "content.metadata.read" => content_metadata::read(self, params),
             "content.attachments.list" => content_attachments::list(self, params),
             "content.attachments.begin" => content_attachments::begin(self, params),
-            "content.write.begin" | "content.write.chunk" | "content.write.finish" | "content.write.abort" => content_write::handle(self, method, params),
+            "content.write.anchor" | "content.write.begin" | "content.write.chunk" | "content.write.finish" | "content.write.abort" => content_write::handle(self, method, params),
             "object.list" => self.object_list(params),
             "object.reveal" => self.object_reveal(params),
             "object.upsert" => self.object_upsert(params),
@@ -746,6 +746,7 @@ impl HostRuntime {
             "supportsCollectionProfileWrite": true,
             "supportsContentAttachments": true,
             "supportsContentWrite": true,
+            "supportsContentWriteAnchor": true,
             "supportsRetainedFolderTrash": true,
             "supportsObjectRestore": true,
             "supportsObjectBatchRestore": true,
@@ -8152,6 +8153,7 @@ fn path_string(path: &Path) -> Result<String, RpcFailure> {
 #[cfg(test)]
 mod tests {
     include!("content_write_tests.rs");
+    include!("content_write_anchor_tests.rs");
     include!("content_profile_write_tests.rs");
     include!("content_metadata_tests.rs");
     include!("content_attachments_tests.rs");

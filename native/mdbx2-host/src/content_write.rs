@@ -98,6 +98,69 @@ pub(super) fn handle(runtime: &mut HostRuntime, method: &str, value: Value) -> R
     }
     let vault = runtime.require_open_vault(&vault_handle)?;
     match method {
+        "content.write.anchor" => {
+            reject_unknown(params)?;
+            let unreadable = || {
+                RpcFailure::new(
+                    "content-write-anchor-unavailable",
+                    "The native write anchor could not be read.",
+                    true,
+                )
+            };
+            // Retain the actual branch inputs to the native revision hash.
+            // A caller can then predict the revision after its own main-branch
+            // commit, including after a lost reply, without accepting unrelated
+            // edits as a new baseline. This endpoint never performs a write.
+            let before = vault.read_write_revision().map_err(|_| unreadable())?;
+            let mut branches = vault.list_branches().map_err(|_| unreadable())?;
+            if branches.is_empty() || branches.len() > 1024 {
+                return Err(invalid());
+            }
+            branches.sort_by(|a, b| a.branch_id.cmp(&b.branch_id));
+            let mut ids = HashSet::new();
+            let mut main_count = 0;
+            let mut hash = Sha256::new();
+            let mut part = |bytes: &[u8]| {
+                hash.update((bytes.len() as u64).to_le_bytes());
+                hash.update(bytes);
+            };
+            part(b"monica-extension-write-revision-v1");
+            part(before.vault_id.as_bytes());
+            let mut rows = Vec::with_capacity(branches.len());
+            for branch in branches {
+                if branch.branch_id.len() != 36
+                    || branch.head_commit_id.len() != 36
+                    || branch.branch_name.is_empty()
+                    || branch.branch_name.len() > 4096
+                    || !ids.insert(branch.branch_id.clone())
+                {
+                    return Err(invalid());
+                }
+                part(branch.branch_id.as_bytes());
+                part(branch.branch_name.as_bytes());
+                part(branch.head_commit_id.as_bytes());
+                if branch.branch_name == "main" {
+                    main_count += 1;
+                }
+                rows.push(json!({"branchId":branch.branch_id,"branchName":branch.branch_name,"headCommitId":branch.head_commit_id}));
+            }
+            let after = vault.read_write_revision().map_err(|_| unreadable())?;
+            if before != after || format!("{:x}", hash.finalize()) != before.revision_sha256 {
+                return Err(RpcFailure::new(
+                    "content-write-stale",
+                    "The vault changed while reading its write anchor.",
+                    true,
+                ));
+            }
+            if main_count != 1 {
+                return Err(invalid());
+            }
+            let result = json!({"writeRevision":{"vaultId":before.vault_id,"revisionSha256":before.revision_sha256},"branches":rows});
+            if serde_json::to_vec(&result).map_err(|_| invalid())?.len() > 512 * 1024 {
+                return Err(invalid());
+            }
+            Ok(result)
+        }
         "content.write.begin" => {
             let operation_id = take_uuid(&mut params, "operationId")?;
             let revision = revision(params.remove("writeRevision").ok_or_else(invalid)?)?;

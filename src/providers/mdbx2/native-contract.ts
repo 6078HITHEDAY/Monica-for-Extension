@@ -120,6 +120,7 @@ export type Mdbx2NativeMethod =
   | "content.attachments.list"
   | "content.attachments.begin"
   | "content.write.begin"
+  | "content.write.anchor"
   | "content.write.chunk"
   | "content.write.finish"
   | "content.write.abort"
@@ -955,6 +956,7 @@ export interface Mdbx2HostCapabilities {
   supportsCollectionProfileWrite?: boolean;
   supportsContentAttachments?: boolean;
   supportsContentWrite?: boolean;
+  supportsContentWriteAnchor?: boolean;
   supportsRetainedFolderTrash?: boolean;
   supportsCompleteBackup?: boolean;
   supportsObjectRestore?: boolean;
@@ -1183,6 +1185,7 @@ export function validateMdbx2HostCapabilities(input: unknown): Mdbx2HostCapabili
     ...(value.supportsCollectionProfileWrite === true ? { supportsCollectionProfileWrite: true } : {}),
     ...(value.supportsContentAttachments === true ? { supportsContentAttachments: true } : {}),
     ...(value.supportsContentWrite === true ? { supportsContentWrite: true } : {}),
+    ...(value.supportsContentWriteAnchor === true ? { supportsContentWriteAnchor: true } : {}),
     ...(value.supportsRetainedFolderTrash === true ? { supportsRetainedFolderTrash: true } : {}),
     ...(value.supportsCompleteBackup === true ? { supportsCompleteBackup: true } : {}),
     ...(value.supportsObjectRestore === true ? { supportsObjectRestore: true } : {}),

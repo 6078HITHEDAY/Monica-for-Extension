@@ -7,6 +7,7 @@ import {createHash,randomUUID} from 'node:crypto';
 import path from 'node:path';
 import {launchEdgeContext} from './fixtures/edge';
 import type {NearbyNativeSource} from '../../src/nearby/native-source';
+import {advanceMdbx2ContentWriteAnchor,type Mdbx2ContentWriteAnchor} from '../../src/providers/mdbx2/content-write-anchor';
 
 test('bundled engine reads and atomically writes opaque profiles across encrypted import and browser restart',async({},info)=>{
   test.skip(process.platform!=='win32','Installed Edge and native fixture');test.setTimeout(180000);
@@ -39,6 +40,8 @@ test('bundled engine reads and atomically writes opaque profiles across encrypte
     const handle=(await rpc('vault.open',{source:{kind:'file',handle:finished.fileHandle},credential:{method:'password',password}})).vaultHandle;
     const capture=():Promise<NearbyNativeSource>=>call('nearby-native-source',{providerId,vaultHandle:handle});
     const first=await capture();expect(first.profiles).toHaveLength(1);expect(first.profiles![0]).toMatchObject({...expected.metadata,sha256:expected.sha256});
+    const anchor:Mdbx2ContentWriteAnchor=await call('content-write-anchor',{handle,writeRevision:first.writeRevision});
+    expect((await capture()).writeRevision).toEqual(first.writeRevision);
     const payload=Buffer.from(first.profiles![0].payloadBase64,'base64');expect(payload.length).toBe(expected.sizeBytes);expect(payload.every((byte,index)=>byte===index%256)).toBe(true);
     const projection=await call('nearby-native-project',first);expect(projection.blockers).toEqual([]);expect(projection.profileAssets).toHaveLength(1);
     const replacement=Buffer.from(Uint8Array.from({length:1024*1024},(_,index)=>(index*37+17)%256)),assetId=randomUUID();
@@ -50,6 +53,8 @@ test('bundled engine reads and atomically writes opaque profiles across encrypte
     const invalid=structuredClone(write);invalid.input.plan.commands[0].collectionTypeId='com.monica.incompatible';
     await expect(call('content-write',invalid)).rejects.toThrow();expect((await capture()).writeRevision).toEqual(first.writeRevision);
     const receipt=await call('content-write',write),after=await capture();expect(receipt.alreadyCommitted).toBe(false);
+    const nextAnchor=await advanceMdbx2ContentWriteAnchor(anchor,receipt.commitId);
+    expect(nextAnchor.writeRevision).toEqual(after.writeRevision);
     expect(Buffer.from(after.profiles![0].payloadBase64,'base64').equals(replacement)).toBe(true);
     expect(after.profiles![0].createdAt).toBe(first.profiles![0].createdAt);
     expect(after.collections.find(row=>row.collectionId===expected.collectionId)).toMatchObject({favorite:true,archived:true,iconRef:'key',headCommitId:receipt.commitId});
@@ -61,7 +66,28 @@ test('bundled engine reads and atomically writes opaque profiles across encrypte
     const restored=await capture();expect(restored.profiles).toEqual(after.profiles);expect(restored.writeRevision).toEqual(after.writeRevision);
     const replay=await call('content-write',write);expect(replay).toMatchObject({alreadyCommitted:true,commitId:receipt.commitId});
     expect((await capture()).writeRevision).toEqual(after.writeRevision);
+    // Continue from the saved pre-write anchor and the replayed receipt. The
+    // 1MiB profile plus 1MiB attachment cannot fit their original combined
+    // transaction, but each bounded step can preserve its exact revision.
+    const resumedAnchor=await advanceMdbx2ContentWriteAnchor(JSON.parse(JSON.stringify(anchor)),replay.commitId);
+    expect(resumedAnchor).toEqual(nextAnchor);
+    const attachmentId=randomUUID(),fileAsset=randomUUID(),file=Buffer.alloc(1024*1024,0x5a);
+    const fileWrite={handle,input:{operationId:randomUUID(),writeRevision:resumedAnchor.writeRevision,plan:{commands:[],attachments:[{
+      kind:'create',attachmentId,collectionId:expected.collectionId,objectId:null,fileName:'synthetic-large-file.bin',mediaType:'application/octet-stream',assetId:fileAsset}]},assets:[{id:fileAsset,base64:file.toString('base64')}]}};
+    const fileReceipt=await call('content-write',fileWrite),withFile=await capture();
+    const finalAnchor=await advanceMdbx2ContentWriteAnchor(resumedAnchor,fileReceipt.commitId);
+    expect(withFile.writeRevision).toEqual(finalAnchor.writeRevision);expect(withFile.profiles).toEqual(after.profiles);expect(withFile.objects).toEqual(first.objects);
+    const attachment=withFile.attachments.find(a=>a.attachmentId===attachmentId)!;
+    expect(await call('content-attachment-bytes',{handle,input:{writeRevision:withFile.writeRevision,attachment}})).toEqual({sizeBytes:file.length,sha256:createHash('sha256').update(file).digest('hex')});
+    const independent={handle,input:{operationId:randomUUID(),writeRevision:withFile.writeRevision,plan:{commands:[{kind:'collection-rename',collectionId:expected.collectionId,title:'User edit after interruption'}],attachments:[]},assets:[]}};
+    await call('content-write',independent);const userEdit=await capture();
+    const replayFile=await call('content-write',fileWrite);expect(replayFile).toMatchObject({alreadyCommitted:true,commitId:fileReceipt.commitId});
+    const staleAnchor=await advanceMdbx2ContentWriteAnchor(resumedAnchor,replayFile.commitId);
+    const stale=structuredClone(independent);stale.input.operationId=randomUUID();stale.input.writeRevision=staleAnchor.writeRevision;stale.input.plan.commands[0].title='Must not overwrite user edit';
+    await expect(call('content-write',stale)).rejects.toThrow('content-write-stale');expect((await capture()).writeRevision).toEqual(userEdit.writeRevision);
+    await expect(call('content-write-anchor',{handle,writeRevision:staleAnchor.writeRevision})).rejects.toThrow('content-write-stale');
     await call('close');Object.assign(evidence,{status:'passed',binaryBytes:payload.length,writeBytes:replacement.length,atomicProfileWrite:true,presentation:true,
-      typeConflictRollback:true,unchangedObjects:true,identicalReplayAfterRestart:true,exactBytes:true,lockedDenial:true,realBrowserRestart:true,encryptedStorageScan:true,versionOneNoSilentLoss:true});
+      typeConflictRollback:true,unchangedObjects:true,identicalReplayAfterRestart:true,exactBytes:true,lockedDenial:true,realBrowserRestart:true,encryptedStorageScan:true,versionOneNoSilentLoss:true,
+      predictedRevisionAfterRestart:true,largeProfileAndFileSteps:true,interveningEditPreserved:true,automaticMultiStepAdoption:false});
   }finally{await context?.close();await writeFile(path.join(run,'evidence.json'),JSON.stringify(evidence,null,2));}
 });

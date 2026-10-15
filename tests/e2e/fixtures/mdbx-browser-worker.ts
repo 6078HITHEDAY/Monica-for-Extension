@@ -4,6 +4,7 @@ import { MdbxBrowserBlockStore, blockHash, type BrowserCommit } from '../../../s
 import { MdbxBrowserFilesystem } from '../../../src/providers/mdbx2/browser/filesystem';
 import { readMdbx2ContentMetadata } from '../../../src/providers/mdbx2/content-metadata';
 import { writeMdbx2Content } from '../../../src/providers/mdbx2/content-write';
+import { readMdbx2ContentWriteAnchor } from '../../../src/providers/mdbx2/content-write-anchor';
 import { readMdbx2ContentAttachments, readMdbx2ContentAttachmentBytes } from '../../../src/providers/mdbx2/content-attachments';
 import { Mdbx2NativeClient } from '../../../src/providers/mdbx2/native-client';
 import { captureNearbyNativeSource } from '../../../src/nearby/native-source';
@@ -133,7 +134,7 @@ async function action(op: string, data: any): Promise<unknown> {
     await journalService.adoptNearbyLocalTransaction({providerId,sourceHash:await journalService.nearbyLocalSnapshotHash(),records,assets:data.assets},sessionId);
     return journalService.captureNearbyLocalRecords();
   }
-  if (op === 'content-metadata' || op === 'content-write' || op === 'content-attachments' || op === 'content-attachment-bytes' || op.startsWith('nearby-native-')) {
+  if (op === 'content-metadata' || op === 'content-write' || op === 'content-write-anchor' || op === 'content-attachments' || op === 'content-attachment-bytes' || op.startsWith('nearby-native-')) {
     const request = async (method: Mdbx2NativeMethod, params: Record<string, unknown> = {}) => {
       const response = parseMdbx2NativeResponse(await session!.request({ protocol: 2, requestId: crypto.randomUUID(), method, params }));
       if (!response) throw Error('Invalid synthetic native response');
@@ -141,6 +142,7 @@ async function action(op: string, data: any): Promise<unknown> {
       return response.result;
     };
     const client = { request, hello: async () => validateMdbx2HostCapabilities(await request('host.hello')) };
+    if (op === 'content-write-anchor') return readMdbx2ContentWriteAnchor(client, data.handle, data.writeRevision);
     if (op === 'nearby-native-journal-stage') {
       const sessionId = await unlockJournal(), plan = data.plan;
       await journalService.upsertProvider({id:plan.providerId,kind:'mdbx2',enabled:true,isDefaultSaveTarget:false,name:'Synthetic journal source',config:{vaultHandle:plan.vaultHandle}});
