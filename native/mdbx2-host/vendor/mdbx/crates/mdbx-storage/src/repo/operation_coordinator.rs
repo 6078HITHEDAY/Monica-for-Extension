@@ -125,6 +125,9 @@ pub enum WriteCommand {
     RemoveObjectLabelAssignment {
         assignment_id: String,
     },
+    TrashProjectWithAttachments {
+        project_id: String,
+    },
 }
 
 impl WriteCommand {
@@ -141,6 +144,7 @@ impl WriteCommand {
             | Self::RenameProject { .. }
             | Self::MoveProject { .. }
             | Self::DeleteProject { .. }
+            | Self::TrashProjectWithAttachments { .. }
             | Self::RestoreProject { .. }
             | Self::DeleteEntry { .. }
             | Self::RestoreEntry { .. }
@@ -310,6 +314,26 @@ impl PreparedWriteOperation {
     /// `CommitOperation` and transaction.
     pub fn apply(&self, conn: &VaultConnection, ctx: &CommitContext) -> StorageResult<()> {
         execute_prepared_commands(conn, ctx, &self.commands)
+    }
+
+    /// Composite adoption executes file mutations before the explicit folder
+    /// trash commands. Both phases use the caller's single outer transaction.
+    pub fn apply_with_deferred_folder_trash(
+        &self,
+        conn: &VaultConnection,
+        ctx: &CommitContext,
+        trash_phase: bool,
+    ) -> StorageResult<()> {
+        for command in &self.commands {
+            if matches!(
+                command,
+                PreparedWriteCommand::TrashProjectWithAttachments { .. }
+            ) == trash_phase
+            {
+                execute_prepared_commands(conn, ctx, std::slice::from_ref(command))?;
+            }
+        }
+        Ok(())
     }
 
     fn commit_operation(&self) -> CommitOperation {
@@ -565,7 +589,8 @@ pub fn write_operation_changes(commands: &[WriteCommand]) -> Vec<CommitChange> {
             WriteCommand::MoveProject { project_id, .. } => {
                 ("project", project_id, "move", &["group_id"])
             }
-            WriteCommand::DeleteProject { project_id } => {
+            WriteCommand::DeleteProject { project_id }
+            | WriteCommand::TrashProjectWithAttachments { project_id } => {
                 ("project", project_id, "delete", &["deleted"])
             }
             WriteCommand::RestoreProject { project_id, .. } => {
@@ -771,6 +796,9 @@ enum PreparedWriteCommand {
     RemoveObjectLabelAssignment {
         assignment_id: String,
     },
+    TrashProjectWithAttachments {
+        project_id: String,
+    },
 }
 
 impl PreparedWriteCommand {
@@ -782,6 +810,7 @@ impl PreparedWriteCommand {
             | Self::CreateProjectWithParent { .. }
             | Self::RenameProject { .. }
             | Self::DeleteProject { .. }
+            | Self::TrashProjectWithAttachments { .. }
             | Self::CreateEntry { .. }
             | Self::UpdateEntry { .. }
             | Self::DeleteEntry { .. }
@@ -845,6 +874,12 @@ impl TryFrom<&WriteCommand> for PreparedWriteCommand {
             WriteCommand::DeleteProject { project_id } => {
                 validate_uuid(project_id, "project_id")?;
                 Ok(Self::DeleteProject {
+                    project_id: project_id.clone(),
+                })
+            }
+            WriteCommand::TrashProjectWithAttachments { project_id } => {
+                validate_uuid(project_id, "project_id")?;
+                Ok(Self::TrashProjectWithAttachments {
                     project_id: project_id.clone(),
                 })
             }
@@ -1158,6 +1193,11 @@ fn execute_prepared_commands(
                 ensure_project_empty(conn, project_id)?;
                 ProjectRepo::soft_delete(conn, ctx, project_id)?;
             }
+            PreparedWriteCommand::TrashProjectWithAttachments { project_id } => {
+                active_project(conn, project_id)?;
+                ensure_project_without_active_members(conn, project_id)?;
+                ProjectRepo::soft_delete(conn, ctx, project_id)?;
+            }
             PreparedWriteCommand::RestoreProject {
                 project_id,
                 parent_project_id,
@@ -1413,7 +1453,10 @@ fn ensure_unique_project_title(
     Ok(())
 }
 
-fn ensure_project_empty(conn: &VaultConnection, project_id: &str) -> StorageResult<()> {
+fn ensure_project_without_active_members(
+    conn: &VaultConnection,
+    project_id: &str,
+) -> StorageResult<()> {
     if ProjectRepo::list_all(conn)?
         .iter()
         .any(|project| project.group_id.as_deref() == Some(project_id))
@@ -1427,6 +1470,11 @@ fn ensure_project_empty(conn: &VaultConnection, project_id: &str) -> StorageResu
             "a project with active entries cannot be deleted".to_string(),
         ));
     }
+    Ok(())
+}
+
+fn ensure_project_empty(conn: &VaultConnection, project_id: &str) -> StorageResult<()> {
+    ensure_project_without_active_members(conn, project_id)?;
     if !AttachmentRepo::list_by_project(conn, project_id)?.is_empty() {
         return Err(StorageError::ConstraintViolation(
             "a project with active attachments cannot be deleted".to_string(),

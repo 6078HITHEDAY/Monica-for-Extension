@@ -33,10 +33,41 @@ function fixture() {
 }
 
 describe('atomic native nearby adoption', () => {
-  it('refuses folder attachment trash before staging an uncommittable native intent',async()=>{
+  it('plans retained folder trash without deleting its attachments',async()=>{
     const f=fixture(),file=f.file();f.source.attachments.push({...f.base,attachmentId:randomUUID(),collectionId:f.other,objectId:null,fileName:'file.bin',mediaType:'application/octet-stream',storageMode:'embedded-inline',contentHash:file.descriptor.id,originalSize:file.bytes.length,storedSize:file.bytes.length,chunkCount:1});
     const row=(await projectNearbyNativeRecords(f.source)).records.find(row=>row.global_id===f.other)!;
-    await expect(planNearbyNativeAdoption(f.source,f.batch([{id:f.other,deleted:true,clockJson:'{"peer":1}',dataJson:JSON.stringify({...row.data,trashed:true}),localId:row.local_id,scope:row.scope,expectedGuard:row.guard}]))).rejects.toMatchObject({code:'native-folder-attachment-trash-unavailable'});
+    const result=await planNearbyNativeAdoption(f.source,f.batch([{id:f.other,deleted:true,clockJson:'{"peer":1}',dataJson:JSON.stringify({...row.data,trashed:true}),localId:row.local_id,scope:row.scope,expectedGuard:row.guard}]));
+    expect(result.write.plan.commands).toContainEqual({kind:'collection-trash',collectionId:f.other});
+    expect(result.write.plan.attachments).toEqual([]);
+  });
+  it('rejects folder trash with active members before staging',async()=>{
+    const f=fixture(),row=(await projectNearbyNativeRecords(f.source)).records.find(row=>row.global_id===f.folder)!;
+    await expect(planNearbyNativeAdoption(f.source,f.batch([{id:f.folder,deleted:true,clockJson:'{"peer":1}',dataJson:JSON.stringify({...row.data,trashed:true}),localId:row.local_id,scope:row.scope,expectedGuard:row.guard}]))).rejects.toMatchObject({code:'native-folder-active-members'});
+  });
+  it('trashes nested folders child-first without dropping attachments or metadata',async()=>{
+    const f=fixture();f.source.collections.find(row=>row.collectionId===f.other)!.groupId=f.folder;
+    f.source.objects=[];
+    const projection=await projectNearbyNativeRecords(f.source);
+    const records=[f.folder,f.other].map(id=>{const row=projection.records.find(row=>row.global_id===id)!;return{id,deleted:true,clockJson:'{"peer":1}',dataJson:JSON.stringify({...row.data,trashed:true}),localId:row.local_id,scope:row.scope,expectedGuard:row.guard};});
+    const result=await planNearbyNativeAdoption(f.source,f.batch(records));
+    expect(result.write.plan.commands.filter(c=>c.kind==='collection-trash').map(c=>c.collectionId)).toEqual([f.other,f.folder]);
+  });
+  it('rejects restoring a child while its parent remains deleted before staging',async()=>{
+    const f=fixture();f.source.objects=[];
+    f.source.collections.find(row=>row.collectionId===f.other)!.groupId=f.folder;
+    for(const row of f.source.collections)if(row.collectionId!==f.root)row.deleted=true;
+    const row=(await projectNearbyNativeRecords(f.source)).records.find(row=>row.global_id===f.other)!;
+    const restore={id:f.other,deleted:false,clockJson:'{"peer":2}',dataJson:JSON.stringify({...row.data,trashed:false}),localId:row.local_id,scope:row.scope,expectedGuard:row.guard};
+    await expect(planNearbyNativeAdoption(f.source,f.batch([restore]))).rejects.toMatchObject({code:'native-folder-deleted'});
+  });
+  it('restores a nested family parent-first regardless of incoming record order',async()=>{
+    const f=fixture();f.source.objects=[];
+    f.source.collections.find(row=>row.collectionId===f.other)!.groupId=f.folder;
+    for(const row of f.source.collections)if(row.collectionId!==f.root)row.deleted=true;
+    const projection=await projectNearbyNativeRecords(f.source);
+    const records=[f.other,f.folder].map(id=>{const row=projection.records.find(row=>row.global_id===id)!;return{id,deleted:false,clockJson:'{"peer":2}',dataJson:JSON.stringify({...row.data,trashed:false}),localId:row.local_id,scope:row.scope,expectedGuard:row.guard};});
+    const plan=await planNearbyNativeAdoption(f.source,f.batch(records));
+    expect(plan.write.plan.commands.flatMap(c=>c.kind==='collection-restore'?[c.collectionId]:[])).toEqual([f.folder,f.other]);
   });
   it.each(['folder', 'vault-metadata', 'note'] as const)('rejects duplicate portable attachment IDs in %s before returning an intent', async type => {
     const f=fixture(),id=randomUUID(),file=f.file();

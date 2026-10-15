@@ -65,14 +65,22 @@ test('native folder and root metadata keep attachment ownership across native/lo
       const before=current.records.find((r:any)=>r.global_id===row.global_id),data=purge?{}:{...row.data,trashed:deleted};
       return{id:row.global_id,deleted,clockJson:'{"peer":4}',dataJson:JSON.stringify(data),localId:before.local_id,scope:before.scope,expectedGuard:before.guard};
     });
-    const folderTrash=boundRecords(projection,retained.filter((r:any)=>r.global_id===folder),true);
-    await expect(call('nearby-native-adopt-plan',{source:target,batch:{operationId:randomUUID(),sourceHash:target.sourceHash,records:folderTrash,assets:[]}})).rejects.toThrow('native-folder-attachment-trash-unavailable');
-    expect((await capture(b,providerB)).writeRevision).toEqual(target.writeRevision);
-    const retainedRoot=retained.filter((r:any)=>r.global_id===source.rootId);
-    await adopt(b,target,boundRecords(projection,retainedRoot,true),[]);
+    await adopt(b,target,boundRecords(projection,retained,true),[]);
     target=await capture(b,providerB);projection=await call('nearby-native-project',target);
-    for(const row of retainedRoot){const trashed=projection.records.find((r:any)=>r.global_id===row.global_id);expect(trashed.deleted).toBe(true);expect(trashed.data.assets).toEqual(row.data.assets);expect(trashed.data.payload).toEqual(row.data.payload);}
-    await adopt(b,target,boundRecords(projection,retainedRoot,false),[]);
+    for(const row of retained){const trashed=projection.records.find((r:any)=>r.global_id===row.global_id);expect(trashed.deleted).toBe(true);expect(trashed.data.assets).toEqual(row.data.assets);expect(trashed.data.payload).toEqual(row.data.payload);}
+    const forwardedTrash=await call('nearby-local-forward',{records:incoming(projection,4),assets:[asset,{id:updatedHash,dataBase64:updatedBytes.toString('base64')}]});
+    for(const row of retained){
+      const trashed=forwardedTrash.records.find((r:any)=>r.global_id===row.global_id);
+      expect(trashed.deleted).toBe(true);expect(trashed.data.assets).toEqual(row.data.assets);expect(trashed.data.payload).toEqual(row.data.payload);expect(trashed.data.labels).toEqual(row.data.labels);
+      for(const descriptor of row.data.assets){const file=forwardedTrash.assets.find((a:any)=>a.id===descriptor.id);expect(createHash('sha256').update(Buffer.from(file.dataBase64,'base64')).digest('hex')).toBe(descriptor.id);}
+    }
+    source=await capture(a,providerA);
+    await adopt(a,source,boundRecords(await call('nearby-native-project',source),forwardedTrash.records.filter((r:any)=>[folder,source.rootId].includes(r.global_id)),true),forwardedTrash.assets);
+    source=await capture(a,providerA);
+    const returnedTrash=await call('nearby-native-project',source);
+    for(const row of retained)expect(returnedTrash.records.find((r:any)=>r.global_id===row.global_id)).toMatchObject({deleted:true,data:{assets:row.data.assets,payload:row.data.payload}});
+    await adopt(a,source,boundRecords(returnedTrash,retained,false),[]);
+    await adopt(b,target,boundRecords(projection,retained,false),[]);
     target=await capture(b,providerB);projection=await call('nearby-native-project',target);
     const rootRecord=projection.records.find((r:any)=>r.global_id===source.rootId),rootNativeFile=target.attachments.find((f:any)=>f.objectId===null&&f.collectionId===target.rootId&&!f.deleted);
     await adopt(b,target,boundRecords(projection,[rootRecord],true,true),[]);
@@ -84,14 +92,28 @@ test('native folder and root metadata keep attachment ownership across native/lo
     await adopt(b,target,boundRecords(projection,[rootRecord],false),[asset]);
     target=await capture(b,providerB);projection=await call('nearby-native-project',target);
     expect(projection.records.find((r:any)=>r.global_id===source.rootId).data.assets).toEqual(rootRecord.data.assets);
+    const folderRecord=projection.records.find((r:any)=>r.global_id===folder);
+    await adopt(b,target,boundRecords(projection,[folderRecord],true,true),[]);
+    target=await capture(b,providerB);projection=await call('nearby-native-project',target);
+    expect(projection.records.find((r:any)=>r.global_id===folder)).toMatchObject({deleted:true,data:{}});
+    expect(target.attachments.filter((file:any)=>file.collectionId===folder&&!file.deleted)).toEqual([]);
+    expect(projection.records.find((r:any)=>r.global_id===source.rootId).data.assets).toEqual(rootRecord.data.assets);
+    await adopt(b,target,boundRecords(projection,[folderRecord],false),[{id:updatedHash,dataBase64:updatedBytes.toString('base64')}]);
     await call('close');await context!.close();call=await connect();await call('open',{name:database});
     await rpc('vault.open',{source:{kind:'vault',handle:a},credential:{method:'password',password}});
     source=await capture(a,providerA);projection=await call('nearby-native-project',source);expect(projection.blockers).toEqual([]);
     expect(projection.records.find((r:any)=>r.global_id===folder).data).toMatchObject({title:'Renamed',payload:{future:{retained:'folder-extra'}},assets:[{attachment_id:folderFile,id:updatedHash,size:updatedBytes.length}]});
     expect(source.metadata.labels.find((row:any)=>row.labelId===rootLabel).deleted).toBe(true);
     for(const [id,expected,size]of [[folderFile,updatedHash,updatedBytes.length],[rootFile,hash,bytes.length]]as const){const file=source.attachments.find((row:any)=>row.attachmentId===id);expect(file.deleted).toBe(false);expect(await call('content-attachment-bytes',{handle:a,input:{writeRevision:source.writeRevision,attachment:file}})).toEqual({sizeBytes:size,sha256:expected});}
+    await rpc('vault.open',{source:{kind:'vault',handle:b},credential:{method:'password',password}});
+    target=await capture(b,providerB);projection=await call('nearby-native-project',target);
+    const restoredFolder=projection.records.find((r:any)=>r.global_id===folder);
+    expect(restoredFolder).toMatchObject({deleted:false,data:{assets:folderRecord.data.assets}});
+    const restoredFile=target.attachments.find((file:any)=>file.collectionId===folder&&!file.deleted);
+    expect(await call('content-attachment-bytes',{handle:b,input:{writeRevision:target.writeRevision,attachment:restoredFile}})).toEqual({sizeBytes:updatedBytes.length,sha256:updatedHash});
+    expect(target.metadata.labels.find((label:any)=>label.labelId===ownLabel).deleted).toBe(false);
     await call('scan',[password,'synthetic-label']);await call('nearby-native-journal-scan',['synthetic-label']);
-    Object.assign(evidence,{status:'passed',rootOwnerIsolation:true,nativeLocalNativeRoundtrip:true,folderAndRootAttachmentIdentity:true,byteHashes:true,unknownFolderFields:true,actualRestart:true,rootTrashRestore:true,rootPurgeOwnerIsolation:true,folderAttachmentTrash:'explicit-preflight-blocker-native-support-required'});
+    Object.assign(evidence,{status:'passed',rootOwnerIsolation:true,nativeLocalNativeRoundtrip:true,retainedTrashLocalForwarding:true,folderAndRootAttachmentIdentity:true,byteHashes:true,unknownFolderFields:true,actualRestart:true,rootTrashRestore:true,rootPurgeOwnerIsolation:true,folderAttachmentTrash:true,folderPurgeRestore:true});
     await call('close');
   }finally{await context?.close();await writeFile(path.join(run,'evidence.json'),JSON.stringify(evidence,null,2));}
 });

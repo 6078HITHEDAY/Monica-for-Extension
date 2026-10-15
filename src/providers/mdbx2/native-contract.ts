@@ -953,6 +953,7 @@ export interface Mdbx2HostCapabilities {
   supportsContentMetadata?: boolean;
   supportsContentAttachments?: boolean;
   supportsContentWrite?: boolean;
+  supportsRetainedFolderTrash?: boolean;
   supportsCompleteBackup?: boolean;
   supportsObjectRestore?: boolean;
   supportsObjectBatchRestore?: boolean;
@@ -1178,6 +1179,7 @@ export function validateMdbx2HostCapabilities(input: unknown): Mdbx2HostCapabili
     ...(value.supportsContentMetadata === true ? { supportsContentMetadata: true } : {}),
     ...(value.supportsContentAttachments === true ? { supportsContentAttachments: true } : {}),
     ...(value.supportsContentWrite === true ? { supportsContentWrite: true } : {}),
+    ...(value.supportsRetainedFolderTrash === true ? { supportsRetainedFolderTrash: true } : {}),
     ...(value.supportsCompleteBackup === true ? { supportsCompleteBackup: true } : {}),
     ...(value.supportsObjectRestore === true ? { supportsObjectRestore: true } : {}),
     ...(value.supportsObjectBatchRestore === true ? { supportsObjectBatchRestore: true } : {}),

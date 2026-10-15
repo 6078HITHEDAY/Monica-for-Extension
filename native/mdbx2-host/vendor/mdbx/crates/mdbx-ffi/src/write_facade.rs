@@ -117,6 +117,9 @@ pub enum MdbxWriteCommand {
     RemoveObjectLabelAssignment {
         assignment_id: String,
     },
+    TrashProjectWithAttachments {
+        project_id: String,
+    },
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -252,6 +255,9 @@ impl From<MdbxWriteCommand> for StorageWriteCommand {
                 parent_project_id,
             },
             MdbxWriteCommand::DeleteProject { project_id } => Self::DeleteProject { project_id },
+            MdbxWriteCommand::TrashProjectWithAttachments { project_id } => {
+                Self::TrashProjectWithAttachments { project_id }
+            }
             MdbxWriteCommand::RestoreProject {
                 project_id,
                 parent_project_id,
@@ -643,12 +649,21 @@ impl MdbxVault {
         }
         // Match OperationCoordinator's repository kinds; restore/move may not
         // execute inside a context declared as an ordinary change.
-        let kinds = commands.iter().map(|command| match command {
-            MdbxWriteCommand::RestoreProject { .. } | MdbxWriteCommand::RestoreEntry { .. } => "restore",
-            MdbxWriteCommand::MoveProject { .. } | MdbxWriteCommand::MoveEntry { .. } => "move",
-            _ => "change",
-        }).collect::<std::collections::BTreeSet<_>>();
-        let commit_kind = if kinds.len() == 1 { *kinds.iter().next().unwrap() } else { "multi" };
+        let kinds = commands
+            .iter()
+            .map(|command| match command {
+                MdbxWriteCommand::RestoreProject { .. } | MdbxWriteCommand::RestoreEntry { .. } => {
+                    "restore"
+                }
+                MdbxWriteCommand::MoveProject { .. } | MdbxWriteCommand::MoveEntry { .. } => "move",
+                _ => "change",
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        let commit_kind = if kinds.len() == 1 {
+            *kinds.iter().next().unwrap()
+        } else {
+            "multi"
+        };
         let prepared = OperationCoordinator::prepare(WriteOperationRequest::new(
             operation_id,
             operation_kind,
@@ -965,7 +980,7 @@ impl MdbxVault {
                 ));
             }
             if let Some(prepared) = &prepared {
-                prepared.apply(&conn, scoped)?;
+                prepared.apply_with_deferred_folder_trash(&conn, scoped, false)?;
             }
             execute_attachment_batch_commands(
                 &conn,
@@ -973,7 +988,11 @@ impl MdbxVault {
                 attachment_commands,
                 chunk_size,
                 &attachment_ids,
-            )
+            )?;
+            if let Some(prepared) = &prepared {
+                prepared.apply_with_deferred_folder_trash(&conn, scoped, true)?;
+            }
+            Ok(())
         })?;
         let (commit_id, already_committed) = match execution {
             OperationExecution::Applied { commit_id, .. } => (commit_id, false),

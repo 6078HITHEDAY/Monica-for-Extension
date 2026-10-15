@@ -126,6 +126,192 @@ fn finish_content_write(
 }
 
 #[test]
+fn content_write_retained_folder_trash_preserves_files_and_replays_after_restore() {
+    let (_root, mut runtime) = runtime();
+    let password = "synthetic retained folder password";
+    let handle = open_test_vault(&mut runtime, password);
+    let folder = fresh_uuid();
+    let attachment = fresh_uuid();
+    let asset = fresh_uuid();
+    let revision = call(
+        &mut runtime,
+        "vault.writeRevision",
+        json!({"vaultHandle":handle}),
+    );
+    let setup = json!({"commands":[{"kind":"collection-create","collectionId":folder,"title":"Retained folder"}],"attachments":[{"kind":"create","attachmentId":attachment,"collectionId":folder,"fileName":"original.bin","assetId":asset}]});
+    let staged = stage_content_write(
+        &mut runtime,
+        &handle,
+        &fresh_uuid(),
+        &revision,
+        &setup,
+        &[(asset.clone(), vec![1, 2, 3])],
+    );
+    finish_content_write(&mut runtime, &handle, &staged).unwrap();
+    let before = call(
+        &mut runtime,
+        "vault.writeRevision",
+        json!({"vaultHandle":handle}),
+    );
+    let ordinary =
+        json!({"commands":[{"kind":"collection-delete","collectionId":folder}],"attachments":[]});
+    let staged = stage_content_write(
+        &mut runtime,
+        &handle,
+        &fresh_uuid(),
+        &before,
+        &ordinary,
+        &[],
+    );
+    assert_eq!(
+        finish_content_write(&mut runtime, &handle, &staged)
+            .unwrap_err()
+            .code,
+        "content-write-failed"
+    );
+    assert_eq!(
+        call(
+            &mut runtime,
+            "vault.writeRevision",
+            json!({"vaultHandle":handle})
+        ),
+        before
+    );
+
+    let op = fresh_uuid();
+    let plan = json!({"commands":[{"kind":"collection-trash","collectionId":folder}],"attachments":[{"kind":"replace","attachmentId":attachment,"assetId":asset}]});
+    let content = vec![7u8; 280000];
+    let assets = vec![(asset.clone(), content.clone())];
+    let staged = stage_content_write(&mut runtime, &handle, &op, &before, &plan, &assets);
+    let receipt = finish_content_write(&mut runtime, &handle, &staged).unwrap();
+    {
+        let vault = runtime.require_open_vault(&handle).unwrap();
+        assert!(
+            vault
+                .get_collection_summary(folder.clone())
+                .unwrap()
+                .unwrap()
+                .deleted
+        );
+        let file = vault
+            .get_attachment_summary(attachment.clone())
+            .unwrap()
+            .unwrap();
+        assert!(!file.deleted);
+        assert_eq!(file.attachment_id, attachment);
+        assert_eq!(
+            vault
+                .read_attachment_content(attachment.clone(), 300000)
+                .unwrap(),
+            content
+        );
+    }
+    let current = call(
+        &mut runtime,
+        "vault.writeRevision",
+        json!({"vaultHandle":handle}),
+    );
+    let restore = json!({"commands":[{"kind":"collection-restore","collectionId":folder}],"attachments":[{"kind":"rename","attachmentId":attachment,"fileName":"restored.bin"}]});
+    let staged = stage_content_write(
+        &mut runtime,
+        &handle,
+        &fresh_uuid(),
+        &current,
+        &restore,
+        &[],
+    );
+    finish_content_write(&mut runtime, &handle, &staged).unwrap();
+    call(&mut runtime, "vault.lock", json!({"vaultHandle":handle}));
+    reopen_test_vault(&mut runtime, &handle, password);
+    let restored = call(
+        &mut runtime,
+        "vault.writeRevision",
+        json!({"vaultHandle":handle}),
+    );
+    let staged = stage_content_write(&mut runtime, &handle, &op, &before, &plan, &assets);
+    let replay = finish_content_write(&mut runtime, &handle, &staged).unwrap();
+    assert_eq!(replay["commitId"], receipt["commitId"]);
+    assert_eq!(replay["alreadyCommitted"], true);
+    assert_eq!(
+        call(
+            &mut runtime,
+            "vault.writeRevision",
+            json!({"vaultHandle":handle})
+        ),
+        restored
+    );
+    let vault = runtime.require_open_vault(&handle).unwrap();
+    assert!(
+        !vault
+            .get_collection_summary(folder)
+            .unwrap()
+            .unwrap()
+            .deleted
+    );
+    let file = vault
+        .get_attachment_summary(attachment.clone())
+        .unwrap()
+        .unwrap();
+    assert_eq!(file.file_name, "restored.bin");
+    assert_eq!(
+        vault.read_attachment_content(attachment, 300000).unwrap(),
+        content
+    );
+}
+
+#[test]
+fn content_write_retained_folder_trash_rejects_active_members_atomically() {
+    let (_root, mut runtime) = runtime();
+    let handle = open_test_vault(&mut runtime, "synthetic folder rollback password");
+    let folder = fresh_uuid();
+    let child = fresh_uuid();
+    let attachment = fresh_uuid();
+    let asset = fresh_uuid();
+    let before = call(
+        &mut runtime,
+        "vault.writeRevision",
+        json!({"vaultHandle":handle}),
+    );
+    for member in [
+        json!({"kind":"collection-create","collectionId":child,"title":"Child","parentId":folder}),
+        json!({"kind":"object-create","objectId":child,"collectionId":folder,"objectTypeId":"note","title":"Child","payloadJson":"{}"}),
+    ] {
+        let plan = json!({"commands":[{"kind":"collection-create","collectionId":folder,"title":"Parent"},member,{"kind":"collection-trash","collectionId":folder}],"attachments":[{"kind":"create","attachmentId":attachment,"collectionId":folder,"fileName":"must-rollback.bin","assetId":asset}]});
+        let staged = stage_content_write(
+            &mut runtime,
+            &handle,
+            &fresh_uuid(),
+            &before,
+            &plan,
+            &[(asset.clone(), vec![6; 100])],
+        );
+        assert_eq!(
+            finish_content_write(&mut runtime, &handle, &staged)
+                .unwrap_err()
+                .code,
+            "content-write-failed"
+        );
+        assert_eq!(
+            call(
+                &mut runtime,
+                "vault.writeRevision",
+                json!({"vaultHandle":handle})
+            ),
+            before
+        );
+        let vault = runtime.require_open_vault(&handle).unwrap();
+        assert!(vault
+            .get_collection_summary(folder.clone())
+            .unwrap()
+            .is_none());
+        assert!(vault
+            .get_attachment_summary(attachment.clone())
+            .unwrap()
+            .is_none());
+    }
+}
+
+#[test]
 fn content_write_attachment_only_guards_revision_and_replays_after_deletion_and_reopen() {
     let (_root, mut runtime) = runtime();
     let password = "synthetic attachment-only password";

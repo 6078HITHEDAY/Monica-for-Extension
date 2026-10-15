@@ -120,9 +120,13 @@ export function nearbyNativeMetadataContents(source: NearbyNativeSource): Map<st
     if(found.length>1)invalidNearby('native-folder-data-marker');
     if(found.some(label=>label.payloadSchemaVersion!==1 || payload(label)?.data===undefined))invalidNearby('native-folder-data-marker');
     for (const label of found) {
-      const data = wireObject(payload(label)!.data);
-      validateNearbyWireData(data);
-      if (data.entry_type !== 'folder' || data.folder !== '') invalidNearby('native-folder-data-marker');
+      const marker = payload(label)!, data = wireObject(marker.data);
+      if (marker.purged === true) {
+        if (Object.keys(data).length) invalidNearby('native-folder-data-marker');
+      } else {
+        validateNearbyWireData(data);
+        if (data.entry_type !== 'folder' || data.folder !== '') invalidNearby('native-folder-data-marker');
+      }
     }
     result.set(`folder:${collection.collectionId}`,{marker:found[0],saved:found[0]?payload(found[0])!:{},labels:[],assets:[]});
   }
@@ -166,6 +170,11 @@ export async function projectNearbyNativeMetadata(input: NearbyNativeSource): Pr
     const path = paths.get(project.collectionId)!; if (!path.length) continue;
     const labels = (labelsByOwner.get(project.collectionId) ?? []).filter(row => !row.deleted);
     const extra=contents.get(`folder:${project.collectionId}`)!,saved=extra.saved.data===undefined?{}:wireObject(extra.saved.data);
+    if (project.deleted && extra.saved.purged === true) {
+      result.push({kind:'folder',id:project.collectionId,localId:`${scope}:folder:${project.collectionId}`,scope,deleted:true,data:{},
+        guard:await hash({project,labels,attachments:folderAssets.get(project.collectionId)??[]})});
+      continue;
+    }
     const data: NearbyWireData = { ...cloneLosslessJson(saved), title: path[path.length - 1].title, folder: '', entry_type: 'folder', trashed: project.deleted,
       payload: { ...(saved.payload===undefined?{}:wireObject(saved.payload)), path: path.map(node=>({...(Array.isArray(wireObject(saved.payload??{}).path)?(wireObject(saved.payload??{}).path as unknown[]).map(wireObject).find(old=>old.id===node.id):undefined),...node})), tags: tags(labels.filter(row => kind(row) === NATIVE_PROJECT_TAG)) } };
     if(extra.labels.length||data.labels!==undefined)data.labels=tags(extra.labels);
@@ -282,16 +291,21 @@ export async function planNearbyNativeMetadata(input: NearbyNativeSource, operat
   for (const row of changes) {
     if (row.kind === 'folder') {
       const data = row.data as NearbyWireData;
-      if (Object.keys(data).length && wireObject(data.payload).tags !== undefined) await reconcile(row.id, `folder:${row.id}`,
-        source.metadata.labels.filter(label => label.collectionId === row.id && kind(label) === NATIVE_PROJECT_TAG), wireObject(data.payload).tags);
+      const purge = row.deleted && !Object.keys(data).length;
+      if (purge && projects.get(row.id)?.deleted) {
+        commands.push({kind:'collection-restore',collectionId:row.id,parentId:projects.get(row.id)!.groupId??root});
+        projects.get(row.id)!.deleted=false;
+      }
+      if (purge || wireObject(data.payload).tags !== undefined) await reconcile(row.id, `folder:${row.id}`,
+        source.metadata.labels.filter(label => label.collectionId === row.id && kind(label) === NATIVE_PROJECT_TAG), purge?[]:wireObject(data.payload).tags);
       const extra=contents.get(`folder:${row.id}`);
-      if(data.labels!==undefined)await reconcile(row.id,`folder-label:${row.id}`,extra?.labels??[],data.labels,false);
-      if(Object.keys(data).length){
-        const text=JSON.stringify({...extra?.saved,kind:NATIVE_FOLDER_DATA,data});
+      if(purge || data.labels!==undefined)await reconcile(row.id,`folder-label:${row.id}`,extra?.labels??[],purge?[]:data.labels,false);
+      {
+        const text=JSON.stringify({...extra?.saved,kind:NATIVE_FOLDER_DATA,purged:purge,data,...(purge?{device_sync_assets:[],device_sync_images:{}}:{})});
         if(!extra?.marker)commands.push({kind:'label-create',labelId:await makeId(`folder-data:${row.id}`),collectionId:row.id,name:NATIVE_FOLDER_DATA,payloadJson:text,payloadSchemaVersion:1});
         else if(extra.marker.payloadJson!==text)commands.push({kind:'label-update',labelId:extra.marker.labelId,name:extra.marker.name,payloadJson:text,payloadSchemaVersion:extra.marker.payloadSchemaVersion});
       }
-      if (row.deleted && projects.get(row.id)?.deleted === false) { commands.push({ kind: 'collection-delete', collectionId: row.id }); projects.get(row.id)!.deleted = true; }
+      if (row.deleted && projects.get(row.id)?.deleted === false) { commands.push({ kind: 'collection-trash', collectionId: row.id }); projects.get(row.id)!.deleted = true; }
     } else {
       const purge = row.deleted && !Object.keys(row.data).length;
       const before = values.find(value => value.owner === row.id), ids = await reconcile(root, `root:${row.id}`, rootTags.get(row.id) ?? [], purge ? [] : wireObject((row.data as NearbyWireData).payload).tags);

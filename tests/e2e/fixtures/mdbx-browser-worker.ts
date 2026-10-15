@@ -17,6 +17,7 @@ import { MemoryVaultSessionStore } from '../../../src/security/vault-session';
 import { MemoryVaultDeviceKeyStore } from '../../../src/security/vault-device-key';
 import { nearbyNativeIntent } from '../../../src/nearby/native-journal';
 import { nativeNearbySource } from '../../../src/nearby/native-adapter';
+import type { NearbyIncomingRecord } from '../../../src/nearby/local-adoption';
 import { Mdbx2NativeHostError, parseMdbx2NativeResponse, validateMdbx2HostCapabilities, type Mdbx2NativeMethod } from '../../../src/providers/mdbx2/native-contract';
 // Packaged by the fixture alongside the production compiled engine.
 // @ts-expect-error A generated, external Emscripten module.
@@ -124,7 +125,12 @@ async function lifecycleSuite() {
 async function action(op: string, data: any): Promise<unknown> {
   if(op==='nearby-local-forward'){
     const sessionId=await unlockJournal(),providerId=(await journalService.readState()).providers.find(p=>p.kind==='local')!.id;
-    await journalService.adoptNearbyLocalTransaction({providerId,sourceHash:await journalService.nearbyLocalSnapshotHash(),records:data.records,assets:data.assets},sessionId);
+    const snapshot=await journalService.captureNearbyLocalRecords();
+    const records=(data.records as NearbyIncomingRecord[]).map(row=>{
+      const existing=snapshot.records.find(old=>old.global_id===row.id);
+      return existing?{...row,localId:existing.local_id,scope:existing.scope,expectedGuard:existing.guard}:row;
+    });
+    await journalService.adoptNearbyLocalTransaction({providerId,sourceHash:await journalService.nearbyLocalSnapshotHash(),records,assets:data.assets},sessionId);
     return journalService.captureNearbyLocalRecords();
   }
   if (op === 'content-metadata' || op === 'content-write' || op === 'content-attachments' || op === 'content-attachment-bytes' || op.startsWith('nearby-native-')) {

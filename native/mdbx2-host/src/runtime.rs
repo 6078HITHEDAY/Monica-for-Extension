@@ -744,6 +744,7 @@ impl HostRuntime {
             "supportsContentMetadata": true,
             "supportsContentAttachments": true,
             "supportsContentWrite": true,
+            "supportsRetainedFolderTrash": true,
             "supportsObjectRestore": true,
             "supportsObjectBatchRestore": true,
             "supportsAtomicObjectAttachmentMove": true,

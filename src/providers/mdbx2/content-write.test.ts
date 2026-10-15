@@ -36,6 +36,12 @@ function fixture() {
 }
 
 describe('atomic native content staging client', () => {
+  it('requires explicit retained-folder support before staging, while old commands still work',async()=>{
+    const f=fixture();f.input.plan.commands=[{kind:'collection-trash',collectionId:randomUUID()}];
+    await expect(f.write()).rejects.toMatchObject({code:'content-write-host-update-required'});expect(f.request).not.toHaveBeenCalled();
+    f.caps.supportsRetainedFolderTrash=true;
+    expect((await f.write()).commitId).toBe(f.commitId);
+  });
   it('preserves original IDs, zero counters, exact number lexemes and multi-chunk assets', async () => {
     const f = fixture(); const original = structuredClone(f.input);
     const receipt = await f.write();

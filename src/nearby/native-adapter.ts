@@ -1,7 +1,7 @@
 import type { SecureVaultService } from '../security/secure-vault-service';
 import type { Mdbx2NativeClient } from '../providers/mdbx2/native-client';
 import { Mdbx2NativeHostError } from '../providers/mdbx2/native-contract';
-import { writeMdbx2Content } from '../providers/mdbx2/content-write';
+import { requireMdbx2ContentWriteCapabilities, writeMdbx2Content } from '../providers/mdbx2/content-write';
 import { mdbx2TransferOperationScope as hash } from '../providers/mdbx2/mdbx2-transfer-identity';
 import { clearNearbyNativeAdoption, planNearbyNativeAdoption } from './native-adoption';
 import { captureNearbyNativeSource, nativeActive } from './native-source';
@@ -74,6 +74,10 @@ export function nativeNearbySource(options: {
       const source = await capture(); active();
       const plan = await planNearbyNativeAdoption(source, { ...batch, operationId: crypto.randomUUID() }, signal);
       try {
+        // A known unsupported engine must not leave a durable intent that can
+        // never execute. The writer checks again before native staging.
+        const caps = await client.hello(15_000, source.vaultHandle); active();
+        requireMdbx2ContentWriteCapabilities(caps, plan.write.plan.commands.some(row => row.kind === 'collection-trash'));
         const intent = await nearbyNativeIntent(plan, replicaStorageId); active();
         await store.stageNearbyNativeIntent(intent, options.epoch(), sessionId, active); active();
         const acknowledgements = await apply(intent), after = await client.readWriteRevision(source.vaultHandle); active();

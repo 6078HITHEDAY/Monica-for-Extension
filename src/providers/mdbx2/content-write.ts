@@ -1,5 +1,5 @@
 import { bytesToBase64 } from '../../security/encoding';
-import { Mdbx2NativeHostError, type Mdbx2WriteRevision } from './native-contract';
+import { Mdbx2NativeHostError, type Mdbx2HostCapabilities, type Mdbx2WriteRevision } from './native-contract';
 import type { Mdbx2NativeClient } from './native-client';
 
 export type Mdbx2ContentCommand =
@@ -7,6 +7,7 @@ export type Mdbx2ContentCommand =
   | { kind: 'collection-rename'; collectionId: string; title: string }
   | { kind: 'collection-move' | 'collection-restore'; collectionId: string; parentId?: string | null }
   | { kind: 'collection-delete'; collectionId: string }
+  | { kind: 'collection-trash'; collectionId: string }
   | { kind: 'object-create' | 'object-update'; objectId: string; collectionId: string; objectTypeId: string; title: string; payloadJson: string }
   | { kind: 'object-delete' | 'object-restore'; objectId: string; collectionId: string }
   | { kind: 'object-move'; objectId: string; collectionId: string; targetCollectionId: string }
@@ -30,6 +31,10 @@ export interface Mdbx2ContentWriteInput {
   assets: readonly { id: string; bytes: Uint8Array }[];
 }
 export interface Mdbx2ContentWriteReceipt { operationId: string; commitId: string; alreadyCommitted: boolean }
+export function requireMdbx2ContentWriteCapabilities(caps: Mdbx2HostCapabilities, retainedFolderTrash = false): void {
+  if (!caps.supportsContentWrite || !caps.supportsVaultWriteRevision) throw new Mdbx2NativeHostError('content-write-host-update-required', '当前 MDBX 引擎不支持安全接收内容，请更新后重试。');
+  if (retainedFolderTrash && !caps.supportsRetainedFolderTrash) throw new Mdbx2NativeHostError('content-write-host-update-required', '当前 MDBX 引擎不支持保留文件夹附件，请更新后重试。');
+}
 export class Mdbx2ContentWriteOutcomeUnknownError extends Mdbx2NativeHostError {
   constructor(readonly operationId: string) {
     super('content-write-outcome-unknown', 'MDBX 写入结果尚未确认，请使用相同操作和原始数据重试以恢复回执。', true);
@@ -63,6 +68,7 @@ function integer(value: unknown, maximum: number, minimum = 0): number {
 const commands: Record<Mdbx2ContentCommand['kind'], [string, string?]> = {
   'collection-create': ['collectionId,title', 'parentId'], 'collection-rename': ['collectionId,title'],
   'collection-move': ['collectionId', 'parentId'], 'collection-restore': ['collectionId', 'parentId'], 'collection-delete': ['collectionId'],
+  'collection-trash': ['collectionId'],
   'object-create': ['objectId,collectionId,objectTypeId,title,payloadJson'], 'object-update': ['objectId,collectionId,objectTypeId,title,payloadJson'],
   'object-delete': ['objectId,collectionId'], 'object-restore': ['objectId,collectionId'], 'object-move': ['objectId,collectionId,targetCollectionId'],
   'label-create': ['labelId,collectionId,name,payloadJson,payloadSchemaVersion'], 'label-update': ['labelId,name,payloadJson,payloadSchemaVersion'],
@@ -129,7 +135,7 @@ export async function writeMdbx2Content(
     for (const source of sources) parts.push({ id: source.id, bytes: new Uint8Array(source.bytes) });
     active();
     const caps = await client.hello(15_000, handle); active();
-    if (!caps.supportsContentWrite || !caps.supportsVaultWriteRevision) throw new Mdbx2NativeHostError('content-write-host-update-required', '当前 MDBX 引擎不支持安全接收内容，请更新后重试。');
+    requireMdbx2ContentWriteCapabilities(caps, plan.commands.some(row => row.kind === 'collection-trash'));
     const descriptors = [];
     for (const part of parts) {
       const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', part.bytes as Uint8Array<ArrayBuffer>)); active();

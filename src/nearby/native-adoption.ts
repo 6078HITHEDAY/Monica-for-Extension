@@ -149,11 +149,6 @@ export async function planNearbyNativeAdoption(input: NearbyNativeSource, incomi
   }
   const metadataSource = consumedPurges.length ? { ...source, metadata: { ...source.metadata, labels: source.metadata.labels.filter(label=>!consumedPurges.includes(label.labelId)) } } : source;
   const commands: Mdbx2ContentCommand[] = await planNearbyNativeMetadata(metadataSource, operation, [...metaChanges.values()], true);
-  // The current native DeleteProject contract refuses live attachments. Do not
-  // stage an intent that is guaranteed to fail (and then become an uncertain
-  // outcome); preserving attached bytes during folder trash needs native support.
-  for (const command of commands) if (command.kind === 'collection-delete'
-    && source.attachments.some(file => file.collectionId === command.collectionId && !file.deleted)) invalidNearby('native-folder-attachment-trash-unavailable');
   commands.push(...consumedPurges.map(labelId=>({kind:'label-delete' as const,labelId})));
   if (!source.collections.some(row => row.collectionId === source.rootId) && !commands.some(row => row.kind === 'collection-create' && row.collectionId === source.rootId) && work.some(row => row.kind === 'object')) commands.unshift({ kind: 'collection-create', collectionId: source.rootId, title: '.monica-root', parentId: null });
   const late: Mdbx2ContentCommand[] = [], fileCommands: Mdbx2ContentWriteInput['plan']['attachments'][number][] = [], buffers: { id: string; bytes: Uint8Array }[] = [];
@@ -209,7 +204,7 @@ export async function planNearbyNativeAdoption(input: NearbyNativeSource, incomi
       const contents=metadataContents.get(`${row.kind}:${row.id}`),owner=row.kind==='root'?source.rootId:row.id;
       const files=(contents?.assets??[]).filter(file=>!file.deleted);
       if(row.tombstone){
-        if(row.kind==='root')for(const file of files)fileCommands.push({kind:'delete',attachmentId:file.attachmentId});
+        for(const file of files)fileCommands.push({kind:'delete',attachmentId:file.attachmentId});
         continue;
       }
       const {remapped,stored,descriptors}=await prepareAssets(row.data,contents?.saved??{},files,owner,row.id,null);
@@ -301,8 +296,27 @@ export async function planNearbyNativeAdoption(input: NearbyNativeSource, incomi
       if ([NATIVE_PROJECT_TAG, NATIVE_ROOT_TAGS, NATIVE_FOLDER_TITLE, NATIVE_FOLDER_DATA].includes(kind as string)) continue;
       if (![...commands, ...late].some(row => row.kind === 'label-delete' && row.labelId === id)) late.push({ kind: 'label-delete', labelId: id });
     }
-    const folderDeletes = commands.filter(row => row.kind === 'collection-delete');
-    const finalCommands = [...commands.filter(row => row.kind !== 'collection-delete'), ...late, ...folderDeletes]; nativeActive(signal);
+    const folderDeletes = commands.filter(row => row.kind === 'collection-trash');
+    const parents = new Map(source.collections.map(row=>[row.collectionId,row.groupId??source.rootId]));
+    for(const command of commands)if(command.kind==='collection-create'||command.kind==='collection-move'||command.kind==='collection-restore')parents.set(command.collectionId,command.parentId??source.rootId);
+    const depth=(id:string)=>{let depth=0;const seen=new Set<string>();while(id!==source.rootId&&parents.has(id)){if(seen.has(id))invalidNearby('native-folder-cycle');seen.add(id);id=parents.get(id)!;depth++;}return depth;};
+    folderDeletes.sort((a,b)=>depth(b.collectionId)-depth(a.collectionId));
+    const finalCommands = [...commands.filter(row => row.kind !== 'collection-trash'), ...late, ...folderDeletes]; nativeActive(signal);
+    // Native trash preserves files but cannot hide live child folders or items.
+    // Evaluate the final topology before persisting a recoverable write intent.
+    const liveFolders=new Set(source.collections.filter(row=>!row.deleted).map(row=>row.collectionId));
+    const liveObjects=new Map(source.objects.filter(row=>!row.summary.deleted).map(row=>[row.summary.objectId,row.summary.collectionId]));
+    for(const command of finalCommands){
+      if((command.kind==='collection-create'||command.kind==='collection-restore'||command.kind==='collection-move')&&command.parentId!=null&&!liveFolders.has(command.parentId))invalidNearby('native-folder-deleted');
+      if((command.kind==='object-create'||command.kind==='object-restore'||command.kind==='object-update')&&!liveFolders.has(command.collectionId))invalidNearby('native-folder-deleted');
+      if(command.kind==='object-move'&&!liveFolders.has(command.targetCollectionId))invalidNearby('native-folder-deleted');
+      if(command.kind==='collection-create'||command.kind==='collection-restore')liveFolders.add(command.collectionId);
+      if(command.kind==='collection-trash'||command.kind==='collection-delete')liveFolders.delete(command.collectionId);
+      if(command.kind==='object-create'||command.kind==='object-restore')liveObjects.set(command.objectId,command.collectionId);
+      if(command.kind==='object-move')liveObjects.set(command.objectId,command.targetCollectionId);
+      if(command.kind==='object-delete')liveObjects.delete(command.objectId);
+    }
+    for(const command of folderDeletes)if([...liveFolders].some(id=>parents.get(id)===command.collectionId)||[...liveObjects.values()].includes(command.collectionId))invalidNearby('native-folder-active-members');
     const usedIds = new Set([...source.collections.map(row => row.collectionId), ...summaries.keys(), ...source.metadata.labels.map(row => row.labelId),
       ...source.metadata.assignments.map(row => row.assignmentId), ...source.metadata.relations.map(row => row.relationId), ...source.attachments.map(row => row.attachmentId)]);
     for (const command of [...finalCommands, ...fileCommands]) if (command.kind.endsWith('-create') || command.kind === 'create' || command.kind === 'label-assign') {

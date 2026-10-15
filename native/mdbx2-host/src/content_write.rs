@@ -308,6 +308,9 @@ fn command(value: Value) -> Result<MdbxWriteCommand> {
         "collection-delete" => MdbxWriteCommand::DeleteProject {
             project_id: take_uuid(&mut row, "collectionId")?,
         },
+        "collection-trash" => MdbxWriteCommand::TrashProjectWithAttachments {
+            project_id: take_uuid(&mut row, "collectionId")?,
+        },
         "collection-restore" => MdbxWriteCommand::RestoreProject {
             project_id: take_uuid(&mut row, "collectionId")?,
             parent_project_id: take_optional_uuid(&mut row, "parentId")?,

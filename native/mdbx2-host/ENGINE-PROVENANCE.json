@@ -349,6 +349,20 @@
         "crates/mdbx-storage/src/object_disclosure.rs": "4e2ea8eb26cac83aa1e70cb24df233095caab7442c67d755e7d3a6b126e5bd43",
         "crates/mdbx-ffi/src/object_facade.rs": "1edf5bd7586441b65bf725e45a99f274840da7e90bc08fbabf7e5e54a2b9f41e"
       }
+    },
+    {
+      "id": "retained-folder-trash",
+      "patch": "runtime-patches/extension-retained-folder-trash.patch",
+      "patch_sha256": "46b3f304de8309f53e02906f4b8409dedceb6d783d59243d8a9ac378205776e2",
+      "description": "Explicit retained-folder trash command preserves attachment rows and content, retains ordinary DeleteProject constraints, rejects active members, and defers folder trash until after file writes inside the same revision-bound transaction. Existing command intent identities and storage schema remain unchanged.",
+      "base_files": {
+        "crates/mdbx-storage/src/repo/operation_coordinator.rs": "28b64137ec563a6727eeb6cb10a456c578bcadab9a748bb61111e7fdfe3afd6f",
+        "crates/mdbx-ffi/src/write_facade.rs": "95ef3cbd1b7d3f0361cc18fc800e7da7c5d9d59e02ba3f411b3dd169ede9c3e1"
+      },
+      "files": {
+        "crates/mdbx-storage/src/repo/operation_coordinator.rs": "11a1a6a60224117db574f58c8634f22e62597296049f5dc7eee95fc0276451a1",
+        "crates/mdbx-ffi/src/write_facade.rs": "82475e86793b522702effbeb17b20d693ec803256824d73a17287961ffbae78f"
+      }
     }
   ]
 }

@@ -2,6 +2,8 @@
 
 This checkpoint completes browser-side standalone labels and live folder/root attachment adoption. The overall Wi-Fi task remains open. Android folder/root byte adoption is being handled in the main Android chat at the user's request.
 
+The historical folder-trash limitation below was subsequently addressed by the [retained-folder checkpoint](nearby-folder-trash-320.md). Its original failed-run evidence is preserved here.
+
 ## Behavior
 
 Unassigned labels are projected through wire `labels` without parsing away their JSON number lexemes. Ordinary object assignments keep their existing ownership. Root records share a native collection, so each source's labels and attachments are partitioned by the existing root marker's `label_ids` and `device_sync_assets`; unclaimed native content belongs to the vault's own root. Different owners may share a staged byte buffer for identical content but receive distinct mutable native file identities.
