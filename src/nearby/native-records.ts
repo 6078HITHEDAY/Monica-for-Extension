@@ -95,7 +95,7 @@ export async function projectNearbyNativeRecords(input: NearbyNativeSource, sign
   }
   const objectIds = new Set(source.objects.map(row => row.summary.objectId));
   for (const attachment of source.attachments) if (!attachment.deleted && attachment.objectId !== null && !objectIds.has(attachment.objectId)) result.blockers.push({ id: attachment.attachmentId, reason: 'native-orphan-attachment' });
-  for (const collection of source.collections) if (collection.favorite || collection.archived || collection.iconRef || (collection.profileSchemaVersion ?? 1) !== 1) result.blockers.push({ id: collection.collectionId, reason: 'native-folder-profile-archive-required' });
+  for (const collection of source.collections) if (collection.favorite || collection.archived || collection.iconRef || collection.collectionTypeId !== undefined || collection.profileSchemaVersion !== undefined) result.blockers.push({ id: collection.collectionId, reason: 'native-folder-profile-archive-required' });
   for (const object of source.objects) {
     nativeActive(signal); const id = object.summary.objectId;
     if (!object.record) { result.blockers.push({ id, reason: 'deleted-content-unavailable' }); continue; }

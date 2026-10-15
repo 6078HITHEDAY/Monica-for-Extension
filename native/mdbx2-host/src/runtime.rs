@@ -742,6 +742,7 @@ impl HostRuntime {
             "supportsObjectRevisionPreconditions": true,
             "supportsVaultWriteRevision": true,
             "supportsContentMetadata": true,
+            "supportsContentProfiles": true,
             "supportsContentAttachments": true,
             "supportsContentWrite": true,
             "supportsRetainedFolderTrash": true,

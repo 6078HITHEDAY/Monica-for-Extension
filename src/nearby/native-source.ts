@@ -4,10 +4,11 @@ import type { Mdbx2NativeClient } from '../providers/mdbx2/native-client';
 import type { Mdbx2CollectionSummary, Mdbx2ObjectRecord, Mdbx2ObjectSummary, Mdbx2WriteRevision } from '../providers/mdbx2/native-contract';
 import type { Mdbx2ContentMetadata } from '../providers/mdbx2/content-metadata';
 import type { Mdbx2ContentAttachment } from '../providers/mdbx2/content-attachments';
+import type { Mdbx2ContentProfile } from '../providers/mdbx2/content-profiles';
 import { mdbx2TransferOperationScope as hash } from '../providers/mdbx2/mdbx2-transfer-identity';
 import { invalidNearby } from './wire-shape';
 
-export type NearbyNativeClient = Pick<Mdbx2NativeClient, 'readWriteRevision' | 'listCollections' | 'listObjects' | 'revealObject' | 'readContentMetadata' | 'readContentAttachments'>;
+export type NearbyNativeClient = Pick<Mdbx2NativeClient, 'readWriteRevision' | 'listCollections' | 'listObjects' | 'revealObject' | 'readContentMetadata' | 'readContentAttachments' | 'readContentProfiles'>;
 export interface NearbyNativeObject { summary: Mdbx2ObjectSummary; record: Mdbx2ObjectRecord | null }
 /** Complete source inventory, not a scan batch. A null record explicitly means
  * native deleted-content policy prevented disclosure; it is NOT a purge. */
@@ -16,6 +17,8 @@ export interface NearbyNativeSource {
   writeRevision: Mdbx2WriteRevision;
   collections: Mdbx2CollectionSummary[]; objects: NearbyNativeObject[];
   metadata: Mdbx2ContentMetadata; attachments: Mdbx2ContentAttachment[];
+  /** Always populated by capture; optional for older in-memory inventories. */
+  profiles?: Mdbx2ContentProfile[];
 }
 const UUID = /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/;
 export function nativeId(value: unknown): string { if (typeof value !== 'string' || !UUID.test(value)) invalidNearby('native-identity'); return value; }
@@ -71,6 +74,14 @@ export async function captureNearbyNativeSource(client: NearbyNativeClient, inpu
     if (row.collectionId === rootId && (row.deleted || row.groupId !== undefined)) invalidNearby('native-root-state');
     owners.add(row.collectionId); collections.push({ ...row });
   });
+  const profiled = collections.filter(row => row.collectionTypeId !== undefined || row.profileSchemaVersion !== undefined);
+  const profiles = profiled.length ? await client.readContentProfiles(handle, {writeRevision:{...expected},collections:profiled},signal)
+    : {writeRevision:expected,profiles:[]};
+  nativeActive(signal); assertNativeRevision(profiles.writeRevision,expected); charge(profiles);
+  const profiledById = new Map(profiled.map(row=>[row.collectionId,row]));
+  if (profiles.profiles.length !== profiled.length || new Set(profiles.profiles.map(row=>row.collectionId)).size !== profiled.length
+    || profiles.profiles.some(row=>{const owner=profiledById.get(row.collectionId);return !owner || owner.collectionTypeId!==row.collectionTypeId
+      || owner.profileSchemaVersion!==row.payloadSchemaVersion || owner.headCommitId!==row.headCommitId || owner.deleted!==row.deleted;})) invalidNearby('native-profile-catalog');
   for (const owner of collections) for (const deleted of [false, true]) await pages(cursor => client.listObjects(handle, owner.collectionId, { deleted, pageSize: 200, cursor }), async row => {
     nativeId(row.objectId); nativeId(row.headCommitId);
     if (row.collectionId !== owner.collectionId || row.deleted !== deleted || objectIds.has(row.objectId) || objectIds.size >= 10_000) invalidNearby('native-object-catalog');
@@ -90,5 +101,5 @@ export async function captureNearbyNativeSource(client: NearbyNativeClient, inpu
   assertNativeRevision(await client.readWriteRevision(handle), expected); nativeActive(signal);
   const sourceHash = await hash({ providerId, handle, writeRevision: expected }); nativeActive(signal);
   return { providerId, vaultHandle: handle, rootId, sourceHash, writeRevision: expected, collections: collections.sort((a, b) => a.collectionId < b.collectionId ? -1 : 1),
-    objects: objects.sort((a, b) => a.summary.objectId < b.summary.objectId ? -1 : 1), metadata: cloneLosslessJson(metadata), attachments: cloneLosslessJson(assets.attachments) };
+    objects: objects.sort((a, b) => a.summary.objectId < b.summary.objectId ? -1 : 1), metadata: cloneLosslessJson(metadata), attachments: cloneLosslessJson(assets.attachments), profiles:cloneLosslessJson(profiles.profiles) };
 }

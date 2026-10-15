@@ -4,6 +4,7 @@
 
 ## 中文
 
+- 修复 MDBX 扫描可能遗漏第一版原生文件夹配置的问题，补充受权限和版本检查约束的完整配置读取。无法完整恢复的配置会明确阻止同步，不再被静默忽略；配置跨端写回仍在补齐。
 - 修复大量嵌套文件夹跨批次同步的顺序：先恢复父目录，再恢复子项；先删除或移出子项，再删除父目录。密码关联项目保持完整，仍遵守每批写入上限。修复密码缺省字段在本机库／MDBX 往返时产生虚假修改、冲突副本与重复写入的问题；单纯移入回收站或恢复不再重写未变的内容，接收规划复用已核对版本的扫描结果。
 - 补齐插件内置 MDBX 文件夹携带附件移入回收站、恢复和永久删除状态同步，保留回收站附件原身份与内容。经本地库中转再次同步、重启后仍可恢复读取；永久删除仅清理该文件夹所属内容。仍有活动子项、父文件夹未恢复或引擎版本不支持时，在保存写入事务前停止。
 - 补齐浏览器端未分配标签及文件夹／根目录附件的 Wi-Fi 收发、替换和再次转发，保留文件身份、精确 JSON 与未知附加字段。来自不同密码库的根目录内容分别归属，删除一方不会修改另一方。重复附件身份、无效标签内容和内部所有权标记会在写入前拒绝。
@@ -19,6 +20,7 @@ Wi-Fi 完整收尾仍在进行：部分原生归档与文件夹配置、Android 
 
 ## English
 
+- Fixed native MDBX scans silently overlooking schema-1 collection profiles and added complete, policy- and revision-checked profile reads. Profiles without a complete restoration path explicitly block synchronization instead of being silently omitted; cross-device profile adoption remains in progress.
 - Fixed nested-folder ordering across bounded sync batches: restore parents before descendants, and delete or move descendants before deleting their former parents. Password dependency groups remain whole within write limits. Fixed default password fields generating false edits, conflict copies and repeated writes during local-vault/MDBX round trips. Pure trash/restore transitions no longer rewrite unchanged content; incoming planning reuses a scan only after checking its native revision.
 - Added retained folder trash, restoration and purge synchronization in the bundled MDBX engine. Trash preserves attachment identity and bytes through local-vault forwarding and restart; purge affects only the owning folder. Active children, unrestored parents and unsupported engine versions are rejected before persisting a write intent.
 - Added browser-side Wi-Fi adoption and forwarding of unassigned labels and folder/root attachments, including replacements with preserved file identities, exact JSON and unknown fields. Root contents remain isolated by source vault. Duplicate attachment identities, invalid label payloads and injected internal ownership markers are rejected before writing.

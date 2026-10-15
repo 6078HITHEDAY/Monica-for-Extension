@@ -16,6 +16,12 @@ function fixture() {
   return { source, id, owner, root, assetId, payload };
 }
 
+it('does not silently drop version-one collection profiles with default presentation fields',async()=>{
+  const f=fixture();Object.assign(f.source.collections[1],{collectionTypeId:'com.monica.passwords',profileSchemaVersion:1});
+  const projection=await projectNearbyNativeRecords(f.source);
+  expect(projection.blockers).toContainEqual({id:f.owner,reason:'native-folder-profile-archive-required'});
+});
+
 describe('native nearby application projection', () => {
   it('distinguishes retained trash from a proven purge marker', async () => {
     const f = fixture(); f.source.objects[0].summary.deleted = true; f.source.objects[0].record!.deleted = true;

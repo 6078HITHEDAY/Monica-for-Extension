@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createHash, randomUUID } from 'node:crypto';
 import { captureNearbyNativeSource, nearbyNativeRootId, type NearbyNativeClient } from './native-source';
 import type { Mdbx2CollectionSummary, Mdbx2ObjectRecord, Mdbx2ObjectSummary } from '../providers/mdbx2/native-contract';
+import type { Mdbx2ContentProfiles } from '../providers/mdbx2/content-profiles';
 
 const digest = 'a'.repeat(64);
 function fixture() {
@@ -17,6 +18,7 @@ function fixture() {
     listObjects: vi.fn(async (_handle, _owner, input) => ({ items: [{ ...(input?.deleted ? deleted : active) }] })),
     revealObject: vi.fn(async (_handle: string, id: string, _timeout?: number, retained?: boolean) => ({ ...record, ...(id === deleted.objectId && retained ? deleted : {}) })),
     readContentMetadata: vi.fn(async () => structuredClone(metadata)),
+    readContentProfiles: vi.fn(async ():Promise<Mdbx2ContentProfiles> => ({writeRevision:{...revision},profiles:[]})),
     readContentAttachments: vi.fn(async () => ({ writeRevision: { ...revision }, attachments: [] }))
   } satisfies NearbyNativeClient;
   const input: { providerId: string; vaultHandle: string } = { providerId, vaultHandle: handle };
@@ -24,6 +26,23 @@ function fixture() {
 }
 
 describe('complete nearby native source inventory', () => {
+  it('captures exact binary profile bytes and declarations before exporting a source',async()=>{
+    const f=fixture();f.collection.collectionTypeId='com.monica.passwords';f.collection.profileSchemaVersion=1;
+    const profile={collectionId:f.collection.collectionId,collectionTypeId:f.collection.collectionTypeId,payloadSchemaVersion:1,
+      allowedObjectTypeIds:['login'],requiredCapabilityIds:['com.monica.read'],payloadBase64:'AP/+AA==',sha256:'c'.repeat(64),
+      createdAt:'created',updatedAt:'updated',createdByDeviceId:'source',updatedByDeviceId:'source',headCommitId:f.collection.headCommitId,deleted:false};
+    f.client.readContentProfiles.mockResolvedValue({writeRevision:f.revision,profiles:[profile]});
+    expect((await f.read()).profiles).toEqual([profile]);
+    f.client.readContentProfiles.mockResolvedValue({writeRevision:f.revision,profiles:[]});
+    await expect(f.read()).rejects.toMatchObject({code:'native-profile-catalog'});
+  });
+  it('rejects changed profile revisions and cancellation without returning a partial source',async()=>{
+    const f=fixture();f.collection.collectionTypeId='com.monica.passwords';f.collection.profileSchemaVersion=1;
+    f.client.readContentProfiles.mockResolvedValue({writeRevision:{...f.revision,revisionSha256:'d'.repeat(64)},profiles:[]});
+    await expect(f.read()).rejects.toMatchObject({code:'native-source-changed'});
+    const abort=new AbortController();f.client.readContentProfiles.mockImplementation(async()=>{abort.abort();return{writeRevision:f.revision,profiles:[]};});
+    await expect(f.read(abort.signal)).rejects.toMatchObject({name:'AbortError'});
+  });
   it('matches Android Java name UUID while never recognizing root by title', async () => {
     const f = fixture(), bytes = createHash('md5').update(`monica-root:${f.revision.vaultId}`).digest(); bytes[6] = bytes[6] & 15 | 0x30; bytes[8] = bytes[8] & 63 | 0x80;
     const hex = bytes.toString('hex'), expected = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;

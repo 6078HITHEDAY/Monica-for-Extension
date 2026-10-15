@@ -77,6 +77,138 @@ fn content_metadata_preserves_full_payload_and_revision() {
 }
 
 #[test]
+fn content_profile_preserves_opaque_bytes_revision_and_restart() {
+    let (_root, mut runtime) = runtime();
+    let handle = open_test_vault(&mut runtime, "synthetic profile password");
+    let row = upsert_test_login(
+        &mut runtime,
+        &handle,
+        "profile-password",
+        "Synthetic profile",
+    );
+    let owner = row["collectionId"].as_str().unwrap().to_string();
+    let vault = runtime.require_open_vault(&handle).unwrap();
+    let bytes: Vec<u8> = (0..300_000).map(|i| (i % 256) as u8).collect();
+    vault
+        .set_collection_profile(
+            owner.clone(),
+            "com.monica.passwords".into(),
+            bytes.clone(),
+            1,
+            vec!["login".into(), "passkey".into()],
+            vec![],
+        )
+        .unwrap();
+    let revision = call(
+        &mut runtime,
+        "vault.writeRevision",
+        json!({"vaultHandle":handle}),
+    );
+    let params = json!({"vaultHandle":handle,"kind":"collection-profile","id":owner,"writeRevision":revision,"offset":0,"limit":262144});
+    let first = call(&mut runtime, "content.metadata.read", params.clone());
+    assert_eq!(
+        first["metadata"]["collectionTypeId"],
+        "com.monica.passwords"
+    );
+    assert_eq!(
+        first["metadata"]["allowedObjectTypeIds"],
+        json!(["login", "passkey"])
+    );
+    assert_eq!(first["metadata"]["payloadSchemaVersion"], 1);
+    assert_eq!(first["done"], false);
+    let mut next = params.clone();
+    next["offset"] = json!(262144);
+    let second = call(&mut runtime, "content.metadata.read", next);
+    let mut actual = BASE64
+        .decode(first["dataBase64"].as_str().unwrap())
+        .unwrap();
+    actual.extend(
+        BASE64
+            .decode(second["dataBase64"].as_str().unwrap())
+            .unwrap(),
+    );
+    assert_eq!(actual, bytes);
+    assert_eq!(first["sha256"], second["sha256"]);
+    assert_eq!(second["done"], true);
+    assert_eq!(
+        call(
+            &mut runtime,
+            "vault.writeRevision",
+            json!({"vaultHandle":handle})
+        ),
+        revision
+    );
+    // Optional isolated encrypted fixture for actual browser-engine acceptance.
+    if let Some(directory) = std::env::var_os("MONICA_PROFILE_FIXTURE_DIR") {
+        let directory = PathBuf::from(directory);
+        assert!(directory.is_absolute());
+        fs::create_dir_all(&directory).unwrap();
+        vault
+            .create_backup(path_string(&directory.join("native-profile.mdbx")).unwrap())
+            .unwrap();
+        fs::write(directory.join("expected.json"), serde_json::to_vec(&json!({"collectionId":owner,"sha256":first["sha256"],"sizeBytes":bytes.len(),"metadata":first["metadata"]})).unwrap()).unwrap();
+    }
+    drop(vault);
+    call(&mut runtime, "vault.lock", json!({"vaultHandle":handle}));
+    assert!(runtime
+        .handle("content.metadata.read", params.clone())
+        .is_err());
+    reopen_test_vault(&mut runtime, &handle, "synthetic profile password");
+    assert_eq!(
+        call(&mut runtime, "content.metadata.read", params.clone())["dataBase64"],
+        first["dataBase64"]
+    );
+    let vault = runtime.require_open_vault(&handle).unwrap();
+    vault
+        .set_collection_profile(
+            owner,
+            "com.monica.passwords".into(),
+            vec![],
+            2,
+            vec!["login".into(), "passkey".into()],
+            vec![],
+        )
+        .unwrap();
+    assert_eq!(
+        runtime
+            .handle("content.metadata.read", params)
+            .unwrap_err()
+            .code,
+        "content-metadata-stale"
+    );
+}
+
+#[test]
+fn content_profile_power_denies_before_payload_disclosure() {
+    let (_root, mut runtime) = runtime();
+    let handle = open_test_vault_with_tiga_mode(
+        &mut runtime,
+        "synthetic profile password",
+        mdbx_ffi::MdbxTigaMode::Power,
+    );
+    let row = upsert_test_login(&mut runtime, &handle, "profile-policy", "Profile policy");
+    let vault = runtime.require_open_vault(&handle).unwrap();
+    vault
+        .set_collection_profile(
+            row["collectionId"].as_str().unwrap().into(),
+            "com.monica.passwords".into(),
+            b"synthetic hidden profile".to_vec(),
+            1,
+            vec!["login".into()],
+            vec![],
+        )
+        .unwrap();
+    let revision = call(
+        &mut runtime,
+        "vault.writeRevision",
+        json!({"vaultHandle":handle}),
+    );
+    let failure=runtime.handle("content.metadata.read",json!({"vaultHandle":handle,"kind":"collection-profile","id":row["collectionId"],"writeRevision":revision,"offset":0,"limit":262144})).unwrap_err();
+    assert_eq!(failure.code, "content-metadata-unavailable");
+    assert!(!failure.message.contains("synthetic hidden profile"));
+}
+
+#[test]
 fn retained_sync_disclosure_preserves_trash_without_restoring_or_bypassing_power() {
     for mode in [mdbx_ffi::MdbxTigaMode::Multi, mdbx_ffi::MdbxTigaMode::Power] {
         let (_root, mut runtime) = runtime();

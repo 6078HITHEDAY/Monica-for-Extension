@@ -130,6 +130,7 @@ import {
 } from "./native-contract";
 import { base64ToBytes, bytesToBase64 } from "../../security/encoding";
 import { readMdbx2ContentMetadata, type Mdbx2ContentMetadataInput, type Mdbx2ContentMetadata } from "./content-metadata";
+import { readMdbx2ContentProfiles, type Mdbx2ContentProfilesInput, type Mdbx2ContentProfiles } from "./content-profiles";
 import { readMdbx2ContentAttachments, readMdbx2ContentAttachmentBytes, type Mdbx2ContentAttachmentsInput, type Mdbx2ContentAttachments, type Mdbx2ContentAttachment } from "./content-attachments";
 
 const MAX_JAVASCRIPT_DATE_UNIX_SECONDS = 8_640_000_000;
@@ -284,6 +285,10 @@ export class Mdbx2NativeClient {
 
   readContentMetadata(vaultHandle: string, input: Mdbx2ContentMetadataInput, signal?: AbortSignal): Promise<Mdbx2ContentMetadata> {
     return readMdbx2ContentMetadata(this, vaultHandle, input, signal);
+  }
+
+  readContentProfiles(vaultHandle: string, input: Mdbx2ContentProfilesInput, signal?: AbortSignal): Promise<Mdbx2ContentProfiles> {
+    return readMdbx2ContentProfiles(this, vaultHandle, input, signal);
   }
 
   readContentAttachments(vaultHandle: string, input: Mdbx2ContentAttachmentsInput, signal?: AbortSignal): Promise<Mdbx2ContentAttachments> {

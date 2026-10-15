@@ -5,7 +5,11 @@ use super::{
     take_uuid, valid_sha256, HostRuntime, RpcFailure, MAX_BINARY_CHUNK_BYTES,
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
-use mdbx_ffi::{MdbxObjectMetadataDisclosureLimits, MdbxVault, MdbxWriteRevision};
+use mdbx_ffi::{
+    MdbxAuthorizationOutcome, MdbxDeviceAssurance, MdbxDeviceContext,
+    MdbxObjectMetadataDisclosureLimits, MdbxTigaOperation, MdbxTigaScope, MdbxTigaScopeType,
+    MdbxVault, MdbxWriteRevision,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -174,7 +178,7 @@ pub(super) fn read(runtime: &HostRuntime, params: Value) -> Result<Value> {
                 .ok_or_else(error)?;
             (
                 json!({"labelId":r.label_id,"collectionId":r.collection_id,"name":r.name,"payloadSchemaVersion":r.payload_schema_version,"deleted":r.deleted}),
-                Zeroizing::new(r.payload_json),
+                Zeroizing::new(r.payload_json.into_bytes()),
             )
         }
         "relation" => {
@@ -186,7 +190,57 @@ pub(super) fn read(runtime: &HostRuntime, params: Value) -> Result<Value> {
             (
                 json!({"relationId":r.relation_id,"sourceObjectId":r.source_object_id,"targetObjectId":r.target_object_id,
                 "relationKind":r.relation_kind,"payloadSchemaVersion":r.payload_schema_version,"deleted":r.deleted}),
-                Zeroizing::new(r.payload_json),
+                Zeroizing::new(r.payload_json.into_bytes()),
+            )
+        }
+        "collection-profile" => {
+            // This raw repository API has no policy boundary of its own. Check
+            // the owning project before every chunk, using conservative browser
+            // posture, and recheck the content revision after disclosure.
+            let decision = vault
+                .authorize_tiga_operation(
+                    MdbxTigaScope {
+                        scope_type: MdbxTigaScopeType::Project,
+                        scope_id: Some(id.clone()),
+                    },
+                    MdbxTigaOperation::RevealSecret,
+                    MdbxDeviceContext {
+                        assurance: MdbxDeviceAssurance::Standard,
+                        secure_clipboard_available: false,
+                        screen_capture_protection_available: false,
+                        secure_temp_files_available: false,
+                    },
+                )
+                .map_err(|_| error())?;
+            if !matches!(
+                decision.outcome,
+                MdbxAuthorizationOutcome::Allow | MdbxAuthorizationOutcome::AllowWithConstraints
+            ) {
+                return Err(error());
+            }
+            check(&vault, &expected)?;
+            let r = vault
+                .get_collection_profile(id.clone())
+                .map_err(|_| error())?
+                .ok_or_else(error)?;
+            let payload = Zeroizing::new(r.payload);
+            let summary = vault
+                .get_collection_summary(id.clone())
+                .map_err(|_| error())?
+                .ok_or_else(error)?;
+            if r.collection_id != id
+                || summary.collection_type_id.as_deref() != Some(r.collection_type_id.as_str())
+                || summary.profile_schema_version != Some(r.payload_schema_version)
+            {
+                return Err(error());
+            }
+            (
+                json!({"collectionId":r.collection_id,"collectionTypeId":r.collection_type_id,
+                "payloadSchemaVersion":r.payload_schema_version,"allowedObjectTypeIds":r.allowed_object_type_ids,
+                "requiredCapabilityIds":r.required_capability_ids,"createdAt":r.created_at,"updatedAt":r.updated_at,
+                "createdByDeviceId":r.created_by_device_id,"updatedByDeviceId":r.updated_by_device_id,
+                "headCommitId":summary.head_commit_id,"deleted":summary.deleted}),
+                payload,
             )
         }
         _ => return Err(error()),
@@ -195,8 +249,8 @@ pub(super) fn read(runtime: &HostRuntime, params: Value) -> Result<Value> {
         return Err(error());
     }
     let end = (offset as usize + limit as usize).min(payload.len());
-    let value = json!({"kind":kind,"id":id,"metadata":metadata,"sizeBytes":payload.len(),"sha256":format!("{:x}",Sha256::digest(payload.as_bytes())),
-        "offset":offset,"nextOffset":end,"done":end == payload.len(),"dataBase64":STANDARD.encode(&payload.as_bytes()[offset as usize..end]),"writeRevision":revision_json(&expected)});
+    let value = json!({"kind":kind,"id":id,"metadata":metadata,"sizeBytes":payload.len(),"sha256":format!("{:x}",Sha256::digest(payload.as_slice())),
+        "offset":offset,"nextOffset":end,"done":end == payload.len(),"dataBase64":STANDARD.encode(&payload[offset as usize..end]),"writeRevision":revision_json(&expected)});
     check(&vault, &expected)?;
     if serde_json::to_vec(&value).map_err(|_| error())?.len() > MAX_RESULT {
         return Err(error());
