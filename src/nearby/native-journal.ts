@@ -16,6 +16,10 @@ export interface NearbyNativeIntent {
     anchor: Mdbx2ContentWriteAnchor;
     completedSteps: number;
     remaining: Omit<NearbyNativeIntent['write'], 'writeRevision'>[];
+    /** New journals retain every confirmed input until the final commit. Older
+     * journals may lack these bytes; never advertise them as a complete copy. */
+    completed?: { write: NearbyNativeIntent['write']; commitId: string }[];
+    conflict?: true;
   };
 }
 export interface NearbyNativeJournal {
@@ -64,6 +68,16 @@ export function readNearbyNativeJournal(value: unknown): NearbyNativeJournal | u
         || anchorRevision.vaultId !== revision.vaultId || anchorRevision.revisionSha256 !== revision.revisionSha256
         || !Array.isArray(anchor.branches) || !anchor.branches.length || anchor.branches.length > 1024
         || new TextEncoder().encode(JSON.stringify(anchor)).length > 512 * 1024) invalidNearby('native-journal-sequence');
+      if (sequence.conflict !== undefined && sequence.conflict !== true) invalidNearby('native-journal-sequence');
+      if (sequence.completed !== undefined) {
+        if (!Array.isArray(sequence.completed) || sequence.completed.length !== sequence.completedSteps) invalidNearby('native-journal-sequence');
+        for (const raw of sequence.completed) {
+          const completed = wireObject(raw), write = wireObject(completed.write), before = wireObject(write.writeRevision);
+          id(completed.commitId);
+          if (before.vaultId !== j.vaultId || typeof before.revisionSha256 !== 'string' || !digest.test(before.revisionSha256)) invalidNearby('native-journal-sequence');
+          writes.push(write);
+        }
+      }
       writes.push(...sequence.remaining.map(wireObject));
     }
     let bytes = 0, planBytes = 0;
@@ -113,7 +127,7 @@ export async function nearbyNativeIntent(plan: NearbyNativeAdoption, replicaStor
       plan: structuredClone(plan.write.plan), assets: plan.write.assets.map(a => ({ id: a.id, dataBase64: bytesToBase64(a.bytes) })) }, acknowledgements };
   if (plan.remainingWrites?.length) {
     if (!anchor) invalidNearby('native-journal-sequence');
-    intent.sequence = { anchor: await validateMdbx2ContentWriteAnchor(anchor), completedSteps: 0,
+    intent.sequence = { anchor: await validateMdbx2ContentWriteAnchor(anchor), completedSteps: 0, completed: [],
       remaining: plan.remainingWrites.map(write => ({ operationId: write.operationId, plan: structuredClone(write.plan),
         assets: write.assets.map(a => ({ id: a.id, dataBase64: bytesToBase64(a.bytes) })) })) };
   }
@@ -127,7 +141,25 @@ export async function advanceNearbyNativeIntent(intent: NearbyNativeIntent, comm
   if (!sequence?.remaining.length) invalidNearby('native-journal-sequence');
   const anchor = await advanceMdbx2ContentWriteAnchor(sequence.anchor, commitId), [write, ...remaining] = sequence.remaining;
   return { ...original, operationId: write.operationId, write: { ...structuredClone(write), writeRevision: { ...anchor.writeRevision } },
-    sequence: { anchor, completedSteps: sequence.completedSteps + 1, remaining: structuredClone(remaining) } };
+    sequence: { anchor, completedSteps: sequence.completedSteps + 1, remaining: structuredClone(remaining),
+      ...(sequence.completed ? { completed: [...sequence.completed, { write: original.write, commitId }] } : {}) } };
+}
+
+/** Safe manager view: no payloads, asset bytes, vault IDs, keys or wire clocks. */
+export interface NearbyNativeRecoveryView {
+  operationId: string;
+  completedSteps: number;
+  remainingSteps: number;
+  completeInputsRetained: boolean;
+  conflict: boolean;
+}
+export function nearbyNativeRecoveryView(journal: NearbyNativeJournal | undefined): NearbyNativeRecoveryView | null {
+  const intent = journal?.intent; if (!intent) return null;
+  const sequence = intent.sequence;
+  return { operationId: intent.operationId, completedSteps: sequence?.completedSteps ?? 0,
+    remainingSteps: 1 + (sequence?.remaining.length ?? 0),
+    completeInputsRetained: !sequence?.completedSteps || sequence.completed?.length === sequence.completedSteps,
+    conflict: sequence?.conflict === true };
 }
 export function restoreNearbyNativeWrite(intent: NearbyNativeIntent): Mdbx2ContentWriteInput {
   const assets: { id: string; bytes: Uint8Array }[] = [];

@@ -653,7 +653,13 @@ export class SecureVaultService {
       const { readNearbyNativeJournal } = await import('../nearby/native-journal');
       const journal = readNearbyNativeJournal(state.nearbyNativeJournal);
       if (!journal?.intent || journal.intent.operationId !== operationId) throw new Error('Nearby intent missing');
-      if (stale && journal.intent.sequence?.completedSteps) throw new Error('Nearby sequence changed; preserve remaining recovery steps');
+      if (stale && journal.intent.sequence?.completedSteps) {
+        journal.intent.sequence.conflict = true;
+        state.nearbyNativeJournal = readNearbyNativeJournal(journal);
+        await this.persist(state, key, envelope.kdf, false, false, check);
+        const { invalidNearby } = await import('../nearby/wire-shape');
+        invalidNearby('native-sequence-conflict');
+      }
       if (!stale && journal.intent.sequence?.remaining.length) throw new Error('Nearby sequence incomplete');
       if (!stale) {
         const map = new Map(journal.acknowledgements.map(a => [a.recordId, a]));

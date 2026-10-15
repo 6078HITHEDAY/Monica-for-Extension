@@ -18,6 +18,8 @@ import { MemoryVaultSessionStore } from '../../../src/security/vault-session';
 import { MemoryVaultDeviceKeyStore } from '../../../src/security/vault-device-key';
 import { nearbyNativeIntent } from '../../../src/nearby/native-journal';
 import { nativeNearbySource } from '../../../src/nearby/native-adapter';
+import { NearbyLocalCoordinator } from '../../../src/nearby/local-coordinator';
+import type { NearbyNativeTransport } from '../../../src/nearby/native-transport';
 import type { NearbyIncomingRecord } from '../../../src/nearby/local-adoption';
 import { Mdbx2NativeHostError, parseMdbx2NativeResponse, validateMdbx2HostCapabilities, type Mdbx2NativeMethod } from '../../../src/providers/mdbx2/native-contract';
 // Packaged by the fixture alongside the production compiled engine.
@@ -170,13 +172,25 @@ async function action(op: string, data: any): Promise<unknown> {
         return { operationId:intent.operationId, acknowledgements:intent.acknowledgements };
       } finally { clearNearbyNativeAdoption(nativePlan); }
     }
-    if (op === 'nearby-native-journal-recover') {
+    if (op === 'nearby-native-journal-read') return journalService.readNearbyNativeJournal(await unlockJournal());
+    if (op === 'nearby-native-journal-recover' || op === 'nearby-native-coordinator-recover') {
       const sessionId = await unlockJournal(), preferences = await journalService.nearbySessionPreferences(sessionId);
       const typed = new Mdbx2NativeClient({connectNative(){throw Error('Synthetic fixture must use its compiled engine');},disconnectErrorMessage(){return undefined;}});
-      typed.request = request;
+      let confirmed=0;
+      typed.request = async(method,params)=>{
+        if(data?.pauseAfterConfirmedSteps && method==='content.write.begin' && confirmed>=data.pauseAfterConfirmedSteps)throw new Mdbx2NativeHostError('synthetic-interruption','Synthetic receive interruption');
+        const result=await request(method,params); if(method==='content.write.finish')confirmed++; return result;
+      };
       const adapter = nativeNearbySource({store:journalService,client:typed,providerId:preferences.localProviderId,replicaStorageId:preferences.replicaStorageId,sessionId,
         epoch:()=>preferences.epoch,assertActive:()=>{},signal:new AbortController().signal,exclusive:work=>work()});
-      const before = await journalService.readNearbyNativeJournal(sessionId), acknowledgements = await adapter.recover();
+      const before = await journalService.readNearbyNativeJournal(sessionId);
+      if(op==='nearby-native-coordinator-recover'){
+        const coordinator=new NearbyLocalCoordinator(journalService,()=>({close(){},async call(){throw Error('Offline recovery attempted LAN access');}} as unknown as NearbyNativeTransport),undefined,undefined,
+          async(_preferences,_sessionId,signal,assertActive,epoch)=>nativeNearbySource({store:journalService,client:typed,providerId:preferences.localProviderId,
+            replicaStorageId:preferences.replicaStorageId,sessionId,epoch,assertActive,signal,exclusive:work=>work()}));
+        try{return await coordinator.recover(data.operationId);}finally{coordinator.close();}
+      }
+      const acknowledgements = await adapter.recover(data?.operationId);
       const journal = await journalService.readNearbyNativeJournal(sessionId);
       return {before,acknowledgements,journal};
     }

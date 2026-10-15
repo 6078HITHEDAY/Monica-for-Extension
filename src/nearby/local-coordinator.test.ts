@@ -10,6 +10,8 @@ import type { NearbyNativeTransport, NearbyOperation } from './native-transport'
 import { collectNearbyPending, groupNearbyPending } from './pending';
 import { nearbyLocalItemToWire } from './application-codec';
 import type { NearbyIncomingRecord } from './local-adoption';
+import { localNearbySource } from './source-adapter';
+import { NearbyDataError } from './wire-shape';
 
 const handle = '11111111-1111-4111-8111-111111111111';
 const peer = { deviceId: 'phone', name: 'Synthetic phone', pairId: 'pair-one', trustedKey: Buffer.alloc(32, 9).toString('base64url'),
@@ -39,6 +41,24 @@ async function fixture(items: VaultItem[] = [createLoginItem({ title: 'Original'
 }
 
 describe('nearby coordinator authorization and cancellation', () => {
+  it('recovers a retained native intent without peers or any LAN calls', async () => {
+    const f=await fixture(), preferences=await f.service.nearbySessionPreferences(f.sessionId);
+    await f.service.updateNearbyPreferences({kind:'forget',deviceId:peer.deviceId},preferences.epoch,f.sessionId);
+    const recover=vi.fn(async()=>[{recordId:'incoming'}] as any);
+    const coordinator=new NearbyLocalCoordinator(f.service,f.factory,undefined,undefined,async()=>({
+      ...localNearbySource(f.service,f.sessionId,()=>{}),native:true,recover
+    }));
+    expect(await coordinator.recover(handle)).toEqual({applied:1}); expect(recover).toHaveBeenCalledWith(handle);
+    expect(f.operations).toEqual([]);expect(coordinator.status()).toEqual({phase:'idle'});coordinator.close();
+  });
+  it('reports a retained sequence conflict accurately and sends nothing',async()=>{
+    const f=await fixture();
+    const coordinator=new NearbyLocalCoordinator(f.service,f.factory,undefined,undefined,async()=>({
+      ...localNearbySource(f.service,f.sessionId,()=>{}),native:true,recover:async()=>{throw new NearbyDataError('native-sequence-conflict');}
+    }));
+    await expect(coordinator.recover(handle)).rejects.toMatchObject({code:'native-sequence-conflict'});
+    expect(coordinator.status()).toEqual({phase:'failed',error:'native-sequence-conflict'});expect(f.operations).toEqual([]);
+  });
   it('pairs without reading/exporting local source items', async () => {
     const f = await fixture(), capture = vi.spyOn(f.service, 'captureNearbyLocalRecords');
     const view = await f.coordinator.pair(); expect(view.phase).toBe('pairing');

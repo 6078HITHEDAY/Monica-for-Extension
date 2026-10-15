@@ -15,7 +15,7 @@ export interface NearbySourceAdapter {
   native: boolean;
   capture(): Promise<NearbySourceSnapshot>;
   snapshotHash(): Promise<string>;
-  recover(): Promise<NearbyAcknowledgement[]>;
+  recover(expectedOperationId?: string): Promise<NearbyAcknowledgement[]>;
   saved(records: readonly NearbyIncomingRecord[]): Promise<NearbyAcknowledgement[]>;
   groups(records: readonly NearbyIncomingRecord[]): Promise<Array<[string, string]>>;
   adopt(batch: NearbyLocalBatch): Promise<{ sourceHash: string; acknowledgements: NearbyAcknowledgement[] }>;

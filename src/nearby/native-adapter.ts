@@ -79,7 +79,11 @@ export function nativeNearbySource(options: {
         active(); return client.readContentAttachmentBytes(source.vaultHandle, { writeRevision: source.writeRevision, attachment }, signal);
       } };
     }),
-    recover: () => options.exclusive(async () => { const j = await journal(); return j?.intent ? apply(j.intent) : []; }),
+    recover: expectedOperationId => options.exclusive(async () => {
+      const j = await journal();
+      if (expectedOperationId !== undefined && j?.intent?.operationId !== expectedOperationId) invalidNearby('native-recovery-changed');
+      return j?.intent ? apply(j.intent) : [];
+    }),
     saved: async records => savedNativeAcknowledgements(await journal(), records),
     groups: records => options.exclusive(async () => {
       const projection = requireCompleteNearbyNativeProjection(await projectNearbyNativeRecords(await capture(), signal));

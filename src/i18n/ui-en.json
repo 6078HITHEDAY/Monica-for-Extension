@@ -1,4 +1,15 @@
 {
+  "未完成的接收": "Unfinished receive",
+  "已保存 {0} 步，剩余 {1} 步": "{0} steps saved, {1} remaining",
+  "检查并继续接收": "Check and resume receiving",
+  "密码库有新的修改，继续接收需要先处理冲突。本机数据和待接收内容都没有被丢弃。": "The vault has new changes. Receiving must wait for conflict resolution. Local data and pending content have been retained.",
+  "本次接收的保存内容和附件副本仍加密保留，直到全部保存完成。": "Inputs and attachment copies for this receive remain encrypted until all steps are saved.",
+  "这是旧版创建的接收日志，仅保留剩余步骤；已完成部分以当前数据库和原设备为准。": "This older receive journal retains only remaining steps. Completed content depends on the current vault and the original device.",
+  "无需另一台设备在线。只检查并重试原来的保存操作；冲突仍存在时不会覆盖本机修改。": "The other device can be offline. Only the original save operations are checked and retried; unresolved conflicts will not overwrite local changes.",
+  "接收保存已恢复。再次同步即可向另一端确认并交换后续修改。": "Receive storage has recovered. Sync again to confirm receipt and exchange subsequent changes.",
+  "接收期间密码库有新的修改，已停止继续写入。未完成的接收仍被保留，不能直接覆盖本机修改。": "The vault changed during receiving, so saving has stopped. The unfinished receive is retained and cannot overwrite local changes.",
+  "待恢复的接收已发生变化，请检查最新状态后重试。": "The pending receive has changed. Check its latest status before retrying.",
+  "上次保存的结果尚未确认。可以检查并继续接收，插件会核对原来的保存操作。": "The last save result is unconfirmed. Check and resume receiving to verify the original save operation.",
   "KeePass 来源完整条目保留在原生回收站；云端发布确认后才完成移动。本地文件仍需导出 KDBX 并自行保存。": "Whole KeePass entries remain in the native recycle bin. Cloud moves finish after publication is confirmed. Local files still need to be exported as KDBX and saved.",
   "原密码中的 Passkey 会先保留为同一账号下的独立项目，再移除密码。": "Passkeys in the original password will first be saved as separate items in the same account, then the password will be removed.",
   "正在保留 Passkey": "Preserving Passkeys",
@@ -3544,5 +3555,7 @@
   "复制失败，请选择邀请文本手动复制。": "Copy failed. Select the invitation text to copy it manually.",
   "查找设备超时，请重新连接。": "Device discovery timed out. Reconnect to continue.",
   "切换同步密码库前，请先移除现有配对设备。": "Remove paired devices before switching the sync vault.",
-  "请先恢复当前数据库未完成的接收，再切换密码库。": "Recover the current vault’s unfinished reception before switching vaults."
+  "请先恢复当前数据库未完成的接收，再切换密码库。": "Recover the current vault’s unfinished reception before switching vaults.",
+  "本机": "Local",
+  "正在查找…": "Searching…"
 }

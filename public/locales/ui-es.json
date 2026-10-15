@@ -3544,5 +3544,18 @@
   "复制失败，请选择邀请文本手动复制。": "Copy failed. Select the invitation text to copy it manually.",
   "查找设备超时，请重新连接。": "Device discovery timed out. Reconnect to continue.",
   "切换同步密码库前，请先移除现有配对设备。": "Remove paired devices before switching the sync vault.",
-  "请先恢复当前数据库未完成的接收，再切换密码库。": "Recover the current vault’s unfinished reception before switching vaults."
+  "请先恢复当前数据库未完成的接收，再切换密码库。": "Recover the current vault’s unfinished reception before switching vaults.",
+  "未完成的接收": "Recepción sin terminar",
+  "已保存 {0} 步，剩余 {1} 步": "{0} pasos guardados, {1} pendientes",
+  "检查并继续接收": "Comprobar y reanudar recepción",
+  "密码库有新的修改，继续接收需要先处理冲突。本机数据和待接收内容都没有被丢弃。": "La bóveda tiene nuevos cambios. La recepción debe esperar a que se resuelva el conflicto. Se conservan los datos locales y el contenido pendiente.",
+  "本次接收的保存内容和附件副本仍加密保留，直到全部保存完成。": "Los datos y las copias de adjuntos de esta recepción se conservan cifrados hasta que se guarden todos los pasos.",
+  "这是旧版创建的接收日志，仅保留剩余步骤；已完成部分以当前数据库和原设备为准。": "Este registro de una versión anterior solo conserva los pasos pendientes. El contenido ya guardado depende de la bóveda actual y del dispositivo original.",
+  "无需另一台设备在线。只检查并重试原来的保存操作；冲突仍存在时不会覆盖本机修改。": "El otro dispositivo puede estar desconectado. Solo se comprueban y reintentan las operaciones de guardado originales; los conflictos pendientes no sobrescribirán los cambios locales.",
+  "接收保存已恢复。再次同步即可向另一端确认并交换后续修改。": "Se ha recuperado el guardado de la recepción. Sincroniza de nuevo para confirmar la recepción e intercambiar cambios posteriores.",
+  "接收期间密码库有新的修改，已停止继续写入。未完成的接收仍被保留，不能直接覆盖本机修改。": "La bóveda cambió durante la recepción y se detuvo el guardado. La recepción pendiente se conserva y no puede sobrescribir los cambios locales.",
+  "待恢复的接收已发生变化，请检查最新状态后重试。": "La recepción pendiente ha cambiado. Comprueba su estado actual antes de reintentar.",
+  "上次保存的结果尚未确认。可以检查并继续接收，插件会核对原来的保存操作。": "El resultado del último guardado no está confirmado. Comprueba y reanuda la recepción para verificar la operación original.",
+  "本机": "Local",
+  "正在查找…": "Buscando…"
 }

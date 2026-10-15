@@ -27,10 +27,10 @@ const owners: NearbyManagerOwner[] = [];
 function fixture() {
   const session = { id: 'session', expiresAt: Date.now() + 60_000 };
   const coordinator = { close: vi.fn(), status: vi.fn(() => ({ phase: 'idle' as const })), pair: vi.fn(async () => ({ phase: 'pairing' as const })),
-    discover: vi.fn(), discoveryProgress: vi.fn(), prepare: vi.fn(), confirm: vi.fn(), start: vi.fn(), poll: vi.fn() };
+    discover: vi.fn(), discoveryProgress: vi.fn(), prepare: vi.fn(), confirm: vi.fn(), start: vi.fn(), poll: vi.fn(), recover: vi.fn() };
   const options = { runtimeId: sender.id, extensionRoot: root, readSession: vi.fn(async () => session),
     createCoordinator: vi.fn(() => coordinator), changed: vi.fn(),
-    store: { readState: vi.fn(), nearbySessionPreferences: vi.fn(), updateNearbyPreferences: vi.fn() } };
+    store: { readState: vi.fn(), nearbySessionPreferences: vi.fn(), updateNearbyPreferences: vi.fn(), readNearbyNativeJournal: vi.fn() } };
   const owner = new NearbyManagerOwner(options); owners.push(owner);
   return { owner, options, coordinator, session };
 }
@@ -44,6 +44,19 @@ async function response(p: ReturnType<typeof port>, id: number) {
 afterEach(() => { owners.splice(0).forEach(owner => owner.close()); vi.useRealTimers(); });
 
 describe('nearby manager boundary and lifecycle', () => {
+  it('returns only recovery counters and an opaque operation, never journal contents', async () => {
+    const f = fixture(), p = await ready(f);
+    f.options.store.readNearbyNativeJournal.mockResolvedValue({ intent: { operationId: sender.documentId,
+      write: { assets: ['synthetic secret'] }, acknowledgements: ['synthetic private clock'],
+      sequence: { completedSteps: 1, completed: [{}], remaining: [{}, {}], conflict: true } } });
+    p.onMessage.emit({ id: 1, type: 'recovery-status' });
+    expect((await response(p, 1)).data).toEqual({ operationId: sender.documentId, completedSteps: 1, remainingSteps: 3, completeInputsRetained: true, conflict: true });
+    expect(f.options.createCoordinator).not.toHaveBeenCalled();
+    f.coordinator.recover.mockResolvedValue({ applied: 1 });
+    p.onMessage.emit({ id: 2, type: 'recover', operationId: sender.documentId });
+    expect((await response(p, 2)).data).toEqual({ applied: 1 });
+    expect(f.coordinator.recover).toHaveBeenCalledWith(sender.documentId); expect(f.options.changed).toHaveBeenCalledOnce();
+  });
   it.each([
     { id: 'other' }, { url: `${root}popup.html` }, { url: 'https://example.test/index.html' }, { frameId: 1 },
     { origin: 'https://example.test' }, { documentId: undefined }, { tab: undefined }, { documentLifecycle: 'prerender' }
@@ -117,6 +130,8 @@ describe('nearby manager boundary and lifecycle', () => {
 describe('nearby high-level request validation', () => {
   it.each([
     { type: 'replica_open', key: 'caller key' }, { type: 'status', handle: 'caller handle' },
+    { type: 'recovery-status', key: 'caller key' }, { type: 'recover', operationId: sender.documentId, writeRevision: {} },
+    { type: 'recover', operationId: 'arbitrary' }, { type: 'recover', operationId: sender.documentId, plan: {} },
     { type: 'update', epoch: sender.documentId, change: { kind: 'remember', peer: {} } },
     { type: 'update', epoch: sender.documentId, change: { kind: 'remote-interval' } },
     { type: 'update', epoch: sender.documentId, change: { kind: 'preferences', name: 'a'.repeat(65) } },

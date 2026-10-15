@@ -70,8 +70,9 @@ test('native profiles survive local forwarding, atomic restoration and independe
         await call('nearby-native-journal-scan',[password,bytes.toString('base64').slice(0,512),file.toString('base64').slice(0,512)]);
         await call('close');await context!.close();context=undefined;call=await connect();await call('open',{name:database});
         await rpc('vault.open',{source:{kind:'vault',handle:targetHandle},credential:{method:'password',password}});
-        const recovered=await call('nearby-native-journal-recover');expect(recovered.acknowledgements).toHaveLength(values.length);expect(recovered.journal.intent).toBeUndefined();
-        return recovered;
+        const retained=await call('nearby-native-journal-read');
+        const recovered=await call('nearby-native-coordinator-recover',{operationId:retained.intent.operationId});expect(recovered.applied).toBe(values.length);
+        expect((await call('nearby-native-journal-read')).intent).toBeUndefined();return recovered;
       }
       expect(plan.write.plan.attachments).toEqual([]);return call('content-write',{handle:targetHandle,input:plan.write});
     };
@@ -119,6 +120,39 @@ test('native profiles survive local forwarding, atomic restoration and independe
     call=await connect();await call('open',{name:database});await rpc('vault.open',{source:{kind:'vault',handle:targetHandle},credential:{method:'password',password}});
     const restarted=await target();expect(restarted.profiles).toEqual(current.profiles);expect(restarted.writeRevision).toEqual(current.writeRevision);
     const restored:NearbyNativeProjection=await call('nearby-native-project',restarted);expect(restored.records.find(r=>r.global_id===folder)!.data).toEqual(original.data);
-    await call('close');Object.assign(evidence,{status:'passed',binaryBytes:bytes.length,fileBytes:file.length,encryptedSequenceRestartRecovery:true,localForwarding:true,nativeRestore:true,stableProjection:true,profiledPassword:true,profiledPasskeySignature:true,counter19Preserved:true,rootOwnerIsolation:true,purgePreservesOtherRoot:true,restart:true,sha256:hash});
+    // A second receive is interrupted AFTER a binary step has committed. A
+    // genuine subsequent native edit must survive both restart and repeated
+    // recovery, while every already-applied incoming byte remains encrypted.
+    const conflictOwner=randomUUID(),conflictData=structuredClone(rootData),previousJournal=await call('nearby-native-journal-read');
+    const conflictPlan=await call('nearby-native-adopt-plan',{source:restarted,batch:{operationId:randomUUID(),sourceHash:restarted.sourceHash,
+      records:[{id:conflictOwner,deleted:false,dataJson:JSON.stringify(conflictData),clockJson:'{"syntheticPeer":1}'}],assets:localSnapshot.assets}});
+    expect(conflictPlan.remainingWrites?.length).toBeGreaterThan(1);
+    await call('nearby-native-journal-stage',{plan:conflictPlan});
+    const allWrites=[conflictPlan.write,...conflictPlan.remainingWrites];
+    const firstBinary=allWrites.findIndex(w=>w.assets.length>0);expect(firstBinary).toBeGreaterThanOrEqual(0);
+    await expect(call('nearby-native-journal-recover',{pauseAfterConfirmedSteps:firstBinary+1})).rejects.toThrow('synthetic-interruption');
+    const partial=await call('nearby-native-journal-read');expect(partial.acknowledgements).toEqual(previousJournal.acknowledgements);
+    const committedAsset=partial.intent.sequence.completed.flatMap((step:any)=>step.write.assets)[0];expect(committedAsset).toBeTruthy();
+    expect(Buffer.from(committedAsset.dataBase64,'base64')).toEqual(Buffer.from(allWrites[firstBinary].assets[0].base64,'base64'));
+    await call('content-write',{handle:targetHandle,input:{operationId:randomUUID(),writeRevision:(await target()).writeRevision,plan:{commands:[{
+      kind:'object-update',objectId:loginId,collectionId:folder,objectTypeId:'login',title:'Local edit after interrupted receive',
+      payloadJson:JSON.stringify({...JSON.parse(restarted.objects.find(o=>o.summary.objectId===loginId)!.record!.payloadJson),notes:'synthetic newer local note'})
+    }],attachments:[]},assets:[]}});
+    const edited=await target();
+    for(let attempt=0;attempt<2;attempt++){
+      await expect(call('nearby-native-coordinator-recover',{operationId:partial.intent.operationId})).rejects.toThrow('native-sequence-conflict');
+      const retained=await call('nearby-native-journal-read');expect(retained.intent.sequence.conflict).toBe(true);expect(retained.acknowledgements).toEqual(previousJournal.acknowledgements);
+      expect(retained.intent.sequence.completed).toEqual(partial.intent.sequence.completed);expect(retained.intent.write).toEqual(partial.intent.write);
+      expect((await target()).writeRevision).toEqual(edited.writeRevision);
+      if(attempt===0){
+        await call('nearby-native-journal-scan',[committedAsset.dataBase64.slice(0,512)]);
+        await call('close');await context!.close();context=undefined;call=await connect();await call('open',{name:database});
+        await rpc('vault.open',{source:{kind:'vault',handle:targetHandle},credential:{method:'password',password}});
+      }
+    }
+    const afterConflict=await target();expect(afterConflict.objects.find(o=>o.summary.objectId===loginId)!.record!.title).toBe('Local edit after interrupted receive');
+    expect(await call('verify-key',{payload:afterConflict.objects.find(o=>o.summary.objectId===passkeyId)!.record!.payloadJson,expected:{id:credential,hash:createHash('sha256').update(privateKey).digest('hex'),publicKey,counter:19}})).toBe(true);
+    await call('close');Object.assign(evidence,{status:'passed',binaryBytes:bytes.length,fileBytes:file.length,encryptedSequenceRestartRecovery:true,offlineCoordinatorRecovery:true,
+      actualInterveningEditRetained:true,completedBinaryInputsRetained:true,conflictSurvivesRestart:true,localForwarding:true,nativeRestore:true,stableProjection:true,profiledPassword:true,profiledPasskeySignature:true,counter19Preserved:true,rootOwnerIsolation:true,purgePreservesOtherRoot:true,restart:true,sha256:hash});
   }finally{await context?.close();await writeFile(path.join(run,'evidence.json'),JSON.stringify(evidence,null,2));}
 });

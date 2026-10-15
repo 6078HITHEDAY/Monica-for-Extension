@@ -3544,5 +3544,18 @@
   "复制失败，请选择邀请文本手动复制。": "Copy failed. Select the invitation text to copy it manually.",
   "查找设备超时，请重新连接。": "Device discovery timed out. Reconnect to continue.",
   "切换同步密码库前，请先移除现有配对设备。": "Remove paired devices before switching the sync vault.",
-  "请先恢复当前数据库未完成的接收，再切换密码库。": "Recover the current vault’s unfinished reception before switching vaults."
+  "请先恢复当前数据库未完成的接收，再切换密码库。": "Recover the current vault’s unfinished reception before switching vaults.",
+  "未完成的接收": "Nhận chưa hoàn tất",
+  "已保存 {0} 步，剩余 {1} 步": "Đã lưu {0} bước, còn {1} bước",
+  "检查并继续接收": "Kiểm tra và tiếp tục nhận",
+  "密码库有新的修改，继续接收需要先处理冲突。本机数据和待接收内容都没有被丢弃。": "Kho có thay đổi mới. Cần giải quyết xung đột trước khi tiếp tục nhận. Dữ liệu cục bộ và nội dung đang chờ vẫn được giữ lại.",
+  "本次接收的保存内容和附件副本仍加密保留，直到全部保存完成。": "Nội dung lưu và bản sao tệp đính kèm của lần nhận này được giữ ở dạng mã hóa cho đến khi lưu xong mọi bước.",
+  "这是旧版创建的接收日志，仅保留剩余步骤；已完成部分以当前数据库和原设备为准。": "Nhật ký nhận từ phiên bản cũ này chỉ giữ các bước còn lại. Nội dung đã hoàn tất phụ thuộc vào kho hiện tại và thiết bị gốc.",
+  "无需另一台设备在线。只检查并重试原来的保存操作；冲突仍存在时不会覆盖本机修改。": "Thiết bị kia có thể ngoại tuyến. Chỉ kiểm tra và thử lại các thao tác lưu ban đầu; xung đột chưa giải quyết sẽ không ghi đè thay đổi cục bộ.",
+  "接收保存已恢复。再次同步即可向另一端确认并交换后续修改。": "Đã khôi phục việc lưu nội dung nhận. Đồng bộ lại để xác nhận đã nhận và trao đổi các thay đổi tiếp theo.",
+  "接收期间密码库有新的修改，已停止继续写入。未完成的接收仍被保留，不能直接覆盖本机修改。": "Kho đã thay đổi trong lúc nhận nên việc lưu đã dừng. Lần nhận chưa hoàn tất vẫn được giữ lại và không thể ghi đè thay đổi cục bộ.",
+  "待恢复的接收已发生变化，请检查最新状态后重试。": "Lần nhận đang chờ khôi phục đã thay đổi. Hãy kiểm tra trạng thái mới nhất trước khi thử lại.",
+  "上次保存的结果尚未确认。可以检查并继续接收，插件会核对原来的保存操作。": "Kết quả lưu lần trước chưa được xác nhận. Kiểm tra và tiếp tục nhận để xác minh thao tác lưu ban đầu.",
+  "本机": "Cục bộ",
+  "正在查找…": "Đang tìm…"
 }

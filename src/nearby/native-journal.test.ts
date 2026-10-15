@@ -4,7 +4,8 @@ import { SecureVaultService } from '../security/secure-vault-service';
 import { MemoryVaultStorage } from '../security/vault-storage';
 import { MemoryVaultSessionStore } from '../security/vault-session';
 import { MemoryVaultDeviceKeyStore } from '../security/vault-device-key';
-import { nearbyNativeIntent, readNearbyNativeJournal, restoreNearbyNativeWrite, savedNativeAcknowledgements } from './native-journal';
+import { nearbyNativeIntent, nearbyNativeRecoveryView, readNearbyNativeJournal, restoreNearbyNativeWrite, savedNativeAcknowledgements } from './native-journal';
+import { Mdbx2NativeHostError } from '../providers/mdbx2/native-contract';
 import { createNearbyPreferences, changeNearbyPreferences } from './preferences';
 import type { NearbyNativeAdoption } from './native-adoption';
 import { advanceMdbx2ContentWriteAnchor, type Mdbx2ContentWriteAnchor } from '../providers/mdbx2/content-write-anchor';
@@ -59,11 +60,12 @@ describe('native nearby encrypted intent recovery', () => {
     const journal = await f.service.readNearbyNativeJournal(f.sessionId), anchor = await advanceMdbx2ContentWriteAnchor(f.anchor, commitId);
     expect(journal!.intent!.operationId).toBe(f.next.operationId);
     expect(journal!.intent!.write.writeRevision).toEqual(anchor.writeRevision);
-    expect(journal!.intent!.sequence).toEqual({ anchor, completedSteps: 1, remaining: [] });
+    expect(journal!.intent!.sequence).toEqual({ anchor, completedSteps: 1, remaining: [], completed: [{write:f.intent.write,commitId}] });
     expect(journal!.acknowledgements).toEqual([]);
     expect(JSON.stringify(await f.storage.read())).not.toContain('synthetic-private-marker');
-    await expect(f.service.finishNearbyNativeIntent(f.next.operationId, f.sessionId, () => {}, true)).rejects.toThrow('preserve remaining');
-    expect((await f.service.readNearbyNativeJournal(f.sessionId))!.intent).toEqual(journal!.intent);
+    await expect(f.service.finishNearbyNativeIntent(f.next.operationId, f.sessionId, () => {}, true)).rejects.toMatchObject({code:'native-sequence-conflict'});
+    const conflicted = structuredClone(journal!.intent!); conflicted.sequence!.conflict = true;
+    expect((await f.service.readNearbyNativeJournal(f.sessionId))!.intent).toEqual(conflicted);
     await f.service.finishNearbyNativeIntent(f.next.operationId, f.sessionId, () => {});
     expect((await f.service.readNearbyNativeJournal(f.sessionId))!.acknowledgements).toEqual(f.intent.acknowledgements);
     await expect(f.service.assertNoNearbyNativeSequence(f.p.providerId)).resolves.toBeUndefined();
@@ -109,6 +111,41 @@ describe('native nearby encrypted intent recovery', () => {
       if (kind === 'progress') intent.sequence!.completedSteps = -1;
       await expect(f.service.stageNearbyNativeIntent(intent, f.preferences.epoch, f.sessionId, () => {})).rejects.toThrow();
       expect(await f.service.readNearbyNativeJournal(f.sessionId)).toBeUndefined();
+    }
+  });
+  it('retains confirmed attachment bytes across restart and rejects stale retries without rebasing', async () => {
+    const f = await sequenceFixture(), assetId = randomUUID(), bytes = Buffer.from('synthetic completed attachment');
+    f.p.write.assets = [{id:assetId,bytes}];
+    f.p.write.plan.attachments = [{kind:'create',attachmentId:randomUUID(),collectionId:randomUUID(),assetId,fileName:'synthetic.bin'}];
+    f.intent = await nearbyNativeIntent(f.p, f.preferences.replicaStorageId, f.anchor);
+    await f.service.stageNearbyNativeIntent(f.intent, f.preferences.epoch, f.sessionId, () => {});
+    const next = await f.service.advanceNearbyNativeIntent(f.intent.operationId, randomUUID(), f.sessionId, () => {});
+    const restarted = new SecureVaultService(f.storage, f.sessions, Date.now, new MemoryVaultDeviceKeyStore());
+    let journal = await restarted.readNearbyNativeJournal(f.sessionId);
+    expect(journal!.intent!.sequence!.completed![0].write.assets[0].dataBase64).toBe(bytes.toString('base64'));
+    expect(JSON.stringify(await f.storage.read())).not.toContain(bytes.toString('base64'));
+    expect(nearbyNativeRecoveryView(journal)).toMatchObject({completedSteps:1,remainingSteps:1,completeInputsRetained:true,conflict:false});
+    const write = vi.spyOn(writer, 'writeMdbx2Content').mockRejectedValue(new Mdbx2NativeHostError('content-write-stale','synthetic stale',true));
+    const client = { readWriteRevision: vi.fn().mockResolvedValue({...f.p.write.writeRevision,revisionSha256:'f'.repeat(64)}) } as unknown as Mdbx2NativeClient;
+    const adapter = nativeNearbySource({store:restarted,client,providerId:f.p.providerId,replicaStorageId:f.preferences.replicaStorageId,sessionId:f.sessionId,
+      epoch:()=>f.preferences.epoch,assertActive:()=>{},signal:new AbortController().signal,exclusive:work=>work()});
+    await expect(adapter.recover(f.intent.operationId)).rejects.toMatchObject({code:'native-recovery-changed'}); expect(write).not.toHaveBeenCalled();
+    for (let attempt=0;attempt<2;attempt++) await expect(adapter.recover(next.operationId)).rejects.toMatchObject({code:'native-sequence-conflict'});
+    expect(write.mock.calls.every(row=>row[2].writeRevision.revisionSha256===next.write.writeRevision.revisionSha256)).toBe(true);
+    journal=await restarted.readNearbyNativeJournal(f.sessionId);
+    expect(journal!.acknowledgements).toEqual([]); expect(journal!.intent!.sequence!.completed).toEqual(next.sequence!.completed);
+    expect(nearbyNativeRecoveryView(journal)).toMatchObject({conflict:true,completeInputsRetained:true});
+    const legacy=structuredClone(journal!);delete legacy.intent!.sequence!.completed;
+    expect(nearbyNativeRecoveryView(readNearbyNativeJournal(legacy))).toMatchObject({conflict:true,completeInputsRetained:false});
+    for (const change of ['count','duplicate','receipt','revision','conflict'] as const) {
+      const broken=structuredClone(journal!);
+      const sequence=broken.intent!.sequence!, completed=sequence.completed![0];
+      if(change==='count')sequence.completed=[];
+      if(change==='duplicate')completed.write.operationId=next.operationId;
+      if(change==='receipt')completed.commitId='bad';
+      if(change==='revision')completed.write.writeRevision.vaultId=randomUUID();
+      if(change==='conflict')(sequence as any).conflict='true';
+      expect(()=>readNearbyNativeJournal(broken)).toThrow();
     }
   });
   it('keeps the exact operation, numeric lexemes and payload across encrypted persistence and lost reply', async () => {

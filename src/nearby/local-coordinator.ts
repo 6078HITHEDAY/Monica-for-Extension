@@ -209,6 +209,19 @@ export class NearbyLocalCoordinator {
       return this.status();
     });
   }
+  /** Finish only the already encrypted receive intent. No peer, discovery,
+   * replica acknowledgement or outgoing transfer is needed. The next normal
+   * synchronization acknowledges the durable receipts through saved(). */
+  async recover(operationId: string): Promise<{ applied: number }> {
+    return this.run(async () => {
+      token(operationId);
+      await this.initialize();
+      if (!this.source!.native) failure('native-source-unavailable');
+      const receipts = await this.source!.recover(operationId); await this.guard();
+      this.view = { phase: 'idle' };
+      return { applied: receipts.length };
+    });
+  }
   async prepare(peerId: string): Promise<NearbyCoordinatorView> {
     return this.run(async () => {
       await this.initialize(); this.peer = this.preferences!.peers.find(peer => peer.deviceId === peerId) ?? failure('peer-forgotten');

@@ -4,6 +4,7 @@
 
 ## 中文
 
+- 新增 Wi-Fi 未完成接收的状态与离线恢复入口：无需另一台设备在线，只核对并重试原来的保存操作。新建接收日志会将已完成步骤的内容及附件副本一起加密保留到整笔完成；旧日志明确提示保留范围。遇到新的本机修改会显示冲突并停止，取消、锁定和重启不会丢弃待恢复记录；当前尚不支持直接合并这类修改冲突。
 - 补齐较大文件夹配置与附件组合的 Wi-Fi 分步接收和重启恢复：先加密保存待处理步骤，全部完成后才确认同步成功。中断或丢失响应不会重复创建内容；其他修改不会被当作恢复依据覆盖。待恢复期间阻止同一 MDBX 的普通修改和云同步，永久删除也保留各来源附件的独立归属。当前已验证 1 MiB 配置与独立 1 MiB 附件组合；更大的单文件和恢复冲突处理仍在补齐。
 - 补齐 Wi-Fi 文件夹配置的二进制归档、本机库中转与 MDBX 原子恢复，保留收藏、归档、图标和来源信息。原始字节通过现有附件通道传输，不挤入 JSON；每次发送重新检查权限和数据库版本。来自其他密码库的根目录配置独立保存，删除一方不会修改另一方或目标全局配置。含配置的独立记录会在暂存前分批；要求额外能力或超出当前恢复预算的内容仍明确停止，不能静默降级。
 - 修复 MDBX 扫描可能遗漏第一版原生文件夹配置的问题，补充完整读取与安全写回。保持原生类型、能力、现有对象与 Tiga 限制，失败完整回滚，重启重试不会重复写入。Android 已保存但未应用的配置与附件继续保留；已应用配置的真实本地修改可以回传，原生新生成的时间和提交信息不再造成虚假跨端修改。
@@ -22,6 +23,7 @@ Wi-Fi 完整收尾仍在进行：部分原生归档与文件夹配置、Android 
 
 ## English
 
+- Added an unfinished-receive view and offline Wi-Fi recovery: the other device may be offline while the extension verifies and retries the original save operations. New receive journals retain completed inputs and attachment copies, encrypted until the whole receive finishes; older journals disclose their limited retention. Intervening local edits stop recovery with an explicit conflict, and cancellation, locking and restart retain the pending journal. Merging these intervening edits remains in progress.
 - Added resumable Wi-Fi adoption for larger collection-profile/file combinations. Pending steps are encrypted before writing, and synchronization is acknowledged only after all steps complete. Interrupted or lost replies retain exact operations without duplicating content; intervening edits cannot be silently accepted as a recovery baseline. Ordinary mutations and cloud sync for the same MDBX wait for recovery, and purge retains source-specific attachment ownership. A 1 MiB profile plus a separate 1 MiB file is verified; larger individual files and recovery-conflict resolution remain in progress.
 - Added binary Wi-Fi collection-profile archives, local-vault forwarding and atomic MDBX restoration, including favorites, archive state, icons and provenance. Original bytes use the existing asset channel; each outgoing read rechecks native policy and revision. Foreign root profiles remain independently owned and cannot overwrite the shared target root. Independent records containing profiles are batched separately before staging; profiles requiring additional capabilities or unsupported restoration budgets still stop explicitly without silently weakening restrictions.
 - Fixed native scans overlooking schema-1 profiles and added complete reads and safe writes. Native type, capability, existing-object and Tiga restrictions remain enforced, with atomic rollback and durable retry receipts. Unapplied metadata/file archives retained by Android remain intact. Real local edits to applied profiles propagate, while regenerated native timestamps and commits do not manufacture cross-device edits.

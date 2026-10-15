@@ -3,9 +3,10 @@ import type { SecureVaultService } from '../security/secure-vault-service';
 import { NearbyCoordinatorError, type NearbyLocalCoordinator } from '../nearby/local-coordinator';
 import { nearbyPreferencesView, NearbyPreferencesError } from '../nearby/preferences';
 import { NEARBY_MANAGER_PORT, readNearbyManagerRequest, type NearbyManagerRequest } from '../nearby/manager-contract';
+import { nearbyNativeRecoveryView } from '../nearby/native-journal';
 
 type Session = { id?: string; expiresAt: number };
-type Store = Pick<SecureVaultService, 'nearbySessionPreferences' | 'updateNearbyPreferences' | 'readState'>;
+type Store = Pick<SecureVaultService, 'nearbySessionPreferences' | 'updateNearbyPreferences' | 'readState' | 'readNearbyNativeJournal'>;
 type Coordinator = Pick<NearbyLocalCoordinator, keyof NearbyLocalCoordinator>;
 interface Lease {
   port: chrome.runtime.Port; session?: Session; coordinator?: Coordinator;
@@ -119,8 +120,16 @@ export class NearbyManagerOwner {
       assertActive(); this.options.changed(); return preferences;
     }
     if (request.type === 'status') return lease.coordinator?.status() ?? { phase: 'idle' };
+    if (request.type === 'recovery-status') {
+      const journal = await this.options.store.readNearbyNativeJournal(sessionId); assertActive();
+      return nearbyNativeRecoveryView(journal);
+    }
     const coordinator = lease.coordinator ??= this.options.createCoordinator(assertActive);
     switch (request.type) {
+      case 'recover': {
+        const result = await coordinator.recover(request.operationId); assertActive();
+        this.options.changed(); return result;
+      }
       case 'discover': return coordinator.discover(request.target);
       case 'discovery-progress': return coordinator.discoveryProgress();
       case 'pair': return coordinator.pair(request.invitation);
