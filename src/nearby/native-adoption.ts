@@ -30,6 +30,15 @@ const rows = (value: unknown): Record<string, unknown>[] => {
 function exactFields(value: Record<string, unknown>, fields: string[]): void {
   if (Object.keys(value).some(key => !fields.includes(key))) invalidNearby('native-record-archive-required');
 }
+function equalWireValue(left: unknown, right: unknown): boolean {
+  if (Object.is(left,right)) return true;
+  const raw=(JSON as typeof JSON & {isRawJSON?:(value:unknown)=>boolean}).isRawJSON;
+  if(raw?.(left)||raw?.(right))return JSON.stringify(left)===JSON.stringify(right);
+  if (!left || !right || typeof left !== 'object' || typeof right !== 'object' || Array.isArray(left) !== Array.isArray(right)) return false;
+  const a=Object.keys(left),b=Object.keys(right);
+  return a.length===b.length && a.every(key=>Object.prototype.hasOwnProperty.call(right,key)
+    && equalWireValue((left as Record<string,unknown>)[key],(right as Record<string,unknown>)[key]));
+}
 function validateClock(text: string): void {
   if (typeof text !== 'string' || text.length > 64 * 1024) invalidNearby('native-clock');
   const clock = wireObject(parseLosslessJson(text)), entries = Object.entries(clock);
@@ -99,8 +108,8 @@ export async function planNearbyNativeAdoption(input: NearbyNativeSource, incomi
   }
   for (const reference of batch.references ?? []) {
     if (!identity.test(reference.id) || !reference.localId.startsWith(`${scope}:`)) invalidNearby('native-reference-binding');
-    const id = reference.localId.slice(scope.length + 1);
-    if (!summaries.has(id) || !existing.has(reference.localId) || mapping.has(reference.id) && mapping.get(reference.id) !== id) invalidNearby('native-reference-unavailable');
+    const suffix = reference.localId.slice(scope.length + 1), folder = suffix.startsWith('folder:'), id = folder ? suffix.slice(7) : suffix;
+    if (!(folder ? source.collections.some(row => row.collectionId === id) : summaries.has(id)) || !existing.has(reference.localId) || mapping.has(reference.id) && mapping.get(reference.id) !== id) invalidNearby('native-reference-unavailable');
     mapping.set(reference.id, id);
   }
   const resolve = (id: string): string => {
@@ -233,6 +242,20 @@ export async function planNearbyNativeAdoption(input: NearbyNativeSource, incomi
       if (before && !row.tombstone && (before.objectTypeId === 'steam_mafile' ? 'steam-mafile' : before.objectTypeId) !== row.data.entry_type) invalidNearby('native-object-type-changed');
       const files = source.attachments.filter(file => file.objectId === row.id && !file.deleted), assignments = source.metadata.assignments.filter(a => a.objectId === row.id && !a.deleted);
       const relations = source.metadata.relations.filter(r => r.sourceObjectId === row.id && !r.deleted);
+      if (before && !row.tombstone && before.deleted !== row.record.deleted) {
+        const current=existing.get(row.localId);
+        if (current) {
+          const {trashed:_old,...oldData}=current.data,{trashed:_next,...nextData}=row.data;
+          if(equalWireValue(oldData,nextData)) {
+            // A pure trash/restore transition does not rewrite password/key
+            // payloads, labels or attachment bytes. Keep the native identities
+            // and avoid doubling every batch with redundant encrypted updates.
+            if(row.record.deleted)late.push({kind:'object-delete',objectId:row.id,collectionId:before.collectionId});
+            else commands.push({kind:'object-restore',objectId:row.id,collectionId:before.collectionId});
+            continue;
+          }
+        }
+      }
       if (before?.deleted) commands.push({kind:'object-restore',objectId:row.id,collectionId:before.collectionId});
       if (row.tombstone) {
         if (!before) invalidNearby('native-tombstone-target-missing');

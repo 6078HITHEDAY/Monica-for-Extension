@@ -6,7 +6,7 @@ import { passkeyKeyMaterialHint } from '../passkey/private-key-portability';
 import { API_TOKEN_METADATA_SCHEMA, decodeApiTokenMetadata } from '../core/api-token';
 import { assertPasskeyCounterNotRegressed, preservePasskeyCounterHistory } from '../passkey/ownership-policy';
 import { prepareNearbyPasskey, retainNearbyPasskey } from './passkey-material';
-import { invalidNearby, NEARBY_ENTRY_TYPES, PASSWORD_FIELDS, nearbyNativeBusinessPayload, nearbyNativePayload, normalizeNearbyNativeData,
+import { invalidNearby, LOCAL_FIELDS, NEARBY_ENTRY_TYPES, PASSWORD_FIELDS, nearbyNativeBusinessPayload, nearbyNativePayload, normalizeNearbyNativeData,
   validateNearbyWireData, wireObject, type NearbyEntryType, type NearbyWireData } from './wire-shape';
 
 /** Raw relationship/asset metadata from the authenticated source catalog. The
@@ -24,6 +24,36 @@ export interface NearbyContentMetadata {
 const API_FIELDS = 'monica:api-token:fields:v1';
 const API_FAVORITE = 'monica:api-token:favorite:v1';
 const WIRE_EXTRAS = 'device_sync_wire_extras';
+const PASSWORD_PROJECTION = 'device_sync_password_projection';
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+function restorePasswordProjection(data: NearbyWireData, value: unknown): void {
+  const marker = wireObject(value);
+  if (marker.version !== 1 || !Array.isArray(marker.fields) || marker.fields.length > 4096) invalidNearby('password-projection');
+  const extensions = wireObject(data.extensions), seen = new Set<string>();
+  for (const raw of marker.fields) {
+    const field = wireObject(raw), key = field.key;
+    if (typeof key !== 'string' || key.length > 4096 || (LOCAL_FIELDS as readonly string[]).includes(key) || seen.has(key)
+      || typeof field.nativePresent !== 'boolean' || typeof field.wirePresent !== 'boolean'
+      || Object.prototype.hasOwnProperty.call(field,'nativeValue') !== field.nativePresent || Object.prototype.hasOwnProperty.call(field,'wireValue') !== field.wirePresent) invalidNearby('password-projection');
+    seen.add(key);
+    if (Object.prototype.hasOwnProperty.call(extensions,key) !== field.nativePresent || !same(extensions[key],field.nativeValue)) continue;
+    if (field.wirePresent) Object.defineProperty(extensions,key,{value:cloneLosslessJson(field.wireValue),enumerable:true,writable:true,configurable:true});
+    else delete extensions[key];
+  }
+}
+function retainPasswordProjection(data: NearbyWireData, payload: Record<string, unknown>): void {
+  if (data.entry_type !== 'login' && data.entry_type !== 'ssh-key') return;
+  const native = wireObject(normalizeNearbyNativeData(payload,data.title,data.folder,data.entry_type).extensions), wire = wireObject(data.extensions ?? {});
+  const keys = new Set([...Object.keys(native),...Object.keys(wire)]);
+  // Retain only fields changed by reconstruction. Defaults must not become
+  // local edits on the next scan; actual later edits still take precedence.
+  const fields = [...keys].filter(key => !(LOCAL_FIELDS as readonly string[]).includes(key) && !same(native[key],wire[key])).map(key => ({key,
+    nativePresent:Object.prototype.hasOwnProperty.call(native,key),...(native[key] === undefined ? {} : {nativeValue:native[key]}),
+    wirePresent:Object.prototype.hasOwnProperty.call(wire,key),...(wire[key] === undefined ? {} : {wireValue:wire[key]})}));
+  if (fields.length > 4096) invalidNearby('password-projection');
+  if (fields.length) payload[PASSWORD_PROJECTION] = {version:1,fields};
+  else delete payload[PASSWORD_PROJECTION];
+}
 function wireExtras(data: Record<string, unknown>, type: string): Record<string, unknown> {
   const known = new Set<string>(['title', 'folder', 'entry_type', 'folder_path', 'labels', 'relations', 'assets', 'trashed', 'password_history',
     ...(['login','ssh-key'].includes(type) ? ['extensions', 'login_type', 'is_archived', 'archived_at', 'custom_fields', ...PASSWORD_FIELDS] : ['payload'])]);
@@ -53,6 +83,7 @@ export async function nearbyNativeObjectToWire(record: Mdbx2ObjectRecord, metada
   if (type === 'passkey') payload = await preparePayload(payload);
   const data = { ...(original[WIRE_EXTRAS] === undefined ? {} : wireExtras(wireObject(original[WIRE_EXTRAS]), type)),
     ...normalizeNearbyNativeData(payload, record.title, metadata.folder ?? '', type) };
+  if ((type === 'login' || type === 'ssh-key') && payload[PASSWORD_PROJECTION] !== undefined) restorePasswordProjection(data,payload[PASSWORD_PROJECTION]);
   for (const key of ['folder_path', 'labels', 'relations', 'assets', 'password_history', 'trashed'] as const) {
     if (metadata[key] !== undefined) data[key] = cloneLosslessJson(metadata[key]);
   }
@@ -77,6 +108,7 @@ export async function nearbyLocalItemToWire(item: VaultItem, metadata: NearbyCon
   if (item.kind === 'opaque') invalidNearby('opaque-local-content');
   if (item.kind === 'passkey') assertPasskeyCounterNotRegressed(item);
   const old = previous ? nearbyNativePayload(previous.data, previous.item.id, null) : undefined;
+  if (old && previous) retainPasswordProjection(previous.data,old);
   const encoded = encodeMdbx2Object(item, old, previous?.item);
   if (!encoded) invalidNearby('unsupported-local-content');
   const record: Mdbx2ObjectRecord = { objectId: item.id, collectionId: '', objectTypeId: encoded.objectTypeId,
@@ -138,6 +170,11 @@ export async function nearbyWireToNativeObject(input: NearbyWireData, target: Ne
   const extras = { ...(previous === undefined ? {} : wireExtras(wireObject(previous), data.entry_type)), ...wireExtras(data, data.entry_type) };
   if (Object.keys(extras).length) {
     const payload = wireObject(parseLosslessJson(result.payloadJson)); payload[WIRE_EXTRAS] = extras;
+    result.payloadJson = JSON.stringify(payload);
+  }
+  if (data.entry_type === 'login' || data.entry_type === 'ssh-key') {
+    const payload = wireObject(parseLosslessJson(result.payloadJson));
+    retainPasswordProjection(data,payload);
     result.payloadJson = JSON.stringify(payload);
   }
   return result;

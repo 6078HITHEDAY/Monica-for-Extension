@@ -29,6 +29,32 @@ beforeAll(async () => {
 });
 
 describe('current Android nearby content shapes', () => {
+  it('keeps local/native/local password projections stable across unchanged scans and edits',async()=>{
+    const item=createLoginItem({title:'Password',password:'original'}),wire=await nearbyLocalItemToWire(item,{});
+    const write=await nearbyWireToNativeObject(wire,{logicalId:'native'});
+    const copied=await nearbyNativeObjectToWire({...native('login',{}),title:item.title,payloadJson:write.payloadJson},{trashed:false});
+    expect(copied).toEqual(wire);
+    const received=await nearbyWireToLocalItem(copied,{...target,previous:item});
+    expect(await nearbyLocalItemToWire(received,{}, {item:received,data:copied})).toEqual(wire);
+    const edited={...received,notes:'intentional edit'};
+    expect(await nearbyLocalItemToWire(edited,{}, {item:received,data:copied})).toEqual({...wire,notes:'intentional edit'});
+  });
+  it('keeps sparse password wire extensions stable without hiding a subsequent archive edit',async()=>{
+    const input=native('login',{kind:'password',password_plain:'original'}),wire=await nearbyNativeObjectToWire(input,{});
+    const written=await nearbyWireToNativeObject(wire,{logicalId:'target'});
+    const copied={...input,payloadJson:written.payloadJson};
+    expect(await nearbyNativeObjectToWire(copied,{})).toEqual(wire);
+    const payload=JSON.parse(written.payloadJson);payload.is_archived=true;payload.archived_at=1790000000000;
+    const edited=await nearbyNativeObjectToWire({...copied,payloadJson:JSON.stringify(payload)},{});
+    expect(edited).toMatchObject({is_archived:true,archived_at:1790000000000,extensions:{is_archived:true,archived_at:1790000000000}});
+  });
+  it('refuses malformed password projection state instead of suppressing a field',async()=>{
+    const input=native('login',{password_plain:'original'}),wire=await nearbyNativeObjectToWire(input,{});
+    const written=await nearbyWireToNativeObject(wire,{logicalId:'target'}),payload=JSON.parse(written.payloadJson);
+    payload.device_sync_password_projection.fields[0].wirePresent=true;
+    delete payload.device_sync_password_projection.fields[0].wireValue;
+    await expect(nearbyNativeObjectToWire({...input,payloadJson:JSON.stringify(payload)},{})).rejects.toMatchObject({code:'password-projection'});
+  });
   it('unwraps legacy password fields, sorting, archive/history and opaque numbers without changing the source', () => {
     const source = wireObject(parseLosslessJson('{"monica_password_encoding":"plaintext-v1","data":{"entry":{"id":8,"password":"secret","appPackageName":"example.app","loginType":4,"isArchived":true,"archivedAt":"2026-10-01T00:00:00Z","future":{"n":1.00000000000000001}},"customFields":[{"title":"second","value":"two","sortOrder":2},{"title":"first","value":"one","isProtected":true,"sortOrder":-1}],"passwordHistory":[{"password":"old","time":9007199254740993}]}}'));
     const saved = JSON.stringify(source);

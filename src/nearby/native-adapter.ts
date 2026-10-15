@@ -4,7 +4,7 @@ import { Mdbx2NativeHostError } from '../providers/mdbx2/native-contract';
 import { requireMdbx2ContentWriteCapabilities, writeMdbx2Content } from '../providers/mdbx2/content-write';
 import { mdbx2TransferOperationScope as hash } from '../providers/mdbx2/mdbx2-transfer-identity';
 import { clearNearbyNativeAdoption, planNearbyNativeAdoption } from './native-adoption';
-import { captureNearbyNativeSource, nativeActive } from './native-source';
+import { captureNearbyNativeSource, nativeActive, type NearbyNativeSource } from './native-source';
 import { projectNearbyNativeRecords, requireCompleteNearbyNativeProjection } from './native-records';
 import { nearbyNativeIntent, restoreNearbyNativeWrite, savedNativeAcknowledgements, type NearbyNativeIntent } from './native-journal';
 import type { NearbySourceAdapter } from './source-adapter';
@@ -17,6 +17,7 @@ export function nativeNearbySource(options: {
   exclusive: <T>(work: () => Promise<T>) => Promise<T>;
 }): NearbySourceAdapter {
   const { store, client, providerId, replicaStorageId, sessionId, signal } = options;
+  let planningSource: NearbyNativeSource | undefined;
   const active = () => { nativeActive(signal); options.assertActive(); };
   const binding = async () => {
     active(); const p = await store.getProvider(providerId); active();
@@ -30,6 +31,7 @@ export function nativeNearbySource(options: {
     return j;
   };
   const apply = async (intent: NearbyNativeIntent) => {
+    planningSource = undefined;
     const b = await binding(), revision = await client.readWriteRevision(b.vaultHandle); active();
     if (revision.vaultId !== intent.vaultId) invalidNearby('native-journal-vault');
     const write = restoreNearbyNativeWrite(intent);
@@ -53,6 +55,7 @@ export function nativeNearbySource(options: {
     async snapshotHash() { const b = await binding(), writeRevision = await client.readWriteRevision(b.vaultHandle); active(); return hash({ providerId, handle: b.vaultHandle, writeRevision }); },
     capture: () => options.exclusive(async () => {
       const source = await capture(), projection = requireCompleteNearbyNativeProjection(await projectNearbyNativeRecords(source, signal)); active();
+      planningSource = source;
       return { sourceHash: source.sourceHash, records: projection.records, async readAsset(id) {
         const attachment = projection.assets.find(a => a.contentHash === id); if (!attachment) invalidNearby('source-asset-missing');
         active(); return client.readContentAttachmentBytes(source.vaultHandle, { writeRevision: source.writeRevision, attachment }, signal);
@@ -71,7 +74,17 @@ export function nativeNearbySource(options: {
     }),
     adopt: batch => options.exclusive(async () => {
       if ((await journal())?.intent) invalidNearby('native-recovery-required');
-      const source = await capture(); active();
+      const b = await binding();
+      let source = planningSource;
+      if (source && source.providerId === b.providerId && source.vaultHandle === b.vaultHandle && source.sourceHash === batch.sourceHash) {
+        const revision = await client.readWriteRevision(b.vaultHandle); active();
+        if (revision.vaultId !== source.writeRevision.vaultId || revision.revisionSha256 !== source.writeRevision.revisionSha256) source = undefined;
+      } else source = undefined;
+      // Reuse only the just-scanned, unchanged revision for incoming planning.
+      // Outgoing captures always reread native policy/data, and every actual
+      // write still executes the native authorization/revision checks.
+      source ??= await capture(); active();
+      planningSource = source;
       const plan = await planNearbyNativeAdoption(source, { ...batch, operationId: crypto.randomUUID() }, signal);
       try {
         // A known unsupported engine must not leave a durable intent that can

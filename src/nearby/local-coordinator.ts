@@ -9,6 +9,7 @@ import { NearbyNativeTransport, NearbyTransportError, appendNearbyAsset, readNea
 import { NearbyPasskeyConsent, type NearbyPasskeyReview } from './passkey-consent';
 import { nearbyDeviceHello, nearbySettingsCounter, type NearbyPreferences, type NearbySavedPeer } from './preferences';
 import { collectNearbyPending, groupNearbyPending, nearbyApplicationReferences } from './pending';
+import { nearbyHierarchyReferences, scheduleNearbyNativeGroups } from './native-schedule';
 import { adoptNearbyNativeGroups } from './native-batches';
 import type { NearbyIncomingRecord, NearbyLocalAcknowledgement } from './local-adoption';
 import { NearbyDataError, wireInteger, wireObject, wireText } from './wire-shape';
@@ -259,9 +260,10 @@ export class NearbyLocalCoordinator {
     for (const entries of chunks(source.records)) await this.call('replica_scan_batch', { handle: this.replica, entries });
     await this.guard(true); await this.call('replica_scan_end', { handle: this.replica });
   }
-  private async refreshNativeBindings(): Promise<void> {
+  private async refreshNativeBindings(): Promise<NearbySourceSnapshot> {
     const source = await this.source!.capture(); this.sourceHash = source.sourceHash;
     await this.scanRecords(source);
+    return source;
   }
   private async scan(source: NearbySourceSnapshot): Promise<void> {
     await this.scanRecords(source);
@@ -373,13 +375,15 @@ export class NearbyLocalCoordinator {
     let rounds = 0;
     do {
     if (++rounds > 20_000) failure('pending-adoption-limit');
-    if (this.source!.native) await this.refreshNativeBindings();
+    const nativeSnapshot = this.source!.native ? await this.refreshNativeBindings() : undefined;
     const pending = await collectNearbyPending(this.transport!, this.replica!, this.abort.signal, this.source!.scope);
     if (!pending.length) break;
     const lookup = new Map(pending.map(row => [row.id, row]));
     const canonicalIds = new Map<string, string>();
     const references: Array<{ id: string; localId: string }> = [];
-    for (const ids of chunks([...new Set(pending.flatMap(nearbyApplicationReferences))])) {
+    const applicationIds = new Set(pending.flatMap(nearbyApplicationReferences));
+    const allIds = new Set([...applicationIds, ...(nativeSnapshot ? pending.flatMap(nearbyHierarchyReferences) : [])]);
+    for (const ids of chunks([...allIds])) {
       const resolved = await this.call('replica_resolve', { handle: this.replica, ids, scope: this.source!.scope });
       if (!Array.isArray(resolved.items) || resolved.items.length !== ids.length) failure('invalid-reference');
       for (const raw of resolved.items) {
@@ -391,8 +395,16 @@ export class NearbyLocalCoordinator {
         if (localId) references.push({ id, localId });
       }
     }
-    const localGroups = pending.some(row => row.deleted) ? new Map(await this.source!.groups(pending)) : undefined;
-    for (const batch of groupNearbyPending(pending, canonicalIds, localGroups, this.source!.native ? 128 : 200).slice(0, this.source!.native ? 1 : undefined)) {
+    // The revision-bound native scan already contains current project groups;
+    // reuse it instead of reading every native payload a second time.
+    const nativeByLocal = nativeSnapshot && new Map(nativeSnapshot.records.map(row => [row.local_id, row.data]));
+    const localGroups = !pending.some(row => row.deleted) ? undefined : nativeByLocal ? new Map(pending.flatMap(row => {
+      const data = row.localId ? nativeByLocal.get(row.localId) : undefined;
+      const group = data?.extensions === undefined ? undefined : wireObject(data.extensions).password_group_id;
+      return typeof group === 'string' && group ? [[row.id, group] as [string, string]] : [];
+    })) : new Map(await this.source!.groups(pending));
+    const nativeGroups = nativeSnapshot ? scheduleNearbyNativeGroups(groupNearbyPending(pending, canonicalIds, localGroups, 128, false), nativeSnapshot, canonicalIds) : undefined;
+    for (const batch of nativeGroups ? [nativeGroups.flat()] : groupNearbyPending(pending, canonicalIds, localGroups)) {
       const adopt = async (records: NearbyIncomingRecord[]) => {
       const saved = new Set((await this.source!.saved(records)).map(row => row.recordId));
       const assets = new Map<string, { id: string; dataBase64: string }>(); let bytesTotal = 0;
@@ -411,7 +423,7 @@ export class NearbyLocalCoordinator {
       this.sourceHash = result.sourceHash; await this.guard(true); await this.applyAcknowledgements(result.acknowledgements);
       this.view.applied = (this.view.applied ?? 0) + records.length;
       };
-      if (this.source!.native) await adoptNearbyNativeGroups(groupNearbyPending(batch, canonicalIds, localGroups, 128, false), adopt);
+      if (nativeGroups) await adoptNearbyNativeGroups(nativeGroups, adopt);
       else await adopt(batch);
     }
     } while (this.source!.native);

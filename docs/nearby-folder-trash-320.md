@@ -28,3 +28,5 @@ The parent-restoration red test is retained in `folder-trash-parent-red.log`. Ty
 ## Remaining acceptance
 
 Nested coordinator scheduling across batches, native collection profiles and unsupported schema/source archives remain open. Android/F-Droid attachment persistence and their UI/multicast acceptance are not claimed by these browser tests. The existing Android repair is owned by its main chat; subsequent extension work should adapt to Android and avoid unnecessary outgoing requests. Wider backend/OneDrive acceptance also remains open.
+
+Follow-up: [bounded hierarchy scheduling](nearby-hierarchy-320.md) subsequently passed actual nested trash, restart restoration, moves and repeat-sync acceptance. The remaining list above records this checkpoint's original boundary; native profiles, archives and Android/F-Droid application acceptance are still open.

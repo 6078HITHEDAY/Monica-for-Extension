@@ -105,6 +105,20 @@ describe('atomic native nearby adoption', () => {
     expect(commands.findIndex(c=>c.kind==='object-restore')).toBeLessThan(commands.findIndex(c=>c.kind==='object-update'));
     expect(commands.some(c=>c.kind==='object-delete')).toBe(false);
   });
+  it.each([false,true])('changes only native deletion state when content is unchanged (previous trash=%s)',async deleted=>{
+    const f=fixture();f.source.objects[0].summary.deleted=deleted;f.source.objects[0].record!.deleted=deleted;
+    const row=(await projectNearbyNativeRecords(f.source)).records.find(row=>row.global_id===f.id)!;
+    const input={id:f.id,deleted:!deleted,clockJson:'{"peer":2}',dataJson:JSON.stringify({...row.data,trashed:!deleted}),localId:row.local_id,scope:row.scope,expectedGuard:row.guard};
+    const plan=await planNearbyNativeAdoption(f.source,f.batch([input]));
+    expect(plan.write.plan.commands).toEqual([{kind:deleted?'object-restore':'object-delete',objectId:f.id,collectionId:f.folder}]);expect(plan.write.plan.attachments).toEqual([]);
+  });
+  it('does not mistake a literal rawJSON object for an exact numeric value during trash',async()=>{
+    const f=fixture();f.source.objects[0].record!.payloadJson='{"item_data":"Existing","future":9007199254740993}';
+    const row=(await projectNearbyNativeRecords(f.source)).records.find(row=>row.global_id===f.id)!;
+    const data=JSON.parse(JSON.stringify(row.data));data.payload.future={rawJSON:'9007199254740993'};data.trashed=true;
+    const plan=await planNearbyNativeAdoption(f.source,f.batch([{id:f.id,deleted:true,clockJson:'{"peer":2}',dataJson:JSON.stringify(data),localId:row.local_id,scope:row.scope,expectedGuard:row.guard}]));
+    expect(plan.write.plan.commands.some(command=>command.kind==='object-update')).toBe(true);
+  });
   it('creates a complete project with precise passwords, references, labels and verified attachment bytes', async () => {
     const f = fixture(), noteId = randomUUID(), loginId = randomUUID(), folderId = randomUUID(), file = f.file();
     const note = f.note(), login = normalizeNearbyNativeData({ password: 'mdbx:literal-password', username: 'alice', password_history: [{ password: 'Before' }], custom_fields: [{ title: 'Extra', value: 'secret', is_protected: true }], bound_note_entry_id: noteId }, 'Password', 'Project', 'login');
@@ -154,6 +168,15 @@ describe('atomic native nearby adoption', () => {
     expect(result.write.plan.commands).toContainEqual({ kind: 'label-unassign', assignmentId });
     expect(result.write.plan.commands.some(row => row.kind === 'label-delete')).toBe(false);
     expect(result.write.plan.commands.filter(row => row.kind === 'label-unassign')).toHaveLength(1);
+  });
+  it('resolves an authenticated folder alias when its creation was acknowledged in an earlier batch',async()=>{
+    const f=fixture(),row=(await projectNearbyNativeRecords(f.source)).records.find(row=>row.global_id===f.other)!;
+    const alias=randomUUID(),data=f.note();data.folder_path=[{id:alias,title:'Other',parent:null}];
+    const batch=f.batch([f.incoming(data)]);batch.references=[{id:alias,localId:row.local_id}];
+    const plan=await planNearbyNativeAdoption(f.source,batch);
+    expect(plan.write.plan.commands).toContainEqual(expect.objectContaining({kind:'object-create',collectionId:f.other}));
+    batch.references=[{id:alias,localId:`mdbx:${randomUUID()}:folder:${f.other}`}];
+    await expect(planNearbyNativeAdoption(f.source,batch)).rejects.toMatchObject({code:'native-reference-binding'});
   });
   it('preserves omitted labels through a move and removes only their obsolete private copies', async () => {
     const f = fixture(), labelId = randomUUID(), assignmentId = randomUUID();
