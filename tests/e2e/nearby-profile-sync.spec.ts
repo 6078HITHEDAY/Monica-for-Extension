@@ -41,6 +41,7 @@ test('native profiles survive local forwarding, atomic restoration and independe
     const credential=Buffer.from('synthetic-profile-credential').toString('base64');
     const keyPayload={credential_id:credential,rp_id:'example.test',user_id:'dXNlcg==',public_key:publicKey,public_key_algorithm:-7,private_key_alias:privateKey.toString('base64'),key_status:'portable',sign_count:19};
     const bytes=Buffer.from(Uint8Array.from({length:1024*1024},(_,i)=>(i*37+11)%256)),hash=createHash('sha256').update(bytes).digest('hex');
+    const file=Buffer.alloc(1024*1024,0x5a),fileHash=createHash('sha256').update(file).digest('hex'),fileAsset=randomUUID(),fileId=randomUUID();
     const source=():Promise<NearbyNativeSource>=>call('nearby-native-source',{providerId,vaultHandle:sourceHandle});
     const target=():Promise<NearbyNativeSource>=>call('nearby-native-source',{providerId:targetProvider,vaultHandle:targetHandle});
     await call('content-write',{handle:sourceHandle,input:{operationId:randomUUID(),writeRevision:(await source()).writeRevision,plan:{commands:[
@@ -49,11 +50,13 @@ test('native profiles survive local forwarding, atomic restoration and independe
       {kind:'collection-presentation',collectionId:folder,favorite:true,archived:true,iconRef:'key'},
       {kind:'object-create',collectionId:folder,objectId:loginId,objectTypeId:'login',title:'Profile password',payloadJson:JSON.stringify({kind:'password',username:'alice',password_plain:'synthetic-profile-password',monica_password_encoding:'plaintext-v1'})},
       {kind:'object-create',collectionId:folder,objectId:passkeyId,objectTypeId:'passkey',title:'Profile Passkey',payloadJson:JSON.stringify(keyPayload)}],attachments:[]},assets:[{id:assetId,base64:bytes.toString('base64')}]}});
+    await call('content-write',{handle:sourceHandle,input:{operationId:randomUUID(),writeRevision:(await source()).writeRevision,plan:{commands:[],attachments:[
+      {kind:'create',attachmentId:fileId,collectionId:folder,objectId:null,fileName:'profile-folder-file.bin',mediaType:'application/octet-stream',assetId:fileAsset}]},assets:[{id:fileAsset,base64:file.toString('base64')}]}});
     const before=await source(),projection:NearbyNativeProjection=await call('nearby-native-project',before);expect(projection.blockers).toEqual([]);
     const original=projection.records.find(r=>r.global_id===folder)!;expect(JSON.stringify(original.data).length).toBeLessThan(4000);
     let local=createEmptyVaultState(),localSnapshot=await captureNearbyLocalSnapshot(local);const localProvider=local.providers.find(p=>p.kind==='local')!.id;
-    local=(await applyNearbyLocalBatch(local,{providerId:localProvider,sourceHash:localSnapshot.sourceHash,records:projection.records.map(r=>({id:r.global_id,deleted:r.deleted,clockJson:'{"source":1}',dataJson:JSON.stringify(r.data)})),assets:[{id:hash,dataBase64:bytes.toString('base64')}]},'2026-10-15T00:00:00Z')).state;
-    localSnapshot=await captureNearbyLocalSnapshot(JSON.parse(JSON.stringify(local)));expect(localSnapshot.records.find(r=>r.global_id===folder)!.data).toEqual(original.data);expect(localSnapshot.assets[0].dataBase64).toBe(bytes.toString('base64'));
+    local=(await applyNearbyLocalBatch(local,{providerId:localProvider,sourceHash:localSnapshot.sourceHash,records:projection.records.map(r=>({id:r.global_id,deleted:r.deleted,clockJson:'{"source":1}',dataJson:JSON.stringify(r.data)})),assets:[{id:hash,dataBase64:bytes.toString('base64')},{id:fileHash,dataBase64:file.toString('base64')}]},'2026-10-15T00:00:00Z')).state;
+    localSnapshot=await captureNearbyLocalSnapshot(JSON.parse(JSON.stringify(local)));expect(localSnapshot.records.find(r=>r.global_id===folder)!.data).toEqual(original.data);expect(localSnapshot.assets.find(a=>a.id===hash)!.dataBase64).toBe(bytes.toString('base64'));
     let current=await target();
     const records=localSnapshot.records.map(r=>({id:r.global_id,deleted:r.deleted,clockJson:'{"source":1}',dataJson:JSON.stringify(r.data)}));
     const empty:NearbyNativeProjection=await call('nearby-native-project',current);
@@ -61,11 +64,22 @@ test('native profiles survive local forwarding, atomic restoration and independe
     const adoptRecords=async(values:typeof records)=>{
       let plan;try{plan=await call('nearby-native-adopt-plan',{source:current,batch:{operationId:randomUUID(),sourceHash:current.sourceHash,records:values,assets:localSnapshot.assets}});}
       catch(error){if(String(error).includes('native-adoption-limit'))throw new NearbyDataError('native-adoption-limit');throw error;}
+      if(plan.remainingWrites?.length){
+        await call('nearby-native-journal-stage',{plan});
+        await call('content-write',{handle:targetHandle,input:plan.write});
+        await call('nearby-native-journal-scan',[password,bytes.toString('base64').slice(0,512),file.toString('base64').slice(0,512)]);
+        await call('close');await context!.close();context=undefined;call=await connect();await call('open',{name:database});
+        await rpc('vault.open',{source:{kind:'vault',handle:targetHandle},credential:{method:'password',password}});
+        const recovered=await call('nearby-native-journal-recover');expect(recovered.acknowledgements).toHaveLength(values.length);expect(recovered.journal.intent).toBeUndefined();
+        return recovered;
+      }
       expect(plan.write.plan.attachments).toEqual([]);return call('content-write',{handle:targetHandle,input:plan.write});
     };
     while(groups.length){const adopted=await adoptNearbyNativeGroups(groups,adoptRecords);let used=0;while(used<adopted.count)used+=groups.shift()!.length;current=await target();}
     expect(Buffer.from(current.profiles![0].payloadBase64,'base64').equals(bytes)).toBe(true);
     expect(current.collections.find(c=>c.collectionId===folder)).toMatchObject({favorite:true,archived:true,iconRef:'key'});
+    const copiedFile=current.attachments.find(a=>a.collectionId===folder&&!a.deleted)!;
+    expect(await call('content-attachment-bytes',{handle:targetHandle,input:{writeRevision:current.writeRevision,attachment:copiedFile}})).toEqual({sizeBytes:file.length,sha256:fileHash});
     let outgoing:NearbyNativeProjection=await call('nearby-native-project',current);expect(outgoing.blockers).toEqual([]);
     expect(outgoing.records.find(r=>r.global_id===folder)!.data).toEqual(original.data);
     expect(JSON.parse(current.objects.find(o=>o.summary.objectId===loginId)!.record!.payloadJson).password_plain).toBe('synthetic-profile-password');
@@ -82,6 +96,10 @@ test('native profiles survive local forwarding, atomic restoration and independe
         try{plan=await call('nearby-native-adopt-plan',{source:current,batch:{operationId:randomUUID(),sourceHash:current.sourceHash,records,assets:localSnapshot.assets}});}
         catch(error){if(String(error).includes('native-adoption-limit'))throw new NearbyDataError('native-adoption-limit');throw error;}
         expect(plan.write.plan.commands.some((c:any)=>c.kind==='collection-profile-set'||c.kind==='collection-presentation')).toBe(false);
+        if(plan.remainingWrites?.length){
+          const result=await call('nearby-native-adopt',{source:current,batch:{sourceHash:current.sourceHash,records,assets:localSnapshot.assets}});
+          expect(result.acknowledgements).toHaveLength(records.length);return result;
+        }
         return call('content-write',{handle:targetHandle,input:plan.write});
       });remaining=remaining.slice(adopted.count);current=await target();
     }
@@ -91,14 +109,16 @@ test('native profiles survive local forwarding, atomic restoration and independe
     const deleted=outgoing.records.find(r=>r.global_id===roots[0])!,survivor=outgoing.records.find(r=>r.global_id===roots[1])!;
     const purge=await call('nearby-native-adopt-plan',{source:current,batch:{operationId:randomUUID(),sourceHash:current.sourceHash,records:[{
       id:roots[0],deleted:true,clockJson:'{"source":2}',dataJson:'{}',localId:deleted.local_id,scope:deleted.scope,expectedGuard:deleted.guard}],assets:[]}});
-    await call('content-write',{handle:targetHandle,input:purge.write});current=await target();outgoing=await call('nearby-native-project',current);
+    expect(purge.remainingWrites?.length).toBeGreaterThan(0);
+    await call('nearby-native-journal-stage',{plan:purge});await call('nearby-native-journal-recover');current=await target();outgoing=await call('nearby-native-project',current);
     expect(outgoing.records.find(r=>r.global_id===roots[1])!.data).toEqual(survivor.data);
-    const files=current.attachments.filter(a=>a.collectionId===current.rootId&&!a.deleted);expect(files).toHaveLength(1);
-    expect(await call('content-attachment-bytes',{handle:targetHandle,input:{writeRevision:current.writeRevision,attachment:files[0]}})).toEqual({sizeBytes:bytes.length,sha256:hash});
+    const files=current.attachments.filter(a=>a.collectionId===current.rootId&&!a.deleted);expect(files).toHaveLength(2);
+    expect(await call('content-attachment-bytes',{handle:targetHandle,input:{writeRevision:current.writeRevision,attachment:files.find(a=>a.contentHash===hash)!}})).toEqual({sizeBytes:bytes.length,sha256:hash});
+    expect(await call('content-attachment-bytes',{handle:targetHandle,input:{writeRevision:current.writeRevision,attachment:files.find(a=>a.contentHash===fileHash)!}})).toEqual({sizeBytes:file.length,sha256:fileHash});
     await call('scan',[password,bytes.toString('base64').slice(0,512)]);await call('close');await context!.close();context=undefined;
     call=await connect();await call('open',{name:database});await rpc('vault.open',{source:{kind:'vault',handle:targetHandle},credential:{method:'password',password}});
     const restarted=await target();expect(restarted.profiles).toEqual(current.profiles);expect(restarted.writeRevision).toEqual(current.writeRevision);
     const restored:NearbyNativeProjection=await call('nearby-native-project',restarted);expect(restored.records.find(r=>r.global_id===folder)!.data).toEqual(original.data);
-    await call('close');Object.assign(evidence,{status:'passed',binaryBytes:bytes.length,localForwarding:true,nativeRestore:true,stableProjection:true,profiledPassword:true,profiledPasskeySignature:true,counter19Preserved:true,rootOwnerIsolation:true,purgePreservesOtherRoot:true,restart:true,sha256:hash});
+    await call('close');Object.assign(evidence,{status:'passed',binaryBytes:bytes.length,fileBytes:file.length,encryptedSequenceRestartRecovery:true,localForwarding:true,nativeRestore:true,stableProjection:true,profiledPassword:true,profiledPasskeySignature:true,counter19Preserved:true,rootOwnerIsolation:true,purgePreservesOtherRoot:true,restart:true,sha256:hash});
   }finally{await context?.close();await writeFile(path.join(run,'evidence.json'),JSON.stringify(evidence,null,2));}
 });

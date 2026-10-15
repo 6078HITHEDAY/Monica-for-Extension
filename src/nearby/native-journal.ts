@@ -5,12 +5,18 @@ import type { NearbyNativeAdoption } from './native-adoption';
 import type { NearbyIncomingRecord } from './local-adoption';
 import { invalidNearby, wireInteger, wireObject } from './wire-shape';
 import { parseLosslessJson } from '../core/lossless-json';
+import { advanceMdbx2ContentWriteAnchor, validateMdbx2ContentWriteAnchor, type Mdbx2ContentWriteAnchor } from '../providers/mdbx2/content-write-anchor';
 
 export interface NearbyAcknowledgement { recordId: string; clockJson: string; localId: string; scope: string; guard: string; dataJson: string }
 export interface NearbyNativeIntent {
   version: 1; replicaStorageId: string; providerId: string; vaultId: string; operationId: string;
   write: Omit<Mdbx2ContentWriteInput, 'assets'> & { assets: { id: string; dataBase64: string }[] };
   acknowledgements: NearbyAcknowledgement[];
+  sequence?: {
+    anchor: Mdbx2ContentWriteAnchor;
+    completedSteps: number;
+    remaining: Omit<NearbyNativeIntent['write'], 'writeRevision'>[];
+  };
 }
 export interface NearbyNativeJournal {
   version: 1; replicaStorageId: string; providerId: string; vaultId: string;
@@ -50,18 +56,35 @@ export function readNearbyNativeJournal(value: unknown): NearbyNativeJournal | u
       || revision.vaultId !== j.vaultId || typeof revision.revisionSha256 !== 'string' || !digest.test(revision.revisionSha256)
       || !Array.isArray(plan.commands) || plan.commands.length > 128 || !Array.isArray(plan.attachments) || plan.attachments.length > 64
       || !Array.isArray(w.assets) || w.assets.length > 64 || !Array.isArray(i.acknowledgements) || !i.acknowledgements.length || i.acknowledgements.length > 128) invalidNearby('native-journal-intent');
-    let bytes = 0;
-    for (const raw of w.assets) {
-      const a = wireObject(raw); id(a.id);
-      if (typeof a.dataBase64 !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(a.dataBase64)) invalidNearby('native-journal-asset');
-      bytes += a.dataBase64.length; if (bytes > 90 * 1024 * 1024) invalidNearby('native-journal-limit');
+    const writes = [w];
+    if (i.sequence !== undefined) {
+      const sequence = wireObject(i.sequence), anchor = wireObject(sequence.anchor), anchorRevision = wireObject(anchor.writeRevision);
+      if (!Number.isSafeInteger(sequence.completedSteps) || (sequence.completedSteps as number) < 0
+        || !Array.isArray(sequence.remaining) || sequence.remaining.length + (sequence.completedSteps as number) >= 68
+        || anchorRevision.vaultId !== revision.vaultId || anchorRevision.revisionSha256 !== revision.revisionSha256
+        || !Array.isArray(anchor.branches) || !anchor.branches.length || anchor.branches.length > 1024
+        || new TextEncoder().encode(JSON.stringify(anchor)).length > 512 * 1024) invalidNearby('native-journal-sequence');
+      writes.push(...sequence.remaining.map(wireObject));
     }
-    if (new TextEncoder().encode(JSON.stringify(plan)).length > 8 * 1024 * 1024) invalidNearby('native-journal-limit');
-    const seen = new Set<string>(), assets = new Set<string>();
-    for (const a of w.assets) {
-      const assetId = wireObject(a).id as string;
-      if (assets.has(assetId)) invalidNearby('native-journal-duplicate'); assets.add(assetId);
+    let bytes = 0, planBytes = 0;
+    const operations = new Set<string>();
+    for (const write of writes) {
+      id(write.operationId);
+      if (operations.has(write.operationId as string)) invalidNearby('native-journal-duplicate'); operations.add(write.operationId as string);
+      const p = wireObject(write.plan);
+      if (!Array.isArray(p.commands) || p.commands.length > 128 || !Array.isArray(p.attachments) || p.attachments.length > 64
+        || !(p.commands.length + p.attachments.length) || !Array.isArray(write.assets) || write.assets.length > 64) invalidNearby('native-journal-intent');
+      planBytes += new TextEncoder().encode(JSON.stringify(p)).length;
+      if (planBytes > 8 * 1024 * 1024) invalidNearby('native-journal-limit');
+      const assets = new Set<string>();
+      for (const raw of write.assets) {
+        const a = wireObject(raw); id(a.id);
+        if (assets.has(a.id as string)) invalidNearby('native-journal-duplicate'); assets.add(a.id as string);
+        if (typeof a.dataBase64 !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(a.dataBase64)) invalidNearby('native-journal-asset');
+        bytes += a.dataBase64.length; if (bytes > 90 * 1024 * 1024) invalidNearby('native-journal-limit');
+      }
     }
+    const seen = new Set<string>();
     for (const value of i.acknowledgements) {
       const a = ack(value, j.providerId as string);
       if (seen.has(a.recordId)) invalidNearby('native-journal-duplicate'); seen.add(a.recordId);
@@ -78,7 +101,7 @@ export function readNearbyNativeJournal(value: unknown): NearbyNativeJournal | u
   }
   return structuredClone(value) as NearbyNativeJournal;
 }
-export async function nearbyNativeIntent(plan: NearbyNativeAdoption, replicaStorageId: string): Promise<NearbyNativeIntent> {
+export async function nearbyNativeIntent(plan: NearbyNativeAdoption, replicaStorageId: string, anchor?: Mdbx2ContentWriteAnchor): Promise<NearbyNativeIntent> {
   const scope = `mdbx:${plan.providerId}`;
   const acknowledgements = await Promise.all(plan.bindings.map(async b => ({ recordId: b.recordId, clockJson: b.clockJson, localId: b.localId, scope,
     // The receipt proves the original transaction, not the current content.
@@ -88,8 +111,23 @@ export async function nearbyNativeIntent(plan: NearbyNativeAdoption, replicaStor
   const intent: NearbyNativeIntent = { version: 1, replicaStorageId, providerId: plan.providerId, vaultId: plan.write.writeRevision.vaultId,
     operationId: plan.write.operationId, write: { operationId: plan.write.operationId, writeRevision: { ...plan.write.writeRevision },
       plan: structuredClone(plan.write.plan), assets: plan.write.assets.map(a => ({ id: a.id, dataBase64: bytesToBase64(a.bytes) })) }, acknowledgements };
+  if (plan.remainingWrites?.length) {
+    if (!anchor) invalidNearby('native-journal-sequence');
+    intent.sequence = { anchor: await validateMdbx2ContentWriteAnchor(anchor), completedSteps: 0,
+      remaining: plan.remainingWrites.map(write => ({ operationId: write.operationId, plan: structuredClone(write.plan),
+        assets: write.assets.map(a => ({ id: a.id, dataBase64: bytesToBase64(a.bytes) })) })) };
+  }
   readNearbyNativeJournal({ version: 1, replicaStorageId, providerId: intent.providerId, vaultId: intent.vaultId, intent, acknowledgements: [] });
   return intent;
+}
+/** Called only after verifying this exact operation's native receipt. No
+ * acknowledgements become durable until the last step has committed. */
+export async function advanceNearbyNativeIntent(intent: NearbyNativeIntent, commitId: string): Promise<NearbyNativeIntent> {
+  const original = structuredClone(intent), sequence = original.sequence;
+  if (!sequence?.remaining.length) invalidNearby('native-journal-sequence');
+  const anchor = await advanceMdbx2ContentWriteAnchor(sequence.anchor, commitId), [write, ...remaining] = sequence.remaining;
+  return { ...original, operationId: write.operationId, write: { ...structuredClone(write), writeRevision: { ...anchor.writeRevision } },
+    sequence: { anchor, completedSteps: sequence.completedSteps + 1, remaining: structuredClone(remaining) } };
 }
 export function restoreNearbyNativeWrite(intent: NearbyNativeIntent): Mdbx2ContentWriteInput {
   const assets: { id: string; bytes: Uint8Array }[] = [];

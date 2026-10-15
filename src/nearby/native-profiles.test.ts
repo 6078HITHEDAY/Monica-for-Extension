@@ -55,11 +55,17 @@ describe('portable native collection archives',()=>{
     const batch=await f.batch(data);batch.records.push({...batch.records[0],id:randomUUID()});
     await expect(planNearbyNativeAdoption(f.empty,batch)).rejects.toMatchObject({code:'native-adoption-limit'});
   });
-  it('rejects a profile/file combination above its native batch budget before staging',async()=>{
+  it('plans a bounded recoverable sequence for a profile/file combination above one transaction budget',async()=>{
     const f=fixture(1024*1024),data=(await f.record()).data as NearbyWireData,extra=Buffer.alloc(1,7),extraHash=sha(extra);
     (data.assets as unknown[]).push({id:extraHash,attachment_id:'other',file_name:'other.bin',media_type:'application/octet-stream',size:1});
     const batch=await f.batch(data);batch.assets.push({id:extraHash,dataBase64:extra.toString('base64')});
-    await expect(planNearbyNativeAdoption(f.empty,batch)).rejects.toMatchObject({code:'native-adoption-limit'});
+    const plan=await planNearbyNativeAdoption(f.empty,batch),steps=[plan.write,...plan.remainingWrites??[]];
+    expect(steps.length).toBeGreaterThan(1);
+    expect(steps.flatMap(w=>w.plan.commands).filter(c=>c.kind==='collection-profile-set')).toHaveLength(1);
+    expect(steps.flatMap(w=>w.plan.attachments)).toHaveLength(1);
+    expect(steps.every(w=>w.assets.reduce((size,a)=>size+a.bytes.length,0)<=1024*1024)).toBe(true);
+    expect(steps[steps.length-1].plan.commands.some(c=>c.kind==='label-create'&&c.name==='monica-device-folder-data-v1')).toBe(true);
+    clearNearbyNativeAdoption(plan);expect(steps.every(w=>w.assets.every(a=>a.bytes.every(byte=>byte===0)))).toBe(true);
   });
   it('projects a full 1MiB profile as a bounded descriptor and a separate native asset',async()=>{
     const f=fixture(1024*1024),p=requireCompleteNearbyNativeProjection(await projectNearbyNativeRecords(f.source)),row=p.records.find(r=>r.global_id===f.folder)!;

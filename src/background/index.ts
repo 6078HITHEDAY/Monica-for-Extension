@@ -685,6 +685,7 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
     assertManagerPage(sender);
     return providerOperations.run(nativeProvider, async () => {
       await service.assertNoBitwardenMdbxMove(nativeProvider);
+      await service.assertNoNearbyNativeSequence(nativeProvider);
       return handleRequest(request, sender, true);
     });
   }
@@ -2841,6 +2842,7 @@ async function executeProviderSync(providerId: string, options: { allowEmptyRemo
     if (account.kind === 'keepass') await service.assertNoBitwardenKeePassMove(account.id);
     if (account.kind === 'mdbx2') {
       await service.assertNoBitwardenMdbxMove(account.id);
+      await service.assertNoNearbyNativeSequence(account.id);
       if ((await service.readMdbx2MoveFinalizations()).some(row => row.status !== 'completed' && row.sourceProviderId === account.id))
         throw new Error('此密码源还有待恢复的移动，请先恢复后再同步。');
       await passwordProjectRemovals.recoverProvider(account.id, controller.signal);

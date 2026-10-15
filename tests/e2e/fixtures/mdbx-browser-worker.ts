@@ -143,15 +143,29 @@ async function action(op: string, data: any): Promise<unknown> {
     };
     const client = { request, hello: async () => validateMdbx2HostCapabilities(await request('host.hello')) };
     if (op === 'content-write-anchor') return readMdbx2ContentWriteAnchor(client, data.handle, data.writeRevision);
+    if (op === 'nearby-native-adopt') {
+      const sessionId = await unlockJournal(), source = data.source;
+      await journalService.upsertProvider({id:source.providerId,kind:'mdbx2',enabled:true,isDefaultSaveTarget:false,name:'Synthetic sequence source',config:{vaultHandle:source.vaultHandle}});
+      const previous = await journalService.nearbySessionPreferences(sessionId);
+      if (previous.localProviderId !== source.providerId) await journalService.updateNearbyPreferences({kind:'source',providerId:source.providerId},previous.epoch,sessionId);
+      const preferences = await journalService.nearbySessionPreferences(sessionId);
+      const typed = new Mdbx2NativeClient({connectNative(){throw Error('Synthetic fixture must use its compiled engine');},disconnectErrorMessage(){return undefined;}});
+      typed.request = request;
+      const adapter = nativeNearbySource({store:journalService,client:typed,providerId:source.providerId,replicaStorageId:preferences.replicaStorageId,sessionId,
+        epoch:()=>preferences.epoch,assertActive:()=>{},signal:new AbortController().signal,exclusive:work=>work()});
+      return adapter.adopt({...data.batch,providerId:source.providerId});
+    }
     if (op === 'nearby-native-journal-stage') {
       const sessionId = await unlockJournal(), plan = data.plan;
       await journalService.upsertProvider({id:plan.providerId,kind:'mdbx2',enabled:true,isDefaultSaveTarget:false,name:'Synthetic journal source',config:{vaultHandle:plan.vaultHandle}});
       const previous = await journalService.nearbySessionPreferences(sessionId);
       await journalService.updateNearbyPreferences({kind:'source',providerId:plan.providerId},previous.epoch,sessionId);
       const preferences = await journalService.nearbySessionPreferences(sessionId);
-      const nativePlan = {...plan,write:{...plan.write,assets:plan.write.assets.map((a:{id:string;base64:string})=>({id:a.id,bytes:Uint8Array.from(atob(a.base64),c=>c.charCodeAt(0))}))}};
+      const decode = (write:typeof plan.write) => ({...write,assets:write.assets.map((a:{id:string;base64:string})=>({id:a.id,bytes:Uint8Array.from(atob(a.base64),c=>c.charCodeAt(0))}))});
+      const nativePlan = {...plan,write:decode(plan.write),...(plan.remainingWrites?{remainingWrites:plan.remainingWrites.map(decode)}:{})};
       try {
-        const intent = await nearbyNativeIntent(nativePlan, preferences.replicaStorageId);
+        const anchor = nativePlan.remainingWrites?.length ? await readMdbx2ContentWriteAnchor(client, nativePlan.vaultHandle, nativePlan.write.writeRevision) : undefined;
+        const intent = await nearbyNativeIntent(nativePlan, preferences.replicaStorageId, anchor);
         await journalService.stageNearbyNativeIntent(intent, preferences.epoch, sessionId, () => {});
         return { operationId:intent.operationId, acknowledgements:intent.acknowledgements };
       } finally { clearNearbyNativeAdoption(nativePlan); }
@@ -180,7 +194,8 @@ async function action(op: string, data: any): Promise<unknown> {
     if (op === 'nearby-native-plan') return planNearbyNativeMetadata(data.source, data.operationId, data.changes);
     if (op === 'nearby-native-adopt-plan') {
       const plan = await planNearbyNativeAdoption(data.source, data.batch);
-      try { return { ...plan, write: { ...plan.write, assets: plan.write.assets.map(asset => ({ id: asset.id, base64: bytesToBase64(asset.bytes) })) } }; }
+      const encode = (write:Omit<typeof plan.write,'writeRevision'>) => ({...write,assets:write.assets.map(asset=>({id:asset.id,base64:bytesToBase64(asset.bytes)}))});
+      try { return { ...plan, write: { ...plan.write, ...encode(plan.write) }, ...(plan.remainingWrites?{remainingWrites:plan.remainingWrites.map(encode)}:{}) }; }
       finally { clearNearbyNativeAdoption(plan); }
     }
     if (op === 'content-attachments') return readMdbx2ContentAttachments(client, data.handle, data.input);

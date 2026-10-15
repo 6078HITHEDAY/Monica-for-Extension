@@ -10,8 +10,9 @@ import { nearbyNativeIntent, restoreNearbyNativeWrite, savedNativeAcknowledgemen
 import type { NearbySourceAdapter } from './source-adapter';
 import { invalidNearby, wireObject } from './wire-shape';
 import { base64ToBytes } from '../security/encoding';
+import { readMdbx2ContentWriteAnchor, validateMdbx2ContentWriteAnchor } from '../providers/mdbx2/content-write-anchor';
 
-type Store = Pick<SecureVaultService, 'getProvider' | 'readNearbyNativeJournal' | 'stageNearbyNativeIntent' | 'finishNearbyNativeIntent'>;
+type Store = Pick<SecureVaultService, 'getProvider' | 'readNearbyNativeJournal' | 'stageNearbyNativeIntent' | 'advanceNearbyNativeIntent' | 'finishNearbyNativeIntent'>;
 export function nativeNearbySource(options: {
   store: Store; client: Mdbx2NativeClient; providerId: string; replicaStorageId: string; sessionId: string;
   epoch: () => string; assertActive: () => void; signal: AbortSignal;
@@ -33,23 +34,30 @@ export function nativeNearbySource(options: {
   };
   const apply = async (intent: NearbyNativeIntent) => {
     planningSource = undefined;
-    const b = await binding(), revision = await client.readWriteRevision(b.vaultHandle); active();
-    if (revision.vaultId !== intent.vaultId) invalidNearby('native-journal-vault');
-    const write = restoreNearbyNativeWrite(intent);
-    try {
-      // Never substitute a new operation/revision after an uncertain outcome.
-      const receipt = await writeMdbx2Content(client, b.vaultHandle, write, signal); active();
-      if (receipt.operationId !== intent.operationId) invalidNearby('native-journal-receipt');
-      await store.finishNearbyNativeIntent(intent.operationId, sessionId, active); active();
-      return intent.acknowledgements;
-    } catch (e) {
-      // Only this engine result proves no transaction was applied. Keep every
-      // other intent (including cancellation) for exact receipt recovery.
-      if (e instanceof Mdbx2NativeHostError && e.code === 'content-write-stale') {
-        await store.finishNearbyNativeIntent(intent.operationId, sessionId, active, true);
-      }
-      throw e;
-    } finally { write.assets.forEach(a => a.bytes.fill(0)); }
+    for (;;) {
+      const b = await binding(), revision = await client.readWriteRevision(b.vaultHandle); active();
+      if (revision.vaultId !== intent.vaultId) invalidNearby('native-journal-vault');
+      if (intent.sequence) { await validateMdbx2ContentWriteAnchor(intent.sequence.anchor); active(); }
+      const write = restoreNearbyNativeWrite(intent);
+      try {
+        // Never substitute a new operation/revision after an uncertain outcome.
+        const receipt = await writeMdbx2Content(client, b.vaultHandle, write, signal); active();
+        if (receipt.operationId !== intent.operationId) invalidNearby('native-journal-receipt');
+        if (intent.sequence?.remaining.length) {
+          intent = await store.advanceNearbyNativeIntent(intent.operationId, receipt.commitId, sessionId, active); active();
+          continue;
+        }
+        await store.finishNearbyNativeIntent(intent.operationId, sessionId, active); active();
+        return intent.acknowledgements;
+      } catch (e) {
+        // Only this engine result proves the current step was not applied.
+        // A stale sequence retains earlier progress and its remaining intent.
+        if (e instanceof Mdbx2NativeHostError && e.code === 'content-write-stale') {
+          await store.finishNearbyNativeIntent(intent.operationId, sessionId, active, true);
+        }
+        throw e;
+      } finally { write.assets.forEach(a => a.bytes.fill(0)); }
+    }
   };
   return {
     scope: `mdbx:${providerId}`, native: true,
@@ -100,9 +108,11 @@ export function nativeNearbySource(options: {
         // A known unsupported engine must not leave a durable intent that can
         // never execute. The writer checks again before native staging.
         const caps = await client.hello(15_000, source.vaultHandle); active();
-        requireMdbx2ContentWriteCapabilities(caps, plan.write.plan.commands.some(row => row.kind === 'collection-trash'),
-          plan.write.plan.commands.some(row => row.kind === 'collection-profile-set' || row.kind === 'collection-presentation'));
-        const intent = await nearbyNativeIntent(plan, replicaStorageId); active();
+        const commands = [plan.write, ...plan.remainingWrites ?? []].flatMap(write => write.plan.commands);
+        requireMdbx2ContentWriteCapabilities(caps, commands.some(row => row.kind === 'collection-trash'),
+          commands.some(row => row.kind === 'collection-profile-set' || row.kind === 'collection-presentation'));
+        const anchor = plan.remainingWrites?.length ? await readMdbx2ContentWriteAnchor(client, source.vaultHandle, source.writeRevision, signal) : undefined; active();
+        const intent = await nearbyNativeIntent(plan, replicaStorageId, anchor); active();
         await store.stageNearbyNativeIntent(intent, options.epoch(), sessionId, active); active();
         const acknowledgements = await apply(intent), after = await client.readWriteRevision(source.vaultHandle); active();
         return { acknowledgements, sourceHash: await hash({ providerId, handle: source.vaultHandle, writeRevision: after }) };

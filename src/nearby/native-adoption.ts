@@ -8,6 +8,7 @@ import { NATIVE_FOLDER_DATA, NATIVE_FOLDER_TITLE, NATIVE_PROJECT_TAG, NATIVE_ROO
 import { projectNearbyNativeRecords, validateNearbyNativeAssetIdentities } from './native-records';
 import { nativeActive, nativeId, nearbyJavaNameUuid, type NearbyNativeSource } from './native-source';
 import { readNearbyCollectionArchive, requireNearbyProfileAsset, sameNearbyProfile, type NearbyCollectionArchive } from './native-profiles';
+import { partitionNearbyMetadataWrite } from './native-write-sequence';
 import { invalidNearby, nearbyNativeBusinessPayload, remapNearbyAssetPaths, remapNearbyReferences, validateNearbyWireData,
   wireInteger, wireObject, type NearbyWireData } from './wire-shape';
 
@@ -21,6 +22,9 @@ export interface NearbyNativeAdoption {
   providerId: string; vaultHandle: string; sourceHash: string;
   /** Keep this exact operation for uncertain-outcome recovery. */
   write: Mdbx2ContentWriteInput;
+  /** Optional, already validated bounded steps. Revisions are derived from
+   * confirmed preceding receipts, never from a newer live vault snapshot. */
+  remainingWrites?: Omit<Mdbx2ContentWriteInput, 'writeRevision'>[];
   bindings: { recordId: string; clockJson: string; localId: string; deleted: boolean; dataJson: string }[];
 }
 const identity = /^[A-Za-z0-9_-]{1,64}$/, digest = /^[a-f0-9]{64}$/;
@@ -48,7 +52,9 @@ function validateClock(text: string): void {
 }
 /** A prepared batch contains plaintext only in owned memory. Call after commit,
  * cancellation or durable encrypted staging; never clear caller-owned buffers. */
-export function clearNearbyNativeAdoption(plan: NearbyNativeAdoption): void { for (const asset of plan.write.assets) asset.bytes.fill(0); }
+export function clearNearbyNativeAdoption(plan: NearbyNativeAdoption): void {
+  for (const write of [plan.write, ...plan.remainingWrites ?? []]) for (const asset of write.assets) asset.bytes.fill(0);
+}
 
 /** Pure adoption planning. It validates the complete batch before any native
  * mutation. The caller must durably retain the exact intent before writing and
@@ -123,7 +129,12 @@ export async function planNearbyNativeAdoption(input: NearbyNativeSource, incomi
   for (const row of work) if (!row.tombstone) row.data = remapNearbyReferences(row.data, resolve);
   const profilePlans=new Map<string,NearbyCollectionArchive>();
   let hasProfileArchive=false;
-  for(const row of work.filter(row=>row.kind!=='object'&&!row.tombstone)){
+  for(const row of work.filter(row=>row.kind!=='object')){
+    if(row.tombstone){
+      const previous=existing.get(row.localId)?.data;
+      if(previous&&Object.keys(previous).length&&readNearbyCollectionArchive(previous as NearbyWireData)?.profile)hasProfileArchive=true;
+      continue;
+    }
     const archive=readNearbyCollectionArchive(row.data);if(!archive)continue;
     if(archive.profile){requireNearbyProfileAsset(row.data,archive.profile);hasProfileArchive=true;}
     // A foreign root is an archive owned by that source, not authority to
@@ -389,10 +400,16 @@ export async function planNearbyNativeAdoption(input: NearbyNativeSource, incomi
       if (!id || usedIds.has(id)) invalidNearby('native-created-identity-collision'); usedIds.add(id);
     }
     const planBytes=new TextEncoder().encode(JSON.stringify({commands:finalCommands,attachments:fileCommands})).length;
-    if (finalCommands.length > 128 || fileCommands.length > 64 || planBytes > 8 * 1024 * 1024
-      || hasProfileArchive&&(copies>1024*1024||planBytes>32*1024)) invalidNearby('native-adoption-limit');
-    return { providerId: source.providerId, vaultHandle: source.vaultHandle, sourceHash: source.sourceHash,
+    if (finalCommands.length > 128 || fileCommands.length > 64 || planBytes > 8 * 1024 * 1024) invalidNearby('native-adoption-limit');
+    const result: NearbyNativeAdoption = { providerId: source.providerId, vaultHandle: source.vaultHandle, sourceHash: source.sourceHash,
       write: { operationId: operation, writeRevision: { ...source.writeRevision }, plan: { commands: finalCommands, attachments: fileCommands }, assets: buffers },
       bindings: work.map(row => ({ recordId: row.record.id, clockJson: row.record.clockJson, localId: row.localId, deleted: row.record.deleted, dataJson: row.record.dataJson })) };
+    const existingFileSizes = new Map(source.attachments.map(a => [a.attachmentId, a.storedSize]));
+    const retainedFileCost = fileCommands.reduce((size, command) => size + ('assetId' in command ? 0 : existingFileSizes.get(command.attachmentId) ?? 0), 0);
+    if (hasProfileArchive && (copies + retainedFileCost > 1024 * 1024 || planBytes > 32 * 1024)) {
+      const [first, ...remaining] = await partitionNearbyMetadataWrite(result.write, existingFileSizes); nativeActive(signal);
+      result.write = { ...first, writeRevision: { ...source.writeRevision } }; result.remainingWrites = remaining;
+    }
+    return result;
   } catch (error) { buffers.forEach(asset => asset.bytes.fill(0)); throw error; }
 }

@@ -632,6 +632,20 @@ export class SecureVaultService {
     });
   }
 
+  async advanceNearbyNativeIntent(operationId: string, commitId: string, sessionId: string, assertActive: () => void): Promise<import('../nearby/native-journal').NearbyNativeIntent> {
+    return this.runExclusive(async () => {
+      const check = async () => { assertActive(); await this.assertLocalTransferSession(sessionId); assertActive(); };
+      await check(); const { state, envelope, key } = await this.mutableContext();
+      const { readNearbyNativeJournal, advanceNearbyNativeIntent } = await import('../nearby/native-journal');
+      const journal = readNearbyNativeJournal(state.nearbyNativeJournal);
+      if (!journal?.intent || journal.intent.operationId !== operationId) throw new Error('Nearby intent missing');
+      journal.intent = await advanceNearbyNativeIntent(journal.intent, commitId);
+      state.nearbyNativeJournal = readNearbyNativeJournal(journal);
+      await this.persist(state, key, envelope.kdf, false, false, check);
+      return structuredClone(journal.intent);
+    });
+  }
+
   async finishNearbyNativeIntent(operationId: string, sessionId: string, assertActive: () => void, stale = false): Promise<void> {
     return this.runExclusive(async () => {
       const check = async () => { assertActive(); await this.assertLocalTransferSession(sessionId); assertActive(); };
@@ -639,6 +653,8 @@ export class SecureVaultService {
       const { readNearbyNativeJournal } = await import('../nearby/native-journal');
       const journal = readNearbyNativeJournal(state.nearbyNativeJournal);
       if (!journal?.intent || journal.intent.operationId !== operationId) throw new Error('Nearby intent missing');
+      if (stale && journal.intent.sequence?.completedSteps) throw new Error('Nearby sequence changed; preserve remaining recovery steps');
+      if (!stale && journal.intent.sequence?.remaining.length) throw new Error('Nearby sequence incomplete');
       if (!stale) {
         const map = new Map(journal.acknowledgements.map(a => [a.recordId, a]));
         for (const a of journal.intent.acknowledgements) map.set(a.recordId, a);
@@ -992,6 +1008,17 @@ export class SecureVaultService {
         && batch.mdbxMoves?.some(group => group.account.id === providerId || account?.kind === 'mdbx2'
           && (account.config.vaultHandle === group.account.config.vaultHandle || account.config.nativeVaultId === group.vaultId))))
         throw new Error('此 MDBX 来源还有待恢复的 Bitwarden 移动，请先恢复后再修改或同步。');
+    });
+  }
+
+  async assertNoNearbyNativeSequence(providerId: string): Promise<void> {
+    await this.readProjection(state => {
+      const intent = state.nearbyNativeJournal?.intent;
+      if (!intent?.sequence) return;
+      const account = state.providers.find(p => p.id === providerId), source = state.providers.find(p => p.id === intent.providerId);
+      if (providerId === intent.providerId || account?.kind === 'mdbx2' && source?.kind === 'mdbx2'
+        && (account.config.vaultHandle === source.config.vaultHandle || account.config.nativeVaultId === intent.vaultId))
+        throw new Error('此 MDBX 还有待恢复的 Wi-Fi 接收，请先完成恢复后再修改或云同步。');
     });
   }
 

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import * as sourceApi from './native-source';
+import * as adoptionApi from './native-adoption';
 import { nativeNearbySource } from './native-adapter';
 import { projectNearbyNativeRecords } from './native-records';
 import type { Mdbx2NativeClient } from '../providers/mdbx2/native-client';
@@ -15,7 +16,7 @@ async function fixture() {
       objects:[],attachments:[],metadata:{writeRevision,labels:[],assignments:[],relations:[]}};
     const capture=vi.spyOn(sourceApi,'captureNearbyNativeSource').mockResolvedValue(source);
     const store={getProvider:vi.fn().mockResolvedValue({id:providerId,enabled:true,kind:'mdbx2',config:{vaultHandle}}),
-      readNearbyNativeJournal:vi.fn().mockResolvedValue(undefined),stageNearbyNativeIntent:vi.fn(),finishNearbyNativeIntent:vi.fn()};
+      readNearbyNativeJournal:vi.fn().mockResolvedValue(undefined),stageNearbyNativeIntent:vi.fn(),advanceNearbyNativeIntent:vi.fn(),finishNearbyNativeIntent:vi.fn()};
     const client={hello:vi.fn().mockResolvedValue({supportsContentWrite:true,supportsVaultWriteRevision:true}),request:vi.fn(),readWriteRevision:vi.fn().mockResolvedValue(writeRevision)};
     const adapter=nativeNearbySource({store,client:client as unknown as Mdbx2NativeClient,providerId,replicaStorageId:randomUUID(),sessionId:randomUUID(),epoch:()=>'',assertActive:()=>{},signal:new AbortController().signal,exclusive:work=>work()});
     const row=(await projectNearbyNativeRecords(source)).records.find(row=>row.global_id===folder)!;
@@ -23,6 +24,14 @@ async function fixture() {
     return {adapter,batch,client,store,capture,source};
 }
 describe('native nearby capability preflight', () => {
+  it('checks capabilities required by later steps before persisting any sequence', async () => {
+    const f=await fixture(),operationId=randomUUID();
+    vi.spyOn(adoptionApi,'planNearbyNativeAdoption').mockResolvedValue({providerId:f.source.providerId,vaultHandle:f.source.vaultHandle,sourceHash:f.source.sourceHash,
+      write:{operationId,writeRevision:f.source.writeRevision,plan:{commands:[{kind:'collection-create',collectionId:randomUUID(),title:'Synthetic sequence'}],attachments:[]},assets:[]},
+      remainingWrites:[{operationId:randomUUID(),plan:{commands:[{kind:'collection-presentation',collectionId:randomUUID(),favorite:true,archived:false,iconRef:null}],attachments:[]},assets:[]}],bindings:[]});
+    await expect(f.adapter.adopt(f.batch)).rejects.toMatchObject({code:'content-write-host-update-required'});
+    expect(f.store.stageNearbyNativeIntent).not.toHaveBeenCalled();expect(f.client.request).not.toHaveBeenCalled();
+  });
   it('reauthorizes each profile asset read instead of returning captured plaintext',async()=>{
     const f=await fixture(),folder=f.source.collections[1],hash='f'.repeat(64);
     Object.assign(folder,{collectionTypeId:'com.monica.passwords',profileSchemaVersion:1});
