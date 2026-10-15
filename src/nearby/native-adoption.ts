@@ -7,6 +7,7 @@ import type { NearbyIncomingRecord } from './local-adoption';
 import { NATIVE_FOLDER_DATA, NATIVE_FOLDER_TITLE, NATIVE_PROJECT_TAG, NATIVE_ROOT_TAGS, nearbyNativeMetadataContents, nearbyNativePayloadVersion, planNearbyNativeMetadata, projectNearbyNativeMetadata, validateNearbyNativeLabelPayload, type NearbyNativeMetadataChange } from './native-metadata';
 import { projectNearbyNativeRecords, validateNearbyNativeAssetIdentities } from './native-records';
 import { nativeActive, nativeId, nearbyJavaNameUuid, type NearbyNativeSource } from './native-source';
+import { readNearbyCollectionArchive, requireNearbyProfileAsset, sameNearbyProfile, type NearbyCollectionArchive } from './native-profiles';
 import { invalidNearby, nearbyNativeBusinessPayload, remapNearbyAssetPaths, remapNearbyReferences, validateNearbyWireData,
   wireInteger, wireObject, type NearbyWireData } from './wire-shape';
 
@@ -66,6 +67,7 @@ export async function planNearbyNativeAdoption(input: NearbyNativeSource, incomi
   if (!Array.isArray(batch.records) || !batch.records.length || batch.records.length > 128 || !Array.isArray(batch.assets) || batch.assets.length > 64) invalidNearby('native-adoption-limit');
   const projection = await projectNearbyNativeRecords(source, signal), existing = new Map(projection.records.map(row => [row.local_id, row]));
   const summaries = new Map(source.objects.map(row => [row.summary.objectId, row]));
+  const profiles=new Map(source.profiles?.map(row=>[row.collectionId,row]));
   const metadata = new Map((await projectNearbyNativeMetadata(source)).map(row => [row.id, row]));
   nativeActive(signal);
   const ids = new Set<string>(), targets = new Set<string>(), mapping = new Map<string, string>();
@@ -119,6 +121,28 @@ export async function planNearbyNativeAdoption(input: NearbyNativeSource, incomi
     return invalidNearby('native-reference-unavailable');
   };
   for (const row of work) if (!row.tombstone) row.data = remapNearbyReferences(row.data, resolve);
+  const profilePlans=new Map<string,NearbyCollectionArchive>();
+  let hasProfileArchive=false;
+  for(const row of work.filter(row=>row.kind!=='object'&&!row.tombstone)){
+    const archive=readNearbyCollectionArchive(row.data);if(!archive)continue;
+    if(archive.profile){requireNearbyProfileAsset(row.data,archive.profile);hasProfileArchive=true;}
+    // A foreign root is an archive owned by that source, not authority to
+    // change the shared native root used by every other incoming vault.
+    if(row.kind==='root'&&row.id!==source.rootId)continue;
+    const actual=profiles.get(row.id);
+    if(actual&&!archive.profile)invalidNearby('native-profile-removal-unsupported');
+    if(archive.profile){
+      if(archive.profile.requiredCapabilityIds.length || actual?.requiredCapabilityIds.length)invalidNearby('native-profile-capability-archive-required');
+      if(actual&&actual.collectionTypeId!==archive.profile.collectionTypeId)invalidNearby('native-profile-immutable');
+      const allowed=new Set(archive.profile.allowedObjectTypeIds);
+      if(source.objects.some(o=>o.summary.collectionId===row.id&&!o.summary.deleted&&!allowed.has(o.summary.objectTypeId)))invalidNearby('native-profile-object-type');
+    }
+    profilePlans.set(row.id,archive);
+  }
+  // A profile's encrypted row and version snapshot expand inside the native
+  // 16MiB delta. Split independent metadata records before durable staging;
+  // never retry a native write failure with a different operation identity.
+  if(hasProfileArchive&&work.length>1)invalidNearby('native-adoption-limit');
   for (const row of work.filter(row => row.kind === 'object' && !row.tombstone)) for (const node of [row.data, row.data.payload, row.data.extensions]) {
     if (node === undefined) continue;
     for (const field of ['bound_password_entry_id', 'bound_note_entry_id', 'sso_ref_entry_id']) {
@@ -216,7 +240,22 @@ export async function planNearbyNativeAdoption(input: NearbyNativeSource, incomi
         for(const file of files)fileCommands.push({kind:'delete',attachmentId:file.attachmentId});
         continue;
       }
-      const {remapped,stored,descriptors}=await prepareAssets(row.data,contents?.saved??{},files,owner,row.id,null);
+      const archive=profilePlans.get(row.id),profile=archive?.profile,actual=profiles.get(row.id);
+      const asset=profile?requireNearbyProfileAsset(row.data,profile):undefined;
+      const ordinary=cloneLosslessJson(row.data);
+      if(asset)ordinary.assets=(ordinary.assets as unknown[]).filter(a=>wireObject(a).attachment_id!==profile!.assetIdentity);
+      const {remapped,stored,descriptors}=await prepareAssets(ordinary,contents?.saved??{},files,owner,row.id,null);
+      if(asset)remapped.assets=[...(remapped.assets as unknown[]??[]),cloneLosslessJson(asset)];
+      if(archive){
+        if(profile&&!sameNearbyProfile(actual,profile)){
+          const payload=await load(profile.sha256,profile.sizeBytes);
+          commands.push({kind:'collection-profile-set',collectionId:owner,collectionTypeId:profile.collectionTypeId,payloadSchemaVersion:profile.payloadSchemaVersion,
+            allowedObjectTypeIds:profile.allowedObjectTypeIds,requiredCapabilityIds:profile.requiredCapabilityIds,assetId:payload});
+        }
+        const presentation=readNearbyCollectionArchive(remapped)!.presentation,before=source.collections.find(c=>c.collectionId===owner);
+        if((before?.favorite??false)!==presentation.favorite||(before?.archived??false)!==presentation.archived||(before?.iconRef??null)!==presentation.iconRef)
+          commands.push({kind:'collection-presentation',collectionId:owner,...presentation});
+      }
       const markerKind=row.kind==='root'?NATIVE_ROOT_TAGS:NATIVE_FOLDER_DATA;
       let command=commands.find(c=>{
         if(c.kind!=='label-create'&&c.kind!=='label-update')return false;
@@ -231,6 +270,7 @@ export async function planNearbyNativeAdoption(input: NearbyNativeSource, incomi
       }
       if(command.kind!=='label-create'&&command.kind!=='label-update')invalidNearby('native-metadata-marker-missing');
       const marker=wireObject(parseLosslessJson(command.payloadJson));marker.data=remapped;
+      if(archive)marker.device_sync_collection_applied=true;
       if(descriptors){marker.device_sync_assets=stored;marker.device_sync_images={};}
       command.payloadJson=JSON.stringify(marker);
     }
@@ -348,7 +388,9 @@ export async function planNearbyNativeAdoption(input: NearbyNativeSource, incomi
           : command.kind === 'relation-create' ? command.relationId : undefined;
       if (!id || usedIds.has(id)) invalidNearby('native-created-identity-collision'); usedIds.add(id);
     }
-    if (finalCommands.length > 128 || fileCommands.length > 64 || new TextEncoder().encode(JSON.stringify({ commands: finalCommands, attachments: fileCommands })).length > 8 * 1024 * 1024) invalidNearby('native-adoption-limit');
+    const planBytes=new TextEncoder().encode(JSON.stringify({commands:finalCommands,attachments:fileCommands})).length;
+    if (finalCommands.length > 128 || fileCommands.length > 64 || planBytes > 8 * 1024 * 1024
+      || hasProfileArchive&&(copies>1024*1024||planBytes>32*1024)) invalidNearby('native-adoption-limit');
     return { providerId: source.providerId, vaultHandle: source.vaultHandle, sourceHash: source.sourceHash,
       write: { operationId: operation, writeRevision: { ...source.writeRevision }, plan: { commands: finalCommands, attachments: fileCommands }, assets: buffers },
       bindings: work.map(row => ({ recordId: row.record.id, clockJson: row.record.clockJson, localId: row.localId, deleted: row.record.deleted, dataJson: row.record.dataJson })) };

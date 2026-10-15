@@ -238,5 +238,9 @@ export function remapNearbyAssetPaths(input: NearbyWireData, map: (path: string)
     }
   };
   visit(data);
+  if(['folder','vault-metadata'].includes(data.entry_type)){
+    const archive=wireObject(data.payload).monica_native_collection;
+    if(archive!==undefined){const presentation=wireObject(wireObject(archive).presentation);if(typeof presentation.iconRef==='string')presentation.iconRef=map(presentation.iconRef);}
+  }
   return data;
 }

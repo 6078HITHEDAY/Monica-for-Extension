@@ -1,9 +1,11 @@
 import { cloneLosslessJson, parseLosslessJson } from '../core/lossless-json';
 import type { Mdbx2ContentAttachment } from '../providers/mdbx2/content-attachments';
+import type { Mdbx2ContentProfile } from '../providers/mdbx2/content-profiles';
 import { mdbx2TransferOperationScope as hash } from '../providers/mdbx2/mdbx2-transfer-identity';
 import { nearbyNativeObjectToWire } from './application-codec';
 import { nearbyNativeFolderPaths, nearbyNativeMetadataContents, projectNearbyNativeMetadata } from './native-metadata';
 import { nativeActive, type NearbyNativeSource } from './native-source';
+import { profileAsset, readNearbyCollectionArchive, requireNearbyProfileAsset } from './native-profiles';
 import { invalidNearby, NearbyDataError, NEARBY_ENTRY_TYPES, nearbyNativeBusinessPayload, remapNearbyAssetPaths, validateNearbyWireData, wireObject, type NearbyEntryType, type NearbyWireData } from './wire-shape';
 
 export interface NearbyNativeScanRecord { local_id: string; global_id: string; scope: string; guard: string; deleted: boolean; data: NearbyWireData | Record<string, never> }
@@ -12,6 +14,7 @@ export interface NearbyNativeProjection {
   /** Lazy native attachment references. Read and hash-verify bytes only when the
    * transport requests them; do not allocate the complete vault in memory. */
   assets: Mdbx2ContentAttachment[];
+  profileAssets: Mdbx2ContentProfile[];
   excluded: Array<{ id: string; reason: 'connector-owned' | 'staging' }>;
   blockers: Array<{ id: string; reason: string }>;
 }
@@ -38,12 +41,13 @@ export async function projectNearbyNativeRecords(input: NearbyNativeSource, sign
   nativeActive(signal);
   const metadata = await projectNearbyNativeMetadata(source); nativeActive(signal);
   const metadataContents=nearbyNativeMetadataContents(source);
+  const profiles=new Map(source.profiles?.map(row=>[row.collectionId,row]));
   const paths = nearbyNativeFolderPaths(source), labels = new Map(source.metadata.labels.map(row => [row.labelId, row]));
   const assignments = byId(source.metadata.assignments.filter(row => !row.deleted), row => row.objectId);
   const relations = byId(source.metadata.relations.filter(row => !row.deleted), row => row.sourceObjectId);
   const attachments = byId(source.attachments, row => row.objectId ?? `folder:${row.collectionId}`);
   const assets = new Map<string, Mdbx2ContentAttachment>();
-  const result: NearbyNativeProjection = { sourceHash: source.sourceHash, scope, records: [], assets: [], excluded: [], blockers: [] };
+  const result: NearbyNativeProjection = { sourceHash: source.sourceHash, scope, records: [], assets: [], profileAssets: [], excluded: [], blockers: [] };
   const recordIds = new Set<string>();
   const add = (row: NearbyNativeScanRecord) => {
     if (recordIds.has(row.global_id)) invalidNearby('native-record-identity-collision'); recordIds.add(row.global_id);
@@ -90,12 +94,28 @@ export async function projectNearbyNativeRecords(input: NearbyNativeSource, sign
   for (const row of metadata) {
     let data = row.data;
     const contents=metadataContents.get(`${row.kind}:${row.id}`)!;
-    if (Object.keys(data).length) data = withAssets(data as NearbyWireData, contents.assets, contents.saved);
+    if (Object.keys(data).length) {
+      const savedDescriptors=Array.isArray(data.assets)?data.assets.map(wireObject):[];
+      data = withAssets(data as NearbyWireData, contents.assets, contents.saved);
+      const archive=readNearbyCollectionArchive(data as NearbyWireData),profile=profiles.get(row.id);
+      if(archive?.profile && profile){
+        const descriptors=(data.assets??[]) as Record<string,unknown>[];
+        if(descriptors.some(a=>a.attachment_id===archive.profile!.assetIdentity))invalidNearby('native-profile-asset-identity-collision');
+        const saved=savedDescriptors.find(a=>a.attachment_id===archive.profile!.assetIdentity);
+        descriptors.push({...profileAsset(archive.profile),...saved,id:archive.profile.sha256,size:archive.profile.sizeBytes,attachment_id:archive.profile.assetIdentity}); data.assets=descriptors;result.profileAssets.push(profile);
+      }
+      if(archive?.profile)requireNearbyProfileAsset(data as NearbyWireData,archive.profile);
+      validateNearbyWireData(data);
+    }
     add({ local_id: row.localId, global_id: row.id, scope, guard: row.guard, deleted: row.deleted, data });
   }
   const objectIds = new Set(source.objects.map(row => row.summary.objectId));
   for (const attachment of source.attachments) if (!attachment.deleted && attachment.objectId !== null && !objectIds.has(attachment.objectId)) result.blockers.push({ id: attachment.attachmentId, reason: 'native-orphan-attachment' });
-  for (const collection of source.collections) if (collection.favorite || collection.archived || collection.iconRef || collection.collectionTypeId !== undefined || collection.profileSchemaVersion !== undefined) result.blockers.push({ id: collection.collectionId, reason: 'native-folder-profile-archive-required' });
+  for (const collection of source.collections) {
+    const profile=profiles.get(collection.collectionId);
+    if((collection.collectionTypeId!==undefined||collection.profileSchemaVersion!==undefined)&&!profile)result.blockers.push({id:collection.collectionId,reason:'native-folder-profile-archive-required'});
+    if(profile?.requiredCapabilityIds.length)result.blockers.push({id:collection.collectionId,reason:'native-profile-capability-archive-required'});
+  }
   for (const object of source.objects) {
     nativeActive(signal); const id = object.summary.objectId;
     if (!object.record) { result.blockers.push({ id, reason: 'deleted-content-unavailable' }); continue; }

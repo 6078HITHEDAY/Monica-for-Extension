@@ -3,6 +3,7 @@ import type { Mdbx2ContentLabel } from '../providers/mdbx2/content-metadata';
 import type { Mdbx2ContentCommand } from '../providers/mdbx2/content-write';
 import { mdbx2TransferOperationScope as hash, mdbx2TransferUuid } from '../providers/mdbx2/mdbx2-transfer-identity';
 import { nativeId, type NearbyNativeSource } from './native-source';
+import { projectNearbyCollectionArchive } from './native-profiles';
 import { invalidNearby, validateNearbyWireData, wireInteger, wireObject, wireText, type NearbyWireData } from './wire-shape';
 
 export const NATIVE_ROOT_TAGS = 'monica-device-root-tags-v2';
@@ -151,6 +152,7 @@ export async function projectNearbyNativeMetadata(input: NearbyNativeSource): Pr
   const source = cloneLosslessJson(input), paths = nearbyNativeFolderPaths(source), values = markers(source);
   const rootTags = tagGroups(source, values), markerIndex = new Map(values.map(row => [row.owner, row])), labelsByOwner = labelIndex(source);
   const contents=nearbyNativeMetadataContents(source);
+  const profiles=new Map(source.profiles?.map(row=>[row.collectionId,row])),rootProject=source.collections.find(row=>row.collectionId===source.rootId);
   const folderAssets = new Map<string, typeof source.attachments>();
   for (const asset of source.attachments) if (asset.objectId === null) { const rows = folderAssets.get(asset.collectionId) ?? []; rows.push(asset); folderAssets.set(asset.collectionId, rows); }
   const result: NearbyNativeMetadataRecord[] = [], scope = `mdbx:${source.providerId}`;
@@ -159,11 +161,14 @@ export async function projectNearbyNativeMetadata(input: NearbyNativeSource): Pr
       const marker = markerIndex.get(owner), owned = rootTags.get(owner) ?? [],extra=contents.get(`root:${owner}`)!;
       const retainedTrash = marker?.payload.deleted === true && wireObject(marker.payload.data ?? {}).trashed === true;
       const deleted = marker?.payload.deleted === true && (retainedTrash || owned.length === 0 && extra.labels.length===0 && !extra.assets.some(a=>!a.deleted));
-      const data: Record<string, unknown> = deleted && !retainedTrash ? {} : marker?.payload.data && wireObject(marker.payload.data).payload
+      let data: Record<string, unknown> = deleted && !retainedTrash ? {} : marker?.payload.data && wireObject(marker.payload.data).payload
         ? cloneLosslessJson(wireObject(marker.payload.data)) : { title: 'Vault metadata', folder: '', entry_type: 'vault-metadata', payload: {} };
       if (!deleted || retainedTrash) { wireObject(data.payload).tags = tags(owned); if(extra.labels.length||data.labels!==undefined)data.labels=tags(extra.labels); validateNearbyWireData(data); if (data.entry_type !== 'vault-metadata') invalidNearby('native-root-marker-type'); }
+      const project=owner===source.rootId?rootProject:undefined,profile=profiles.get(owner);
+      if(owner===source.rootId && Object.keys(data).length && project)data=projectNearbyCollectionArchive(data as NearbyWireData,project,profile,extra.saved.device_sync_collection_applied===true);
       result.push({ kind: 'root', id: owner, localId: `${scope}:metadata:${owner}`, scope, deleted, data: data as NearbyWireData,
-        guard: await hash({ marker: marker?.label ?? null, tags: [...owned].sort((a, b) => compare(a.labelId, b.labelId)), labels:extra.labels,attachments:extra.assets }) });
+        guard: await hash({ marker: marker?.label ?? null, tags: [...owned].sort((a, b) => compare(a.labelId, b.labelId)), labels:extra.labels,attachments:extra.assets,
+          ...(owner===source.rootId?{profile:profile?{...profile,payloadBase64:undefined}:null,presentation:project?{favorite:project.favorite,archived:project.archived,iconRef:project.iconRef??null}:null}:{}) }) });
     }
   }
   for (const project of source.collections) {
@@ -175,9 +180,10 @@ export async function projectNearbyNativeMetadata(input: NearbyNativeSource): Pr
         guard:await hash({project,labels,attachments:folderAssets.get(project.collectionId)??[]})});
       continue;
     }
-    const data: NearbyWireData = { ...cloneLosslessJson(saved), title: path[path.length - 1].title, folder: '', entry_type: 'folder', trashed: project.deleted,
+    let data: NearbyWireData = { ...cloneLosslessJson(saved), title: path[path.length - 1].title, folder: '', entry_type: 'folder', trashed: project.deleted,
       payload: { ...(saved.payload===undefined?{}:wireObject(saved.payload)), path: path.map(node=>({...(Array.isArray(wireObject(saved.payload??{}).path)?(wireObject(saved.payload??{}).path as unknown[]).map(wireObject).find(old=>old.id===node.id):undefined),...node})), tags: tags(labels.filter(row => kind(row) === NATIVE_PROJECT_TAG)) } };
     if(extra.labels.length||data.labels!==undefined)data.labels=tags(extra.labels);
+    data=projectNearbyCollectionArchive(data,project,profiles.get(project.collectionId),extra.saved.device_sync_collection_applied===true);
     validateNearbyWireData(data);
     result.push({ kind: 'folder', id: project.collectionId, localId: `${scope}:folder:${project.collectionId}`, scope, deleted: project.deleted, data,
       guard: await hash({ project, labels, attachments: folderAssets.get(project.collectionId) ?? [] }) });

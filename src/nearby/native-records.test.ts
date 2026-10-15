@@ -68,7 +68,7 @@ describe('native nearby application projection', () => {
     if (problem === 'schema') f.source.objects[0].record!.payloadSchemaVersion = 9;
     if (problem === 'type') f.source.objects[0].record!.objectTypeId = 'unknown';
     if (problem === 'orphan-asset') f.source.attachments[0].objectId = randomUUID();
-    if (problem === 'folder-profile') f.source.collections[1].favorite = true;
+    if (problem === 'folder-profile') Object.assign(f.source.collections[1],{collectionTypeId:'com.monica.missing',profileSchemaVersion:1});
     if (problem === 'unavailable-image') f.source.objects[0].record!.payloadJson = JSON.stringify({ ...f.payload, custom_icon_value: 'content://unavailable-image' });
     if (problem === 'unavailable-icon') f.source.objects[0].record!.payloadJson = JSON.stringify({ ...f.payload, custom_icon_type: 'UPLOADED', custom_icon_value: 'android-internal-icon.png' });
     const result = await projectNearbyNativeRecords(f.source); expect(result.blockers.length).toBeGreaterThan(0); expect(() => requireCompleteNearbyNativeProjection(result)).toThrow('native-projection-incomplete');

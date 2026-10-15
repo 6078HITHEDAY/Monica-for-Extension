@@ -23,6 +23,19 @@ async function fixture() {
     return {adapter,batch,client,store,capture,source};
 }
 describe('native nearby capability preflight', () => {
+  it('reauthorizes each profile asset read instead of returning captured plaintext',async()=>{
+    const f=await fixture(),folder=f.source.collections[1],hash='f'.repeat(64);
+    Object.assign(folder,{collectionTypeId:'com.monica.passwords',profileSchemaVersion:1});
+    const profile={collectionId:folder.collectionId,collectionTypeId:'com.monica.passwords',payloadSchemaVersion:1,allowedObjectTypeIds:['login'],requiredCapabilityIds:[],
+      payloadBase64:'AP+A',sha256:hash,createdAt:'created',updatedAt:'updated',createdByDeviceId:'synthetic',updatedByDeviceId:'synthetic',headCommitId:folder.headCommitId,deleted:false};
+    f.source.profiles=[profile];
+    const read=vi.fn().mockResolvedValue({writeRevision:f.source.writeRevision,profiles:[profile]});Object.assign(f.client,{readContentProfiles:read});
+    const captured=await f.adapter.capture();expect(await captured.readAsset(hash)).toEqual(Uint8Array.of(0,255,128));
+    expect(read).toHaveBeenCalledWith(f.source.vaultHandle,{writeRevision:f.source.writeRevision,collections:[{
+      collectionId:folder.collectionId,collectionTypeId:'com.monica.passwords',profileSchemaVersion:1,headCommitId:folder.headCommitId,deleted:false}]},expect.any(AbortSignal));
+    read.mockRejectedValueOnce(Error('synthetic locked or changed policy'));
+    await expect(captured.readAsset(hash)).rejects.toThrow('synthetic locked');expect(read).toHaveBeenCalledTimes(2);
+  });
   it('rejects an older engine before persisting folder trash or blocking later synchronization', async () => {
     const {adapter,batch,client,store}=await fixture();
     await expect(adapter.adopt(batch)).rejects.toMatchObject({code:'content-write-host-update-required'});

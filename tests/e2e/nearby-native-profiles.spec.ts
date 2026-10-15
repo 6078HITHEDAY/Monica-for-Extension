@@ -40,7 +40,7 @@ test('bundled engine reads and atomically writes opaque profiles across encrypte
     const capture=():Promise<NearbyNativeSource>=>call('nearby-native-source',{providerId,vaultHandle:handle});
     const first=await capture();expect(first.profiles).toHaveLength(1);expect(first.profiles![0]).toMatchObject({...expected.metadata,sha256:expected.sha256});
     const payload=Buffer.from(first.profiles![0].payloadBase64,'base64');expect(payload.length).toBe(expected.sizeBytes);expect(payload.every((byte,index)=>byte===index%256)).toBe(true);
-    const projection=await call('nearby-native-project',first);expect(projection.blockers).toContainEqual({id:expected.collectionId,reason:'native-folder-profile-archive-required'});
+    const projection=await call('nearby-native-project',first);expect(projection.blockers).toEqual([]);expect(projection.profileAssets).toHaveLength(1);
     const replacement=Buffer.from(Uint8Array.from({length:1024*1024},(_,index)=>(index*37+17)%256)),assetId=randomUUID();
     const write={handle,input:{operationId:randomUUID(),writeRevision:first.writeRevision,plan:{commands:[
       {kind:'collection-profile-set',collectionId:expected.collectionId,collectionTypeId:first.profiles![0].collectionTypeId,payloadSchemaVersion:1,

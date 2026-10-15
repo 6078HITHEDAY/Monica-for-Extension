@@ -9,6 +9,7 @@ import { projectNearbyNativeRecords, requireCompleteNearbyNativeProjection } fro
 import { nearbyNativeIntent, restoreNearbyNativeWrite, savedNativeAcknowledgements, type NearbyNativeIntent } from './native-journal';
 import type { NearbySourceAdapter } from './source-adapter';
 import { invalidNearby, wireObject } from './wire-shape';
+import { base64ToBytes } from '../security/encoding';
 
 type Store = Pick<SecureVaultService, 'getProvider' | 'readNearbyNativeJournal' | 'stageNearbyNativeIntent' | 'finishNearbyNativeIntent'>;
 export function nativeNearbySource(options: {
@@ -57,6 +58,15 @@ export function nativeNearbySource(options: {
       const source = await capture(), projection = requireCompleteNearbyNativeProjection(await projectNearbyNativeRecords(source, signal)); active();
       planningSource = source;
       return { sourceHash: source.sourceHash, records: projection.records, async readAsset(id) {
+        // Reauthorize each outgoing profile read at the captured revision. A
+        // retained plaintext scan is not authority for later disclosure.
+        const profile=projection.profileAssets.find(p=>p.sha256===id);
+        if(profile){
+          active();const found=await client.readContentProfiles(source.vaultHandle,{writeRevision:source.writeRevision,collections:[{
+            collectionId:profile.collectionId,collectionTypeId:profile.collectionTypeId,profileSchemaVersion:profile.payloadSchemaVersion,headCommitId:profile.headCommitId,deleted:profile.deleted}]},signal);
+          active();if(found.profiles.length!==1||found.profiles[0].sha256!==id)invalidNearby('source-profile-changed');
+          return base64ToBytes(found.profiles[0].payloadBase64);
+        }
         const attachment = projection.assets.find(a => a.contentHash === id); if (!attachment) invalidNearby('source-asset-missing');
         active(); return client.readContentAttachmentBytes(source.vaultHandle, { writeRevision: source.writeRevision, attachment }, signal);
       } };
