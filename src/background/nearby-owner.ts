@@ -126,6 +126,11 @@ export class NearbyManagerOwner {
     }
     const coordinator = lease.coordinator ??= this.options.createCoordinator(assertActive);
     switch (request.type) {
+      case 'recovery-review': return coordinator.reviewRecovery(request.operationId);
+      case 'recovery-confirm': {
+        const result = await coordinator.confirmRecovery(request.reviewId); assertActive();
+        this.options.changed(); return result;
+      }
       case 'recover': {
         const result = await coordinator.recover(request.operationId); assertActive();
         this.options.changed(); return result;

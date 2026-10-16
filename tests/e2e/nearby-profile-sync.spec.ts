@@ -152,7 +152,45 @@ test('native profiles survive local forwarding, atomic restoration and independe
     }
     const afterConflict=await target();expect(afterConflict.objects.find(o=>o.summary.objectId===loginId)!.record!.title).toBe('Local edit after interrupted receive');
     expect(await call('verify-key',{payload:afterConflict.objects.find(o=>o.summary.objectId===passkeyId)!.record!.payloadJson,expected:{id:credential,hash:createHash('sha256').update(privateKey).digest('hex'),publicKey,counter:19}})).toBe(true);
+    const history=await rpc('history.list',{vaultHandle:targetHandle,pageSize:50,cursor:null});
+    evidence.reviewHistory=history;
+    evidence.reviewDiff=await rpc('history.diff',{vaultHandle:targetHandle,commitId:history.items[0].commitId});
+    evidence.remainingPlan=(await call('nearby-native-journal-read')).intent.write.plan;
+    const review=await call('nearby-native-coordinator-review',{operationId:partial.intent.operationId});
+    expect(review).toMatchObject({editedEntries:1,interveningCommits:1});
+    expect((await target()).writeRevision).toEqual(afterConflict.writeRevision);
+    await call('content-write',{handle:targetHandle,input:{operationId:randomUUID(),writeRevision:afterConflict.writeRevision,plan:{commands:[{
+      kind:'object-update',objectId:loginId,collectionId:folder,objectTypeId:'login',title:'Local edit after review',
+      payloadJson:JSON.stringify({...JSON.parse(afterConflict.objects.find(o=>o.summary.objectId===loginId)!.record!.payloadJson),notes:'synthetic latest local note'})
+    }],attachments:[]},assets:[]}});
+    await expect(call('nearby-native-coordinator-confirm',{reviewId:review.reviewId})).rejects.toThrow('native-recovery-changed');
+    const finalReview=await call('nearby-native-coordinator-review',{operationId:partial.intent.operationId,loseConfirmedReply:true});
+    expect(finalReview).toMatchObject({editedEntries:1,interveningCommits:2});
+    await expect(call('nearby-native-coordinator-confirm',{reviewId:finalReview.reviewId})).rejects.toThrow();
+    const approved=(await call('nearby-native-journal-read')).intent;
+    expect(approved.operationId).not.toBe(partial.intent.operationId);
+    expect(approved.sequence.resolutions).toHaveLength(1);
+    expect(approved.sequence.completed).toEqual(partial.intent.sequence.completed);
+    await call('close');await context!.close();context=undefined;call=await connect();await call('open',{name:database});
+    await rpc('vault.open',{source:{kind:'vault',handle:targetHandle},credential:{method:'password',password}});
+    expect(await call('nearby-native-coordinator-recover',{operationId:approved.operationId})).toEqual({applied:1});
+    expect((await call('nearby-native-journal-read')).intent).toBeUndefined();
+    const continued=await target(),forwarded:NearbyNativeProjection=await call('nearby-native-project',continued);
+    expect(continued.objects.find(o=>o.summary.objectId===loginId)!.record!.title).toBe('Local edit after review');
+    expect(JSON.parse(continued.objects.find(o=>o.summary.objectId===loginId)!.record!.payloadJson).notes).toBe('synthetic latest local note');
+    const receivedData=forwarded.records.find(r=>r.global_id===conflictOwner)!.data;
+    expect({...receivedData,assets:undefined}).toEqual({...conflictData,assets:undefined});
+    const expectedAssets=conflictData.assets;
+    if(!Array.isArray(expectedAssets))throw new Error('Expected conflict fixture assets');
+    expect(receivedData.assets).toHaveLength(expectedAssets.length);
+    expect(receivedData.assets).toEqual(expect.arrayContaining(expectedAssets));
+    for(const attachment of continued.attachments.filter(a=>a.collectionId===continued.rootId&&!a.deleted)) {
+      expect([hash,fileHash]).toContain(attachment.contentHash);
+      expect(await call('content-attachment-bytes',{handle:targetHandle,input:{writeRevision:continued.writeRevision,attachment}})).toEqual({sizeBytes:1048576,sha256:attachment.contentHash});
+    }
+    expect(await call('verify-key',{payload:continued.objects.find(o=>o.summary.objectId===passkeyId)!.record!.payloadJson,expected:{id:credential,hash:createHash('sha256').update(privateKey).digest('hex'),publicKey,counter:19}})).toBe(true);
     await call('close');Object.assign(evidence,{status:'passed',binaryBytes:bytes.length,fileBytes:file.length,encryptedSequenceRestartRecovery:true,offlineCoordinatorRecovery:true,
+      explicitNonOverlapContinuation:true,editAfterReviewRejected:true,committedReplyLossRecovered:true,
       actualInterveningEditRetained:true,completedBinaryInputsRetained:true,conflictSurvivesRestart:true,localForwarding:true,nativeRestore:true,stableProjection:true,profiledPassword:true,profiledPasskeySignature:true,counter19Preserved:true,rootOwnerIsolation:true,purgePreservesOtherRoot:true,restart:true,sha256:hash});
   }finally{await context?.close();await writeFile(path.join(run,'evidence.json'),JSON.stringify(evidence,null,2));}
 });

@@ -646,6 +646,25 @@ export class SecureVaultService {
     });
   }
 
+  /** Internal approved recovery only; the manager never supplies this proof. */
+  async approveNearbyNativeContinuation(operationId: string, previousRevision: string, proof: import('../nearby/native-recovery-review').NearbyRecoveryProof,
+    epoch: string, sessionId: string, assertActive: () => void): Promise<import('../nearby/native-journal').NearbyNativeIntent> {
+    const input = structuredClone(proof);
+    return this.runExclusive(async () => {
+      const check = async () => { assertActive(); await this.assertLocalTransferSession(sessionId); assertActive(); };
+      await check(); const { state, envelope, key } = await this.mutableContext();
+      const { readNearbyNativeJournal, approveNearbyNativeContinuation } = await import('../nearby/native-journal');
+      const { invalidNearby } = await import('../nearby/wire-shape');
+      const journal = readNearbyNativeJournal(state.nearbyNativeJournal), p = state.nearbyPreferences;
+      if (!journal?.intent || journal.intent.operationId !== operationId || journal.intent.write.writeRevision.revisionSha256 !== previousRevision
+        || !p || p.epoch !== epoch || p.localProviderId !== journal.providerId || p.replicaStorageId !== journal.replicaStorageId) return invalidNearby('native-recovery-changed');
+      journal.intent = await approveNearbyNativeContinuation(journal.intent, input); await check();
+      state.nearbyNativeJournal = readNearbyNativeJournal(journal);
+      await this.persist(state, key, envelope.kdf, false, false, check);
+      return structuredClone(journal.intent);
+    });
+  }
+
   async finishNearbyNativeIntent(operationId: string, sessionId: string, assertActive: () => void, stale = false): Promise<void> {
     return this.runExclusive(async () => {
       const check = async () => { assertActive(); await this.assertLocalTransferSession(sessionId); assertActive(); };

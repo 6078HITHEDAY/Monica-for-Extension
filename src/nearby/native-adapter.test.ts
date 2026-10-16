@@ -16,7 +16,7 @@ async function fixture() {
       objects:[],attachments:[],metadata:{writeRevision,labels:[],assignments:[],relations:[]}};
     const capture=vi.spyOn(sourceApi,'captureNearbyNativeSource').mockResolvedValue(source);
     const store={getProvider:vi.fn().mockResolvedValue({id:providerId,enabled:true,kind:'mdbx2',config:{vaultHandle}}),
-      readNearbyNativeJournal:vi.fn().mockResolvedValue(undefined),stageNearbyNativeIntent:vi.fn(),advanceNearbyNativeIntent:vi.fn(),finishNearbyNativeIntent:vi.fn()};
+      readNearbyNativeJournal:vi.fn().mockResolvedValue(undefined),stageNearbyNativeIntent:vi.fn(),advanceNearbyNativeIntent:vi.fn(),finishNearbyNativeIntent:vi.fn(),approveNearbyNativeContinuation:vi.fn()};
     const client={hello:vi.fn().mockResolvedValue({supportsContentWrite:true,supportsVaultWriteRevision:true}),request:vi.fn(),readWriteRevision:vi.fn().mockResolvedValue(writeRevision)};
     const adapter=nativeNearbySource({store,client:client as unknown as Mdbx2NativeClient,providerId,replicaStorageId:randomUUID(),sessionId:randomUUID(),epoch:()=>'',assertActive:()=>{},signal:new AbortController().signal,exclusive:work=>work()});
     const row=(await projectNearbyNativeRecords(source)).records.find(row=>row.global_id===folder)!;

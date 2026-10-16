@@ -6,6 +6,7 @@ import type { NearbyIncomingRecord } from './local-adoption';
 import { invalidNearby, wireInteger, wireObject } from './wire-shape';
 import { parseLosslessJson } from '../core/lossless-json';
 import { advanceMdbx2ContentWriteAnchor, validateMdbx2ContentWriteAnchor, type Mdbx2ContentWriteAnchor } from '../providers/mdbx2/content-write-anchor';
+import type { NearbyRecoveryProof } from './native-recovery-review';
 
 export interface NearbyAcknowledgement { recordId: string; clockJson: string; localId: string; scope: string; guard: string; dataJson: string }
 export interface NearbyNativeIntent {
@@ -20,6 +21,10 @@ export interface NearbyNativeIntent {
      * journals may lack these bytes; never advertise them as a complete copy. */
     completed?: { write: NearbyNativeIntent['write']; commitId: string }[];
     conflict?: true;
+    /** Explicit approvals only; keep the superseded operation and revision so
+     * a recovery never silently rewrites the original uncertain intent. */
+    resolutions?: { previousOperationId: string; operationId: string; previousRevisionSha256: string;
+      revisionSha256: string; commitIds: string[]; editedEntries: number }[];
   };
 }
 export interface NearbyNativeJournal {
@@ -69,6 +74,17 @@ export function readNearbyNativeJournal(value: unknown): NearbyNativeJournal | u
         || !Array.isArray(anchor.branches) || !anchor.branches.length || anchor.branches.length > 1024
         || new TextEncoder().encode(JSON.stringify(anchor)).length > 512 * 1024) invalidNearby('native-journal-sequence');
       if (sequence.conflict !== undefined && sequence.conflict !== true) invalidNearby('native-journal-sequence');
+      if (sequence.resolutions !== undefined) {
+        if (!Array.isArray(sequence.resolutions) || !sequence.resolutions.length || sequence.resolutions.length > 8) invalidNearby('native-journal-sequence');
+        for (const raw of sequence.resolutions) {
+          const r = wireObject(raw); id(r.previousOperationId); id(r.operationId);
+          if (r.previousOperationId === r.operationId || typeof r.previousRevisionSha256 !== 'string' || !digest.test(r.previousRevisionSha256)
+            || typeof r.revisionSha256 !== 'string' || !digest.test(r.revisionSha256) || r.previousRevisionSha256 === r.revisionSha256
+            || !Array.isArray(r.commitIds) || !r.commitIds.length || r.commitIds.length > 64 || new Set(r.commitIds).size !== r.commitIds.length
+            || !Number.isSafeInteger(r.editedEntries) || (r.editedEntries as number) < 1 || (r.editedEntries as number) > 1024) invalidNearby('native-journal-sequence');
+          r.commitIds.forEach(id);
+        }
+      }
       if (sequence.completed !== undefined) {
         if (!Array.isArray(sequence.completed) || sequence.completed.length !== sequence.completedSteps) invalidNearby('native-journal-sequence');
         for (const raw of sequence.completed) {
@@ -142,7 +158,26 @@ export async function advanceNearbyNativeIntent(intent: NearbyNativeIntent, comm
   const anchor = await advanceMdbx2ContentWriteAnchor(sequence.anchor, commitId), [write, ...remaining] = sequence.remaining;
   return { ...original, operationId: write.operationId, write: { ...structuredClone(write), writeRevision: { ...anchor.writeRevision } },
     sequence: { anchor, completedSteps: sequence.completedSteps + 1, remaining: structuredClone(remaining),
+      ...(sequence.resolutions ? { resolutions: sequence.resolutions } : {}),
       ...(sequence.completed ? { completed: [...sequence.completed, { write: original.write, commitId }] } : {}) } };
+}
+
+/** Call only after a user-approved, still-current proof. Persist this result
+ * before attempting a native write. An ordinary recover() never calls it. */
+export async function approveNearbyNativeContinuation(intent: NearbyNativeIntent, proof: NearbyRecoveryProof): Promise<NearbyNativeIntent> {
+  const next = structuredClone(intent), sequence = next.sequence;
+  if (!sequence?.conflict || !sequence.completedSteps || sequence.completed?.length !== sequence.completedSteps
+    || (sequence.resolutions?.length ?? 0) >= 8) invalidNearby('native-recovery-changed');
+  const anchor = await validateMdbx2ContentWriteAnchor(proof.anchor);
+  if (anchor.writeRevision.vaultId !== intent.vaultId) invalidNearby('native-recovery-changed');
+  const operationId = crypto.randomUUID();
+  sequence.resolutions = [...sequence.resolutions ?? [], { previousOperationId: intent.operationId, operationId,
+    previousRevisionSha256: intent.write.writeRevision.revisionSha256, revisionSha256: anchor.writeRevision.revisionSha256,
+    commitIds: [...proof.commitIds], editedEntries: proof.editedEntries }];
+  sequence.anchor = anchor; delete sequence.conflict;
+  next.operationId = next.write.operationId = operationId;
+  next.write.writeRevision = { ...anchor.writeRevision };
+  return next;
 }
 
 /** Safe manager view: no payloads, asset bytes, vault IDs, keys or wire clocks. */

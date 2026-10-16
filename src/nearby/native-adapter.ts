@@ -11,8 +11,9 @@ import type { NearbySourceAdapter } from './source-adapter';
 import { invalidNearby, wireObject } from './wire-shape';
 import { base64ToBytes } from '../security/encoding';
 import { readMdbx2ContentWriteAnchor, validateMdbx2ContentWriteAnchor } from '../providers/mdbx2/content-write-anchor';
+import { reviewNearbyNativeRecovery, type NearbyRecoveryProof } from './native-recovery-review';
 
-type Store = Pick<SecureVaultService, 'getProvider' | 'readNearbyNativeJournal' | 'stageNearbyNativeIntent' | 'advanceNearbyNativeIntent' | 'finishNearbyNativeIntent'>;
+type Store = Pick<SecureVaultService, 'getProvider' | 'readNearbyNativeJournal' | 'stageNearbyNativeIntent' | 'advanceNearbyNativeIntent' | 'finishNearbyNativeIntent' | 'approveNearbyNativeContinuation'>;
 export function nativeNearbySource(options: {
   store: Store; client: Mdbx2NativeClient; providerId: string; replicaStorageId: string; sessionId: string;
   epoch: () => string; assertActive: () => void; signal: AbortSignal;
@@ -20,6 +21,7 @@ export function nativeNearbySource(options: {
 }): NearbySourceAdapter {
   const { store, client, providerId, replicaStorageId, sessionId, signal } = options;
   let planningSource: NearbyNativeSource | undefined;
+  let review: { id: string; operationId: string; previousRevision: string; handle: string; epoch: string; expires: number; proof: NearbyRecoveryProof } | undefined;
   const active = () => { nativeActive(signal); options.assertActive(); };
   const binding = async () => {
     active(); const p = await store.getProvider(providerId); active();
@@ -80,9 +82,39 @@ export function nativeNearbySource(options: {
       } };
     }),
     recover: expectedOperationId => options.exclusive(async () => {
+      review = undefined;
       const j = await journal();
       if (expectedOperationId !== undefined && j?.intent?.operationId !== expectedOperationId) invalidNearby('native-recovery-changed');
       return j?.intent ? apply(j.intent) : [];
+    }),
+    reviewRecovery: operationId => options.exclusive(async () => {
+      review = undefined;
+      const j = await journal();
+      if (!j?.intent || j.intent.operationId !== operationId) invalidNearby('native-recovery-changed');
+      const b = await binding(), revision = await client.readWriteRevision(b.vaultHandle); active();
+      const anchor = await readMdbx2ContentWriteAnchor(client, b.vaultHandle, revision, signal); active();
+      const proof = await reviewNearbyNativeRecovery(client, b.vaultHandle, j.intent, anchor, active);
+      const after = await client.readWriteRevision(b.vaultHandle); active();
+      if (after.vaultId !== revision.vaultId || after.revisionSha256 !== revision.revisionSha256) invalidNearby('native-recovery-changed');
+      const id = crypto.randomUUID();
+      review = { id, operationId, previousRevision: j.intent.write.writeRevision.revisionSha256, handle: b.vaultHandle,
+        epoch: options.epoch(), expires: Date.now() + 120_000, proof };
+      return { reviewId: id, editedEntries: proof.editedEntries, interveningCommits: proof.commitIds.length,
+        remainingSteps: 1 + j.intent.sequence!.remaining.length };
+    }),
+    confirmRecovery: reviewId => options.exclusive(async () => {
+      const approved = review; review = undefined;
+      if (!approved || approved.id !== reviewId || approved.expires <= Date.now() || approved.epoch !== options.epoch()) invalidNearby('native-recovery-changed');
+      const b = await binding(), j = await journal();
+      if (b.vaultHandle !== approved.handle || j?.intent?.operationId !== approved.operationId
+        || j.intent.write.writeRevision.revisionSha256 !== approved.previousRevision) invalidNearby('native-recovery-changed');
+      const revision = await client.readWriteRevision(b.vaultHandle); active();
+      if (revision.vaultId !== approved.proof.anchor.writeRevision.vaultId
+        || revision.revisionSha256 !== approved.proof.anchor.writeRevision.revisionSha256) invalidNearby('native-recovery-changed');
+      // Consume the token before persisting. A lost reply is handled by the
+      // exact new intent already saved in the encrypted journal, not rebasing.
+      const intent = await store.approveNearbyNativeContinuation(approved.operationId, approved.previousRevision, approved.proof, approved.epoch, sessionId, active); active();
+      return apply(intent);
     }),
     saved: async records => savedNativeAcknowledgements(await journal(), records),
     groups: records => options.exclusive(async () => {

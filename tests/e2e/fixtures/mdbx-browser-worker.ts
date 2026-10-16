@@ -29,6 +29,7 @@ import create from './engine.js';
 const check = (ok: unknown, reason: string) => { if (!ok) throw Error(reason); };
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 let session: MdbxBrowserSession | undefined;
+let recoveryCoordinator: NearbyLocalCoordinator | undefined;
 let dbName = '';
 const journalStorage = new IndexedDbVaultStorage();
 const journalService = new SecureVaultService(journalStorage, new MemoryVaultSessionStore(), Date.now, new MemoryVaultDeviceKeyStore());
@@ -173,21 +174,41 @@ async function action(op: string, data: any): Promise<unknown> {
       } finally { clearNearbyNativeAdoption(nativePlan); }
     }
     if (op === 'nearby-native-journal-read') return journalService.readNearbyNativeJournal(await unlockJournal());
-    if (op === 'nearby-native-journal-recover' || op === 'nearby-native-coordinator-recover') {
+    if (op === 'nearby-native-coordinator-confirm') {
+      check(recoveryCoordinator, 'Synthetic review missing');
+      try { return await recoveryCoordinator!.confirmRecovery(data.reviewId); }
+      finally { recoveryCoordinator?.close(); recoveryCoordinator = undefined; }
+    }
+    if (op === 'nearby-native-journal-recover' || op === 'nearby-native-coordinator-recover' || op === 'nearby-native-coordinator-review') {
       const sessionId = await unlockJournal(), preferences = await journalService.nearbySessionPreferences(sessionId);
       const typed = new Mdbx2NativeClient({connectNative(){throw Error('Synthetic fixture must use its compiled engine');},disconnectErrorMessage(){return undefined;}});
       let confirmed=0;
       typed.request = async(method,params)=>{
         if(data?.pauseAfterConfirmedSteps && method==='content.write.begin' && confirmed>=data.pauseAfterConfirmedSteps)throw new Mdbx2NativeHostError('synthetic-interruption','Synthetic receive interruption');
-        const result=await request(method,params); if(method==='content.write.finish')confirmed++; return result;
+        const result=await request(method,params); if(method==='content.write.finish') {
+          confirmed++;
+          if (data?.loseConfirmedReply && confirmed === 1) throw new Mdbx2NativeHostError('synthetic-reply-lost', 'Synthetic committed reply loss');
+        }
+        return result;
       };
       const adapter = nativeNearbySource({store:journalService,client:typed,providerId:preferences.localProviderId,replicaStorageId:preferences.replicaStorageId,sessionId,
         epoch:()=>preferences.epoch,assertActive:()=>{},signal:new AbortController().signal,exclusive:work=>work()});
       const before = await journalService.readNearbyNativeJournal(sessionId);
-      if(op==='nearby-native-coordinator-recover'){
+      if(op==='nearby-native-coordinator-recover' || op==='nearby-native-coordinator-review'){
+        let reviewError = '';
         const coordinator=new NearbyLocalCoordinator(journalService,()=>({close(){},async call(){throw Error('Offline recovery attempted LAN access');}} as unknown as NearbyNativeTransport),undefined,undefined,
-          async(_preferences,_sessionId,signal,assertActive,epoch)=>nativeNearbySource({store:journalService,client:typed,providerId:preferences.localProviderId,
-            replicaStorageId:preferences.replicaStorageId,sessionId,epoch,assertActive,signal,exclusive:work=>work()}));
+          async(_preferences,_sessionId,signal,assertActive,epoch)=>{
+            const source=nativeNearbySource({store:journalService,client:typed,providerId:preferences.localProviderId,
+              replicaStorageId:preferences.replicaStorageId,sessionId,epoch,assertActive,signal,exclusive:work=>work()});
+            const review=source.reviewRecovery!.bind(source);
+            source.reviewRecovery=async id=>{try{return await review(id);}catch(error){reviewError=error instanceof Error ? error.stack || error.message : String(error);throw error;}};
+            return source;
+          });
+        if(op==='nearby-native-coordinator-review') {
+          recoveryCoordinator?.close(); recoveryCoordinator = coordinator;
+          try { return await coordinator.reviewRecovery(data.operationId); }
+          catch(error) { throw Error(`${String(error)}; synthetic review diagnostic: ${reviewError}`); }
+        }
         try{return await coordinator.recover(data.operationId);}finally{coordinator.close();}
       }
       const acknowledgements = await adapter.recover(data?.operationId);

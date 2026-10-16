@@ -222,6 +222,22 @@ export class NearbyLocalCoordinator {
       return { applied: receipts.length };
     });
   }
+  async reviewRecovery(operationId: string) {
+    return this.run(async () => {
+      token(operationId); await this.initialize();
+      if (!this.source?.native || !this.source.reviewRecovery) failure('native-source-unavailable');
+      const review = await this.source.reviewRecovery(operationId); await this.guard();
+      this.view = { phase: 'idle' }; return review;
+    });
+  }
+  async confirmRecovery(reviewId: string): Promise<{ applied: number }> {
+    return this.run(async () => {
+      token(reviewId); await this.guard();
+      if (!this.source?.native || !this.source.confirmRecovery) failure('native-recovery-changed');
+      const receipts = await this.source.confirmRecovery(reviewId); await this.guard();
+      this.view = { phase: 'idle' }; return { applied: receipts.length };
+    });
+  }
   async prepare(peerId: string): Promise<NearbyCoordinatorView> {
     return this.run(async () => {
       await this.initialize(); this.peer = this.preferences!.peers.find(peer => peer.deviceId === peerId) ?? failure('peer-forgotten');

@@ -3566,5 +3566,10 @@
   "家庭电话": "Teléfono de casa",
   "工作邮箱": "Correo del trabajo",
   "工作电话": "Teléfono del trabajo",
-  "姓名与联系方式": "Nombre y contacto"
+  "姓名与联系方式": "Nombre y contacto",
+  "无法确认本机修改与接收内容互不影响，已保留冲突和接收内容。": "No se puede confirmar que los cambios locales y el contenido recibido sean independientes. Se han conservado el conflicto y el contenido.",
+  "已核实 {0} 次修改，涉及 {1} 个条目，与剩余 {2} 步接收互不覆盖。": "Se verificaron {0} cambios en {1} elementos, sin solapamiento con los {2} pasos de recepción restantes.",
+  "继续会保留本机条目修改，并保存剩余附件和文件夹信息。确认前会再次检查密码库是否变化。": "Al continuar se conservan los cambios locales y se guardan los adjuntos y datos de carpetas restantes. Se vuelve a comprobar la bóveda antes de proceder.",
+  "保留本机修改并继续": "Conservar cambios locales y continuar",
+  "检查能否继续接收": "Comprobar si se puede continuar la recepción"
 }

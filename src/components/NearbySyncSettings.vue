@@ -8,11 +8,13 @@ import type { NearbyCoordinatorView, NearbyDiscoveryView, NearbyDiscoveredPeer, 
 import type { NearbyPreferencesView, NearbySyncMode } from '../nearby/preferences';
 import type { NearbyManagerChange } from '../nearby/manager-contract';
 import type { NearbyNativeRecoveryView } from '../nearby/native-journal';
+import type { NearbyRecoveryReviewView } from '../nearby/native-recovery-review';
 
 const preferences = ref<NearbyPreferencesView>(), view = ref<NearbyCoordinatorView>({ phase: 'idle' });
 const busy = ref(false), connected = ref(false), searching = ref(false), discovered = ref<NearbyDiscoveredPeer[]>([]);
 const sources = ref<{id:string;name:string;kind:string}[]>([]), qr = ref('');
 const recovery = ref<NearbyNativeRecoveryView | null>(null), recovered = ref(false);
+const recoveryReview = ref<NearbyRecoveryReviewView | null>(null);
 const error = ref(''), invitation = ref(''), target = ref(''), name = ref(''), copied = ref(false), forgetId = ref('');
 let client: NearbyManagerClient | undefined, disposed = false, generation = 0, timer: ReturnType<typeof setTimeout> | undefined;
 let nextAutomatic = 0, automaticCursor = 0, searchStarted = 0, waitingStarted = 0, pendingEndpoint: NearbyEndpoint | undefined;
@@ -28,6 +30,7 @@ function errorText(code: string): string {
     'source-changed': '同步期间密码库发生了修改，请重新同步。', 'native-source-changed': '同步期间密码库发生了修改，请重新同步。',
     'native-sequence-conflict': '接收期间密码库有新的修改，已停止继续写入。未完成的接收仍被保留，不能直接覆盖本机修改。',
     'native-recovery-changed': '待恢复的接收已发生变化，请检查最新状态后重试。',
+    'native-recovery-overlap': '无法确认本机修改与接收内容互不影响，已保留冲突和接收内容。',
     'content-write-outcome-unknown': '上次保存的结果尚未确认。可以检查并继续接收，插件会核对原来的保存操作。',
     'stale-session': '设置已更新，请重新连接同步页面。', 'manager-busy': '另一窗口正在使用 Wi-Fi 同步，请先关闭该窗口的同步页面。',
     'vault-locked': '密码库已锁定，请解锁后重新进入同步页面。', 'session-expired': '密码库已锁定，请解锁后重新进入同步页面。',
@@ -42,7 +45,7 @@ function errorText(code: string): string {
   };
   return tr(messages[code] ?? '同步未完成，请检查本机通信组件和另一端状态后重试。');
 }
-function report(e: unknown) { if (!disposed) { error.value = errorText(e instanceof NearbyManagerClientError ? e.code : 'operation-failed'); view.value = {phase:'failed'}; searching.value=false; } }
+function report(e: unknown) { if (!disposed) { recoveryReview.value = null; error.value = errorText(e instanceof NearbyManagerClientError ? e.code : 'operation-failed'); view.value = {phase:'failed'}; searching.value=false; } }
 async function request<T>(command: NearbyManagerCommand): Promise<T> {
   if (!client) throw new NearbyManagerClientError('connection-closed');
   const current = client, result = await current.request<T>(command);
@@ -65,7 +68,19 @@ function deferAutomatic() { nextAutomatic = Date.now() + Math.max(60, preference
 async function loadPreferences() {
   preferences.value = await request<NearbyPreferencesView>({ type: 'preferences' }); name.value = preferences.value.name;
 }
-async function loadRecovery() { recovery.value = await request<NearbyNativeRecoveryView | null>({ type: 'recovery-status' }); }
+async function loadRecovery() { recoveryReview.value = null; recovery.value = await request<NearbyNativeRecoveryView | null>({ type: 'recovery-status' }); }
+async function reviewReceive() {
+  const pending = recovery.value; if (!pending || !editable.value) return;
+  await run(async () => { recoveryReview.value = await request<NearbyRecoveryReviewView>({ type: 'recovery-review', operationId: pending.operationId }); deferAutomatic(); });
+}
+async function confirmReceive() {
+  const review = recoveryReview.value; if (!review || !editable.value) return;
+  recoveryReview.value = null;
+  await run(async () => {
+    await request({ type: 'recovery-confirm', reviewId: review.reviewId });
+    await loadRecovery(); view.value = { phase: 'idle' }; recovered.value = true; deferAutomatic();
+  });
+}
 async function resumeReceive() {
   const pending = recovery.value; if (!pending || !editable.value) return;
   await run(async () => {
@@ -80,7 +95,7 @@ async function connect() {
     client?.close();
     const current = new NearbyManagerClient(reason => { queueMicrotask(() => {
       if (disposed || client !== current) return;
-      connected.value = false; searching.value = false; invitation.value = ''; copied.value = false; recovery.value = null;
+      connected.value = false; searching.value = false; invitation.value = ''; copied.value = false; recovery.value = null; recoveryReview.value = null;
       view.value = { phase: 'cancelled' }; if (reason !== 'cancelled') error.value = errorText(reason);
     }); });
     client = current; await current.ready;
@@ -124,7 +139,7 @@ function cancel() {
   generation++;
   client?.close(); client = undefined; connected.value = false; searching.value = false; busy.value = false;
   view.value = { phase: 'cancelled' }; discovered.value = []; invitation.value = ''; pendingEndpoint = undefined; error.value = ''; deferAutomatic();
-  recovery.value = null; recovered.value = false;
+  recovery.value = null; recovered.value = false; recoveryReview.value = null;
 }
 async function copyInvitation() {
   const text = view.value.pairing?.invitations[0]; if (!text) return;
@@ -170,8 +185,17 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); client?.close(); clien
         <p v-if="recovery.conflict" class="nearby-row">{{ tr('密码库有新的修改，继续接收需要先处理冲突。本机数据和待接收内容都没有被丢弃。') }}</p>
         <p class="nearby-row supporting">{{ tr(recovery.completeInputsRetained ? '本次接收的保存内容和附件副本仍加密保留，直到全部保存完成。' : '这是旧版创建的接收日志，仅保留剩余步骤；已完成部分以当前数据库和原设备为准。') }}</p>
       </div>
-      <p class="supporting">{{ tr('无需另一台设备在线。只检查并重试原来的保存操作；冲突仍存在时不会覆盖本机修改。') }}</p>
-      <div class="nearby-actions"><m3e-button variant="tonal" :disabled="!editable" @click="resumeReceive">{{ tr('检查并继续接收') }}</m3e-button><m3e-button :disabled="busy" @click="cancel">{{ tr('稍后处理') }}</m3e-button></div>
+      <template v-if="recoveryReview">
+        <p role="status">{{ tr('已核实 {0} 次修改，涉及 {1} 个条目，与剩余 {2} 步接收互不覆盖。',{0:recoveryReview.interveningCommits,1:recoveryReview.editedEntries,2:recoveryReview.remainingSteps}) }}</p>
+        <p class="supporting">{{ tr('继续会保留本机条目修改，并保存剩余附件和文件夹信息。确认前会再次检查密码库是否变化。') }}</p>
+      </template>
+      <p v-else class="supporting">{{ tr('无需另一台设备在线。只检查并重试原来的保存操作；冲突仍存在时不会覆盖本机修改。') }}</p>
+      <div class="nearby-actions">
+        <m3e-button v-if="recoveryReview" variant="filled" :disabled="!editable" @click="confirmReceive">{{ tr('保留本机修改并继续') }}</m3e-button>
+        <m3e-button v-else-if="recovery.conflict" variant="tonal" :disabled="!editable" @click="reviewReceive">{{ tr('检查能否继续接收') }}</m3e-button>
+        <m3e-button v-else variant="tonal" :disabled="!editable" @click="resumeReceive">{{ tr('检查并继续接收') }}</m3e-button>
+        <m3e-button :disabled="busy" @click="cancel">{{ tr('稍后处理') }}</m3e-button>
+      </div>
     </section>
     <template v-if="preferences">
       <div class="nearby-rows">

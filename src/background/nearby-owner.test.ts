@@ -27,7 +27,7 @@ const owners: NearbyManagerOwner[] = [];
 function fixture() {
   const session = { id: 'session', expiresAt: Date.now() + 60_000 };
   const coordinator = { close: vi.fn(), status: vi.fn(() => ({ phase: 'idle' as const })), pair: vi.fn(async () => ({ phase: 'pairing' as const })),
-    discover: vi.fn(), discoveryProgress: vi.fn(), prepare: vi.fn(), confirm: vi.fn(), start: vi.fn(), poll: vi.fn(), recover: vi.fn() };
+    discover: vi.fn(), discoveryProgress: vi.fn(), prepare: vi.fn(), confirm: vi.fn(), start: vi.fn(), poll: vi.fn(), recover: vi.fn(), reviewRecovery: vi.fn(), confirmRecovery: vi.fn() };
   const options = { runtimeId: sender.id, extensionRoot: root, readSession: vi.fn(async () => session),
     createCoordinator: vi.fn(() => coordinator), changed: vi.fn(),
     store: { readState: vi.fn(), nearbySessionPreferences: vi.fn(), updateNearbyPreferences: vi.fn(), readNearbyNativeJournal: vi.fn() } };
@@ -44,6 +44,17 @@ async function response(p: ReturnType<typeof port>, id: number) {
 afterEach(() => { owners.splice(0).forEach(owner => owner.close()); vi.useRealTimers(); });
 
 describe('nearby manager boundary and lifecycle', () => {
+  it('routes review and one-use confirmation through the owning coordinator only', async () => {
+    const f = fixture(), p = await ready(f), reviewId = '22222222-2222-4222-8222-222222222222';
+    f.coordinator.reviewRecovery.mockResolvedValue({ reviewId, editedEntries: 1, interveningCommits: 2, remainingSteps: 3 });
+    p.onMessage.emit({ id: 1, type: 'recovery-review', operationId: sender.documentId });
+    expect((await response(p, 1)).data).toEqual({ reviewId, editedEntries: 1, interveningCommits: 2, remainingSteps: 3 });
+    expect(f.options.changed).not.toHaveBeenCalled();
+    f.coordinator.confirmRecovery.mockResolvedValue({ applied: 1 });
+    p.onMessage.emit({ id: 2, type: 'recovery-confirm', reviewId });
+    expect((await response(p, 2)).data).toEqual({ applied: 1 });
+    expect(f.coordinator.confirmRecovery).toHaveBeenCalledWith(reviewId); expect(f.options.changed).toHaveBeenCalledOnce();
+  });
   it('returns only recovery counters and an opaque operation, never journal contents', async () => {
     const f = fixture(), p = await ready(f);
     f.options.store.readNearbyNativeJournal.mockResolvedValue({ intent: { operationId: sender.documentId,
@@ -132,6 +143,8 @@ describe('nearby high-level request validation', () => {
     { type: 'replica_open', key: 'caller key' }, { type: 'status', handle: 'caller handle' },
     { type: 'recovery-status', key: 'caller key' }, { type: 'recover', operationId: sender.documentId, writeRevision: {} },
     { type: 'recover', operationId: 'arbitrary' }, { type: 'recover', operationId: sender.documentId, plan: {} },
+    { type: 'recovery-review', operationId: sender.documentId, proof: {} },
+    { type: 'recovery-confirm', reviewId: sender.documentId, writeRevision: {} }, { type: 'recovery-confirm', reviewId: 'arbitrary' },
     { type: 'update', epoch: sender.documentId, change: { kind: 'remember', peer: {} } },
     { type: 'update', epoch: sender.documentId, change: { kind: 'remote-interval' } },
     { type: 'update', epoch: sender.documentId, change: { kind: 'preferences', name: 'a'.repeat(65) } },

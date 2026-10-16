@@ -5,7 +5,8 @@ export const NEARBY_MANAGER_PORT = 'monica-nearby-manager-v1';
 export type NearbyManagerChange = Extract<NearbyPreferencesChange, { kind: 'preferences' | 'source' | 'forget' | 'request-sync' }>;
 export type NearbyManagerRequest = { id: number } & (
   | { type: 'status' | 'preferences' | 'progress' | 'cancel' | 'discovery-progress' | 'sources' | 'recovery-status' }
-  | { type: 'recover'; operationId: string }
+  | { type: 'recover' | 'recovery-review'; operationId: string }
+  | { type: 'recovery-confirm'; reviewId: string }
   | { type: 'discover'; target?: string }
   | { type: 'update'; epoch: string; change: NearbyManagerChange }
   | { type: 'pair'; invitation?: string }
@@ -32,7 +33,8 @@ export function readNearbyManagerRequest(value: unknown): NearbyManagerRequest {
   if (typeof p.id !== 'number' || !Number.isSafeInteger(p.id) || p.id < 1) invalid();
   switch (p.type) {
     case 'status': case 'preferences': case 'progress': case 'cancel': case 'discovery-progress': case 'sources': case 'recovery-status': fields(p, ['id', 'type']); break;
-    case 'recover': fields(p, ['id', 'type', 'operationId']); text(p.operationId, uuid); break;
+    case 'recover': case 'recovery-review': fields(p, ['id', 'type', 'operationId']); text(p.operationId, uuid); break;
+    case 'recovery-confirm': fields(p, ['id', 'type', 'reviewId']); text(p.reviewId, uuid); break;
     case 'discover':
       fields(p, ['id', 'type', 'target']);
       if (p.target !== undefined && (typeof p.target !== 'string' || p.target.length > 15)) invalid();

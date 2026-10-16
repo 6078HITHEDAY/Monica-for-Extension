@@ -3,6 +3,7 @@ import type { NearbyIncomingRecord, NearbyLocalBatch } from './local-adoption';
 import type { NearbyAcknowledgement } from './native-journal';
 import type { NearbyWireData } from './wire-shape';
 import { base64ToBytes } from '../security/encoding';
+import type { NearbyRecoveryReviewView } from './native-recovery-review';
 
 export interface NearbySourceSnapshot {
   sourceHash: string;
@@ -16,6 +17,8 @@ export interface NearbySourceAdapter {
   capture(): Promise<NearbySourceSnapshot>;
   snapshotHash(): Promise<string>;
   recover(expectedOperationId?: string): Promise<NearbyAcknowledgement[]>;
+  reviewRecovery?(operationId: string): Promise<NearbyRecoveryReviewView>;
+  confirmRecovery?(reviewId: string): Promise<NearbyAcknowledgement[]>;
   saved(records: readonly NearbyIncomingRecord[]): Promise<NearbyAcknowledgement[]>;
   groups(records: readonly NearbyIncomingRecord[]): Promise<Array<[string, string]>>;
   adopt(batch: NearbyLocalBatch): Promise<{ sourceHash: string; acknowledgements: NearbyAcknowledgement[] }>;

@@ -1,6 +1,6 @@
 {
   "title": "Monica · 接收恢复",
-  "brief": "紧凑连续分组；顶部说明进度、冲突和真实保留范围。明确检查与稍后处理。用户确认不会改变修订约束。旧日志提示仅剩余步骤可恢复。",
+  "brief": "紧凑连续分组；冲突先检查再确认，不重叠时保留本机条目修改继续保存附件与文件夹。无法证明则保留冲突。",
   "frame": "phone",
   "platform": "web",
   "paletteKey": "teal",
@@ -87,8 +87,8 @@
         {
           "id": "item-2",
           "kind": "listItem",
-          "label": "密码库有新的修改",
-          "supporting": "已停止继续写入，避免覆盖本机修改。",
+          "label": "本机条目修改与剩余接收不重叠",
+          "supporting": "检查到 1 次修改，涉及 1 个条目；剩余 2 步。",
           "size": 396,
           "radius": 4,
           "variant": "tonal",
@@ -139,7 +139,7 @@
         {
           "id": "item-4",
           "kind": "button",
-          "label": "检查并继续接收",
+          "label": "保留本机修改并继续",
           "supporting": "",
           "size": 396,
           "radius": 4,
@@ -192,7 +192,7 @@
           "id": "item-6",
           "kind": "listItem",
           "label": "无需另一台设备在线",
-          "supporting": "仅重试原来的保存操作；冲突仍存在时会继续保留。",
+          "supporting": "确认前再次核对数据库；版本已变化时重新检查。",
           "size": 396,
           "radius": 4,
           "variant": "tonal",

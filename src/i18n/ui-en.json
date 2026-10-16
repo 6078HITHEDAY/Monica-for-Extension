@@ -3566,5 +3566,10 @@
   "家庭电话": "Home phone",
   "工作邮箱": "Work email",
   "工作电话": "Work phone",
-  "姓名与联系方式": "Name and contact details"
+  "姓名与联系方式": "Name and contact details",
+  "无法确认本机修改与接收内容互不影响，已保留冲突和接收内容。": "Cannot prove that local edits and incoming content are independent. The conflict and received content have been retained.",
+  "已核实 {0} 次修改，涉及 {1} 个条目，与剩余 {2} 步接收互不覆盖。": "Verified {0} changes affecting {1} entries, with no overlap with the remaining {2} receive steps.",
+  "继续会保留本机条目修改，并保存剩余附件和文件夹信息。确认前会再次检查密码库是否变化。": "Continuing preserves local entry edits and saves the remaining attachments and folder information. The vault is checked again before proceeding.",
+  "保留本机修改并继续": "Keep local edits and continue",
+  "检查能否继续接收": "Check whether receiving can continue"
 }
