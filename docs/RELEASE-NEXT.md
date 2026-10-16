@@ -4,7 +4,11 @@
 
 ## 中文
 
-阶段范围已于 2026-10-16 冻结，详见[阶段收尾与已知限制](verification/wifi-stage-closeout-2026-10-16.md)。以下是尚未发布的开发改动；本轮结束后不自动继续扩展功能。
+Wi-Fi 阶段范围已于 2026-10-16 冻结，详见[阶段收尾与已知限制](verification/wifi-stage-closeout-2026-10-16.md)。其后另行授权的 Android 1.0.320 资料字段对齐已完成[定向验收](verification/wallet-fields-320-2026-10-16.md)。以下均为尚未发布的开发改动。
+
+- 对齐 Android 新增的地址姓名分段、地址第三行、区/县、家庭及工作联系方式，以及银行卡持卡人姓名分段。沿用现有补充信息编辑入口，并分别展示详情；完整姓名与姓名分段独立保存，家庭／工作联系方式不使用默认联系方式代填。
+- 补齐这些字段的本机保存、导入、Android 备份、MDBX、KDBX 和 Bitwarden 编解码。Bitwarden 自定义字段名称和值均加密，避免重复展示；旧记录缺少完整姓名字段时保留本机原值，明确清空时正常同步清空。KDBX 银行卡账单地址沿用 Android 的文本表示，保留第三行与区/县内容。
+- 网页填充支持对应的独立字段、国家与有效期下拉框，以及地址多行格式。按聚焦表单、分组及收货／账单用途限制填充，识别家庭／工作联系人；含义不明或重复匹配时跳过。电话号码区号／本地号的细分仅在可明确解析的美国、加拿大号码中提供，其他号码不猜测；动态新增控件可再次主动填充。
 
 - 新增 Wi-Fi 未完成接收的状态与离线恢复入口：无需另一台设备在线，只核对并重试原来的保存操作。新建接收日志会将已完成步骤的内容及附件副本一起加密保留到整笔完成；旧日志明确提示保留范围。遇到新的本机修改会显示冲突并停止，取消、锁定和重启不会丢弃待恢复记录；当前尚不支持直接合并这类修改冲突。
 - 补齐较大文件夹配置与附件组合的 Wi-Fi 分步接收和重启恢复：先加密保存待处理步骤，全部完成后才确认同步成功。中断或丢失响应不会重复创建内容；其他修改不会被当作恢复依据覆盖。待恢复期间阻止同一 MDBX 的普通修改和云同步，永久删除也保留各来源附件的独立归属。当前已验证 1 MiB 配置与独立 1 MiB 附件组合；更大的单文件和恢复冲突处理仍在补齐。
@@ -25,7 +29,11 @@
 
 ## English
 
-This stage was frozen on 2026-10-16; see the [closeout and known limitations](verification/wifi-stage-closeout-2026-10-16.md). The following development changes remain unpublished. Closing this goal does not automatically start additional feature work.
+The Wi-Fi stage was frozen on 2026-10-16; see the [closeout and known limitations](verification/wifi-stage-closeout-2026-10-16.md). The separately authorized Android 1.0.320 profile-field alignment subsequently passed [targeted acceptance](verification/wallet-fields-320-2026-10-16.md). All changes below remain unpublished.
+
+- Aligned address name parts, third address line, district, home/work contacts and cardholder name parts with Android. Existing additional-content editors and separate detail labels preserve independent values: full names are never derived from name parts, and default contacts never replace missing home/work contacts.
+- Preserved these fields through local saves, imports, Android backups, MDBX, KDBX and Bitwarden codecs. Bitwarden custom-field names and values are encrypted and managed duplicates are filtered. A missing legacy full-name field preserves the existing local value; an explicitly empty field clears it. Card billing addresses in KDBX retain Android's text representation, including third-line and district contents.
+- Web filling supports the independent fields, country/expiry selects and multiline addresses. Focused forms, sections, shipping/billing purposes and contact qualifiers constrain filling; ambiguous matches are skipped. Area/local phone-number splitting is limited to unambiguous US/Canadian numbers, without guessing other countries' varying formats. Dynamically added controls can be filled by another explicit invocation.
 
 - Added an unfinished-receive view and offline Wi-Fi recovery: the other device may be offline while the extension verifies and retries the original save operations. New receive journals retain completed inputs and attachment copies, encrypted until the whole receive finishes; older journals disclose their limited retention. Intervening local edits stop recovery with an explicit conflict, and cancellation, locking and restart retain the pending journal. Merging these intervening edits remains in progress.
 - Added resumable Wi-Fi adoption for larger collection-profile/file combinations. Pending steps are encrypted before writing, and synchronization is acknowledged only after all steps complete. Interrupted or lost replies retain exact operations without duplicating content; intervening edits cannot be silently accepted as a recovery baseline. Ordinary mutations and cloud sync for the same MDBX wait for recovery, and purge retains source-specific attachment ownership. A 1 MiB profile plus a separate 1 MiB file is verified; larger individual files and recovery-conflict resolution remain in progress.

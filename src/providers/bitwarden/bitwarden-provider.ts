@@ -127,7 +127,7 @@ export class BitwardenProvider implements ProviderAdapter {
         const cached = synced.decoded.get(cipherId);
         const reused = cached?.fingerprint === fingerprint;
         const decoded = reused
-          ? { items: structuredClone(cached.items), warning: undefined, historyWarning: undefined, unsupported: false }
+          ? { items: structuredClone(cached.items), legacyIdentityFullName: cached.legacyIdentityFullName, warning: undefined, historyWarning: undefined, unsupported: false }
           : await decodeBitwardenCipher(rawCipher, account.id, ownerKey, resolvedFolderNames.get(folderId));
         let hydrationFailed = false;
         const steamCarrier = decoded.items.find((item): item is LoginItem => item.kind === "login" && isSteamMaFileLogin(item));
@@ -150,8 +150,12 @@ export class BitwardenProvider implements ProviderAdapter {
             warnings.push(`Bitwarden Steam 项目 ${steamCarrier.title} 的 maFile 附件读取失败：${errorMessage(error)}`);
           }
         }
-        if (!decoded.warning && !decoded.historyWarning && !hydrationFailed) synced.decoded.set(cipherId, { fingerprint, items: structuredClone(decoded.items) });
-        remoteItems.push(...decoded.items);
+        if (!decoded.warning && !decoded.historyWarning && !hydrationFailed) synced.decoded.set(cipherId, { fingerprint, items: structuredClone(decoded.items), legacyIdentityFullName: decoded.legacyIdentityFullName });
+        remoteItems.push(...decoded.items.map(remote => {
+          if (remote.kind !== "identity" || !decoded.legacyIdentityFullName) return remote;
+          const local = localScoped.find(item => item.kind === "identity" && baseCipherId(providerReference(item, account.id)?.remoteId) === cipherId);
+          return local?.kind === "identity" ? { ...remote, fullName: local.fullName } : remote;
+        }));
         if (decoded.historyWarning) warnings.push(decoded.historyWarning);
         if (decoded.warning) {
           warnings.push(decoded.warning);

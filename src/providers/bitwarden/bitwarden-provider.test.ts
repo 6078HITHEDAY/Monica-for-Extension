@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { LoginItem, PasskeyItem, ProviderAccount, VaultItem } from "../../core/model";
 import { bytesToBase64 } from "../../security/encoding";
 import { decryptBitwardenString, encryptBitwardenString, type BitwardenSymmetricKey } from "./bitwarden-crypto";
+import { encodeBitwardenCipher } from "./bitwarden-cipher-codec";
 import { BitwardenProvider } from "./bitwarden-provider";
 import { bitwardenMutationFingerprint } from "./bitwarden-durable-sync";
 
@@ -12,6 +13,25 @@ const RSA_FIXTURE_TIMEOUT_MS = 15_000;
 const P256_PKCS8 = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgsloK6aKNvj0CZMYdBdSZs+AUAsFy1t66q4tq5SvyeJahRANCAASlCTbHlIcaKQ2lzoEFhtjkLEO++f3cYq6FMYG7eH3BmuLQPz71FAtWq4z+tIb7oequwhUJL3xos1nA8jFqpkDs";
 
 describe("Bitwarden provider", () => {
+  it('preserves a local full name for legacy missing fields across cache reuse, but propagates an explicit empty name', async () => {
+    const item: VaultItem = { id: 'local-identity', kind: 'identity', title: 'Synthetic identity', favorite: false, notes: '', createdAt: OLD_REVISION, updatedAt: OLD_REVISION,
+      documentType: 'OTHER', documentNumber: '', firstName: 'Separate', middleName: '', lastName: 'Parts', fullName: 'Local full name', providerRefs: [{ providerId: 'provider-1', remoteId: 'identity-cipher', revision: OLD_REVISION }] };
+    const encoded = await encodeBitwardenCipher(item, KEY);
+    let raw = { ...encoded, id: 'identity-cipher', revisionDate: OLD_REVISION, fields: [] };
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      if (new URL(String(input)).pathname === '/api/sync') return json({ Profile: { Id: 'user' }, Folders: [], Ciphers: [raw] });
+      throw Error('Unexpected request: ' + input);
+    });
+    const provider = new BitwardenProvider(fetcher);
+    for (const fullName of ['Local full name', 'New local full name']) {
+      const result = await provider.sync(account(), { now: OLD_REVISION, localItems: [{ ...item, fullName }], readOnly: true });
+      expect(result.items.find(i => i.kind === 'identity')).toMatchObject({ fullName, firstName: 'Separate', lastName: 'Parts' });
+    }
+    raw = { ...await encodeBitwardenCipher({ ...item, fullName: '' }, KEY), id: 'identity-cipher', revisionDate: '2026-10-16T01:00:00Z' } as typeof raw;
+    const result = await provider.sync(account(), { now: OLD_REVISION, localItems: [item], readOnly: true });
+    expect(result.items.find(i => i.kind === 'identity')).toMatchObject({ fullName: '', firstName: 'Separate', lastName: 'Parts' });
+  });
+
   it.each(['update', 'passkey', 'trash', 'restore'] as const)('keeps folder context in the %s acknowledgement for a login and its credentials', async operation => {
     const folderName = '跨端 / Passkeys', folderId = 'folder-passkeys', changedAt = '2026-10-10T00:00:00.000Z';
     let raw: Record<string, unknown> = { ...await loginCipher('original', OLD_REVISION, [await fidoCredential('folder-key', 23)]), FolderId: folderId };

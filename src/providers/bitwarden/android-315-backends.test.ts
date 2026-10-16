@@ -63,7 +63,7 @@ describe("Android 1.0.315 Bitwarden data contract", () => {
   it("keeps all document identifiers and title prefix while editing the displayed document number", async () => {
     const raw = { ...base, type: 4, name: await enc("Document"), fields: [await custom("monica_document_type", "PASSPORT"), await custom("monica_issue_date", "2020-01-02"), await custom("monica_additional_info", "all info")], identity: { title: await enc("Dr"), firstName: await enc("A"), middleName: await enc("B"), lastName: await enc("C"), company: await enc("Company"), username: await enc("profile"), ssn: await enc("0001"), passportNumber: await enc("P01"), licenseNumber: await enc("L01"), address3: await enc("floor 3") } };
     const item = (await decodeBitwardenCipher(raw, "provider", key)).items[0] as IdentityItem;
-    expect(item).toMatchObject({ documentTitle: "Dr", fullName: "A B C", company: "Company", username: "profile", ssn: "0001", licenseNumber: "L01", issuedDate: "2020-01-02", address3: "floor 3" });
+    expect(item).toMatchObject({ documentTitle: "Dr", fullName: "", firstName: "A", middleName: "B", lastName: "C", company: "Company", username: "profile", ssn: "0001", licenseNumber: "L01", issuedDate: "2020-01-02", address3: "floor 3" });
     const result = await encodeBitwardenCipher({ ...item, documentNumber: "P02" }, key, raw);
     const identity = result.identity as Record<string, string>;
     expect(await decryptBitwardenString(identity.passportNumber, key)).toBe("P02");

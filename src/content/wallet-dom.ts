@@ -1,5 +1,6 @@
 import type { WalletFieldName, WalletFillKind, WalletFillPayload, WalletFillResult } from "../runtime/messages";
 import { elementByIdInRoot, queryComposedAll } from "./composed-dom";
+import { walletPhoneSegment, walletSelectOption } from './wallet-values';
 
 type WalletControl = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
 
@@ -7,6 +8,10 @@ interface WalletField {
   element: WalletControl;
   name: WalletFieldName;
   kinds: WalletFillKind[];
+  token?: string;
+  section: string;
+  addressKind: string;
+  contact: string;
 }
 
 const AUTOCOMPLETE_FIELDS: Record<string, WalletFieldName> = {
@@ -19,14 +24,19 @@ const AUTOCOMPLETE_FIELDS: Record<string, WalletFieldName> = {
   "street-address": "streetAddress",
   "address-line1": "streetAddress",
   "address-line2": "apartment",
+  "address-line3": "addressLine3",
+  "address-level3": "district",
   "address-level2": "city",
   "address-level1": "stateProvince",
   "postal-code": "postalCode",
   country: "country",
   "country-name": "country",
   tel: "phone",
+  'tel-country-code': 'phone', 'tel-national': 'phone', 'tel-area-code': 'phone',
+  'tel-local': 'phone', 'tel-local-prefix': 'phone', 'tel-local-suffix': 'phone', 'tel-extension': 'phone',
   email: "email",
   "cc-name": "cardholderName",
+  'cc-given-name': 'cardholderFirstName', 'cc-additional-name': 'cardholderMiddleName', 'cc-family-name': 'cardholderLastName',
   "cc-number": "cardNumber",
   "cc-exp-month": "cardExpiryMonth",
   "cc-exp-year": "cardExpiryYear",
@@ -37,7 +47,10 @@ const AUTOCOMPLETE_FIELDS: Record<string, WalletFieldName> = {
 };
 
 const FIELD_KINDS: Record<WalletFieldName, WalletFillKind[]> = {
-  fullName: ["identity", "billing-address"], firstName: ["identity"], middleName: ["identity"], lastName: ["identity"],
+  fullName: ["identity", "billing-address"], firstName: ["identity", "billing-address"], middleName: ["identity", "billing-address"], lastName: ["identity", "billing-address"],
+  addressLine3: ['identity', 'billing-address'], district: ['identity', 'billing-address'],
+  homeEmail: ['identity', 'billing-address'], homePhone: ['identity', 'billing-address'], workEmail: ['identity', 'billing-address'], workPhone: ['identity', 'billing-address'],
+  cardholderFirstName: ['card'], cardholderMiddleName: ['card'], cardholderLastName: ['card'],
   birthDate: ["identity"], nationality: ["identity"], documentNumber: ["identity"], documentType: ["identity"],
   documentIssuedDate: ["identity"], documentExpiryDate: ["identity"], documentIssuedBy: ["identity"],
   passportNumber: ["identity"], licenseNumber: ["identity"], ssn: ["identity"], company: ["identity", "billing-address"],
@@ -52,6 +65,12 @@ const FIELD_KINDS: Record<WalletFieldName, WalletFillKind[]> = {
 };
 
 const HEURISTICS: Array<[WalletFieldName, RegExp]> = [
+  ['addressLine3', /^(addressline3|address3|地址第三行)$/], ['district', /^(district|county|区县)$/],
+  ['homeEmail', /^(homeemail|家庭邮箱)$/], ['homePhone', /^(homephone|家庭电话)$/],
+  ['workEmail', /^(workemail|工作邮箱)$/], ['workPhone', /^(workphone|工作电话)$/],
+  ['cardholderFirstName', /^(cardholderfirstname|ccgivenname|持卡人名)$/],
+  ['cardholderMiddleName', /^(cardholdermiddlename|ccadditionalname|持卡人中间名)$/],
+  ['cardholderLastName', /^(cardholderlastname|ccfamilyname|持卡人姓)$/],
   ["cardSecurityCode", /^(cvv|cvc|cardsecuritycode|cardverificationcode|银行卡安全码|信用卡安全码|卡片安全码)$/],
   ["cardPin", /^(cardpin|creditcardpin|bankcardpin|银行卡pin|信用卡pin|卡片pin)$/],
   ["cardExpiryMonth", /^(card|cc)?expir(y|ation)?month$/],
@@ -94,10 +113,11 @@ export function scanWalletKinds(rootDocument: Document = document): WalletFillKi
 
 export function fillWallet(payload: WalletFillPayload, rootDocument: Document = document): { ok: boolean; error?: string } & WalletFillResult {
   const filledFields: WalletFieldName[] = [];
-  for (const field of findWalletFields(rootDocument)) {
-    if (!field.kinds.includes(payload.kind)) continue;
-    const value = payload.fields[field.name];
-    if (!value || !setControlValue(field.element, value)) continue;
+  for (const field of scopedWalletFields(findWalletFields(rootDocument).filter(f => f.kinds.includes(payload.kind)), rootDocument)) {
+    let value = payload.fields[field.name];
+    if (field.token === 'street-address') value = [payload.fields.streetAddress, payload.fields.apartment, payload.fields.addressLine3].filter(Boolean).join('\n');
+    if (value && field.token?.startsWith('tel-')) value = walletPhoneSegment(value, payload.fields.country, field.token, rootDocument.documentElement.lang || 'en');
+    if (!value || !field.element.isConnected || !visibleControl(field.element) || !setControlValue(field.element, value, field.name)) continue;
     filledFields.push(field.name);
   }
   if (!filledFields.length) return { ok: false, error: "当前页面没有与此项目对应的安全可填写字段。", filledCount: 0, filledFields: [] };
@@ -107,14 +127,61 @@ export function fillWallet(payload: WalletFillPayload, rootDocument: Document = 
 function findWalletFields(rootDocument: Document): WalletField[] {
   return queryComposedAll<WalletControl>(rootDocument, "input,select,textarea").flatMap((element) => {
     if (!visibleControl(element)) return [];
-    const name = walletFieldName(element);
-    return name ? [{ element, name, kinds: FIELD_KINDS[name] }] : [];
+    const parsed = describeWalletField(element);
+    return parsed ? [{ element, ...parsed, kinds: FIELD_KINDS[parsed.name] }] : [];
   });
 }
 
 export function walletFieldName(element: WalletControl): WalletFieldName | undefined {
-  const autocomplete = element.autocomplete.toLowerCase().split(/\s+/).reverse().find((token) => AUTOCOMPLETE_FIELDS[token]);
-  return autocomplete ? AUTOCOMPLETE_FIELDS[autocomplete] : heuristicField(element);
+  return describeWalletField(element)?.name;
+}
+
+function describeWalletField(element: WalletControl): Omit<WalletField, 'element' | 'kinds'> | undefined {
+  const tokens = (element.getAttribute('autocomplete') || '').toLowerCase().trim().split(/\s+/).filter(Boolean);
+  let section = '', addressKind = '', contact = '', token: string | undefined, name: WalletFieldName | undefined;
+  if (tokens.length && !['on', 'off'].includes(tokens[0])) {
+    if (tokens[0]?.startsWith('section-') && tokens[0].length > 8) section = tokens.shift()!;
+    if (['shipping', 'billing'].includes(tokens[0])) addressKind = tokens.shift()!;
+    if (['home', 'work', 'mobile', 'fax', 'pager'].includes(tokens[0])) contact = tokens.shift()!;
+    token = tokens.shift();
+    if (tokens.length || !token || !AUTOCOMPLETE_FIELDS[token] || contact && token !== 'email' && !token.startsWith('tel')) return;
+    if (contact && contact !== 'home' && contact !== 'work') return; // No independent stored value for other contact groups.
+    name = AUTOCOMPLETE_FIELDS[token];
+    if (contact) name = `${contact}${name === 'email' ? 'Email' : 'Phone'}` as WalletFieldName;
+  } else name = heuristicField(element);
+  if (!name) return;
+  if (element instanceof element.ownerDocument.defaultView!.HTMLInputElement) {
+    if (element.type === 'tel' && !['phone', 'homePhone', 'workPhone'].includes(name)) return;
+    if (element.type === 'email' && !['email', 'homeEmail', 'workEmail'].includes(name)) return;
+  }
+  if (!contact && /^(home|work)(Email|Phone)$/.test(name)) contact = name.startsWith('home') ? 'home' : 'work';
+  return { name, token, section, addressKind, contact };
+}
+
+const lastFocused = new WeakMap<Document, Element>();
+export function installWalletFocusTracking(rootDocument: Document = document): void {
+  rootDocument.addEventListener('focusin', event => {
+    const element = event.composedPath()[0];
+    if (element instanceof rootDocument.defaultView!.Element) lastFocused.set(rootDocument, element);
+  }, true);
+}
+function scopedWalletFields(fields: WalletField[], doc: Document): WalletField[] {
+  let focus = doc.activeElement;
+  while (focus?.shadowRoot?.activeElement) focus = focus.shadowRoot.activeElement;
+  if (!focus || focus === doc.body || focus === doc.documentElement) focus = lastFocused.get(doc) ?? null;
+  const anchor = fields.find(f => f.element === focus);
+  const groups: WalletField[][] = [];
+  for (const field of fields) {
+    let group = [...groups].reverse().find(g => g[0].element.form === field.element.form && g[0].element.getRootNode() === field.element.getRootNode()
+      && g[0].section === field.section && g[0].addressKind === field.addressKind);
+    // Repeated unmarked blocks are separated in document order.
+    if (group?.some(f => f.name === field.name && f.token === field.token)) group = undefined;
+    if (!group) { group = []; groups.push(group); }
+    group.push(field);
+  }
+  const selected = anchor ? groups.find(g => g.includes(anchor)) : groups.length === 1 && (!focus || focus === doc.body || focus === doc.documentElement) ? groups[0] : undefined;
+  if (!selected) return [];
+  return anchor?.contact ? selected.filter(f => f.contact === anchor.contact) : selected;
 }
 
 function heuristicField(element: WalletControl): WalletFieldName | undefined {
@@ -130,6 +197,7 @@ function normalizeHint(value: string): string {
 }
 
 function visibleControl(element: WalletControl): boolean {
+  if (element instanceof element.ownerDocument.defaultView!.HTMLSelectElement && element.multiple) return false;
   if (element.disabled || element instanceof element.ownerDocument.defaultView!.HTMLInputElement && (element.readOnly || /^(hidden|password|file|submit|button|checkbox|radio)$/i.test(element.type))) return false;
   if (element instanceof element.ownerDocument.defaultView!.HTMLTextAreaElement && element.readOnly) return false;
   const style = element.ownerDocument.defaultView?.getComputedStyle(element);
@@ -137,21 +205,20 @@ function visibleControl(element: WalletControl): boolean {
   return style?.display !== "none" && style?.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
 }
 
-function setControlValue(element: WalletControl, requestedValue: string): boolean {
+function setControlValue(element: WalletControl, requestedValue: string, name: WalletFieldName): boolean {
   const view = element.ownerDocument.defaultView;
   if (!view) return false;
   let value = requestedValue;
   let prototype: object;
   if (element instanceof view.HTMLSelectElement) {
-    const direct = Array.from(element.options).find((option) => option.value === requestedValue);
-    const byLabel = Array.from(element.options).find((option) => option.textContent?.trim().toLocaleLowerCase() === requestedValue.trim().toLocaleLowerCase());
-    const option = direct || byLabel;
+    const option = walletSelectOption(element, name, requestedValue);
     if (!option) return false;
     value = option.value;
     prototype = view.HTMLSelectElement.prototype;
   } else if (element instanceof view.HTMLTextAreaElement) {
     prototype = view.HTMLTextAreaElement.prototype;
   } else {
+    value = value.replace(/\r?\n/g, ', ');
     prototype = view.HTMLInputElement.prototype;
   }
   Object.getOwnPropertyDescriptor(prototype, "value")?.set?.call(element, value);

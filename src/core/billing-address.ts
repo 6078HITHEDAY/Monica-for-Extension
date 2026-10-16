@@ -2,7 +2,7 @@ import { parseLosslessJson } from "./lossless-json";
 
 // Android SecureItemModels.kt::BillingAddress, not the richer standalone BillingAddressData.
 export const BILLING_ADDRESS_FIELDS = {
-  streetAddress: "街道地址", apartment: "公寓/单元", city: "城市",
+  streetAddress: "街道地址", apartment: "公寓/单元", addressLine3: "地址第三行", district: "区/县", city: "城市",
   stateProvince: "省/州", postalCode: "邮编", country: "国家/地区"
 } as const;
 export type BillingAddressField = keyof typeof BILLING_ADDRESS_FIELDS;

@@ -1,3 +1,4 @@
+import { profileValues, CARD_NAMES, PROFILE_EXTRAS, ADDRESS_EXTRAS } from "../../core/profile-fields";
 import { passkeyKeyMaterialHint } from '../../passkey/private-key-portability';
 import { parseLosslessJson, jsonScalarText } from "../../core/lossless-json";
 import { capturePasswordHistory, assertPortablePasswordHistory } from '../../core/password-history';
@@ -657,6 +658,7 @@ export function androidRecordToItem(path: string, raw: Record<string, unknown>, 
       ...base,
       kind: "card",
       cardholderName: firstString(data, "cardholderName"),
+      ...profileValues(data, CARD_NAMES),
       number: firstString(data, "cardNumber", "number"),
       expiryMonth: firstString(data, "expiryMonth", "expMonth"),
       expiryYear: firstString(data, "expiryYear", "expYear"),
@@ -685,7 +687,6 @@ export function androidRecordToItem(path: string, raw: Record<string, unknown>, 
     const firstName = firstString(data, "firstName");
     const middleName = firstString(data, "middleName");
     const lastName = firstString(data, "lastName");
-    const nameFromParts = [firstName, middleName, lastName].filter(Boolean).join(" ");
     return {
       ...base,
       kind: "identity",
@@ -695,7 +696,8 @@ export function androidRecordToItem(path: string, raw: Record<string, unknown>, 
       firstName,
       middleName,
       lastName,
-      fullName: Object.prototype.hasOwnProperty.call(data, "fullName") ? jsonScalarText(data.fullName) : nameFromParts || firstString(data, "name"),
+      fullName: Object.prototype.hasOwnProperty.call(data, "fullName") ? jsonScalarText(data.fullName) : firstString(data, "name"),
+      ...profileValues(data, PROFILE_EXTRAS),
       documentTitle: typeof data.title === "string" ? data.title : undefined,
       cardFace: readCardFaceConfig(data.cardFace),
       birthDate: optionalString(firstString(data, "birthDate")),
@@ -731,7 +733,8 @@ export function androidRecordToItem(path: string, raw: Record<string, unknown>, 
       ...base,
       kind: "billing-address",
       cardFace: readCardFaceConfig(data.cardFace),
-      fullName: firstString(data, "fullName", "name"),
+      fullName: Object.prototype.hasOwnProperty.call(data, "fullName") ? jsonScalarText(data.fullName) : firstString(data, "name"),
+      ...profileValues(data, ADDRESS_EXTRAS),
       company: firstString(data, "company", "organization"),
       streetAddress: firstString(data, "streetAddress", "address1", "addressLine1"),
       apartment: firstString(data, "apartment", "address2", "addressLine2"),
@@ -1272,6 +1275,7 @@ function serializeAndroidItem(item: VaultItem, original?: Record<string, unknown
       const previous = applyCommon("card", "BANK_CARD") as CardItem | undefined;
       const updates: Record<string, unknown> = {};
       setNested(updates, "cardholderName", item.cardholderName, item.cardholderName, previous?.cardholderName);
+      for (const key of CARD_NAMES) setNested(updates, key, item[key] || "", item[key] || "", previous?.[key] || "");
       setNested(updates, "cardNumber", item.number, item.number, previous?.number);
       setNested(updates, "expiryMonth", item.expiryMonth, item.expiryMonth, previous?.expiryMonth);
       setNested(updates, "expiryYear", item.expiryYear, item.expiryYear, previous?.expiryYear);
@@ -1294,6 +1298,7 @@ function serializeAndroidItem(item: VaultItem, original?: Record<string, unknown
       setNested(updates, "middleName", item.middleName, item.middleName, previous?.middleName);
       setNested(updates, "lastName", item.lastName, item.lastName, previous?.lastName);
       setNested(updates, "fullName", item.fullName, item.fullName, previous?.fullName);
+      for (const key of PROFILE_EXTRAS) setNested(updates, key, item[key] || "", item[key] || "", previous?.[key] || "");
       setNested(updates, "birthDate", item.birthDate || "", item.birthDate || "", previous?.birthDate || "");
       setNested(updates, "issuedDate", item.issuedDate || "", item.issuedDate || "", previous?.issuedDate || "");
       setNested(updates, "expiryDate", item.expiryDate || "", item.expiryDate || "", previous?.expiryDate || "");
@@ -1317,6 +1322,7 @@ function serializeAndroidItem(item: VaultItem, original?: Record<string, unknown
     case "billing-address": {
       const previous = applyCommon("billing-address", "BILLING_ADDRESS") as BillingAddressItem | undefined;
       const updates: Record<string, unknown> = {};
+      for (const key of ADDRESS_EXTRAS) setNested(updates, key, item[key] || "", item[key] || "", previous?.[key] || "");
       for (const key of ["fullName", "company", "streetAddress", "apartment", "city", "stateProvince", "postalCode", "country", "phone", "email"] as const) {
         setNested(updates, key, item[key], item[key], previous?.[key]);
       }

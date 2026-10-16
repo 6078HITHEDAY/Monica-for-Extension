@@ -3,7 +3,7 @@ import { ProviderTransportError } from "../provider-transport";
 import { BitwardenClient, type BitwardenSessionConfig } from "./bitwarden-client";
 
 export type BitwardenSyncHint = { type: "check-remote" | "full" } | { type: "ciphers"; ids: string[] };
-export interface DecodedCipherCacheEntry { fingerprint: string; items: VaultItem[] }
+export interface DecodedCipherCacheEntry { fingerprint: string; items: VaultItem[]; legacyIdentityFullName?: boolean }
 
 interface RemoteSnapshot {
   binding: string;

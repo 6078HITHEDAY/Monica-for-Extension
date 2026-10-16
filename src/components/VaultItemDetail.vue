@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { CARD_NAMES, PROFILE_NAMES, PROFILE_EXTRAS, ADDRESS_EXTRAS, PROFILE_LABELS } from "../core/profile-fields";
 import { BILLING_ADDRESS_FIELDS, readBillingAddress, type BillingAddressField } from "../core/billing-address";
 import PasskeyBindings from "./PasskeyBindings.vue";
 import { tr, locale } from '../i18n';
@@ -166,6 +167,7 @@ const fields = computed<DetailField[]>(() => {
     case "card": {
       const rows = [
         item.cardholderName && { label: tr('持卡人'), value: item.cardholderName },
+        ...CARD_NAMES.map(key => item[key] && { secondary: true, label: tr(PROFILE_LABELS[key]), value: item[key] }),
         item.number && { label: tr('卡号'), value: item.number, secret: true, showLastFour: true, mono: true },
         (item.expiryMonth || item.expiryYear) && { label: tr('有效期'), value: [item.expiryMonth, item.expiryYear].filter(Boolean).join(" / ") },
         item.securityCode && { label: tr('安全码'), value: item.securityCode, secret: true, compact: true },
@@ -194,7 +196,7 @@ const fields = computed<DetailField[]>(() => {
         item.documentNumber && { label: tr('证件号码'), value: item.documentNumber, secret: true, showLastFour: true, mono: true },
         item.fullName && { label: tr('姓名'), value: item.fullName },
         item.documentTitle && { secondary: true, label: tr('人物称谓'), value: item.documentTitle },
-        (item.firstName || item.middleName || item.lastName) && { secondary: true, label: tr('姓名分写'), value: [item.firstName, item.middleName, item.lastName].filter(Boolean).join(" · ") },
+        ...([...PROFILE_NAMES, ...PROFILE_EXTRAS]).map(key => item[key] && { secondary: true, label: tr(PROFILE_LABELS[key]), value: item[key] }),
         item.birthDate && { secondary: true, label: tr('出生日期'), value: item.birthDate },
         item.issuedDate && { secondary: true, label: tr('签发日期'), value: item.issuedDate },
         item.expiryDate && { label: tr('有效期至'), value: item.expiryDate },
@@ -225,6 +227,7 @@ const fields = computed<DetailField[]>(() => {
     }
     case "billing-address": {
       const rows = [
+        ...ADDRESS_EXTRAS.map(key => item[key] && { secondary: true, label: tr(PROFILE_LABELS[key]), value: item[key] }),
         item.fullName && { label: tr('姓名'), value: item.fullName },
         item.company && { label: tr('公司'), value: item.company },
         item.streetAddress && { label: tr('街道地址'), value: item.streetAddress },

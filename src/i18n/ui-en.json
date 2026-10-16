@@ -3557,5 +3557,14 @@
   "切换同步密码库前，请先移除现有配对设备。": "Remove paired devices before switching the sync vault.",
   "请先恢复当前数据库未完成的接收，再切换密码库。": "Recover the current vault’s unfinished reception before switching vaults.",
   "本机": "Local",
-  "正在查找…": "Searching…"
+  "正在查找…": "Searching…",
+  "持卡人名": "Cardholder given name",
+  "持卡人中间名": "Cardholder middle name",
+  "持卡人姓": "Cardholder family name",
+  "区/县": "District / county",
+  "家庭邮箱": "Home email",
+  "家庭电话": "Home phone",
+  "工作邮箱": "Work email",
+  "工作电话": "Work phone",
+  "姓名与联系方式": "Name and contact details"
 }

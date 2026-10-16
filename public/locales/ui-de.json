@@ -3557,5 +3557,14 @@
   "待恢复的接收已发生变化，请检查最新状态后重试。": "Der ausstehende Empfang hat sich geändert. Vor einem erneuten Versuch den aktuellen Status prüfen.",
   "上次保存的结果尚未确认。可以检查并继续接收，插件会核对原来的保存操作。": "Das Ergebnis des letzten Speicherns ist unbestätigt. Den Empfang prüfen und fortsetzen, um den ursprünglichen Speichervorgang zu verifizieren.",
   "本机": "Lokal",
-  "正在查找…": "Suche läuft…"
+  "正在查找…": "Suche läuft…",
+  "持卡人名": "Vorname des Karteninhabers",
+  "持卡人中间名": "Zweiter Vorname des Karteninhabers",
+  "持卡人姓": "Nachname des Karteninhabers",
+  "区/县": "Bezirk / Landkreis",
+  "家庭邮箱": "Private E-Mail",
+  "家庭电话": "Privates Telefon",
+  "工作邮箱": "Geschäftliche E-Mail",
+  "工作电话": "Geschäftliches Telefon",
+  "姓名与联系方式": "Name und Kontaktdaten"
 }

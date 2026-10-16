@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import ProfileExtraFields from "./ProfileExtraFields.vue";
+import { profileValues, CARD_NAMES, PROFILE_CONTACTS, PROFILE_EXTRAS, ADDRESS_EXTRAS } from "../core/profile-fields";
 import EditorContentSection from "./EditorContentSection.vue";
 import { materialSelectTag, materialOptionTag } from "../lib/material-controls";
 import { tr } from '../i18n';
@@ -112,6 +114,7 @@ function initialize() {
     case "card":
       Object.assign(fields, {
         cardholderName: props.item.cardholderName,
+        ...profileValues(props.item, CARD_NAMES),
         number: props.item.number,
         expiryMonth: props.item.expiryMonth,
         expiryYear: props.item.expiryYear,
@@ -144,6 +147,7 @@ function initialize() {
         middleName: props.item.middleName,
         lastName: props.item.lastName,
         fullName: props.item.fullName,
+        ...profileValues(props.item, PROFILE_EXTRAS),
         birthDate: props.item.birthDate || "",
         issuedDate: props.item.issuedDate || "",
         expiryDate: props.item.expiryDate || "",
@@ -170,6 +174,7 @@ function initialize() {
     case "billing-address":
       Object.assign(fields, {
         fullName: props.item.fullName,
+        ...profileValues(props.item, ADDRESS_EXTRAS),
         company: props.item.company,
         streetAddress: props.item.streetAddress,
         apartment: props.item.apartment,
@@ -302,6 +307,7 @@ function buildCandidate(title: string, validateCustomFields = false): VaultItem 
         ...base,
         kind: "card",
         cardholderName: fields.cardholderName.trim(),
+        ...profileValues(fields, CARD_NAMES),
         number: fields.number.replace(/\s+/g, ""),
         expiryMonth: fields.expiryMonth.trim(),
         expiryYear: fields.expiryYear.trim(),
@@ -335,6 +341,7 @@ function buildCandidate(title: string, validateCustomFields = false): VaultItem 
         middleName: fields.middleName.trim(),
         lastName: fields.lastName.trim(),
         fullName: fields.fullName,
+        ...profileValues(fields, PROFILE_EXTRAS),
         birthDate: optional(fields.birthDate),
         issuedDate: optional(fields.issuedDate),
         expiryDate: optional(fields.expiryDate),
@@ -366,7 +373,8 @@ function buildCandidate(title: string, validateCustomFields = false): VaultItem 
       return {
         ...base,
         kind: "billing-address",
-        fullName: fields.fullName.trim(),
+        fullName: fields.fullName,
+        ...profileValues(fields, ADDRESS_EXTRAS),
         company: fields.company.trim(),
         streetAddress: fields.streetAddress.trim(),
         apartment: fields.apartment.trim(),
@@ -531,6 +539,9 @@ function emptyFields() {
     favorite: false,
     providerId: "",
     cardholderName: "",
+    ...profileValues({}, CARD_NAMES),
+    ...profileValues({}, PROFILE_EXTRAS),
+    addressLine3: "",
     number: "",
     expiryMonth: "",
     expiryYear: "",
@@ -1131,7 +1142,7 @@ function exportMaFile() {
 
 <WalletContentEditor v-if="isOrderedWallet" :key="kind" v-model="walletContentOrder" :sections="walletSections" :disabled="saving">
   <template #billing><BillingAddressFields v-model="fields.billingAddress" /></template>
-  <template #extended><div class="editor-field-grid"><m3e-form-field v-field-label variant="filled" hide-required-marker class="field"
+  <template #extended><div class="editor-field-grid"><ProfileExtraFields :values="fields" :names="CARD_NAMES" @edit="(key,value)=>fields[key]=value" /><m3e-form-field v-field-label variant="filled" hide-required-marker class="field"
             ><label slot="label">{{ tr('银行') }}</label><input v-model="fields.bankName" /></m3e-form-field>
 <m3e-form-field v-field-label variant="filled" hide-required-marker class="field"
             ><label slot="label">{{ tr('卡类型') }}</label><component :is="materialSelectTag" @input="fields.cardType = ($event.target as HTMLElement &amp; { value: string }).value" >
@@ -1167,7 +1178,7 @@ function exportMaFile() {
 <m3e-form-field v-field-label variant="filled" hide-required-marker class="field"
             ><label slot="label">{{ tr('客服电话') }}</label><input v-model="fields.customerServicePhone" type="tel" /></m3e-form-field>
 </div></template>
-  <template #identity><div class="editor-field-grid"><m3e-form-field v-field-label variant="filled" hide-required-marker class="field"
+  <template #identity><div class="editor-field-grid"><ProfileExtraFields :values="fields" :names="PROFILE_CONTACTS" @edit="(key,value)=>fields[key]=value" /><m3e-form-field v-field-label variant="filled" hide-required-marker class="field"
             ><label slot="label">{{ tr('名') }}</label><input
               v-model="fields.firstName"
               autocomplete="given-name" /></m3e-form-field>
@@ -1194,7 +1205,7 @@ function exportMaFile() {
 <m3e-form-field v-field-label variant="filled" hide-required-marker class="field"
             ><label slot="label">{{ tr('用户名') }}</label><input v-model="fields.username" /></m3e-form-field>
 <m3e-form-field v-field-label variant="filled" class="field"><label slot="label">{{ tr("人物称谓") }}</label><input v-model="fields.documentTitle" autocomplete="off" /></m3e-form-field></div></template>
-  <template #address><div class="editor-field-grid"><m3e-form-field v-field-label variant="filled" hide-required-marker class="field field-wide"
+  <template #address><div class="editor-field-grid"><ProfileExtraFields :values="fields" :names="['district']" @edit="(key,value)=>fields[key]=value" /><m3e-form-field v-field-label variant="filled" hide-required-marker class="field field-wide"
             ><label slot="label">{{ tr('街道地址') }}</label><input
               v-model="fields.streetAddress"
               autocomplete="street-address" /></m3e-form-field>
@@ -1271,7 +1282,7 @@ function exportMaFile() {
   <p v-if="item?.imagePaths?.length" class="supporting">{{ tr('{0} 个 Android 图片引用已保留；图片字节继续保存在同步信封中。', {0: item.imagePaths.length}) }}</p>
   <label v-choice-label class="favorite-row"><m3e-checkbox :checked.prop="fields.favorite" @input="fields.favorite = ($event.target as any).checked" /><span>{{ tr('收藏并优先显示') }}</span></label>
 </EditorContentSection>
-<section v-if="!isOrderedWallet" class="editor-section editor-extras editor-content-list" :aria-label="tr('补充信息')"><h3>{{ tr('补充信息') }}</h3><EditorContentSection v-if="kind !== 'totp'" :title="tr('自定义字段')" icon="edit_note" :summary="fields.customFields.length ? String(fields.customFields.length) : tr('可选')"><div class="editor-disclosure-body">
+<section v-if="!isOrderedWallet" class="editor-section editor-extras editor-content-list" :aria-label="tr('补充信息')"><h3>{{ tr('补充信息') }}</h3><EditorContentSection v-if="kind === 'billing-address'" :title="tr('姓名与联系方式')" icon="contact_page" :summary="tr('可选')"><div class="editor-field-grid"><ProfileExtraFields :values="fields" :names="ADDRESS_EXTRAS" @edit="(key,value)=>fields[key]=value" /></div></EditorContentSection><EditorContentSection v-if="kind !== 'totp'" :title="tr('自定义字段')" icon="edit_note" :summary="fields.customFields.length ? String(fields.customFields.length) : tr('可选')"><div class="editor-disclosure-body">
           <div class="custom-field-list">
             <div
               v-for="(custom, index) in fields.customFields"

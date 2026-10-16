@@ -45,6 +45,7 @@ export const KEEPASS_SECURE_ITEM_FIELDS = {
 const CARD_FIELDS = {
   number: "Card Number",
   holder: "Card Holder",
+  firstName: "Cardholder First Name", middleName: "Cardholder Middle Name", lastName: "Cardholder Last Name",
   expiry: "Card Expiry",
   cvv: "Card CVV",
   expiryMonth: "Expiry Month",
@@ -91,6 +92,7 @@ const BASE_SECURE_ITEM_FIELD_NAMES = [
 const BANK_CARD_SECURE_ITEM_FIELD_NAMES = [
   ...CARD_READ_ALIASES.number,
   ...CARD_READ_ALIASES.holder,
+  CARD_FIELDS.firstName, CARD_FIELDS.middleName, CARD_FIELDS.lastName,
   ...CARD_READ_ALIASES.expiry,
   ...CARD_READ_ALIASES.cvv,
   CARD_FIELDS.expiryMonth,
@@ -237,6 +239,9 @@ function reconstructBankCardData(fields: KeePassEntryFields): Record<string, unk
   const data = {
     cardNumber: keePassFieldValue(fields, ...CARD_READ_ALIASES.number),
     cardholderName: keePassFieldValue(fields, ...CARD_READ_ALIASES.holder),
+    cardholderFirstName: keePassFieldValue(fields, CARD_FIELDS.firstName),
+    cardholderMiddleName: keePassFieldValue(fields, CARD_FIELDS.middleName),
+    cardholderLastName: keePassFieldValue(fields, CARD_FIELDS.lastName),
     expiryMonth: keePassFieldValue(fields, CARD_FIELDS.expiryMonth) || fallbackMonth,
     expiryYear: keePassFieldValue(fields, CARD_FIELDS.expiryYear) || fallbackYear,
     cvv: keePassFieldValue(fields, ...CARD_READ_ALIASES.cvv),
@@ -360,6 +365,9 @@ function appendBankCardFields(fields: Map<string, KeePassEntryFieldValue>, item:
 
   secret(CARD_FIELDS.number, item.number);
   plain(CARD_FIELDS.holder, item.cardholderName);
+  plain(CARD_FIELDS.firstName, item.cardholderFirstName);
+  plain(CARD_FIELDS.middleName, item.cardholderMiddleName);
+  plain(CARD_FIELDS.lastName, item.cardholderLastName);
   plain(CARD_FIELDS.expiryMonth, item.expiryMonth);
   plain(CARD_FIELDS.expiryYear, item.expiryYear);
   secret(CARD_FIELDS.cvv, item.securityCode);
@@ -444,7 +452,8 @@ function formatBillingAddressForDisplay(value: string | undefined): string {
   const lines = [
     text("streetAddress"),
     text("apartment"),
-    [text("city"), text("stateProvince")].filter(Boolean).join(", "),
+    text("addressLine3"),
+    [text("district"), text("city"), text("stateProvince")].filter(Boolean).join(", "),
     [text("postalCode"), text("country")].filter(Boolean).join(" ")
   ].filter(Boolean);
   return lines.join("\n") || value;

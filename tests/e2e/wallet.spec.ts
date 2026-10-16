@@ -65,18 +65,21 @@ test("wallet popup explicitly fills identity address card and payment fields whi
     for (const title of ["Joy Passport", "Shanghai Home", "Test Visa", "Euro Bank"]) await expect(popup.getByText(title, { exact: true })).toBeVisible();
 
     await checkout.bringToFront();
+    await checkout.locator('#first-name').click();
     await popup.getByRole("button", { name: /Joy Passport/ }).click();
     await expect(checkout.locator("#first-name")).toHaveValue("Joy");
     await expect(checkout.locator("#last-name")).toHaveValue("Lin");
     await expect(checkout.locator("#passport")).toHaveValue("P12345678");
 
     await checkout.bringToFront();
+    await checkout.locator('#street').click();
     await popup.getByRole("button", { name: /Shanghai Home/ }).click();
-    await expect(checkout.locator("#street")).toHaveValue("1 Monica Road");
+    await expect(checkout.locator("#street")).toHaveValue("1 Monica Road, Room 1507");
     await expect(checkout.locator("#city")).toHaveValue("Shanghai");
     await expect(checkout.locator("#postal")).toHaveValue("200000");
 
     await checkout.bringToFront();
+    await checkout.locator('#cc-name').click();
     await popup.getByRole("button", { name: /Test Visa/ }).click();
     await expect(checkout.locator("#cc-name")).toHaveValue("JOY LIN");
     await expect(checkout.locator("#cc-number")).toHaveValue("4111111111111111");
@@ -93,6 +96,7 @@ test("wallet popup explicitly fills identity address card and payment fields whi
     await expect(checkout.locator("#generic-pin")).toHaveValue("");
 
     await checkout.bringToFront();
+    await checkout.locator('#iban').click();
     await popup.getByRole("button", { name: /Euro Bank/ }).click();
     await expect(checkout.locator("#iban")).toHaveValue("DE89370400440532013000");
     await expect(checkout.locator("#routing")).toHaveValue("021000021");

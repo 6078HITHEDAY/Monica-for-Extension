@@ -3,6 +3,7 @@ import { parseLosslessJson } from "../../core/lossless-json";
 
 /** Names emitted by Android CipherUploadProcessor, not Room property names. */
 export const CARD_FIELD_NAMES = {
+  cardholderFirstName: ["Cardholder First Name"], cardholderMiddleName: ["Cardholder Middle Name"], cardholderLastName: ["Cardholder Last Name"],
   bankName: ["Bank Name", "monica_bank_name"], cardType: ["Card Type", "monica_card_type"],
   billingAddress: ["Billing Address", "monica_billing_address"], nickname: ["Nickname", "monica_nickname"],
   validFromMonth: ["Valid From Month", "monica_valid_from_month"], validFromYear: ["Valid From Year", "monica_valid_from_year"],
@@ -12,6 +13,8 @@ export const CARD_FIELD_NAMES = {
   customerServicePhone: ["Customer Service Phone", "monica_customer_service_phone"]
 } as const;
 export const DOCUMENT_FIELD_NAMES = {
+  fullName: ["monica_full_name"], district: ["monica_district"],
+  homeEmail: ["monica_home_email"], homePhone: ["monica_home_phone"], workEmail: ["monica_work_email"], workPhone: ["monica_work_phone"],
   documentType: ["monica_document_type"], issuedDate: ["monica_issue_date"], expiryDate: ["monica_expiry_date"],
   issuedBy: ["monica_issued_by"], nationality: ["monica_nationality"], additionalInfo: ["monica_additional_info"]
 } as const;

@@ -4,12 +4,13 @@ import { fillCredential, scanPageWithFieldContext, type FillCredentialInput } fr
 import { createCurrentFieldContext } from "./field-signature";
 import { createFieldContextsForRoot } from "./field-signature";
 import { renderSavePrompt } from "./save-prompt";
-import { fillWallet } from "./wallet-dom";
+import { fillWallet, installWalletFocusTracking } from "./wallet-dom";
 import { closePasskeyPrompt, renderPasskeyPrompt } from "./passkey-prompt";
 import { initializeUiLocale, translateRuntimeError } from "../i18n/runtime";
 import { installInlineAutofill } from "./inline-autofill";
 import type { InlineAutofillResult } from "../autofill/inline-contract";
 
+installWalletFocusTracking();
 const inlineAutofill = installInlineAutofill({
   query: sessionId => sendRuntime<InlineAutofillResult>({ type: "AUTOFILL_INLINE_QUERY", sessionId }),
   fill: (sessionId, itemId) => sendRuntime({ type: "AUTOFILL_INLINE_FILL", sessionId, itemId }),

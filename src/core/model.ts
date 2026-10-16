@@ -208,6 +208,9 @@ export interface TotpItem extends VaultItemBase {
 export interface CardItem extends VaultItemBase {
   kind: "card";
   cardholderName: string;
+  cardholderFirstName?: string;
+  cardholderMiddleName?: string;
+  cardholderLastName?: string;
   number: string;
   expiryMonth: string;
   expiryYear: string;
@@ -249,6 +252,11 @@ export interface IdentityItem extends VaultItemBase {
   middleName: string;
   lastName: string;
   fullName: string;
+  district?: string;
+  homeEmail?: string;
+  homePhone?: string;
+  workEmail?: string;
+  workPhone?: string;
   /** DocumentData.title is the person's prefix, independent of the record title. */
   documentTitle?: string;
   birthDate?: string;
@@ -273,6 +281,15 @@ export interface IdentityItem extends VaultItemBase {
 }
 
 export interface AddressFields {
+  firstName?: string;
+  middleName?: string;
+  lastName?: string;
+  addressLine3?: string;
+  district?: string;
+  homeEmail?: string;
+  homePhone?: string;
+  workEmail?: string;
+  workPhone?: string;
   fullName: string;
   company: string;
   streetAddress: string;

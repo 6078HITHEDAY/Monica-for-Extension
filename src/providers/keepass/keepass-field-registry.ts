@@ -54,6 +54,7 @@ const secureItemOverlayFields = [
   "MonicaIsFavorite",
   "Card Number", "CardNumber", "Credit Card Number", "CreditCardNumber",
   "Card Holder", "CardHolder", "Credit Card Holder", "CreditCardHolder",
+  "Cardholder First Name", "Cardholder Middle Name", "Cardholder Last Name",
   "Card Expiry", "CardExpiry", "Expiration Date", "Expiry Date",
   "Card CVV", "CardCVV", "CVV", "CVC",
   "Expiry Month", "Expiry Year",
@@ -112,6 +113,7 @@ const monicaPasswordFields = [
 ];
 
 const monicaSecureItemFields = [
+  "Cardholder First Name", "Cardholder Middle Name", "Cardholder Last Name",
   "MonicaSecureItemId",
   "MonicaConflictCopy",
   "MonicaItemType",

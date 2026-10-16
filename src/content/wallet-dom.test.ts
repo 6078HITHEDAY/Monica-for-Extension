@@ -15,6 +15,61 @@ function show(control: HTMLElement): void {
 }
 
 describe("wallet DOM filling", () => {
+  it('keeps independent full/card names, third address lines and home/work contacts separate', () => {
+    const dom = page('<input autocomplete="name"><input autocomplete="given-name"><input autocomplete="additional-name"><input autocomplete="family-name"><input autocomplete="address-line1"><input autocomplete="address-line2"><input autocomplete="address-line3"><input autocomplete="address-level3"><input autocomplete="email"><input autocomplete="home email"><input autocomplete="work email">');
+    const fields = { fullName: 'Separate Full', firstName: 'Independent', middleName: '', lastName: 'Parts', streetAddress: 'One', apartment: 'Two', addressLine3: 'Three', district: 'County', email: 'default@example.test', homeEmail: '', workEmail: 'work@example.test' };
+    expect(fillWallet({ kind: 'billing-address', fields }, dom.window.document).ok).toBe(true);
+    expect([...dom.window.document.querySelectorAll('input')].map(x => x.value)).toEqual(['Separate Full', 'Independent', '', 'Parts', 'One', 'Two', 'Three', 'County', 'default@example.test', '', 'work@example.test']);
+    const cards = page('<input autocomplete="cc-name"><input autocomplete="cc-given-name"><input autocomplete="cc-additional-name"><input autocomplete="cc-family-name">');
+    fillWallet({ kind: 'card', fields: { cardholderName: 'Different Holder', cardholderFirstName: 'OnlyFirst' } }, cards.window.document);
+    expect([...cards.window.document.querySelectorAll('input')].map(x => x.value)).toEqual(['Different Holder', 'OnlyFirst', '', '']);
+  });
+  it.each(['form', 'section', 'shipping', 'repeated'] as const)('fills only the focused %s block', mode => {
+    const block = (suffix: string) => `<input id="name${suffix}" autocomplete="${mode === 'section' ? `section-${suffix} ` : mode === 'shipping' ? `${suffix === 'a' ? 'shipping' : 'billing'} ` : ''}name"><input id="email${suffix}" autocomplete="${mode === 'section' ? `section-${suffix} ` : mode === 'shipping' ? `${suffix === 'a' ? 'shipping' : 'billing'} ` : ''}email">`;
+    const dom = page(mode === 'form' ? `<form>${block('a')}</form><form>${block('b')}</form>` : block('a') + block('b'));
+    dom.window.document.querySelector<HTMLInputElement>('#nameb')!.focus();
+    expect(fillWallet({ kind: 'identity', fields: { fullName: 'Selected', email: 'chosen@example.test' } }, dom.window.document).filledCount).toBe(2);
+    expect([...dom.window.document.querySelectorAll('input')].map(x => x.value)).toEqual(['', '', 'Selected', 'chosen@example.test']);
+  });
+  it('declines ambiguous forms without focus and never uses a login email as a phone or a name', () => {
+    const dom = page('<form><input autocomplete="name"></form><form><input autocomplete="name"></form><input type="tel" name="first_name"><input type="email" name="phone"><input name="email" autocomplete="username">');
+    expect(fillWallet({ kind: 'identity', fields: { fullName: 'Name', email: 'login@example.test', firstName: 'Given', phone: '1234' } }, dom.window.document).filledCount).toBe(0);
+  });
+  it('limits a focused home contact to home values and leaves missing values blank', () => {
+    const dom = page('<input autocomplete="email"><input id="home" autocomplete="home email"><input autocomplete="home tel"><input autocomplete="work email"><input autocomplete="work tel">');
+    dom.window.document.querySelector<HTMLInputElement>('#home')!.focus();
+    fillWallet({ kind: 'identity', fields: { email: 'default@example.test', phone: 'default', homeEmail: 'home@example.test', workEmail: 'work@example.test', workPhone: 'work' } }, dom.window.document);
+    expect([...dom.window.document.querySelectorAll('input')].map(x => x.value)).toEqual(['', 'home@example.test', '', '', '']);
+  });
+  it.each(['input', 'textarea'])('formats a combined street-address correctly for %s', tag => {
+    const dom = page(`<${tag} autocomplete="street-address"></${tag}>`);
+    fillWallet({ kind: 'billing-address', fields: { streetAddress: 'One', apartment: 'Two', addressLine3: 'Three' } }, dom.window.document);
+    expect(dom.window.document.querySelector<HTMLInputElement>(tag)!.value).toBe(tag === 'input' ? 'One, Two, Three' : 'One\nTwo\nThree');
+  });
+  it('matches valid country/month/year options and skips duplicate or disabled options', () => {
+    const dom = page('<select autocomplete="country"><option value="">Choose</option><option value="United States">United States</option></select><select autocomplete="cc-exp-month"><option value="">Choose</option><option value="dec">12 - December</option></select><select autocomplete="cc-exp-year"><option value="">Choose</option><option value="30">2030</option></select>');
+    fillWallet({ kind: 'billing-address', fields: { country: 'US' } }, dom.window.document);
+    fillWallet({ kind: 'card', fields: { cardExpiryMonth: '12', cardExpiryYear: '2030' } }, dom.window.document);
+    expect([...dom.window.document.querySelectorAll('select')].map(x => x.value)).toEqual(['United States', 'dec', '30']);
+    const duplicate = page('<select autocomplete="cc-exp-month"><option value="">Choose</option><option value="12">December</option><option value="dup">December</option></select><input autocomplete="cc-number">');
+    expect(fillWallet({ kind: 'card', fields: { cardExpiryMonth: '12', cardNumber: '4111' } }, duplicate.window.document).filledCount).toBe(1);
+    expect(duplicate.window.document.querySelector('select')!.value).toBe('');
+  });
+  it('parses phone parts using the stored region and keeps home/work segments independent', () => {
+    const dom = page('<input autocomplete="tel-country-code"><input autocomplete="tel-national"><input autocomplete="tel-area-code"><input autocomplete="tel-local-prefix"><input autocomplete="tel-local-suffix"><input autocomplete="home tel-national"><input autocomplete="work tel-national">');
+    fillWallet({ kind: 'identity', fields: { phone: '(202) 555-0142', country: 'US', workPhone: '+12025550144', email: 'not-a-phone@example.test' } }, dom.window.document);
+    expect([...dom.window.document.querySelectorAll('input')].map(x => x.value)).toEqual(['+1', '2025550142', '202', '555', '0142', '', '2025550144']);
+  });
+  it('rescans controls added by a previous fill without crossing into another form', () => {
+    const dom = page('<form id="target"><input id="country" autocomplete="country"></form><form><input autocomplete="address-line1"></form>');
+    const country = dom.window.document.querySelector<HTMLInputElement>('#country')!; country.focus();
+    country.addEventListener('change', () => { const next = dom.window.document.createElement('input'); next.autocomplete = 'address-line1'; next.id = 'dynamic'; show(next); country.after(next); }, { once: true });
+    const payload = { kind: 'billing-address' as const, fields: { country: 'US', streetAddress: 'Dynamic street' } };
+    fillWallet(payload, dom.window.document);
+    const dynamic = dom.window.document.querySelector<HTMLInputElement>('#dynamic')!; dynamic.focus();
+    fillWallet(payload, dom.window.document);
+    expect(dynamic.value).toBe('Dynamic street'); expect(dom.window.document.querySelectorAll<HTMLInputElement>('form')[1].querySelector('input')!.value).toBe('');
+  });
   it("discovers and fills standard identity and address autocomplete fields", () => {
     const dom = page('<input autocomplete="given-name"><input autocomplete="family-name"><input autocomplete="street-address"><input autocomplete="postal-code">');
     expect(scanWalletKinds(dom.window.document)).toEqual(["identity", "billing-address"]);

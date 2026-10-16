@@ -3557,5 +3557,14 @@
   "待恢复的接收已发生变化，请检查最新状态后重试。": "Lần nhận đang chờ khôi phục đã thay đổi. Hãy kiểm tra trạng thái mới nhất trước khi thử lại.",
   "上次保存的结果尚未确认。可以检查并继续接收，插件会核对原来的保存操作。": "Kết quả lưu lần trước chưa được xác nhận. Kiểm tra và tiếp tục nhận để xác minh thao tác lưu ban đầu.",
   "本机": "Cục bộ",
-  "正在查找…": "Đang tìm…"
+  "正在查找…": "Đang tìm…",
+  "持卡人名": "Tên chủ thẻ",
+  "持卡人中间名": "Tên đệm chủ thẻ",
+  "持卡人姓": "Họ chủ thẻ",
+  "区/县": "Quận / huyện",
+  "家庭邮箱": "Email cá nhân",
+  "家庭电话": "Điện thoại nhà",
+  "工作邮箱": "Email công việc",
+  "工作电话": "Điện thoại công việc",
+  "姓名与联系方式": "Họ tên và liên hệ"
 }

@@ -1,6 +1,6 @@
 {
   "sourceSha256": "a0b648e4531fd6cb23b0473e47ce39461d8e49c33d4a5fc64023c424ab37fb5d",
-  "fontSha256": "6917402e4bbfb90c879e2194df490a41b142d9a2791bc166d72117f1784c74b6",
+  "fontSha256": "fc19dd699578ed017bbf7ec7f51d31396a3225d413e02b76bc274a60a0144e0a",
   "fontTools": "4.60.1",
   "axes": {
     "FILL": [
@@ -52,7 +52,6 @@
     "close",
     "cloud",
     "cloud_done",
-    "cloud_download",
     "cloud_off",
     "cloud_sync",
     "cloud_upload",
@@ -62,6 +61,7 @@
     "comment",
     "compare",
     "computer",
+    "contact_page",
     "content_copy",
     "content_paste_off",
     "create",
@@ -94,6 +94,7 @@
     "expand_less",
     "expand_more",
     "favorite",
+    "fax",
     "files",
     "filter_1",
     "fingerprint",
@@ -249,7 +250,8 @@
     "vpn_key",
     "wallet",
     "warning",
-    "wifi"
+    "wifi",
+    "work"
   ],
   "availableSymbols": [
     "10k",

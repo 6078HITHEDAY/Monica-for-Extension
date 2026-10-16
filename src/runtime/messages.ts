@@ -52,6 +52,8 @@ export interface PasskeyMatchSummary {
 export type WalletFillKind = "identity" | "billing-address" | "card" | "payment-account";
 
 export type WalletFieldName =
+  | "addressLine3" | "district" | "homeEmail" | "homePhone" | "workEmail" | "workPhone"
+  | "cardholderFirstName" | "cardholderMiddleName" | "cardholderLastName"
   | "fullName" | "firstName" | "middleName" | "lastName" | "birthDate" | "nationality" | "documentNumber"
   | "documentType" | "documentIssuedDate" | "documentExpiryDate" | "documentIssuedBy" | "passportNumber" | "licenseNumber" | "ssn"
   | "company" | "streetAddress" | "apartment" | "city" | "stateProvince" | "postalCode" | "country" | "phone" | "email"

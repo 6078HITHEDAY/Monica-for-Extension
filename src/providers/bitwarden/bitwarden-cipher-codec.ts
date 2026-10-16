@@ -51,6 +51,8 @@ interface PlainBitwardenCustomField {
 }
 
 export interface DecodedBitwardenCipher {
+  /** Missing legacy key is distinct from an explicitly encrypted empty name. */
+  legacyIdentityFullName?: boolean;
   items: VaultItem[];
   warning?: string;
   /** The login is usable; unreadable historical rows remain in its source envelope. */
@@ -206,10 +208,10 @@ export async function decodeBitwardenCipher(raw: Record<string, unknown>, provid
     const fields = await decryptRecordFields(identity, key, [
       "Title", "FirstName", "MiddleName", "LastName", "Address1", "Address2", "Address3", "City", "State", "PostalCode", "Country", "Company", "Username", "Email", "Phone", "Ssn", "PassportNumber", "LicenseNumber"
     ]);
-    const fullName = [fields.FirstName, fields.MiddleName, fields.LastName].filter(Boolean).join(" ");
     const wallet = walletFieldsToItem("identity", await decodeBitwardenCustomFields(arrayValue(raw, "Fields", "fields"), key)) as Partial<IdentityItem>;
     const documentType: IdentityItem["documentType"] = fields.PassportNumber ? "PASSPORT" : fields.LicenseNumber ? "DRIVER_LICENSE" : fields.Ssn ? "SOCIAL_SECURITY" : "OTHER";
     return {
+      legacyIdentityFullName: wallet.fullName === undefined,
       items: [{
         ...base,
         kind: "identity",
@@ -219,7 +221,7 @@ export async function decodeBitwardenCipher(raw: Record<string, unknown>, provid
         firstName: fields.FirstName,
         middleName: fields.MiddleName,
         lastName: fields.LastName,
-        fullName,
+        fullName: wallet.fullName ?? "",
         documentTitle: fields.Title,
         company: fields.Company,
         username: fields.Username,

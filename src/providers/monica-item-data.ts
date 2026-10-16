@@ -1,3 +1,4 @@
+import { profileValues, CARD_NAMES, PROFILE_EXTRAS, ADDRESS_EXTRAS } from "../core/profile-fields";
 import { parseLosslessJson, jsonScalarText } from "../core/lossless-json";
 import { normalizeOtpCounter, otpCounterJson } from "../core/otp-counter";
 import type {
@@ -149,6 +150,7 @@ function decodeBankCard(data: Record<string, unknown>): Omit<CardItem, keyof Mon
   return {
     kind: "card",
     cardholderName: firstString(data, "cardholderName"),
+    ...profileValues(data, CARD_NAMES),
     number: firstString(data, "cardNumber", "number"),
     expiryMonth: firstString(data, "expiryMonth", "expMonth"),
     expiryYear: firstString(data, "expiryYear", "expYear"),
@@ -178,7 +180,6 @@ function decodeDocument(data: Record<string, unknown>): Omit<IdentityItem, keyof
   const firstName = firstString(data, "firstName");
   const middleName = firstString(data, "middleName");
   const lastName = firstString(data, "lastName");
-  const nameFromParts = [firstName, middleName, lastName].filter(Boolean).join(" ");
   return {
     kind: "identity",
     documentType: normalizeDocumentType(firstString(data, "documentType", "type")),
@@ -186,7 +187,8 @@ function decodeDocument(data: Record<string, unknown>): Omit<IdentityItem, keyof
     firstName,
     middleName,
     lastName,
-    fullName: Object.prototype.hasOwnProperty.call(data, "fullName") ? jsonScalarText(data.fullName) : nameFromParts || firstString(data, "name"),
+    fullName: Object.prototype.hasOwnProperty.call(data, "fullName") ? jsonScalarText(data.fullName) : firstString(data, "name"),
+    ...profileValues(data, PROFILE_EXTRAS),
     documentTitle: typeof data.title === "string" ? data.title : undefined,
     editorSectionOrder: readWalletEditorSectionOrder(data.editorSectionOrder),
     birthDate: optionalString(firstString(data, "birthDate")),
@@ -222,7 +224,8 @@ function decodeDocument(data: Record<string, unknown>): Omit<IdentityItem, keyof
 function decodeBillingAddress(data: Record<string, unknown>): Omit<BillingAddressItem, keyof MonicaItemBase> {
   return {
     kind: "billing-address",
-    fullName: firstString(data, "fullName", "name"),
+    fullName: Object.prototype.hasOwnProperty.call(data, "fullName") ? jsonScalarText(data.fullName) : firstString(data, "name"),
+    ...profileValues(data, ADDRESS_EXTRAS),
     company: firstString(data, "company", "organization"),
     streetAddress: firstString(data, "streetAddress", "address1", "addressLine1"),
     apartment: firstString(data, "apartment", "address2", "addressLine2"),
@@ -322,6 +325,7 @@ function buildMonicaItemData(item: VaultItem): Record<string, unknown> | undefin
       return {
         cardNumber: item.number,
         cardholderName: item.cardholderName,
+        ...profileValues(item, CARD_NAMES),
         expiryMonth: item.expiryMonth,
         expiryYear: item.expiryYear,
         cvv: item.securityCode,
@@ -350,6 +354,7 @@ function buildMonicaItemData(item: VaultItem): Record<string, unknown> | undefin
         ...(item.editorSectionOrder !== undefined ? { editorSectionOrder: readWalletEditorSectionOrder(item.editorSectionOrder) } : {}),
         documentNumber: item.documentNumber,
         fullName: item.fullName,
+        ...profileValues(item, PROFILE_EXTRAS),
         issuedDate: item.issuedDate || "",
         expiryDate: item.expiryDate || "",
         issuedBy: item.issuedBy || "",
@@ -380,6 +385,7 @@ function buildMonicaItemData(item: VaultItem): Record<string, unknown> | undefin
     case "billing-address":
       return {
         fullName: item.fullName,
+        ...profileValues(item, ADDRESS_EXTRAS),
         company: item.company,
         streetAddress: item.streetAddress,
         apartment: item.apartment,

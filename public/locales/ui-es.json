@@ -3557,5 +3557,14 @@
   "待恢复的接收已发生变化，请检查最新状态后重试。": "La recepción pendiente ha cambiado. Comprueba su estado actual antes de reintentar.",
   "上次保存的结果尚未确认。可以检查并继续接收，插件会核对原来的保存操作。": "El resultado del último guardado no está confirmado. Comprueba y reanuda la recepción para verificar la operación original.",
   "本机": "Local",
-  "正在查找…": "Buscando…"
+  "正在查找…": "Buscando…",
+  "持卡人名": "Nombre del titular",
+  "持卡人中间名": "Segundo nombre del titular",
+  "持卡人姓": "Apellidos del titular",
+  "区/县": "Distrito / condado",
+  "家庭邮箱": "Correo personal",
+  "家庭电话": "Teléfono de casa",
+  "工作邮箱": "Correo del trabajo",
+  "工作电话": "Teléfono del trabajo",
+  "姓名与联系方式": "Nombre y contacto"
 }
