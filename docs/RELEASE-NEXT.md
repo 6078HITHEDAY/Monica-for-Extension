@@ -4,6 +4,8 @@
 
 ## 中文
 
+阶段范围已于 2026-10-16 冻结，详见[阶段收尾与已知限制](verification/wifi-stage-closeout-2026-10-16.md)。以下是尚未发布的开发改动；本轮结束后不自动继续扩展功能。
+
 - 新增 Wi-Fi 未完成接收的状态与离线恢复入口：无需另一台设备在线，只核对并重试原来的保存操作。新建接收日志会将已完成步骤的内容及附件副本一起加密保留到整笔完成；旧日志明确提示保留范围。遇到新的本机修改会显示冲突并停止，取消、锁定和重启不会丢弃待恢复记录；当前尚不支持直接合并这类修改冲突。
 - 补齐较大文件夹配置与附件组合的 Wi-Fi 分步接收和重启恢复：先加密保存待处理步骤，全部完成后才确认同步成功。中断或丢失响应不会重复创建内容；其他修改不会被当作恢复依据覆盖。待恢复期间阻止同一 MDBX 的普通修改和云同步，永久删除也保留各来源附件的独立归属。当前已验证 1 MiB 配置与独立 1 MiB 附件组合；更大的单文件和恢复冲突处理仍在补齐。
 - 补齐 Wi-Fi 文件夹配置的二进制归档、本机库中转与 MDBX 原子恢复，保留收藏、归档、图标和来源信息。原始字节通过现有附件通道传输，不挤入 JSON；每次发送重新检查权限和数据库版本。来自其他密码库的根目录配置独立保存，删除一方不会修改另一方或目标全局配置。含配置的独立记录会在暂存前分批；要求额外能力或超出当前恢复预算的内容仍明确停止，不能静默降级。
@@ -19,9 +21,11 @@
 - 修复 MDBX 后台文档误断开 Wi-Fi 管理端口，以及旧版原生对象 UUID 被误当作会话句柄而拒绝的问题；会话与操作句柄仍使用原有严格校验。取消后的旧操作不再改变新连接状态。
 - 本机项目同步保留原始来源归档，包括精确 JSON、二进制编码、未知格式和历史版本；接收、编辑、重启、便携备份恢复及再次复制均保留原文。归档保持加密，不自动创建远端连接或启用凭据。
 
-Wi-Fi 完整收尾仍在进行：部分原生归档与文件夹配置、Android 两版文件夹／根目录附件收发，以及 F-Droid、Android 界面与组播发现验收尚未完成。插件优先兼容 Android 现有协议；本次文件夹修复不要求 Android 修改。完整 Android 对齐还包含跨后端冲突、恢复与真实 OneDrive 验收。本记录不表示已发布。
+后续待办：部分原生归档与文件夹配置、Android 两版文件夹／根目录附件收发，以及 F-Droid、Android 界面与组播发现验收尚未完成。插件优先兼容 Android 现有协议；本次文件夹修复不要求 Android 修改。完整 Android 对齐还包含跨后端冲突、恢复与真实 OneDrive 验收。这些未完成内容不计入本次阶段完成范围，本记录不表示已发布。
 
 ## English
+
+This stage was frozen on 2026-10-16; see the [closeout and known limitations](verification/wifi-stage-closeout-2026-10-16.md). The following development changes remain unpublished. Closing this goal does not automatically start additional feature work.
 
 - Added an unfinished-receive view and offline Wi-Fi recovery: the other device may be offline while the extension verifies and retries the original save operations. New receive journals retain completed inputs and attachment copies, encrypted until the whole receive finishes; older journals disclose their limited retention. Intervening local edits stop recovery with an explicit conflict, and cancellation, locking and restart retain the pending journal. Merging these intervening edits remains in progress.
 - Added resumable Wi-Fi adoption for larger collection-profile/file combinations. Pending steps are encrypted before writing, and synchronization is acknowledged only after all steps complete. Interrupted or lost replies retain exact operations without duplicating content; intervening edits cannot be silently accepted as a recovery baseline. Ordinary mutations and cloud sync for the same MDBX wait for recovery, and purge retains source-specific attachment ownership. A 1 MiB profile plus a separate 1 MiB file is verified; larger individual files and recovery-conflict resolution remain in progress.
@@ -38,4 +42,4 @@ Wi-Fi 完整收尾仍在进行：部分原生归档与文件夹配置、Android 
 - Fixed the MDBX offscreen document disconnecting unrelated Wi-Fi manager ports and historical native object UUIDs being rejected as session handles. Runtime session/operation handles keep strict validation. Cancelled operations cannot change a subsequent connection's state.
 - Local-item synchronization retains exact source archives, including JSON, binary-encoded data, unknown formats and historical versions through adoption, edits, restart, portable-backup restore and subsequent copies. Archives stay encrypted and never automatically create remote connections or activate credentials.
 
-Wi-Fi closeout remains in progress: some native archives/profiles, folder/root byte adoption in both Android editions, F-Droid acceptance, and Android UI/multicast discovery are unfinished. The extension follows Android's existing protocol; this folder fix requires no Android changes. Full Android parity also requires cross-backend conflict/recovery and real OneDrive acceptance. These changes have not been published.
+Deferred work: some native archives/profiles, folder/root byte adoption in both Android editions, F-Droid acceptance, and Android UI/multicast discovery are unfinished. The extension follows Android's existing protocol; this folder fix requires no Android changes. Full Android parity also requires cross-backend conflict/recovery and real OneDrive acceptance. These unfinished items are not counted as completed by this stage. These changes have not been published.
