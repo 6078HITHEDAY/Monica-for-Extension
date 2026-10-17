@@ -171,12 +171,12 @@ test("manager sections remain readable with 200% text", async ({}, testInfo) => 
     }
 
     await page.locator(".sidebar").getByRole("button", { name: /^登录项/ }).click();
-    const loginCard = page.locator(".login-data-card");
-    await expect(loginCard.locator("thead")).toHaveCSS("display", "none");
-    const rows = loginCard.locator("tbody tr");
+    const loginCard = page.locator(".vault-list-card");
+    await expect(loginCard.locator("table")).toHaveCount(0);
+    const rows = loginCard.locator(".item-card");
     await expect(rows).toHaveCount(2);
     const longRow = rows.filter({ hasText: "非常长的示例工作账号名称用于检查显示" });
-    await expect(longRow.locator(".credential-compact-summary")).toHaveText("demo-long-user@example.test · very-long-example-domain.example.test");
+    await expect(longRow.locator(".item-summary-text")).toHaveText("demo-long-user@example.test");
     const firstRow = (await rows.first().boundingBox())!;
     const secondRow = (await rows.nth(1).boundingBox())!;
     const firstRowLayout = await rows.first().evaluate((row) => ({
@@ -188,11 +188,9 @@ test("manager sections remain readable with 200% text", async ({}, testInfo) => 
         return { className: cell.className, display: style.display, width: rect.width, height: rect.height, padding: style.padding };
       })
     }));
-    expect(firstRow.height, JSON.stringify(firstRowLayout, null, 2)).toBeLessThanOrEqual(128);
+    expect(firstRow.height, JSON.stringify(firstRowLayout, null, 2)).toBeLessThanOrEqual(240);
     expect(secondRow.y - (firstRow.y + firstRow.height)).toBeLessThanOrEqual(10);
-    const details = await longRow.locator(".credential-detail-cell").evaluateAll((cells) => cells.map((cell) => getComputedStyle(cell).display));
-    expect(details).toEqual(["none", "none", "none"]);
-    const actions = (await rows.first().locator(".action-cell").boundingBox())!;
+    const actions = (await rows.first().locator(".item-card-actions").boundingBox())!;
     expect(actions.y).toBeGreaterThanOrEqual(firstRow.y - 1);
     expect(actions.y + actions.height).toBeLessThanOrEqual(firstRow.y + firstRow.height + 1);
     await expectNoHorizontalOverflow(loginCard);
@@ -730,13 +728,12 @@ test("compact login list actions remain fully visible at a 1280px store viewport
     }, createdAt)).toMatchObject({ ok: true });
     await page.reload();
     await page.locator(".sidebar").getByRole("button", { name: /^登录项/ }).click();
-    const tableWrap = page.locator(".table-wrap");
+    const tableWrap = page.locator(".vault-list-card .item-grid");
     await expect(tableWrap).toBeVisible();
-    await expect(page.locator(".login-data-card thead")).toHaveCSS("display", "none");
-    const row = page.locator(".login-data-card tbody tr");
-    await expect(row.locator(".credential-compact-summary")).toHaveText("demo@example.test · shop-demo.example.test");
+    await expect(page.locator(".vault-list-card table")).toHaveCount(0);
+    const row = page.locator(".vault-list-card .item-card");
+    await expect(row.locator(".item-summary-text")).toHaveText("demo@example.test");
     expect((await row.boundingBox())!.height).toBeLessThanOrEqual(84);
-    expect(await row.locator(".credential-detail-cell").evaluateAll((cells) => cells.map((cell) => getComputedStyle(cell).display))).toEqual(["none", "none", "none"]);
     const tableLayout = await tableWrap.evaluate((element) => ({ clientWidth: element.clientWidth, scrollWidth: element.scrollWidth, tableWidth: element.querySelector("table")?.getBoundingClientRect().width }));
     expect(tableLayout.scrollWidth, JSON.stringify(tableLayout)).toBeLessThanOrEqual(tableLayout.clientWidth);
     const finalAction = page.getByRole("button", { name: "删除登录项" });
@@ -747,20 +744,21 @@ test("compact login list actions remain fully visible at a 1280px store viewport
     await page.setViewportSize({ width: 375, height: 900 });
     await page.evaluate(() => { document.documentElement.style.fontSize = "200%"; });
     const mobileRow = (await row.boundingBox())!;
-    const mobileActions = (await row.locator(".action-cell").boundingBox())!;
-    expect(mobileRow.height).toBeLessThanOrEqual(144);
+    const mobileActions = (await row.locator(".item-card-actions").boundingBox())!;
+    // At 200% text the shared card retains its title, summary, source and date.
+    expect(mobileRow.height).toBeLessThanOrEqual(256);
     expect(mobileActions.x + mobileActions.width).toBeLessThanOrEqual(375);
     expect(mobileActions.y + mobileActions.height).toBeLessThanOrEqual(mobileRow.y + mobileRow.height + 1);
     await expectNoHorizontalOverflow(page.locator("html"));
     // Pad to four actions (the most a row offers) whatever the source provides.
-    await row.locator(".action-cell").evaluate((cell) => {
+    await row.locator(".item-card-actions").evaluate((cell) => {
       const template = cell.querySelector("m3e-icon-button")!;
       while (cell.querySelectorAll("m3e-icon-button").length < 4) cell.append(template.cloneNode(true));
     });
-    await expect(row.locator(".action-cell m3e-icon-button")).toHaveCount(4);
+    await expect(row.locator(".item-card-actions m3e-icon-button")).toHaveCount(4);
     const fourActionRow = (await row.boundingBox())!;
-    const fourActions = (await row.locator(".action-cell").boundingBox())!;
-    expect(fourActionRow.height).toBeLessThanOrEqual(144);
+    const fourActions = (await row.locator(".item-card-actions").boundingBox())!;
+    expect(fourActionRow.height).toBeLessThanOrEqual(256);
     expect(fourActions.x + fourActions.width).toBeLessThanOrEqual(375);
     await expectNoHorizontalOverflow(page.locator("html"));
   } finally { await context?.close(); }

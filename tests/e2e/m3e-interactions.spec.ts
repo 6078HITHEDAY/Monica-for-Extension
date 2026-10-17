@@ -73,9 +73,9 @@ test("split primary action follows each page and the menu can create another typ
     await page.getByLabel('API 地址', { exact: true }).fill('https://example.test/api');
     await page.getByRole('button', { name: '加密保存', exact: true }).click();
     await expect(dialogContent(page)).toHaveCount(0);
-    await expect(page.getByRole('row').filter({ hasText: 'Password-page API key' })).toBeVisible();
+    await expect(page.locator('.vault-list-card .item-card').filter({ hasText: 'Password-page API key' })).toBeVisible();
     await page.reload(); await navigate(page, /^登录项/);
-    await expect(page.getByRole('row').filter({ hasText: 'Password-page API key' })).toBeVisible();
+    await expect(page.locator('.vault-list-card .item-card').filter({ hasText: 'Password-page API key' })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath('sidebar-password-api.png'), fullPage: true });
     const saved = await page.evaluate(() => chrome.runtime.sendMessage({ type: 'VAULT_LIST_ITEMS' }));
     expect(saved).toMatchObject({ ok: true });

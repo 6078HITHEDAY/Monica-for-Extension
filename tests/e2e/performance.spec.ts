@@ -27,13 +27,13 @@ test("large lists remain searchable, pageable and usable for filling", async ({}
     expect(setup.ok).toBe(true);
     await manager.reload();
     await manager.locator(".sidebar .nav-item").nth(1).click();
-    await expect(manager.locator(".credential-table tbody tr")).toHaveCount(50);
+    await expect(manager.locator(".vault-list-card .item-card")).toHaveCount(50);
     await chooseOption(manager.getByLabel("Page", { exact: true }), "3");
-    await expect(manager.locator(".credential-table tbody tr")).toHaveCount(23);
+    await expect(manager.locator(".vault-list-card .item-card")).toHaveCount(23);
     await expect(manager.locator("#main-content")).toBeFocused();
     const search = manager.getByRole("searchbox", { name: "Search vault", exact: true });
     await search.fill("Account 077");
-    await expect(manager.locator(".credential-table tbody tr")).toHaveCount(1);
+    await expect(manager.locator(".vault-list-card .item-card")).toHaveCount(1);
     await expect(manager.getByText("Account 077", { exact: true })).toBeVisible();
     await search.fill("");
     await expect(manager.getByLabel("Page", { exact: true })).toHaveJSProperty("value", "1");
@@ -41,7 +41,7 @@ test("large lists remain searchable, pageable and usable for filling", async ({}
     manager.on("dialog", dialog => void dialog.accept());
     for (let index = 0; index < 23; index++) {
       await manager.getByRole("button", { name: "Delete login", exact: true }).first().click();
-      await expect(manager.locator(".credential-table tbody tr")).toHaveCount(index === 22 ? 50 : 22 - index);
+      await expect(manager.locator(".vault-list-card .item-card")).toHaveCount(index === 22 ? 50 : 22 - index);
     }
     await expect(manager.getByLabel("Page", { exact: true })).toHaveJSProperty("value", "2");
     await manager.setViewportSize({ width: 320, height: 480 });
@@ -95,7 +95,7 @@ test("large lists remain searchable, pageable and usable for filling", async ({}
     await popup.evaluate(() => chrome.runtime.sendMessage({ type: "VAULT_LOCK" }));
     await expect(manager.getByRole("heading", { name: "Unlock Monica", exact: true })).toBeVisible();
     await expect(dialogContent(manager)).toHaveCount(0);
-    await expect(manager.locator(".credential-table")).toHaveCount(0);
+    await expect(manager.locator(".vault-list-card .item-card")).toHaveCount(0);
   } finally { await context.close(); }
 });
 

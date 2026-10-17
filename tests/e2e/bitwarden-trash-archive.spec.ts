@@ -129,7 +129,7 @@ test("manager requires explicit confirmation before adopting an authenticated em
     await expect(openConfirmation).toHaveCount(0);
 
     await openMobileSection(manager, /^登录项/);
-    await expect(manager.getByRole("row").filter({ hasText: "Server account" })).toHaveCount(0);
+    await expect(manager.locator(".vault-list-card .item-card").filter({ hasText: "Server account" })).toHaveCount(0);
 
     const popup = await context.newPage();
     await popup.goto(`chrome-extension://${extensionId}/popup.html`);

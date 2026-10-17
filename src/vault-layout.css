@@ -33,11 +33,11 @@
 #root .vault-list-card .item-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 3px; padding: 0; }
 #root .vault-list-card .item-card {
   display: grid;
-  grid-template-columns: minmax(0, 1.25fr) minmax(0, .85fr) minmax(7rem, .6fr) 88px;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, .85fr) minmax(7rem, .6fr) 132px;
   align-items: center;
-  gap: 16px;
-  min-height: 80px;
-  padding: 16px;
+  gap: 12px;
+  min-height: 72px;
+  padding: 8px 12px;
   border: 0;
   border-radius: 4px;
   background: var(--app-surface);
@@ -57,67 +57,46 @@
   --m3e-focus-ring-color: var(--app-primary);
   z-index: 1;
 }
-#root .vault-list-card :is(.item-card-main, .row-title) {
+#root .vault-list-card .item-card-main {
   min-width: 0;
   width: 100%;
   --m3e-list-item-leading-space: 0;
   --m3e-list-item-trailing-space: 0;
   --m3e-list-item-between-space: 12px;
-  --m3e-list-item-one-line-height: 48px;
-  --m3e-list-item-two-line-height: 48px;
-  --m3e-list-item-three-line-height: 48px;
-  --m3e-list-item-container-color: transparent;
-  --m3e-list-item-hover-state-layer-opacity: 0;
-  --m3e-list-item-focus-state-layer-opacity: 0;
-  --m3e-list-item-pressed-state-layer-opacity: 0;
-  --m3e-focus-ring-visibility: hidden;
-}
-#root .vault-list-card :is(.item-card-main, .row-title) > strong { font-size: 1rem; font-weight: 500; line-height: 1.5; overflow-wrap: anywhere; }
-#root .vault-list-card :is(.item-card-main, .row-title) > small { font-size: .8125rem; line-height: 1.5; overflow-wrap: anywhere; }
-#root .vault-list-card .row-icon { flex: 0 0 40px; width: 40px; height: 40px; border: 0; border-radius: 12px; background: var(--app-bg); }
-#root .vault-list-card .item-card-summary { min-width: 0; min-height: 0; overflow: visible; }
-#root .vault-list-card .item-summary-text { font-size: .8125rem; font-weight: 400; line-height: 1.6; color: var(--app-muted); }
-#root .vault-list-card .item-card-meta { min-width: 0; display: grid; justify-content: start; gap: 6px; font-size: .75rem; line-height: 1.4; }
-#root .vault-list-card .item-card-meta time { font: 400 .6875rem/1.5 var(--font-data); }
-#root .vault-list-card .item-card-actions { min-width: 0; flex-wrap: wrap; align-items: center; gap: 0; border: 0; padding: 0; margin: 0; }
-#root .vault-list-card .empty-state { min-height: 240px; margin: 0; padding: 32px 24px; border: 1px solid var(--app-outline); border-radius: 12px; }
-
-/* Login rows keep their existing table and keyboard actions. */
-#root .vault-list-card .credential-table tbody { gap: 3px; }
-#root .vault-list-card .credential-table tbody tr { border: 0; border-radius: 4px; background: var(--app-surface); min-height: 80px; }
-#root .vault-list-card .credential-table tbody tr:first-child { border-start-start-radius: 12px; border-start-end-radius: 12px; }
-#root .vault-list-card .credential-table tbody tr:last-child { border-end-start-radius: 12px; border-end-end-radius: 12px; }
-#root .vault-list-card .credential-table tbody tr:is(:hover, :focus-within) { background: var(--app-surface-high); }
-#root .vault-list-card .credential-table tbody tr > td { background: transparent; box-shadow: none; }
-#root .vault-list-card .credential-table .item-cell { position: static; border-radius: inherit; }
-#root .vault-list-card .credential-table .item-cell { padding: 10px 16px; }
-#root .vault-list-card .credential-table .action-cell { padding-inline-end: 16px; }
-#root .vault-list-card .credential-table .row-title {
+  --m3e-list-item-one-line-height: 40px;
+  --m3e-list-item-two-line-height: 40px;
+  --m3e-list-item-three-line-height: 40px;
   --m3e-list-item-one-line-top-space: 0px;
   --m3e-list-item-one-line-bottom-space: 0px;
   --m3e-list-item-two-line-top-space: 0px;
   --m3e-list-item-two-line-bottom-space: 0px;
   --m3e-list-item-three-line-top-space: 0px;
   --m3e-list-item-three-line-bottom-space: 0px;
+  --m3e-list-item-container-color: transparent;
+  --m3e-list-item-hover-state-layer-opacity: 0;
+  --m3e-list-item-focus-state-layer-opacity: 0;
+  --m3e-list-item-pressed-state-layer-opacity: 0;
+  --m3e-focus-ring-visibility: hidden;
 }
-/* Full values remain in the detail view and accessible name. Keep list rows
-   scannable even when users enlarge text, without shrinking the type. */
-#root .vault-list-card .credential-table .row-title > :is(strong, small) {
-  min-width: 0; max-width: 100%; white-space: normal; overflow: hidden;
-  display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical;
-}
-#root .vault-list-card .credential-table .row-title > strong { font-size: .875rem; line-height: 1.4; }
-#root .vault-list-card .credential-table .row-title > small { font-size: .75rem; line-height: 1.4; }
+#root .vault-list-card .item-card-main > strong { font-size: 1rem; font-weight: 500; line-height: 1.5; overflow-wrap: anywhere; }
+#root .vault-list-card .item-card-main > small { font-size: .8125rem; line-height: 1.5; overflow-wrap: anywhere; }
+#root .vault-list-card .row-icon { flex: 0 0 40px; width: 40px; height: 40px; border: 0; border-radius: 12px; background: var(--app-bg); }
+#root .vault-list-card .item-card-summary { min-width: 0; min-height: 0; overflow: visible; }
+#root .vault-list-card .item-summary-text { font-size: .8125rem; font-weight: 400; line-height: 1.6; color: var(--app-muted); }
+#root .vault-list-card .item-card-meta { min-width: 0; display: grid; justify-content: start; gap: 2px; font-size: .75rem; line-height: 1.4; }
+#root .vault-list-card .item-card-meta time { font: 400 .6875rem/1.5 var(--font-data); }
+#root .vault-list-card .item-card-actions { min-width: 0; flex-wrap: wrap; align-items: center; gap: 0; border: 0; padding: 0; margin: 0; }
+#root .vault-list-card .empty-state { min-height: 240px; margin: 0; padding: 32px 24px; border: 1px solid var(--app-outline); border-radius: 12px; }
 
 @container manager-content (max-width: 58rem) {
-  #root .vault-list-card .item-card { grid-template-columns: minmax(0, 1fr) minmax(7rem, .45fr) 88px; grid-template-areas: 'main meta actions' 'summary meta actions'; gap: 4px 16px; }
+  #root .vault-list-card .item-card { grid-template-columns: minmax(0, 1fr) minmax(7rem, .45fr) 132px; grid-template-areas: 'main meta actions' 'summary meta actions'; gap: 4px 16px; }
   #root .vault-list-card .item-card-main { grid-area: main; }
   #root .vault-list-card .item-card-summary { grid-area: summary; padding-inline-start: 52px; }
   #root .vault-list-card .item-card-meta { grid-area: meta; }
   #root .vault-list-card .item-card-actions { grid-area: actions; }
 }
 @container manager-content (max-width: 38rem) {
-  #root .vault-list-card .item-card { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: 'main main' 'summary summary' 'meta actions'; gap: 8px 12px; }
+  #root .vault-list-card .item-card { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: 'main main' 'summary summary' 'meta actions'; gap: 4px 12px; }
   #root .vault-list-card .item-card-summary { padding-inline-start: 0; }
   #root .vault-list-card .item-card-meta { gap: 4px; }
   #root .vault-list-card .item-card-actions { max-width: 176px; }
@@ -125,10 +104,8 @@
   #root .vault-result-count { flex: 1 0 auto; }
 }
 @container manager-content (max-width: 24rem) {
-  #root .vault-list-card .item-card { padding: 12px; }
+  #root .vault-list-card .item-card { padding: 8px 12px; }
   #root .vault-list-card .item-card-actions { max-width: 88px; }
-  #root .vault-list-card .credential-table .item-cell { padding: 8px 12px 4px; }
-  #root .vault-list-card .credential-table .action-cell { padding: 0 12px 8px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

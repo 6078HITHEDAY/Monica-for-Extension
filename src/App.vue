@@ -63,11 +63,6 @@ import { withLoginDraftSource } from "./manager/login-source-scope";
 import { putApiKeyFields, putGpgFields, readGpgFields } from "./core/credential-fields";
 import { createProjectPassword } from "./manager/project-password-create";
 import { groupedPasswords, passwordGroupKey, passwordGroupMembers } from "./core/password-groups";
-import { normalizeHomePreferences } from "./core/home-preferences";
-import { passwordDisplayStacks, passwordCoverPeers, PASSWORD_STACK_MODES, type PasswordStackMode, type WebsiteStackMatch } from "./core/password-display-stacks";
-import PasswordStackList from "./components/PasswordStackList.vue";
-import PasswordStackDialog from "./components/PasswordStackDialog.vue";
-import type { PasswordStackAction } from "./core/password-manual-stacks";
 import type { M3eListActionElement } from '@m3e/web/list';
 import { parseLosslessJson } from "./core/lossless-json";
 import { readVerifiedAttachment } from "./manager/attachment-reader";
@@ -80,7 +75,6 @@ import CreateSplitButton from "./components/CreateSplitButton.vue";
 import { createItemGroups, type CreateItemType } from "./manager/create-items";
 import ApiTokenEditor from "./components/ApiTokenEditor.vue";
 import type { LoginForm } from "./manager/login-form";
-import { normalizeHost } from "./core/matching";
 import { createLoginItem, isLoginItem, type ApiTokenItem, type LoginItem, type LoginUriMatchType, type LoginUriRule, type ProviderAccount, type ProviderConflictResolution, type ProviderConflictSummary, type SecureCustomField, type TotpItem, type VaultItem, type VaultItemKind } from "./core/model";
 import { createQrDataUrl } from "./core/otp-qr";
 import { hotpUsageFromItem, findBoundTotpItem, parametersFromItem } from "./core/login-otp";
@@ -336,17 +330,9 @@ const keePassForm = reactive<KeePassFormState>({
 useThemePreferences();
 
 const credentials = vaultDerived(() => vaultItems.value.filter(isLoginItem));
-const filteredCredentials = vaultDerived(() => credentials.value.filter(matchesManagerFilters));
 const allCredentialGroups = computed(() => groupedPasswords(credentials.value));
-const passwordDisplayPreferences = ref(normalizeHomePreferences());
-const passwordDisplaySaving = ref(false);
-const passwordCoverSaving = ref(false);
-const passwordStackDialogOpen = ref(false);
-const passwordStackLabels: Record<PasswordStackMode, string> = { none: '不分组', manual: '仅手动堆叠', smart: '智能分组', website: '按网站', title: '按标题', app: '按应用', note: '按备注', folder: '按文件夹' };
-const credentialGroups = computed(() => { const matching = new Set(filteredCredentials.value.map(item=>item.id)); return allCredentialGroups.value.filter(group=>group.some(item=>matching.has(item.id))); });
 const credentialGroupSizes = computed(() => new Map(allCredentialGroups.value.flatMap(group => group.map(item => [item.id, group.length] as const))));
 const credentialGroupSize = (item: LoginItem) => credentialGroupSizes.value.get(item.id) || 0;
-const credentialDisplayStacks = computed(() => passwordDisplayStacks(credentialGroups.value, passwordDisplayPreferences.value.passwordStackMode, passwordDisplayPreferences.value.passwordWebsiteMatch));
 const walletItems = vaultDerived(() => vaultItems.value.filter((item) => itemSection(item) === "wallet"));
 const noteItems = vaultDerived(() => vaultItems.value.filter((item) => itemSection(item) === "notes"));
 const totpItems = vaultDerived(() => vaultItems.value.filter((item): item is TotpItem => item.kind === "totp"));
@@ -385,9 +371,9 @@ const restoreCohortLeaders = vaultDerived(() => {
   return result;
 });
 const filteredSectionItems = vaultDerived(() => {
-  if (!["vault", "wallet", "notes", "totp", "api-tokens", "passkeys"].includes(activeSection.value)) return [];
+  if (!["vault", "passwords", "wallet", "notes", "totp", "api-tokens", "passkeys"].includes(activeSection.value)) return [];
   const matching = vaultItems.value.filter((item) => (activeSection.value === "vault" || itemSection(item) === activeSection.value) && matchesManagerFilters(item));
-  if (activeSection.value !== "vault") return matching;
+  if (activeSection.value !== "vault" && activeSection.value !== "passwords") return matching;
   const ids = new Set(matching.map(item => item.id));
   const representatives = new Map(allCredentialGroups.value.filter(group => group.some(item => ids.has(item.id))).map(group => [group[0].id, group[0]]));
   return vaultItems.value.filter(item => item.kind === "login" ? representatives.has(item.id) : ids.has(item.id));
@@ -430,11 +416,10 @@ const keePassDialogTitle = computed(() => editingKeePassId.value ? tr('管理 Ke
 
 const listTotal = computed(() => {
   switch (activeSection.value) {
-    case "passwords": return passwordDisplayPreferences.value.passwordStackMode === 'none' ? credentialGroups.value.length : credentialDisplayStacks.value.length;
     case "steam": return filteredSteamItems.value.length;
     case "archive": return filteredArchiveItems.value.length;
     case "trash": return filteredDeletedItems.value.length;
-    case "vault": case "wallet": case "notes": case "totp": case "api-tokens": case "passkeys": return filteredSectionItems.value.length;
+    case "vault": case "passwords": case "wallet": case "notes": case "totp": case "api-tokens": case "passkeys": return filteredSectionItems.value.length;
     default: return 0;
   }
 });
@@ -728,10 +713,6 @@ async function lockVault() {
 
 function clearVaultView() {
   managerScopesRestored = false; managerScopes.value = {};
-  passwordDisplayPreferences.value = normalizeHomePreferences();
-  passwordDisplaySaving.value = false;
-  passwordCoverSaving.value = false;
-  passwordStackDialogOpen.value = false;
   mdbxExportAbort?.abort();
   editingCredentialFormSnapshot = "";
   vaultViewRevision++;
@@ -901,7 +882,6 @@ async function refreshItems() {
   const archived = snapshot.items.filter(item => !item.deletedAt && Boolean(item.archivedAt));
   const deleted = snapshot.items.filter(item => Boolean(item.deletedAt));
   vaultItems.value = active;
-  passwordDisplayPreferences.value = displayPreferences;
   if (!managerScopesRestored) {
     managerScopes.value = displayPreferences.managerScopes || {};
     const scope = readManagerScope(managerScopes.value,activeSection.value);
@@ -1095,13 +1075,6 @@ function providerDisplayName(provider: ProviderAccount): string {
   return email ? `${provider.name} · ${email}` : provider.name;
 }
 
-function credentialCompactSummary(item: LoginItem): string {
-  const username = item.username.trim() || tr('无用户名');
-  const rawUri = item.uriRules?.find((rule) => rule.matchType !== "never" && rule.uri.trim())?.uri || item.uris.find((uri) => uri.trim()) || "";
-  const host = normalizeHost(rawUri);
-  return host ? `${username} · ${host}` : username;
-}
-
 function attachmentProvidersFor(item: VaultItem): ProviderAccount[] {
   if (!item.providerRefs.length) return [...attachmentProviderById.value.values()].filter(provider => provider.kind === 'local' && provider.enabled);
   const seen = new Set<string>();
@@ -1217,46 +1190,6 @@ async function restoreDeletedItem(item: VaultItem) {
     showNotice(tr('{0}已从回收站恢复。', { 0: itemKindLabel(item.kind) }));
   } catch (error) {
     showNotice(error instanceof Error ? error.message : tr('恢复失败，请重试。'));
-  }
-}
-
-async function savePasswordDisplay(mode: PasswordStackMode, match: WebsiteStackMatch) {
-  if (passwordDisplaySaving.value) return;
-  const revision = vaultViewRevision;
-  const previous = passwordDisplayPreferences.value;
-  passwordDisplayPreferences.value = { ...previous, passwordStackMode: mode, passwordWebsiteMatch: match };
-  passwordDisplaySaving.value = true;
-  try {
-    const preferences = await vaultClient.setHomePreferences({ passwordStackMode: mode, passwordWebsiteMatch: match });
-    if (revision === vaultViewRevision) passwordDisplayPreferences.value = preferences;
-  } catch (error) { if (revision === vaultViewRevision) { passwordDisplayPreferences.value = previous; notice.value = error instanceof Error ? tr(error.message) : String(error); } }
-  finally { if (revision === vaultViewRevision) passwordDisplaySaving.value = false; }
-}
-
-async function togglePasswordCover(item: LoginItem) {
-  if (passwordCoverSaving.value) return;
-  const revision = vaultViewRevision;
-  const expected = Object.fromEntries(passwordCoverPeers(item, vaultItems.value).map(peer => [peer.id, peer.updatedAt]));
-  passwordCoverSaving.value = true;
-  try {
-    await vaultClient.setPasswordCover(item.id, item.isGroupCover !== true, expected);
-    if (revision === vaultViewRevision) { await refreshItems(); if (revision === vaultViewRevision) notice.value = tr('封面已更新'); }
-  } catch (error) { if (revision === vaultViewRevision) notice.value = error instanceof Error ? tr(error.message) : String(error); }
-  finally { if (revision === vaultViewRevision) passwordCoverSaving.value = false; }
-}
-
-async function passwordStackSaved(action: PasswordStackAction) {
-  const revision = vaultViewRevision;
-  passwordStackDialogOpen.value = false;
-  try {
-    await refreshItems();
-    if (revision !== vaultViewRevision) return;
-    notice.value = tr('堆叠设置已更新');
-    if (action === "stack" && passwordDisplayPreferences.value.passwordStackMode === "none") {
-      await savePasswordDisplay("manual", passwordDisplayPreferences.value.passwordWebsiteMatch);
-    }
-  } catch (error) {
-    if (revision === vaultViewRevision) notice.value = error instanceof Error ? tr(error.message) : String(error);
   }
 }
 
@@ -2875,32 +2808,6 @@ function errorCode(error: unknown): string | undefined {
           <div v-if="filterDialogOpen" class="modal-backdrop" role="presentation" @mousedown.self="filterDialogOpen = false"><section class="filter-dialog" role="dialog" aria-modal="true" aria-labelledby="filter-dialog-title"><header><div><h2 id="filter-dialog-title">{{ tr('筛选密码库') }}</h2><p>{{ tr('按密码源、Android 分类和快捷条件组合筛选。') }}</p></div><m3e-icon-button :aria-label="tr('关闭筛选')" @click="filterDialogOpen = false"><m3e-icon name="close"></m3e-icon></m3e-icon-button></header><div class="filter-dialog-body"><m3e-form-field v-field-label variant="filled" hide-required-marker class="field filter-kind-field"><label slot="label">{{ tr('项目类型') }}</label><component :is="materialSelectTag" @input="kindFilter = ($event.target as HTMLElement &amp; { value: string }).value as VaultItemKind || undefined" ><component :is="materialOptionTag" :selected.prop="!kindFilter" value="">{{ tr('全部类型') }}</component><component :is="materialOptionTag" :selected.prop="String(kindFilter ?? '') === String(kind)" v-for="kind in (['login','api-token','card','identity','billing-address','payment-account','secure-note','totp','passkey'] as VaultItemKind[])" :key="kind" :value="kind">{{ itemKindLabel(kind) }}</component></component></m3e-form-field><span class="filter-caption">{{ tr('密码源') }}</span><div class="filter-chip-row" role="group" :aria-label="tr('密码源')"><m3e-button variant="text" type="button" :class="{ selected: databaseSourceFilter === 'all' }" toggle :selected.prop="databaseSourceFilter === 'all'" @beforeinput.prevent @click="databaseSourceFilter = 'all'"><m3e-icon slot="icon" name="list"></m3e-icon>{{ tr('全部') }}</m3e-button><m3e-button variant="text" type="button" :class="{ selected: databaseSourceFilter === 'local' }" toggle :selected.prop="databaseSourceFilter === 'local'" @beforeinput.prevent @click="databaseSourceFilter = 'local'"><m3e-icon slot="icon" name="smartphone"></m3e-icon>{{ tr('Monica 本地库') }}</m3e-button><m3e-button variant="text" v-for="source in databaseSources" :key="source.id" type="button" :class="{ selected: databaseSourceFilter === source.id }" toggle :selected.prop="databaseSourceFilter === source.id" @beforeinput.prevent @click="databaseSourceFilter = source.id"><m3e-icon slot="icon" :name="source.kind === 'bitwarden' ? 'cloud_sync' : source.kind === 'mdbx2' ? 'storage' : 'key'"></m3e-icon><span class="filter-label">{{ providerDisplayName(source) }}</span></m3e-button></div><span class="filter-caption">{{ tr('文件夹') }}</span><FolderScopeList v-model="folderFilter" :folders="databaseFolders" :source-names="sourceNames" :show-source="databaseSourceFilter === 'all'" /><span class="filter-caption">{{ tr('快捷筛选') }}</span><div class="filter-chip-row filter-dialog-quick" role="group" :aria-label="tr('快捷筛选条件')"><m3e-button variant="text" type="button" :class="{ selected: hasAndroidFilter('favorite') }" toggle :selected.prop="hasAndroidFilter('favorite')" @beforeinput.prevent @click="toggleAndroidQuickFilter('favorite')"><m3e-icon slot="icon" name="star"></m3e-icon>{{ tr('收藏') }}</m3e-button><m3e-button variant="text" type="button" :class="{ selected: hasAndroidFilter('two-fa') }" toggle :selected.prop="hasAndroidFilter('two-fa')" @beforeinput.prevent @click="toggleAndroidQuickFilter('two-fa')"><m3e-icon slot="icon" name="security"></m3e-icon>{{ tr('验证码') }}</m3e-button><m3e-button variant="text" type="button" :class="{ selected: hasAndroidFilter('notes') }" toggle :selected.prop="hasAndroidFilter('notes')" @beforeinput.prevent @click="toggleAndroidQuickFilter('notes')"><m3e-icon slot="icon" name="description"></m3e-icon>{{ tr('笔记') }}</m3e-button><m3e-button variant="text" type="button" :class="{ selected: hasAndroidFilter('passkey') }" toggle :selected.prop="hasAndroidFilter('passkey')" @beforeinput.prevent @click="toggleAndroidQuickFilter('passkey')"><m3e-icon slot="icon" name="key_vertical"></m3e-icon>Passkey</m3e-button><m3e-button variant="text" type="button" :class="{ selected: hasAndroidFilter('uncategorized') }" toggle :selected.prop="hasAndroidFilter('uncategorized')" @beforeinput.prevent @click="toggleAndroidQuickFilter('uncategorized')"><m3e-icon slot="icon" name="folder_off"></m3e-icon>{{ tr('未分类') }}</m3e-button><m3e-button variant="text" type="button" :class="{ selected: hasAndroidFilter('local-only') }" toggle :selected.prop="hasAndroidFilter('local-only')" @beforeinput.prevent @click="toggleAndroidQuickFilter('local-only')"><m3e-icon slot="icon" name="key"></m3e-icon>{{ tr('仅本地') }}</m3e-button><m3e-button variant="text" type="button" :class="{ selected: hasAndroidFilter('attachments') }" toggle :selected.prop="hasAndroidFilter('attachments')" @beforeinput.prevent @click="toggleAndroidQuickFilter('attachments')"><m3e-icon slot="icon" name="attach_file"></m3e-icon>{{ tr('附件') }}</m3e-button></div></div><footer><m3e-button variant="text" @click="clearManagerFilters()">{{ tr('清除筛选') }}</m3e-button><m3e-button variant="filled" @click="filterDialogOpen = false">{{ tr('完成') }}</m3e-button></footer></section></div>
 
 
-        <section v-else-if="activeSection === 'passwords'" class="content-grid">
-          <div class="password-display-controls" role="group" :aria-label="tr('显示分组')">
-            <m3e-form-field v-field-label variant="filled" hide-required-marker>
-              <label slot="label">{{ tr('显示分组') }}</label>
-              <component :is="materialSelectTag" :disabled="passwordDisplaySaving" @input="savePasswordDisplay(($event.target as HTMLElement &amp; {value: string}).value as PasswordStackMode, passwordDisplayPreferences.passwordWebsiteMatch)">
-                <component :is="materialOptionTag" v-for="mode in PASSWORD_STACK_MODES" :key="mode" :value="mode" :selected.prop="passwordDisplayPreferences.passwordStackMode === mode">{{ tr(passwordStackLabels[mode]) }}</component>
-              </component>
-            </m3e-form-field>
-            <m3e-form-field v-if="['smart','website'].includes(passwordDisplayPreferences.passwordStackMode)" v-field-label variant="filled" hide-required-marker>
-              <label slot="label">{{ tr('网站匹配') }}</label>
-              <component :is="materialSelectTag" :disabled="passwordDisplaySaving" @input="savePasswordDisplay(passwordDisplayPreferences.passwordStackMode, ($event.target as HTMLElement &amp; {value: string}).value as WebsiteStackMatch)">
-                <component :is="materialOptionTag" value="strict" :selected.prop="passwordDisplayPreferences.passwordWebsiteMatch === 'strict'">{{ tr('完整域名') }}</component>
-                <component :is="materialOptionTag" value="relaxed" :selected.prop="passwordDisplayPreferences.passwordWebsiteMatch === 'relaxed'">{{ tr('主域名') }}</component>
-              </component>
-            </m3e-form-field>
-          </div>
-          <m3e-button variant="tonal" class="password-stack-manage" :disabled="!credentialGroups.length" @click="passwordStackDialogOpen = true"><m3e-icon slot="icon" name="tune" />{{ tr('管理堆叠') }}</m3e-button>
-          <PasswordStackList v-if="passwordDisplayPreferences.passwordStackMode !== 'none'" :stacks="listPagination.slice(credentialDisplayStacks)" :busy="passwordCoverSaving" :source-label="providerName" @open="openVaultDetail" @cover="togglePasswordCover" />
-          <m3e-card v-else variant="filled" class="data-card login-data-card vault-list-card motion-card">
-            <div v-if="filteredCredentials.length" class="table-wrap"><table class="credential-table" :aria-label="tr('登录项列表')"><thead><tr><th>{{ tr('名称') }}</th><th>{{ tr('用户名') }}</th><th>{{ tr('匹配网站') }}</th><th>{{ tr('更新时间') }}</th><th><span class="visually-hidden">{{ tr('操作') }}</span></th></tr></thead><tbody>
-              <tr v-for="item in listPagination.slice(credentialGroups).map(group=>group[0])" :key="item.id" class="row-clickable" @click="openVaultDetail(item)"><td class="item-cell" :data-label="tr('名称')"><m3e-focus-ring :for="vaultRowDomId(item.id)" class="vault-row-focus" inward /><m3e-list-action :id="vaultRowDomId(item.id)" role="presentation" class="row-title" v-list-action="tr('查看{0}详情', { 0: item.title })" @click.stop="openVaultDetail(item)"><WebsiteIcon slot="leading" class="row-icon" :item="item" /><strong :title="item.title">{{ item.title }}<span v-if="credentialGroupSize(item)>1"> · {{ tr('{0} 条密码', {0: credentialGroupSize(item)}) }}</span></strong><span v-if="lockedAutofillIds.includes(item.id)" slot="supporting-text" class="locked-autofill-badge"><m3e-icon name="lock_open"></m3e-icon>{{ tr('免解锁填写') }}</span><small slot="supporting-text" class="credential-compact-summary" :title="credentialCompactSummary(item)">{{ credentialCompactSummary(item) }}</small></m3e-list-action></td><td class="credential-detail-cell" :data-label="tr('用户名')">{{ item.username || '—' }}</td><td class="credential-detail-cell" :data-label="tr('匹配网站')"><span class="url-list">{{ item.uris.join(' · ') }}</span></td><td class="credential-detail-cell" :data-label="tr('更新时间')">{{ new Date(item.updatedAt).toLocaleString(locale) }}</td><td class="action-cell" @click.stop><m3e-icon-button v-if="keePassHistoryProvidersFor(item).length" :aria-label="tr('查看 {0} 的 KeePass 历史', { 0: item.title })" @click="openKeePassHistory(item)"><m3e-icon name="history"></m3e-icon></m3e-icon-button><m3e-icon-button v-if="attachmentProvidersFor(item).length" :aria-label="tr('管理 {0} 的附件', { 0: item.title })" @click="openAttachmentDialog(item)"><m3e-icon name="attach_file"></m3e-icon></m3e-icon-button><m3e-icon-button :aria-label="tr('编辑登录项')" @click="openEdit(item)"><m3e-icon name="edit"></m3e-icon></m3e-icon-button><m3e-icon-button :aria-label="tr('删除登录项')" @click="removeCredential(item)"><m3e-icon name="delete"></m3e-icon></m3e-icon-button></td></tr>
-            </tbody></table></div>
-            <div v-else class="empty-state" slot="content"><m3e-icon name="key_off"></m3e-icon><h2>{{ query || hasActiveManagerFilter ? tr('没有匹配的登录项') : tr('加密密码库还是空的') }}</h2><p>{{ query ? tr('换一个关键词试试。') : hasActiveManagerFilter ? tr('调整分类或快捷筛选条件。') : tr('添加第一个账号后即可在 Popup 中匹配。') }}</p><m3e-button v-if="!query && !hasActiveManagerFilter" variant="filled" @click="openCreate">{{ tr('添加登录项') }}</m3e-button></div>
-          </m3e-card>
-        </section>
-
         <section v-else-if="activeSection === 'wallet' || activeSection === 'totp' || activeSection === 'steam'" class="tile-page" :aria-label="sectionTitle(activeSection)">
           <div v-if="activeSection === 'wallet'" class="wallet-kind-filter" role="group" :aria-label="tr('项目类型')">
             <m3e-button :variant="!kindFilter ? 'filled' : 'tonal'" toggle :selected.prop="!kindFilter" @beforeinput.prevent @click="kindFilter = undefined">{{ tr('全部类型') }}</m3e-button>
@@ -2934,15 +2841,15 @@ function errorCode(error: unknown): string | undefined {
           </m3e-card>
         </section>
 
-        <section v-else-if="activeSection === 'vault' || activeSection === 'api-tokens' || activeSection === 'notes' || activeSection === 'passkeys'" class="content-grid">
+        <section v-else-if="activeSection === 'vault' || activeSection === 'passwords' || activeSection === 'api-tokens' || activeSection === 'notes' || activeSection === 'passkeys'" class="content-grid">
           <m3e-card variant="filled" class="data-card vault-list-card motion-card">
             <div v-if="filteredSectionItems.length" slot="content" class="item-grid">
-              <article v-for="item in listPagination.slice(filteredSectionItems)" :key="item.id" class="item-card row-clickable" @click="openVaultDetail(item)">
+              <article v-for="item in listPagination.slice(filteredSectionItems)" :key="item.id" :data-item-id="item.id" class="item-card row-clickable" @click="openVaultDetail(item)">
                 <m3e-focus-ring :for="vaultRowDomId(item.id)" class="vault-row-focus" inward />
-                <m3e-list-action :id="vaultRowDomId(item.id)" role="presentation" class="item-card-main" v-list-action="tr('查看{0}详情', { 0: item.title })" @click.stop="openVaultDetail(item)"><WebsiteIcon slot="leading" class="row-icon" :item="item" :fallback="itemIcon(item.kind)" /><strong :title="item.title">{{ item.title }}</strong><small slot="supporting-text">{{ item.kind === 'passkey' ? vaultItemStatus(item) : itemKindLabel(item.kind) }}<template v-if="item.favorite">{{ tr('· 已收藏') }}</template></small></m3e-list-action>
+                <m3e-list-action :id="vaultRowDomId(item.id)" role="presentation" class="item-card-main" v-list-action="tr('查看{0}详情', { 0: item.title })" @click.stop="openVaultDetail(item)"><WebsiteIcon slot="leading" class="row-icon" :item="item" :fallback="itemIcon(item.kind)" /><strong :title="item.title">{{ item.title }}</strong><small slot="supporting-text">{{ item.kind === 'passkey' ? vaultItemStatus(item) : itemKindLabel(item.kind) }}<template v-if="item.kind === 'login' && credentialGroupSize(item) > 1"> · {{ tr('{0} 条密码', { 0: credentialGroupSize(item) }) }}</template><template v-if="item.favorite">{{ tr('· 已收藏') }}</template></small><span v-if="item.kind === 'login' && lockedAutofillIds.includes(item.id)" slot="supporting-text" class="locked-autofill-badge"><m3e-icon name="lock_open" />{{ tr('免解锁填写') }}</span></m3e-list-action>
                 <div class="item-card-summary"><template v-if="item.kind === 'totp'"><span class="item-card-otp" @click.stop><TotpCodeCell :item="item" allow-use :consume-code="advanceHotpItem" /></span></template><span v-else class="item-summary-text" :title="homeItemSummary(item)">{{ homeItemSummary(item) }}</span></div>
                 <div class="item-card-meta"><PasskeyStatus v-if="item.kind === 'passkey'" :item="item" :providers="providers" /><span :title="providerName(item)">{{ providerName(item) }}</span><time :datetime="item.updatedAt">{{ new Date(item.updatedAt).toLocaleDateString(locale) }}</time></div>
-                <div class="item-card-actions" @click.stop><m3e-icon-button v-if="keePassHistoryProvidersFor(item).length" :aria-label="tr('查看 {0} 的 KeePass 历史', { 0: item.title })" @click="openKeePassHistory(item)"><m3e-icon name="history"></m3e-icon></m3e-icon-button><m3e-icon-button v-if="attachmentProvidersFor(item).length" :aria-label="tr('管理 {0} 的附件', { 0: item.title })" @click="openAttachmentDialog(item)"><m3e-icon name="attach_file"></m3e-icon></m3e-icon-button><m3e-icon-button v-if="item.kind === 'login' || isEditableVaultItem(item)" :aria-label="item.kind === 'login' ? tr('编辑登录项') : tr('编辑{0}', { 0: itemKindLabel(item.kind) })" @click="item.kind === 'login' ? openEdit(item) : openVaultEdit(item)"><m3e-icon name="edit"></m3e-icon></m3e-icon-button><m3e-icon-button v-if="item.kind !== 'opaque'" :aria-label="tr('删除{0}', { 0: itemKindLabel(item.kind) })" @click="removeVaultItem(item)"><m3e-icon name="delete"></m3e-icon></m3e-icon-button></div>
+                <div class="item-card-actions" @click.stop><m3e-icon-button v-if="keePassHistoryProvidersFor(item).length" :aria-label="tr('查看 {0} 的 KeePass 历史', { 0: item.title })" @click="openKeePassHistory(item)"><m3e-icon name="history"></m3e-icon></m3e-icon-button><m3e-icon-button v-if="attachmentProvidersFor(item).length" :aria-label="tr('管理 {0} 的附件', { 0: item.title })" @click="openAttachmentDialog(item)"><m3e-icon name="attach_file"></m3e-icon></m3e-icon-button><m3e-icon-button v-if="item.kind === 'login' || isEditableVaultItem(item)" :aria-label="item.kind === 'login' ? tr('编辑登录项') : tr('编辑{0}', { 0: itemKindLabel(item.kind) })" @click="item.kind === 'login' ? openEdit(item) : openVaultEdit(item)"><m3e-icon name="edit"></m3e-icon></m3e-icon-button><m3e-icon-button v-if="item.kind !== 'opaque'" :aria-label="item.kind === 'login' ? tr('删除登录项') : tr('删除{0}', { 0: itemKindLabel(item.kind) })" @click="removeVaultItem(item)"><m3e-icon name="delete"></m3e-icon></m3e-icon-button></div>
               </article>
             </div>
             <div v-else class="empty-state" slot="content"><m3e-icon :name="activeSection === 'wallet' ? 'wallet' : activeSection === 'notes' ? 'note_stack' : activeSection === 'totp' ? 'timer' : 'key_vertical'"></m3e-icon><h2>{{ query || hasActiveManagerFilter ? tr('没有匹配项目') : activeSection === 'vault' ? tr('还没有保存的项目') : tr('还没有{0}', { 0: sectionTitle(activeSection) }) }}</h2><p>{{ query ? tr('换一个关键词试试。') : hasActiveManagerFilter ? tr('调整分类或快捷筛选条件。') : tr('从密码源同步，或使用右上角的添加操作。') }}</p></div>
@@ -3285,7 +3192,6 @@ function errorCode(error: unknown): string | undefined {
       <footer><m3e-button variant="text" type="button" @click="closeBitwardenDialog">{{ tr('取消') }}</m3e-button><m3e-button variant="filled" type="submit" :disabled="bitwardenBusy">{{ bitwardenBusy ? tr('连接中…') : bitwardenDeviceVerificationRequired ? tr('验证新设备并连接') : bitwardenTwoFactorProviders.length ? tr('验证并连接') : bitwardenForm.ssoOrganizationIdentifier.trim() ? tr('打开 SSO 并连接') : tr('登录并连接') }}</m3e-button></footer>
     </form></section></div>
 
-    <PasswordStackDialog v-if="passwordStackDialogOpen" :projects="credentialGroups" :source-label="providerName" @close="passwordStackDialogOpen = false" @saved="passwordStackSaved" />
     <PasswordProjectRestoreDialog v-if="restoringProject" :items="restoringProject.items" :anchor-item-id="restoringProject.anchorItemId" :source-name="restoringProject.sourceName" :keepass-project="restoringProject.keepassProject" @close="restoringProject = undefined" @completed="projectRestoreCompleted" @changed="refreshItems" @pending="showPendingRestores" />
 
     <M3eConfirmationDialog

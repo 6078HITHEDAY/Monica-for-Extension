@@ -107,7 +107,7 @@ try {
     const start = performance.now();
     document.querySelectorAll('.sidebar .nav-item')[1].click();
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    return { ms: performance.now() - start, rows: document.querySelectorAll('.credential-table tbody tr').length };
+    return { ms: performance.now() - start, rows: document.querySelectorAll('.vault-list-card .item-card').length };
   });
   result.managerLogins = render;
   console.log(JSON.stringify({ managerLogins: render }));

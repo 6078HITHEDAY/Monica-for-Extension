@@ -55,7 +55,7 @@ test("Bitwarden SSH keeps native Type 5 data and creates Android-compatible fall
 
     await manager.reload();
     await openLoginSection(manager);
-    await manager.getByRole("row").filter({ hasText: "Native SSH" }).getByRole("button", { name: "编辑登录项" }).click();
+    await manager.locator(".vault-list-card .item-card").filter({ hasText: "Native SSH" }).getByRole("button", { name: "编辑登录项" }).click();
     const nativeDialog = dialogContent(manager, { name: "编辑SSH 密钥" });
     await nativeDialog.locator("[slot=\"header\"]").filter({ hasText: "密钥信息与高级设置" }).click();
     await expect(nativeDialog.getByText("Bitwarden 原生 SSH Cipher（Type 5）", { exact: false })).toBeVisible();
@@ -75,7 +75,7 @@ test("Bitwarden SSH keeps native Type 5 data and creates Android-compatible fall
 
     await manager.reload();
     await openLoginSection(manager);
-    await manager.getByRole("row").filter({ hasText: "Native SSH" }).getByRole("button", { name: "编辑登录项" }).click();
+    await manager.locator(".vault-list-card .item-card").filter({ hasText: "Native SSH" }).getByRole("button", { name: "编辑登录项" }).click();
     await manager.locator(".editor-disclosure [slot=\"header\"]").filter({ hasText: "密钥信息与高级设置" }).click();
     await expect(manager.getByLabel("密钥位数", { exact: true })).toHaveValue("256");
     await expect(manager.getByLabel("注释", { exact: true })).toHaveValue("local encrypted metadata");
@@ -110,7 +110,7 @@ test("Bitwarden SSH keeps native Type 5 data and creates Android-compatible fall
 
     await manager.reload();
     await openLoginSection(manager);
-    await manager.getByRole("row").filter({ hasText: "Fallback SSH" }).getByRole("button", { name: "编辑登录项" }).click();
+    await manager.locator(".vault-list-card .item-card").filter({ hasText: "Fallback SSH" }).getByRole("button", { name: "编辑登录项" }).click();
     const fallbackDialog = dialogContent(manager, { name: "编辑SSH 密钥" });
     await fallbackDialog.locator("[slot=\"header\"]").filter({ hasText: "密钥信息与高级设置" }).click();
     await expect(fallbackDialog.getByText("Monica Android 兼容格式（Type 1 + 加密字段）", { exact: false })).toBeVisible();

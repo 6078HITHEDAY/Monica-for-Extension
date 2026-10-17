@@ -83,7 +83,7 @@ test("manager edits Android Wi-Fi SSH key and barcode records with local QR oper
     expect(barcode).toMatchObject({ loginType: "BARCODE", password: "MONICA-123456789" });
     await manager.reload();
     await manager.getByRole("navigation", { name: "主导航" }).getByRole("button", { name: /^登录项/ }).click();
-    await manager.getByRole("row").filter({ hasText: "Membership Barcode" }).getByRole("button", { name: "编辑登录项" }).click();
+    await manager.locator(".vault-list-card .item-card").filter({ hasText: "Membership Barcode" }).getByRole("button", { name: "编辑登录项" }).click();
     await editContentSection(manager, "复制与条码", async section => {
       await section.getByRole("radio", { name: "Code 128" }).check();
       await section.getByRole("button", { name: "生成条码" }).click();

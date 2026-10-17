@@ -24,9 +24,9 @@ img.brand-logo { display: block; flex: 0 0 44px; width: 44px; height: 44px; obje
 .metric p, thead th { font: 500 .8125rem/1.5 var(--font-ui); letter-spacing: normal; text-transform: none; }
 .row-icon { color: var(--app-primary); border: 0; border-radius: 16px; background: var(--app-selected); }
 #root .vault-result-count { font: 400 .8125rem/1.5 var(--font-ui); }
-#root .vault-list-card :is(.item-card, .credential-table tbody tr) { border-radius: 4px; }
-#root .vault-list-card :is(.item-card, .credential-table tbody tr):first-child { border-start-start-radius: 24px; border-start-end-radius: 24px; }
-#root .vault-list-card :is(.item-card, .credential-table tbody tr):last-child { border-end-start-radius: 24px; border-end-end-radius: 24px; }
+#root .vault-list-card .item-card { border-radius: 4px; }
+#root .vault-list-card .item-card:first-child { border-start-start-radius: 24px; border-start-end-radius: 24px; }
+#root .vault-list-card .item-card:last-child { border-end-start-radius: 24px; border-end-end-radius: 24px; }
 #root .vault-list-card .row-icon { border-radius: 14px; background: var(--app-selected); }
 #root .vault-list-card .item-card-meta time { font-family: var(--font-ui); }
 #root .vault-list-card .empty-state { border: 0; border-radius: 24px; background: var(--app-surface); }

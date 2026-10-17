@@ -146,8 +146,6 @@
 #main-content .getting-started-actions { flex-wrap: wrap; gap: var(--app-action-gap); }
 #main-content :is(.source-actions, .detail-actions, .steam-row-actions) { gap: var(--app-action-gap); }
 #main-content :is(.source-actions, .settings-actions) > * { max-width: 100%; }
-#main-content .login-data-card .row-title { width: 100%; min-height: 44px; margin: 0; padding: 0; font-size: .875rem; line-height: 1.4; }
-#main-content .login-data-card .credential-compact-summary { font-size: .75rem; line-height: 1.4; }
 
 @container manager-content (max-width: 48rem) {
   #main-content .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -166,9 +164,6 @@
   #root .appbar-actions m3e-button { flex: 1 1 0; }
   #main-content .getting-started-actions m3e-button { flex: 1 1 9rem; }
   #main-content .source-actions > m3e-button { width: 100%; }
-  #main-content .login-data-card .credential-table tbody tr { grid-template-columns: minmax(0, 1fr); }
-  #main-content .login-data-card .credential-table .item-cell { padding: 8px 12px 4px; }
-  #main-content .login-data-card .credential-table .action-cell { padding: 0 8px 8px; flex-wrap: wrap; }
 }
 
 /* Long editors keep their actions outside the field scroller. */

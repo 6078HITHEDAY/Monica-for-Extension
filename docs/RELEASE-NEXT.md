@@ -4,6 +4,8 @@
 
 ## 中文
 
+- 插件移除显示分组、管理堆叠和封面操作，各密码项目直接平铺。登录项与全部项目复用同一列表样式，收紧卡片高度和垂直留白；已有项目内的账号、密码及 Android 分组元数据保持完整。
+
 - 移除时间线页面、侧栏入口及后台读取接口，保留 Android 备份原有内容。移除侧栏独立的 API 密钥入口；密码项目中的 API 密钥类型继续可用，已有原生 API Token 记录仍可在“全部项目”中管理。
 
 - 整合 PR #13 与本地 Wi-Fi 开发改动，保留单一设置入口、MDBX 接收恢复与性能优化。补齐 Windows 通信组件配置下载、二维码／链接切换，移除手填 IP。配对成功不再误报同步完成；只有对方确认保存后才更新同步时间并弹出结果，显示本机实际保存／删除的项目及数量，不显示密码。对方保存失败或超时会明确报错。详见[合并验证](verification/pr13-integration-2026-10-17.md)；真实手机首次同步仍待复测，Android 自动同步所需 mDNS 在线广播尚未接入。
@@ -37,6 +39,8 @@ Wi-Fi 首轮范围于 2026-10-16 冻结，保留[当时的阶段记录](verifica
 后续待办：部分原生归档与文件夹配置、Android 两版文件夹／根目录附件收发，以及 F-Droid、Android 界面与组播发现验收尚未完成。插件优先兼容 Android 现有协议；本次文件夹修复不要求 Android 修改。完整 Android 对齐还包含跨后端冲突、恢复与真实 OneDrive 验收。这些未完成内容不计入本次阶段完成范围，本记录不表示已发布。
 
 ## English
+
+- Removed display grouping, stack management and cover controls from the extension. Password projects now appear in a flat list, with Login and All items sharing the same more compact cards. Accounts, passwords within projects and existing Android grouping metadata remain intact.
 
 - Removed the timeline page, navigation entry and background read API while preserving existing Android backup contents. Removed the separate API-key sidebar entry; API-key password projects remain available, and existing native API Token records can still be managed under All items.
 

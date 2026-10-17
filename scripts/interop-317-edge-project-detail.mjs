@@ -13,8 +13,8 @@ export async function runProjectDetailUi({ page, evidence, screenshot }) {
     const nav = page.getByRole('button', { name: /^登录项/ });
     await expect(nav.locator('.nav-count')).toHaveText('3');
     await nav.click();
-    await expect(page.locator('.credential-table tbody tr')).toHaveCount(3);
-    await expect(page.locator('.credential-table').getByText('5 条密码', { exact: false })).toHaveCount(2);
+    await expect(page.locator('.vault-list-card .item-card')).toHaveCount(3);
+    await expect(page.locator('.vault-list-card').getByText('5 条密码', { exact: false })).toHaveCount(2);
     await page.getByRole('button', { name: /^全部项目/ }).click();
   }
   for (const [projectIndex, projectId] of projects.entries()) {

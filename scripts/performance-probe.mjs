@@ -76,9 +76,9 @@ try {
   await expect(manager.locator('.page-heading h1')).toBeVisible();
   await sample(manager, 'managerVault');
   await manager.locator('.sidebar .nav-item').nth(1).click();
-  await expect(manager.locator('.credential-table tbody tr').first()).toBeVisible();
+  await expect(manager.locator('.vault-list-card .item-card').first()).toBeVisible();
   await sample(manager, 'managerLogins');
-  result.renderedLoginRows = await manager.locator('.credential-table tbody tr').count();
+  result.renderedLoginRows = await manager.locator('.vault-list-card .item-card').count();
   await manager.getByRole('navigation').getByRole('button', { name: /^Bestätigungscodes/ }).click();
   await expect(manager.locator('.totp-code-cell').first()).toBeVisible();
   await manager.waitForTimeout(1100);

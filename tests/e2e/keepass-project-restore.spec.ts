@@ -101,7 +101,7 @@ test('actual Edge restores a freshly imported KDBX trash project together and pu
       expect(last.binaries).toEqual(first.binaries); expect(last.history.length).toBe(first.history.length);
     }
     await app.page.reload(); await app.page.getByRole('button', { name: /^登录项/ }).click();
-    await expect(app.page.locator('[data-stack-project], .credential-table tbody tr')).toHaveCount(2);
+    await expect(app.page.locator('.vault-list-card .item-card')).toHaveCount(2);
     await app.page.screenshot({ path: info.outputPath('restored-project.png') });
     evidence.trashSha256 = hash(trashFile); evidence.restoredSha256 = hash(restoredBytes);
     evidence.cancelPreserved = true; evidence.freshTrashProject = 3; evidence.queuedRestartVerified = true;
