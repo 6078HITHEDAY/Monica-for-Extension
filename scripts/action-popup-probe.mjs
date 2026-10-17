@@ -47,6 +47,9 @@ try {
   assert(setup?.ok, "Action Popup probe could not create its temporary vault.");
   const locked = await manager.evaluate(async () => chrome.runtime.sendMessage({ type: "VAULT_LOCK" }));
   assert(locked?.ok, "Action Popup probe could not lock its temporary vault.");
+  // The attached Popup is outside Playwright's locale emulation and would follow
+  // the machine language (English on CI runners); select the asserted language.
+  await manager.evaluate(async () => chrome.storage.local.set({ "monica.locale": "zh-CN" }));
   await manager.close();
   const site = await ownerContext.newPage();
   await site.goto("https://popup-probe.example.test/login");

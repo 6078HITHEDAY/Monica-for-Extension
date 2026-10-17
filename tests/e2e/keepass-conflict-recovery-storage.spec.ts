@@ -2,13 +2,16 @@ import { expect, test } from '@playwright/test';
 import { createServer } from 'node:http';
 import { build } from 'esbuild';
 import { writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { launchEdgeContext } from './fixtures/edge';
 
 test('actual Edge recovery storage retains authenticated snapshots across abort, concurrent retry and restart', async ({}, info) => {
   test.setTimeout(90_000);
   const helper = info.outputPath('recovery.js');
   await build({ stdin: { contents: "export * from './src/providers/keepass/keepass-conflict-recovery'; export * from './src/providers/keepass/keepass-conflict-recovery-store';", resolveDir: process.cwd() },
-    outfile: helper, bundle: true, platform: 'browser', format: 'iife', globalName: 'Recovery', logLevel: 'silent' });
+    outfile: helper, bundle: true, platform: 'browser', format: 'iife', globalName: 'Recovery', logLevel: 'silent',
+    // Same alias as scripts/build-workers.mjs: kdbxweb only touches Node crypto without WebCrypto.
+    alias: { crypto: path.resolve('scripts/stubs/node-crypto.js') } });
   const server = createServer((_request, response) => { response.writeHead(200, { 'Content-Type': 'text/html' }); response.end('<!doctype html><title>Isolated recovery storage test</title>'); });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('Missing local server');

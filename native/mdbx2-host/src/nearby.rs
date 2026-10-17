@@ -795,6 +795,27 @@ impl Nearby {
                 "sync_mode",
             ],
         )?;
+        // Android advertises `revision:settings_version:settings_writer:sync_request`
+        // and reads those parts to notice settings changes and explicit sync
+        // requests. The top-level revision only feeds the discovery offer.
+        let advertisement = match (
+            device.get("settings_version"),
+            device.get("settings_writer"),
+            device.get("sync_request"),
+        ) {
+            (
+                Some(Value::Number(version)),
+                Some(Value::String(writer)),
+                Some(Value::Number(request)),
+            ) if writer.len() <= 64
+                && writer
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') =>
+            {
+                format!("{}:{version}:{writer}:{request}", snapshot.revision)
+            }
+            _ => snapshot.revision.to_string(),
+        };
         device.insert("revision".into(), json!(snapshot.revision));
         device.insert("content_type".into(), json!("vault"));
         device.insert("vault_content_version".into(), json!(2));
@@ -811,7 +832,7 @@ impl Nearby {
         request["protocol"] = json!(2);
         request["device"] = Value::Object(device);
         request["name"] = name;
-        request["revision"] = json!(snapshot.revision);
+        request["revision"] = json!(advertisement);
         request["vault_id"] = json!("monica-passwords-v1");
         request["content_key"] = json!(*snapshot.key);
         request["incoming_directory"] = json!(leaf);

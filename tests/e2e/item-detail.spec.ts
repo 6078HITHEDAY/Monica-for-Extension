@@ -26,6 +26,7 @@ test("list rows open a masked M3E detail page for every item kind", async ({}, t
       { ...common, id: "detail-totp", kind: "totp", title: "Detail OTP", secret: "JBSWY3DPEHPK3PXP", issuer: "Example", accountName: "joy@example.com" }
     ] }), "utf8");
     await page.locator("button.nav-item").filter({ hasText: "设置与备份" }).click();
+    await page.locator('[data-settings-entry="backup"]').click();
     await page.locator("label.file-action").filter({ hasText: "导入明文 JSON" }).locator('input[type="file"]').setInputFiles(importPath);
     await expect(page.getByText(/已加密导入 5 个密码库项目/)).toBeVisible();
 
@@ -55,7 +56,7 @@ test("list rows open a masked M3E detail page for every item kind", async ({}, t
     await page.locator("button.nav-item").filter({ hasText: "钱包与身份" }).click();
     await page.getByRole("button", { name: "查看Detail Card详情", exact: true }).click();
     const cardDetail = dialogContent(page, { name: /Detail Card/ });
-    await expect(cardDetail.getByText(/•••• 1111/)).toBeVisible();
+    await expect(cardDetail.locator(".detail-field-value").filter({ hasText: /^•+ 1111$/ })).toBeVisible();
     await expect(page.getByText("4111111111111111", { exact: true })).toHaveCount(0);
     await cardDetail.getByRole("button", { name: "显示卡号" }).click();
     await expect(cardDetail.getByText("4111111111111111", { exact: true })).toBeVisible();

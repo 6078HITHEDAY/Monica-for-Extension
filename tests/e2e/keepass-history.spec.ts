@@ -56,6 +56,8 @@ test("KeePass history reveals one field at a time and restores a complete KDBX4.
     });
     await sourceDialog.getByLabel("数据库密码（可留空）").fill(DATABASE_PASSWORD);
     await sourceDialog.getByRole("button", { name: "解锁并连接" }).click();
+    // The dialog closes once the source is connected and saved.
+    await expect(sourceDialog).toHaveCount(0);
 
     const providerResponse = await page.evaluate(async () => chrome.runtime.sendMessage({ type: "PROVIDER_LIST" })) as RuntimeResponse<Array<{ id: string; name: string }>>;
     expect(providerResponse, providerResponse.error).toMatchObject({ ok: true });

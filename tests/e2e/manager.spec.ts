@@ -40,7 +40,9 @@ test("manager UI creates edits imports and deletes non-login vault records", asy
     await expect(manager.getByText(/•••• 1111/)).toBeVisible();
     await expect(manager.getByText("4111111111111111", { exact: true })).toHaveCount(0);
 
-    await manager.getByRole("button", { name: "编辑银行卡" }).click();
+    // Wallet items are tiles; editing lives in each tile's actions menu.
+    await manager.locator(".vault-tile").filter({ hasText: "Daily Visa" }).locator(".vault-tile-menu-trigger").click();
+    await manager.locator(".vault-tile-menu:popover-open").getByRole("menuitem", { name: "编辑", exact: true }).click();
     await manager.getByLabel("名称 *").fill("Daily Visa Updated");
     await manager.getByRole("button", { name: "加密保存" }).click();
     await expect(dialogContent(manager)).toHaveCount(0);
@@ -50,18 +52,23 @@ test("manager UI creates edits imports and deletes non-login vault records", asy
     await manager.getByRole("button", { name: "添加安全笔记" }).click();
     await manager.getByLabel("名称 *").fill("Private Note");
     await manager.getByLabel("笔记内容 *").fill("Recovery instructions stored safely.");
-    await manager.locator(".editor-disclosure [slot=\"header\"]").filter({ hasText: "自定义字段" }).click();
+    // Supplemental content opens in its own editor section and returns with Done.
+    const customFields = manager.locator('[data-content-section="自定义字段"] [data-content-open]');
+    await customFields.click();
     await manager.getByRole("button", { name: "添加字段" }).click();
     await manager.getByLabel("自定义字段 1 名称").fill("Recovery code");
     await manager.getByLabel("自定义字段 1 值").fill("ABCD");
     await chooseOption(manager.getByLabel("自定义字段 1 类型"), "HIDDEN");
+    await manager.getByRole("button", { name: "完成", exact: true }).click();
     await manager.getByRole("button", { name: "加密保存" }).click();
     await expect(dialogContent(manager)).toHaveCount(0);
     await expect(manager.getByText("Private Note", { exact: true })).toBeVisible();
     await manager.getByRole("button", { name: "编辑安全笔记" }).click();
+    await customFields.click();
     await expect(manager.getByLabel("自定义字段 1 名称")).toHaveValue("Recovery code");
     await expect(manager.getByLabel("自定义字段 1 值")).toHaveValue("ABCD");
     await expect(manager.getByLabel("自定义字段 1 类型")).toHaveJSProperty("value", "HIDDEN");
+    await manager.getByRole("button", { name: "完成", exact: true }).click();
     await manager.getByRole("button", { name: "取消" }).click();
 
     await manager.getByRole("button", { name: /动态验证码/ }).click();
@@ -91,13 +98,17 @@ test("manager UI creates edits imports and deletes non-login vault records", asy
     ] }), "utf8");
 
     await manager.getByRole("button", { name: "设置与备份" }).click();
+    await manager.locator('[data-settings-entry="backup"]').click();
     await manager.locator("label.file-action").filter({ hasText: "导入明文 JSON" }).locator('input[type="file"]').setInputFiles(importPath);
     await expect(manager.getByText(/已加密导入 4 个密码库项目/)).toBeVisible();
     await manager.getByRole("button", { name: /钱包与身份/ }).click();
-    for (const title of ["Imported Passport", "Imported Home", "Imported Bank"]) await expect(manager.getByText(title, { exact: true })).toBeVisible();
+    for (const title of ["Imported Passport", "Imported Home", "Imported Bank"]) await expect(manager.locator(".vault-tile-open").getByText(title, { exact: true })).toBeVisible();
     await manager.getByRole("button", { name: /Passkey/ }).click();
     await expect(manager.getByText("Imported Passkey", { exact: true })).toBeVisible();
-    await expect(manager.getByText("Android 元数据，仅可查看", { exact: true })).toBeVisible();
+    // Metadata-only Passkeys are marked unusable in the browser, with the reason.
+    const passkeyStatus = manager.locator(".passkey-status-badges", { hasText: "浏览器不可用" });
+    await expect(passkeyStatus).toBeVisible();
+    await expect(passkeyStatus).toHaveAttribute("title", /仅含 Android 元数据/);
 
     const response = await manager.evaluate(async () => chrome.runtime.sendMessage({ type: "VAULT_LIST_ITEMS" })) as { ok: boolean; data: Array<{ kind: string; title: string }> };
     expect(response.ok).toBe(true);

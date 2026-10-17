@@ -7,14 +7,19 @@ import { nearbyDeviceHello, nearbySettingsCounter, type NearbyPreferences, type 
 import { collectNearbyPending, groupNearbyPending, nearbyApplicationReferences } from './pending';
 import type { NearbyIncomingRecord, NearbyLocalAcknowledgement, NearbyLocalSnapshot } from './local-adoption';
 import { NearbyDataError, wireInteger, wireObject, wireText } from './wire-shape';
+import { nearbyEngineCode, nearbyErrorCode } from './errors';
 
 type Store = Pick<SecureVaultService, 'passkeySessionId' | 'nearbySessionPreferences' | 'assertNearbySession' | 'updateNearbyPreferences'
   | 'captureNearbyLocalRecords' | 'nearbyLocalSnapshotHash' | 'nearbySavedAcknowledgements' | 'nearbyPendingPasswordGroups' | 'adoptNearbyLocalTransaction'>;
 export interface NearbyEndpoint { addresses: string[]; port: number }
+/** Android's rule: the device with the greater ID listens; the other discovers and dials. */
+export type NearbyConnectionRole = 'listening' | 'dialing';
 export interface NearbyCoordinatorView {
   phase: 'idle' | 'pairing' | 'preparing' | 'review' | 'ready' | 'transferring' | 'saving' | 'completed' | 'failed' | 'cancelled';
   operationId?: string; peerId?: string; peerName?: string; recoveryOnly?: boolean;
-  pairing?: { code: string; invitations: string[] }; endpoint?: NearbyEndpoint;
+  pairing?: { code: string; invitations: string[] }; endpoint?: NearbyEndpoint; role?: NearbyConnectionRole;
+  /** Native transfer stage and byte counters, for progress display only. */
+  transport?: { stage: string; transferred: number; total: number };
   review?: NearbyPasskeyReview; applied?: number; error?: string;
 }
 export class NearbyCoordinatorError extends Error {
@@ -28,7 +33,8 @@ const validId = (value: unknown) => { const text = wireText(value); if (!identit
 
 function endpoint(value: unknown): NearbyEndpoint {
   const item = wireObject(value);
-  if (!Array.isArray(item.addresses) || !item.addresses.length || item.addresses.length > 16 || typeof item.port !== 'number'
+  // The native engine accepts at most eight invitation addresses.
+  if (!Array.isArray(item.addresses) || !item.addresses.length || item.addresses.length > 8 || typeof item.port !== 'number'
     || !Number.isInteger(item.port) || item.port < 1 || item.port > 65535) failure('invalid-endpoint');
   const addresses = item.addresses.map(raw => {
     const address = string(raw, 15), parts = address.split('.');
@@ -40,8 +46,13 @@ function endpoint(value: unknown): NearbyEndpoint {
   if (new Set(addresses).size !== addresses.length) failure('invalid-endpoint');
   return { addresses, port: item.port };
 }
+function localAddress(value: string): boolean {
+  try { endpoint({ addresses: [value], port: 1 }); return true; } catch { return false; }
+}
 function invitation(value: unknown): { address: NearbyEndpoint; key: string; text: string } {
-  const text = string(value, 512), parts = text.split(':');
+  // Copied invitations commonly carry surrounding whitespace or a trailing newline.
+  const text = string(typeof value === 'string' ? value.trim() : value, 512), parts = text.split(':');
+  if (parts.length === 5 && parts[0] === 'monica-lan' && parts[1] === '1') failure('unsupported-protocol');
   if (parts.length !== 5 || parts[0] !== 'monica-lan' || parts[1] !== '2' || !/^[A-Za-z0-9_-]{43}$/.test(parts[4]) || !/^[1-9]\d{0,4}$/.test(parts[3])) failure('invalid-invitation');
   return { address: endpoint({ addresses: parts[2].split(','), port: Number(parts[3]) }), key: parts[4], text };
 }
@@ -71,6 +82,7 @@ export class NearbyLocalCoordinator {
   private revision = '';
   private peer?: NearbySavedPeer;
   private enrolling = false;
+  private remoteAddress?: string;
   private acknowledged = false;
   private consent = new NearbyPasskeyConsent();
   private view: NearbyCoordinatorView = { phase: 'idle' };
@@ -84,7 +96,7 @@ export class NearbyLocalCoordinator {
     this.generation++;
     this.abort.abort(); this.transport?.close(); this.transport = undefined;
     this.consent.reset(); this.preferences = undefined; this.peer = undefined; this.sessionId = undefined;
-    this.replica = this.snapshot = this.transfer = this.sourceHash = undefined;
+    this.replica = this.snapshot = this.transfer = this.sourceHash = this.remoteAddress = undefined;
     this.view = { phase: 'cancelled' };
   }
   private run<T>(action: () => Promise<T>): Promise<T> {
@@ -98,7 +110,9 @@ export class NearbyLocalCoordinator {
         return result;
       }
       catch (error) {
-        const code = error instanceof NearbyCoordinatorError || error instanceof NearbyDataError ? error.code : 'operation-failed';
+        // Keep transport and native-host codes (for example a missing helper or a
+        // refused connection) so the manager can explain how to recover.
+        const code = error instanceof NearbyCoordinatorError || error instanceof NearbyDataError ? error.code : nearbyErrorCode(error);
         this.close(); this.view = { phase: 'failed', error: code }; throw new NearbyCoordinatorError(code);
       }
     });
@@ -136,7 +150,7 @@ export class NearbyLocalCoordinator {
       this.replica = this.snapshot = this.transfer = undefined;
     }
     if (!this.transport) { this.abort = new AbortController(); this.transport = this.factory(); }
-    this.peer = undefined; this.sourceHash = undefined; this.enrolling = false; this.acknowledged = false; this.consent.reset();
+    this.peer = undefined; this.sourceHash = undefined; this.remoteAddress = undefined; this.enrolling = false; this.acknowledged = false; this.consent.reset();
     this.view = { phase: 'preparing', operationId: crypto.randomUUID(), applied: 0 };
   }
   async pair(link?: string): Promise<NearbyCoordinatorView> {
@@ -151,7 +165,10 @@ export class NearbyLocalCoordinator {
         ...(link ? { invitation: invitation(link).text } : this.listenAddress ? { listen_address: this.listenAddress } : {}) });
       this.transfer = token(started.handle);
       const invitations = link ? [] : (Array.isArray(started.invitations) ? started.invitations.map(value => invitation(value).text) : failure('invalid-invitation'));
-      this.view = { ...this.view, phase: 'pairing', pairing: { code: started.code === undefined ? '' : string(started.code, 64), invitations } };
+      // Without a private IPv4 interface the listener is unreachable; say so instead of showing an empty code.
+      if (!link && !invitations.length) failure('no-local-network');
+      this.view = { ...this.view, phase: 'pairing', role: link ? 'dialing' : 'listening',
+        pairing: { code: started.code === undefined ? '' : string(started.code, 64), invitations } };
       return this.status();
     });
   }
@@ -213,25 +230,70 @@ export class NearbyLocalCoordinator {
       await this.guard(true);
       const device = nearbyDeviceHello(this.preferences!, this.peer.deviceId);
       if (this.view.recoveryOnly) device.sync_mode = 'receive_only';
-      const target = address && endpoint(address);
+      // Android listens only when its ID is greater and otherwise dials the
+      // advertised listener. Mirror that rule so both sides never wait at once.
+      const target = address ? endpoint(address) : this.role() === 'dialing' ? await this.locate() : undefined;
+      await this.guard(true);
       const started = await this.call(target ? 'connect' : 'start', { snapshot: this.snapshot, device, expected_device_id: this.peer.deviceId,
         ...(target ? { invitation: `monica-lan:2:${target.addresses.join(',')}:${target.port}:${this.peer.trustedKey}` }
           : { trusted_key: this.peer.trustedKey, ...(this.listenAddress ? { listen_address: this.listenAddress } : {}) }) });
-      this.transfer = token(started.handle); this.view.phase = 'transferring';
-      if (!target) {
-        if (!Array.isArray(started.invitations) || !started.invitations.length) failure('invalid-invitation');
+      this.transfer = token(started.handle); this.view.phase = 'transferring'; this.view.role = target ? 'dialing' : 'listening';
+      if (target) this.view.endpoint = target;
+      else {
+        if (!Array.isArray(started.invitations) || !started.invitations.length) failure('no-local-network');
         const link = invitation(started.invitations[0]); if (link.key !== this.peer.trustedKey) failure('peer-key-changed');
         this.view.endpoint = link.address;
       }
       return this.status();
     });
   }
+  private role(): NearbyConnectionRole {
+    return this.preferences!.deviceId < this.peer!.deviceId ? 'dialing' : 'listening';
+  }
+  private pause(milliseconds: number): Promise<void> {
+    const signal = this.abort.signal;
+    return new Promise((resolve, reject) => {
+      if (signal.aborted) { reject(new NearbyCoordinatorError('session-closed')); return; }
+      const aborted = () => { clearTimeout(timer); reject(new NearbyCoordinatorError('session-closed')); };
+      const timer = setTimeout(() => { signal.removeEventListener('abort', aborted); resolve(); }, milliseconds);
+      signal.addEventListener('abort', aborted, { once: true });
+    });
+  }
+  /** Find the paired listener by its authenticated pair ID. Unicast probes to the
+   * last known address still work where Wi-Fi access points filter multicast. */
+  private async locate(): Promise<NearbyEndpoint> {
+    const peer = this.peer!;
+    for (let round = 0; round < 3; round++) {
+      const begun = await this.call('discover', { targets: peer.address ? [peer.address] : [], multicast: true });
+      const discovery = token(begun.handle);
+      let result: Record<string, unknown> | undefined;
+      for (let wait = 0; wait < 40 && !result; wait++) {
+        await this.pause(200);
+        const polled = await this.call('discovery_result', { handle: discovery });
+        if (polled.ready === true) result = wireObject(polled.result);
+      }
+      if (!result || !Array.isArray(result.devices)) failure('discovery-unavailable');
+      for (const raw of result.devices) {
+        const found = wireObject(raw);
+        if (found.device_id !== peer.deviceId || found.session !== peer.pairId || found.trusted !== true) continue;
+        const candidates = [found.address, ...(Array.isArray(found.addresses) ? found.addresses : [])].filter(value => typeof value === 'string');
+        try { return endpoint({ addresses: [...new Set(candidates)].slice(0, 8), port: found.port }); } catch { /* Ignore an unusable advertisement. */ }
+      }
+    }
+    failure('peer-not-found');
+  }
   async poll(): Promise<NearbyCoordinatorView> {
     return this.run(async () => {
       if (!this.transfer) return this.status();
       await this.guard(!this.enrolling && !this.acknowledged);
       const progress = await this.call('progress', { handle: this.transfer });
-      if (progress.phase === 'failed' || progress.phase === 'cancelled') failure('transfer-failed');
+      if (progress.phase === 'failed' || progress.phase === 'cancelled') failure(nearbyEngineCode(progress.error) ?? 'transfer-failed');
+      if (typeof progress.phase === 'string' && /^[a-z_]{1,32}$/.test(progress.phase)) {
+        const count = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+        this.view.transport = { stage: progress.phase, transferred: count(progress.transferred), total: count(progress.total) };
+      }
+      const remoteAddress = typeof progress.remote_address === 'string' ? progress.remote_address : undefined;
+      if (remoteAddress) this.remoteAddress = remoteAddress;
       if (progress.phase === 'received' && !this.acknowledged) {
         const remote = wireObject(progress.peer), id = validId(remote.device_id);
         if (id === this.preferences!.deviceId || this.peer && this.peer.deviceId !== id || remote.content_type !== 'vault' || remote.vault_content_version !== 2) failure('unexpected-peer');
@@ -302,6 +364,9 @@ export class NearbyLocalCoordinator {
       lastSyncedAt: this.enrolling ? 0 : Math.max(Date.now(), this.peer?.lastSyncedAt ?? 0),
       sentRevision: this.enrolling ? '' : this.revision, receivedRevision: this.enrolling ? '' : string(remote.revision),
       receivedRequest: this.enrolling ? '0' : nearbySettingsCounter(remote.sync_request) };
+    // Remember where the peer was reachable; later discovery probes it directly.
+    const address = this.remoteAddress ?? this.peer?.address;
+    if (address && localAddress(address)) peer.address = address;
     const view = await this.store.updateNearbyPreferences({ kind: 'remember', peer, enrollment: this.enrolling }, p.epoch, this.sessionId!, this.transactionGuard());
     this.preferences = { ...p, epoch: view.epoch, peers: [...p.peers.filter(entry => entry.deviceId !== id), peer] };
     await this.guard();

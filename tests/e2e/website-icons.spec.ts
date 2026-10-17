@@ -76,6 +76,8 @@ test("website icons are private, cached, and consistent across lists, details an
     }, fixtures)).toMatchObject({ ok: true });
     await page.reload();
     const mainCard = page.locator(".item-card").filter({ hasText: "Studio account" });
+    // Icons load lazily as cards approach the viewport.
+    await mainCard.scrollIntoViewIfNeeded();
     await expect(mainCard.locator(".website-icon__image.is-loaded")).toBeVisible();
     await expect(mainCard.locator(".website-icon__favorite")).toBeVisible();
     await expect.poll(() => requests.filter(request => request.url === "https://icons.example.com/favicon.ico").length).toBe(1);

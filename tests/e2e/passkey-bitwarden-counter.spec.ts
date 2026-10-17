@@ -1,5 +1,6 @@
 import { launchEdgeContext } from "./fixtures/edge";
 import { createHash, createPublicKey, verify } from "node:crypto";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { chromium, expect, test, type Page, type Route } from "@playwright/test";
 import { BitwardenClient } from "../../src/providers/bitwarden/bitwarden-client";
@@ -76,7 +77,8 @@ for (const mode of ["github-json", "zero-offline", "positive", "during-sync", "f
     const mock = await server(mode === "github-json" || mode === "zero-offline" || mode === "discover" ? 0 : 3, origin);
     const extensionPath = path.resolve("dist");
     const launch = mode === "github-json" ? chromium.launchPersistentContext.bind(chromium) : launchEdgeContext;
-    const profile = mode === "github-json" ? `D:/Monica-github-${Date.now()}` : testInfo.outputPath("profile");
+    // A short temp path keeps the profile under Windows path limits without writing into the checkout.
+    const profile = mode === "github-json" ? path.join(tmpdir(), `monica-github-${Date.now()}`) : testInfo.outputPath("profile");
     const context = await launch(profile, { channel: "chromium", headless: true, locale: "zh-CN", args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`] });
     let concurrentSync: Promise<unknown> | undefined;
     try {

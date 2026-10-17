@@ -6,6 +6,8 @@ export type NearbySyncMode = 'bidirectional' | 'send_only' | 'receive_only';
 export interface NearbySavedPeer {
   deviceId: string; name: string; pairId: string; trustedKey: string;
   lastSyncedAt: number; sentRevision: string; receivedRevision: string; receivedRequest: string;
+  /** Last private IPv4 address the authenticated peer used; a discovery hint only. */
+  address?: string;
 }
 export interface NearbyPreferences {
   version: 1;
@@ -65,10 +67,17 @@ function secret(value: unknown): void {
   const decoded = Uint8Array.from(atob(value.replace(/-/g, '+').replace(/_/g, '/') + '='), c => c.charCodeAt(0));
   try { if (decoded.length !== 32 || base64url(decoded) !== value) fail('invalid-key'); } finally { decoded.fill(0); }
 }
+function privateIpv4(value: string): boolean {
+  const parts = value.split('.');
+  if (parts.length !== 4 || parts.some(part => !/^(?:0|[1-9]\d{0,2})$/.test(part) || Number(part) > 255)) return false;
+  const [a, b] = parts.map(Number);
+  return a === 10 || a === 172 && b >= 16 && b <= 31 || a === 192 && b === 168 || a === 169 && b === 254 || a === 127;
+}
 function base64url(bytes: Uint8Array): string { return bytesToBase64(bytes).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_'); }
 function peer(value: unknown): NearbySavedPeer {
   const p = object(value);
-  fields(p, ['deviceId', 'name', 'pairId', 'trustedKey', 'lastSyncedAt', 'sentRevision', 'receivedRevision', 'receivedRequest']);
+  fields(p, ['deviceId', 'name', 'pairId', 'trustedKey', 'lastSyncedAt', 'sentRevision', 'receivedRevision', 'receivedRequest', 'address']);
+  if (p.address !== undefined && (typeof p.address !== 'string' || !privateIpv4(p.address))) fail('invalid-address');
   id(p.deviceId); id(p.pairId); name(p.name, false); secret(p.trustedKey); long(p.receivedRequest);
   if (typeof p.lastSyncedAt !== 'number' || !Number.isSafeInteger(p.lastSyncedAt) || p.lastSyncedAt < 0 || p.lastSyncedAt > 253402300799999) fail('invalid-time');
   for (const value of [p.sentRevision, p.receivedRevision]) if (typeof value !== 'string' || value.length > 128 || /[\u0000-\u001f\u007f-\u009f]/.test(value)) fail('invalid-revision');
@@ -98,7 +107,12 @@ export function createNearbyPreferences(provider: ProviderAccount): NearbyPrefer
   if (!provider.enabled || provider.kind !== 'local') fail('local-provider-required');
   const bytes = crypto.getRandomValues(new Uint8Array(32));
   try {
-    return readNearbyPreferences({ version: 1, epoch: crypto.randomUUID(), deviceId: crypto.randomUUID().replace(/-/g, ''), name: 'Monica Browser',
+    // Android's rule makes the device with the smaller ID dial the other. A leading
+    // "00" makes the browser the dialing side for nearly every phone, so syncing
+    // needs only outbound connections and no inbound desktop firewall exception.
+    // Existing IDs are kept: pairings are bound to them and both roles still work.
+    const deviceId = `00${crypto.randomUUID().replace(/-/g, '').slice(2)}`;
+    return readNearbyPreferences({ version: 1, epoch: crypto.randomUUID(), deviceId, name: 'Monica Browser',
       replicaStorageId: crypto.randomUUID(), replicaKey: base64url(bytes), enabled: false, mode: 'bidirectional', intervalSeconds: 0,
       settingsVersion: '0', settingsWriter: '', syncRequest: '0', localProviderId: provider.id, peers: [] })!;
   } finally { bytes.fill(0); }

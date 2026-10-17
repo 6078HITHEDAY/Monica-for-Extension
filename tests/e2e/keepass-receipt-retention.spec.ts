@@ -14,7 +14,9 @@ test('actual Edge upgrades existing KeePass receipts and atomically retains spen
   test.setTimeout(90_000);
   const helper = info.outputPath('receipts.js');
   await build({ stdin: { contents: "export * from './src/providers/keepass/keepass-working-copy-store';", resolveDir: process.cwd() },
-    outfile: helper, bundle: true, platform: 'browser', format: 'iife', globalName: 'ReceiptStorage', logLevel: 'silent' });
+    outfile: helper, bundle: true, platform: 'browser', format: 'iife', globalName: 'ReceiptStorage', logLevel: 'silent',
+    // Same alias as scripts/build-workers.mjs: kdbxweb only touches Node crypto without WebCrypto.
+    alias: { crypto: path.resolve('scripts/stubs/node-crypto.js') } });
   const server = createServer((_request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/html' }); response.end('<!doctype html><title>Synthetic KeePass receipt test</title>');
   });

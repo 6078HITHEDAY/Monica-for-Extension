@@ -1,0 +1,3 @@
+# The MDBX engine provenance pins this upstream fixture byte-for-byte with CRLF
+# line endings. Check it out identically on every platform so Linux CI matches.
+native/mdbx2-host/vendor/mdbx/crates/mdbx-storage/tests/fixtures/kdbx3-demopass.kdbx.b64 text eol=crlf
