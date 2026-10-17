@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { browserDependencyNotices } from './mdbx2-browser-licenses.mjs';
 
 const root = resolve(import.meta.dirname, "..");
+execFileSync(process.execPath, ['scripts/build-nearby-setup.mjs'], { cwd: root, stdio: 'inherit', windowsHide: true });
 // Never ship missing, stale or unverified native-format browser code. Build the
 // pinned package with build:mdbx2-browser when updating the engine sources.
 execFileSync(process.execPath, ['scripts/verify-mdbx2-browser.mjs'], { cwd: root, stdio: 'inherit', windowsHide: true });

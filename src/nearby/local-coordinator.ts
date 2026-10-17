@@ -1,7 +1,7 @@
 import { localNearbySource, type NearbySourceAdapter, type NearbySourceSnapshot } from './source-adapter';
 import type { NearbyAcknowledgement } from './native-journal';
 import { Mdbx2NativeHostError } from '../providers/mdbx2/native-contract';
-import { remapNearbyReferences, type NearbyWireData } from './wire-shape';
+import { NEARBY_ENTRY_TYPES, remapNearbyReferences, type NearbyEntryType, type NearbyWireData } from './wire-shape';
 import { parseLosslessJson } from '../core/lossless-json';
 import { base64ToBytes, bytesToBase64 } from '../security/encoding';
 import type { SecureVaultService } from '../security/secure-vault-service';
@@ -19,8 +19,13 @@ type Store = Pick<SecureVaultService, 'passkeySessionId' | 'nearbySessionPrefere
 export interface NearbyEndpoint { addresses: string[]; port: number }
 export interface NearbyDiscoveredPeer { deviceId: string; name: string; endpoint: NearbyEndpoint }
 export interface NearbyDiscoveryView { searching: boolean; devices: NearbyDiscoveredPeer[] }
+export interface NearbySyncResult {
+  sent: boolean; received: boolean; processed: number; deleted: number;
+  items: { title: string; type: NearbyEntryType | 'unknown'; deleted: boolean }[];
+}
 export interface NearbyCoordinatorView {
-  phase: 'idle' | 'pairing' | 'preparing' | 'review' | 'ready' | 'transferring' | 'saving' | 'completed' | 'failed' | 'cancelled';
+  phase: 'idle' | 'pairing' | 'preparing' | 'review' | 'ready' | 'transferring' | 'saving' | 'confirming' | 'completed' | 'failed' | 'cancelled';
+  kind?: 'pairing' | 'sync'; result?: NearbySyncResult;
   operationId?: string; peerId?: string; peerName?: string; recoveryOnly?: boolean;
   pairing?: { code: string; invitations: string[] }; endpoint?: NearbyEndpoint;
   review?: NearbyPasskeyReview; applied?: number; error?: string;
@@ -80,6 +85,9 @@ export class NearbyLocalCoordinator {
   private peer?: NearbySavedPeer;
   private enrolling = false;
   private acknowledged = false;
+  private pendingRemote?: Record<string, unknown>;
+  private result: NearbySyncResult = { sent: false, received: false, processed: 0, deleted: 0, items: [] };
+  private reported = new Set<string>();
   private consent = new NearbyPasskeyConsent();
   private view: NearbyCoordinatorView = { phase: 'idle' };
   private tail: Promise<unknown> = Promise.resolve();
@@ -102,6 +110,7 @@ export class NearbyLocalCoordinator {
     this.discovery = undefined; this.source = undefined;
     this.listenerDiscovery = undefined;
     this.listenerConnect = undefined;
+    this.pendingRemote = undefined; this.result = { sent: false, received: false, processed: 0, deleted: 0, items: [] }; this.reported.clear();
     this.view = { phase: 'cancelled' };
   }
   private run<T>(action: () => Promise<T>): Promise<T> {
@@ -154,10 +163,11 @@ export class NearbyLocalCoordinator {
     }
     if (!this.transport) { this.abort = new AbortController(); this.transport = this.factory(); }
     this.peer = undefined; this.sourceHash = undefined; this.enrolling = false; this.acknowledged = false; this.consent.reset();
+    this.pendingRemote = undefined; this.result = { sent: false, received: false, processed: 0, deleted: 0, items: [] }; this.reported.clear();
     this.listenerDiscovery = undefined; this.nextListenerDiscovery = 0;
     this.source = this.sourceFactory ? await this.sourceFactory(this.preferences, this.sessionId, this.abort.signal, this.transactionGuard(), () => this.preferences!.epoch) : localNearbySource(this.store, this.sessionId, this.transactionGuard());
     await this.guard();
-    this.view = { phase: 'preparing', operationId: crypto.randomUUID(), applied: 0 };
+    this.view = { phase: 'preparing', kind: 'sync', operationId: crypto.randomUUID(), applied: 0 };
   }
   /** Discovery is only an address hint. Pair identity and the Noise handshake
    * authenticate the target; no advertised name or revision grants trust. */
@@ -195,7 +205,7 @@ export class NearbyLocalCoordinator {
   }
   async pair(link?: string): Promise<NearbyCoordinatorView> {
     return this.run(async () => {
-      await this.initialize(); this.enrolling = true;
+      await this.initialize(); this.enrolling = true; this.view.kind = 'pairing';
       if (this.preferences!.peers.length >= 8) failure('peer-limit');
       const snapshot = await this.call('snapshot_pairing', { device_id: this.preferences!.deviceId });
       this.snapshot = token(snapshot.handle); this.revision = string(snapshot.revision);
@@ -350,7 +360,12 @@ export class NearbyLocalCoordinator {
           invitation: `monica-lan:2:${target.addresses.join(',')}:${target.port}:${this.peer!.trustedKey}` })).handle);
         this.listenerConnect = undefined; delete this.view.endpoint; return this.status();
       }
-      if (progress.phase === 'failed' || progress.phase === 'cancelled') failure('transfer-failed');
+      if (progress.phase === 'failed' || progress.phase === 'cancelled') {
+        if (progress.error === 'peer_merge_failed') failure('peer-save-rejected');
+        if (progress.error === 'merge_timeout') failure('peer-save-timeout');
+        failure('transfer-failed');
+      }
+      if (progress.phase === 'confirming') this.view.phase = 'confirming';
       if (progress.phase === 'waiting' && !this.enrolling && this.peer && this.preferences!.deviceId < this.peer.deviceId) {
         // Both devices may start listening at once. One deterministic initiator
         // discovers the other without ever changing or trusting advertised keys.
@@ -383,11 +398,20 @@ export class NearbyLocalCoordinator {
         if (typeof remote.receive_content !== 'boolean') failure('invalid-peer');
         this.view.phase = 'saving'; delete this.view.pairing; delete this.view.endpoint;
         if (!this.enrolling && remote.receive_content) await this.adopt();
-        await this.remember(remote);
+        this.result.sent = remote.send_content === true; this.result.received = remote.receive_content;
+        // Pair trust must be durable before acknowledging enrollment. A sync
+        // timestamp/revision must wait for the peer's authenticated save receipt.
+        if (this.enrolling) await this.remember(remote);
+        else this.pendingRemote = structuredClone(remote);
         await this.call('acknowledge', { handle: this.transfer, success: true }); this.acknowledged = true;
       }
       if (progress.phase === 'completed') {
         if (!this.acknowledged) failure('unexpected-completion');
+        if (!this.enrolling) {
+          if (!this.pendingRemote) failure('unexpected-completion');
+          await this.remember(this.pendingRemote); this.pendingRemote = undefined;
+          this.view.result = structuredClone(this.result);
+        }
         await this.call('release', { handle: this.transfer }); this.transfer = undefined;
         if (this.snapshot) await this.call('snapshot_release', { handle: this.snapshot }); this.snapshot = undefined;
         this.consent.reset(); this.view.phase = 'completed';
@@ -449,6 +473,14 @@ export class NearbyLocalCoordinator {
       }
       await this.guard(true);
       const result = await this.source!.adopt({ providerId: this.preferences!.localProviderId, sourceHash: this.sourceHash!, records, references, assets: [...assets.values()] });
+      for (const record of records) if (!saved.has(record.id) && !this.reported.has(record.id)) {
+        this.reported.add(record.id); this.result.processed++; if (record.deleted) this.result.deleted++;
+        if (this.result.items.length < 100) {
+          const data = wireObject(parseLosslessJson(record.dataJson));
+          this.result.items.push({ title: typeof data.title === 'string' ? data.title.replace(/[\u0000-\u001f\u007f-\u009f]/g, '').slice(0, 128) : '',
+            type: NEARBY_ENTRY_TYPES.includes(data.entry_type as NearbyEntryType) ? data.entry_type as NearbyEntryType : 'unknown', deleted: record.deleted });
+        }
+      }
       this.sourceHash = result.sourceHash; await this.guard(true); await this.applyAcknowledgements(result.acknowledgements);
       this.view.applied = (this.view.applied ?? 0) + records.length;
       };

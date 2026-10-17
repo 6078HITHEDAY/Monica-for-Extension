@@ -118,7 +118,15 @@ describe('nearby coordinator authorization and cancellation', () => {
       device_id: peer.deviceId, name: peer.name, revision: 'remote-revision', content_type: 'vault', vault_content_version: 2,
       receive_content: false, pairing: {}, sync_request: 0, interval_seconds: 60, settings_version: 0, settings_writer: ''
     } } as any) : original(operation));
-    await f.coordinator.poll(); phase = 'completed'; await f.coordinator.poll();
+    await f.coordinator.poll();
+    expect((await f.service.nearbySessionPreferences(f.sessionId)).peers[0].lastSyncedAt).toBe(0);
+    phase = 'confirming'; await f.coordinator.poll();
+    expect(f.coordinator.status().phase).toBe('confirming');
+    expect(f.coordinator.status().result).toBeUndefined();
+    expect((await f.service.nearbySessionPreferences(f.sessionId)).peers[0].lastSyncedAt).toBe(0);
+    phase = 'completed'; await f.coordinator.poll();
+    expect((await f.service.nearbySessionPreferences(f.sessionId)).peers[0].lastSyncedAt).toBeGreaterThan(0);
+    expect(f.coordinator.status().result).toMatchObject({processed:0,items:[]});
     expect(f.coordinator.status().phase).toBe('completed');
     await f.service.lock(); await f.service.unlock('');
     expect(await f.service.passkeySessionId()).not.toBe(f.sessionId);
@@ -132,6 +140,15 @@ describe('nearby coordinator authorization and cancellation', () => {
       revision: 'contains-content', receive_content: true } }) as any);
     const before = await f.storage.read(); await expect(f.coordinator.poll()).rejects.toThrow('unexpected-pairing-mode');
     expect(await f.storage.read()).toEqual(before); expect(f.operations).not.toContain('acknowledge');
+  });
+  it('keeps the last successful sync unchanged when the peer rejects its save', async () => {
+    const f=await fixture(); await f.coordinator.prepare(peer.deviceId); await f.coordinator.start();
+    const original=f.transport.call.getMockImplementation()!;let rejected=false;
+    f.transport.call.mockImplementation(async op=>op==='progress' ? (rejected ? {phase:'failed',error:'peer_merge_failed'} : {phase:'received',peer:{device_id:peer.deviceId,name:peer.name,revision:'remote',content_type:'vault',vault_content_version:2,receive_content:false,pairing:{},sync_request:0,interval_seconds:60,settings_version:0,settings_writer:''}}) as any : original(op));
+    await f.coordinator.poll();rejected=true;
+    await expect(f.coordinator.poll()).rejects.toMatchObject({code:'peer-save-rejected'});
+    expect((await f.service.nearbySessionPreferences(f.sessionId)).peers[0].lastSyncedAt).toBe(0);
+    expect(f.coordinator.status().result).toBeUndefined();
   });
 });
 

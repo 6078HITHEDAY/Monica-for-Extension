@@ -3571,5 +3571,15 @@
   "已核实 {0} 次修改，涉及 {1} 个条目，与剩余 {2} 步接收互不覆盖。": "Se verificaron {0} cambios en {1} elementos, sin solapamiento con los {2} pasos de recepción restantes.",
   "继续会保留本机条目修改，并保存剩余附件和文件夹信息。确认前会再次检查密码库是否变化。": "Al continuar se conservan los cambios locales y se guardan los adjuntos y datos de carpetas restantes. Se vuelve a comprobar la bóveda antes de proceder.",
   "保留本机修改并继续": "Conservar cambios locales y continuar",
-  "检查能否继续接收": "Comprobar si se puede continuar la recepción"
+  "检查能否继续接收": "Comprobar si se puede continuar la recepción",
+  "配置本机通信组件": "Configurar comunicación local",
+  "Windows 首次使用需配置一次通信组件，二维码和配对链接会自动包含连接信息，无需填写 IP 地址。": "En Windows hay que configurar el componente de comunicación una sola vez. Los códigos QR y enlaces de vinculación incluyen la conexión; no hace falta una dirección IP.",
+  "下载 Windows 通信组件": "Descargar componente de comunicación para Windows",
+  "此构建未附带 Windows 通信组件，请使用包含通信组件的 Windows 构建。": "Esta compilación no incluye el componente de comunicación para Windows. Use una compilación de Windows que lo incluya.",
+  "解压组件，在解压后的文件夹打开终端，运行以下命令；完成后返回此页重新配对。": "Extraiga el componente, abra un terminal en esa carpeta y ejecute el siguiente comando. Después, vuelva aquí e intente vincular de nuevo.",
+  "当前插件 ID": "ID actual de la extensión",
+  "复制配置命令": "Copiar comando de configuración",
+  "改为输入配对链接": "Introducir un enlace de vinculación",
+  "二维码生成失败，请复制下方配对邀请。": "No se pudo generar el código QR. Copie la invitación de vinculación de abajo.",
+  "请在另一端打开同步页面，设备会自动连接。": "Abra la página de sincronización en el otro dispositivo para conectarse automáticamente."
 }

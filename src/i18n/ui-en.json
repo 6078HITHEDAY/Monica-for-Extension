@@ -3571,5 +3571,15 @@
   "已核实 {0} 次修改，涉及 {1} 个条目，与剩余 {2} 步接收互不覆盖。": "Verified {0} changes affecting {1} entries, with no overlap with the remaining {2} receive steps.",
   "继续会保留本机条目修改，并保存剩余附件和文件夹信息。确认前会再次检查密码库是否变化。": "Continuing preserves local entry edits and saves the remaining attachments and folder information. The vault is checked again before proceeding.",
   "保留本机修改并继续": "Keep local edits and continue",
-  "检查能否继续接收": "Check whether receiving can continue"
+  "检查能否继续接收": "Check whether receiving can continue",
+  "配置本机通信组件": "Set up local communication",
+  "Windows 首次使用需配置一次通信组件，二维码和配对链接会自动包含连接信息，无需填写 IP 地址。": "On Windows, set up the communication component once. QR codes and pairing links include connection details automatically; no IP address is needed.",
+  "下载 Windows 通信组件": "Download Windows communication component",
+  "此构建未附带 Windows 通信组件，请使用包含通信组件的 Windows 构建。": "This build does not include the Windows communication component. Use a Windows build that includes it.",
+  "解压组件，在解压后的文件夹打开终端，运行以下命令；完成后返回此页重新配对。": "Extract the component, open a terminal in the extracted folder and run this command. Then return here and retry pairing.",
+  "当前插件 ID": "Current extension ID",
+  "复制配置命令": "Copy setup command",
+  "改为输入配对链接": "Enter a pairing link instead",
+  "二维码生成失败，请复制下方配对邀请。": "Could not generate the QR code. Copy the pairing invitation below.",
+  "请在另一端打开同步页面，设备会自动连接。": "Open the sync page on the other device to connect automatically."
 }

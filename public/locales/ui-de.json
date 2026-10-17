@@ -3571,5 +3571,15 @@
   "已核实 {0} 次修改，涉及 {1} 个条目，与剩余 {2} 步接收互不覆盖。": "{0} Änderungen an {1} Einträgen geprüft; keine Überschneidung mit den verbleibenden {2} Empfangsschritten.",
   "继续会保留本机条目修改，并保存剩余附件和文件夹信息。确认前会再次检查密码库是否变化。": "Beim Fortsetzen bleiben lokale Änderungen erhalten und die übrigen Anhänge und Ordnerdaten werden gespeichert. Der Tresor wird vorher erneut geprüft.",
   "保留本机修改并继续": "Lokale Änderungen behalten und fortsetzen",
-  "检查能否继续接收": "Fortsetzen des Empfangs prüfen"
+  "检查能否继续接收": "Fortsetzen des Empfangs prüfen",
+  "配置本机通信组件": "Lokale Kommunikation einrichten",
+  "Windows 首次使用需配置一次通信组件，二维码和配对链接会自动包含连接信息，无需填写 IP 地址。": "Unter Windows muss die Kommunikationskomponente einmal eingerichtet werden. QR-Codes und Kopplungslinks enthalten die Verbindungsdaten; eine IP-Adresse ist nicht nötig.",
+  "下载 Windows 通信组件": "Windows-Kommunikationskomponente herunterladen",
+  "此构建未附带 Windows 通信组件，请使用包含通信组件的 Windows 构建。": "Dieser Build enthält keine Windows-Kommunikationskomponente. Verwenden Sie einen Windows-Build mit dieser Komponente.",
+  "解压组件，在解压后的文件夹打开终端，运行以下命令；完成后返回此页重新配对。": "Entpacken Sie die Komponente, öffnen Sie ein Terminal im entpackten Ordner und führen Sie diesen Befehl aus. Versuchen Sie anschließend die Kopplung erneut.",
+  "当前插件 ID": "Aktuelle Erweiterungs-ID",
+  "复制配置命令": "Einrichtungsbefehl kopieren",
+  "改为输入配对链接": "Stattdessen Kopplungslink eingeben",
+  "二维码生成失败，请复制下方配对邀请。": "QR-Code konnte nicht erzeugt werden. Kopieren Sie die Kopplungseinladung unten.",
+  "请在另一端打开同步页面，设备会自动连接。": "Öffnen Sie die Synchronisierungsseite auf dem anderen Gerät, um automatisch eine Verbindung herzustellen."
 }

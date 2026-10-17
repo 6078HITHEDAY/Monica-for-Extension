@@ -1,0 +1,396 @@
+{
+  "title": "Monica · Wi-Fi 配对入口",
+  "brief": "配对优先使用二维码与完整链接；删除手填IP。连接组件缺失时给出配置入口，链接仍可编辑；二维码等待可取消并切换到输入。",
+  "frame": "phone",
+  "platform": "web",
+  "paletteKey": "teal",
+  "theme": {
+    "dark": true,
+    "bothModes": true,
+    "contrast": "standard",
+    "shape": "rounded",
+    "font": "system",
+    "emphasized": true,
+    "motion": "standard"
+  },
+  "frames": [
+    {
+      "id": "pairing",
+      "name": "Wi-Fi 配对",
+      "x": 0,
+      "y": 0,
+      "w": 420,
+      "h": 870
+    },
+    {
+      "id": "result",
+      "name": "同步结果",
+      "x": 480,
+      "y": 0,
+      "w": 420,
+      "h": 640
+    }
+  ],
+  "groups": [
+    {
+      "id": "title",
+      "frameId": "pairing",
+      "x": 12,
+      "y": 12,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "title-bar",
+          "kind": "topAppBar",
+          "label": "Wi-Fi 同步",
+          "size": 396,
+          "radius": 24,
+          "icon": "wifi",
+          "variant": "tonal",
+          "supporting": "",
+          "corners": {
+            "tl": 24,
+            "tr": 24,
+            "bl": 24,
+            "br": 24
+          }
+        }
+      ]
+    },
+    {
+      "id": "help",
+      "frameId": "pairing",
+      "x": 12,
+      "y": 102,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "setup",
+          "kind": "listItem",
+          "label": "配置本机通信组件",
+          "supporting": "首次使用需连接组件，完成后返回重试。",
+          "size": 396,
+          "radius": 24,
+          "icon": "computer",
+          "variant": "tonal",
+          "corners": {
+            "tl": 24,
+            "tr": 24,
+            "bl": 24,
+            "br": 24
+          }
+        }
+      ]
+    },
+    {
+      "id": "pair",
+      "frameId": "pairing",
+      "x": 12,
+      "y": 200,
+      "axis": "y",
+      "gap": 10,
+      "items": [
+        {
+          "id": "show",
+          "kind": "button",
+          "label": "显示本机邀请",
+          "size": 396,
+          "radius": 28,
+          "variant": "filled",
+          "icon": "qr_code_2",
+          "supporting": "",
+          "corners": {
+            "tl": 28,
+            "tr": 28,
+            "bl": 28,
+            "br": 28
+          }
+        },
+        {
+          "id": "input",
+          "kind": "textField",
+          "label": "配对邀请",
+          "supporting": "粘贴 Android 的完整配对链接",
+          "size": 396,
+          "radius": 16,
+          "variant": "filled",
+          "icon": null,
+          "corners": {
+            "tl": 16,
+            "tr": 16,
+            "bl": 16,
+            "br": 16
+          }
+        },
+        {
+          "id": "connect",
+          "kind": "button",
+          "label": "连接设备",
+          "size": 396,
+          "radius": 28,
+          "variant": "tonal",
+          "icon": "link",
+          "supporting": "",
+          "corners": {
+            "tl": 28,
+            "tr": 28,
+            "bl": 28,
+            "br": 28
+          }
+        }
+      ]
+    },
+    {
+      "id": "devices",
+      "frameId": "pairing",
+      "x": 12,
+      "y": 480,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "device",
+          "kind": "listItem",
+          "label": "已配对设备",
+          "supporting": "自动查找同一网络中的设备，无需填写地址。",
+          "size": 396,
+          "radius": 24,
+          "icon": "devices",
+          "variant": "tonal",
+          "corners": {
+            "tl": 24,
+            "tr": 24,
+            "bl": 24,
+            "br": 24
+          }
+        }
+      ]
+    },
+    {
+      "id": "waiting",
+      "frameId": "pairing",
+      "x": 12,
+      "y": 590,
+      "axis": "y",
+      "gap": 10,
+      "items": [
+        {
+          "id": "status",
+          "kind": "listItem",
+          "label": "等待配对设备",
+          "supporting": "让 Android 扫描本机二维码。",
+          "size": 396,
+          "radius": 24,
+          "icon": "qr_code_scanner",
+          "variant": "tonal",
+          "corners": {
+            "tl": 24,
+            "tr": 24,
+            "bl": 24,
+            "br": 24
+          }
+        },
+        {
+          "id": "switch",
+          "kind": "button",
+          "label": "改为输入配对链接",
+          "size": 396,
+          "radius": 28,
+          "variant": "tonal",
+          "supporting": "",
+          "icon": null,
+          "corners": {
+            "tl": 28,
+            "tr": 28,
+            "bl": 28,
+            "br": 28
+          }
+        }
+      ]
+    },
+    {
+      "id": "result-0",
+      "frameId": "result",
+      "x": 12,
+      "y": 12,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "result-item-0",
+          "kind": "topAppBar",
+          "label": "同步完成",
+          "supporting": "双方已确认保存",
+          "size": 396,
+          "radius": 20,
+          "variant": "tonal",
+          "icon": null,
+          "corners": {
+            "tl": 20,
+            "tr": 20,
+            "bl": 20,
+            "br": 20
+          }
+        }
+      ]
+    },
+    {
+      "id": "result-1",
+      "frameId": "result",
+      "x": 12,
+      "y": 92,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "result-item-1",
+          "kind": "listItem",
+          "label": "发送已确认",
+          "supporting": "对方已确认本次发送",
+          "size": 396,
+          "radius": 20,
+          "variant": "tonal",
+          "icon": null,
+          "corners": {
+            "tl": 20,
+            "tr": 20,
+            "bl": 20,
+            "br": 20
+          }
+        }
+      ]
+    },
+    {
+      "id": "result-2",
+      "frameId": "result",
+      "x": 12,
+      "y": 172,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "result-item-2",
+          "kind": "listItem",
+          "label": "本机处理 3 项",
+          "supporting": "保存 2 项 · 删除 1 项",
+          "size": 396,
+          "radius": 20,
+          "variant": "tonal",
+          "icon": null,
+          "corners": {
+            "tl": 20,
+            "tr": 20,
+            "bl": 20,
+            "br": 20
+          }
+        }
+      ]
+    },
+    {
+      "id": "result-3",
+      "frameId": "result",
+      "x": 12,
+      "y": 252,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "result-item-3",
+          "kind": "listItem",
+          "label": "GitHub",
+          "supporting": "登录项 · 保存",
+          "size": 396,
+          "radius": 20,
+          "variant": "tonal",
+          "icon": null,
+          "corners": {
+            "tl": 20,
+            "tr": 20,
+            "bl": 20,
+            "br": 20
+          }
+        }
+      ]
+    },
+    {
+      "id": "result-4",
+      "frameId": "result",
+      "x": 12,
+      "y": 332,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "result-item-4",
+          "kind": "listItem",
+          "label": "Steam",
+          "supporting": "动态验证码 · 保存",
+          "size": 396,
+          "radius": 20,
+          "variant": "tonal",
+          "icon": null,
+          "corners": {
+            "tl": 20,
+            "tr": 20,
+            "bl": 20,
+            "br": 20
+          }
+        }
+      ]
+    },
+    {
+      "id": "result-5",
+      "frameId": "result",
+      "x": 12,
+      "y": 412,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "result-item-5",
+          "kind": "listItem",
+          "label": "已删除项目",
+          "supporting": "删除",
+          "size": 396,
+          "radius": 20,
+          "variant": "tonal",
+          "icon": null,
+          "corners": {
+            "tl": 20,
+            "tr": 20,
+            "bl": 20,
+            "br": 20
+          }
+        }
+      ]
+    },
+    {
+      "id": "result-6",
+      "frameId": "result",
+      "x": 12,
+      "y": 492,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "result-item-6",
+          "kind": "button",
+          "label": "知道了",
+          "supporting": "",
+          "size": 396,
+          "radius": 20,
+          "variant": "tonal",
+          "icon": null,
+          "corners": {
+            "tl": 20,
+            "tr": 20,
+            "bl": 20,
+            "br": 20
+          }
+        }
+      ]
+    }
+  ]
+}
