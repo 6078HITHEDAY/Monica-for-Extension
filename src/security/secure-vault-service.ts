@@ -2953,6 +2953,12 @@ export class SecureVaultService {
 
   /** Preparation can refresh login tokens before a copy journal exists. */
   async saveBitwardenTransferSession(previous: ProviderAccount, next: BitwardenSessionConfig, sessionId: string): Promise<ProviderAccount> {
+    return this.saveBitwardenSessionTokens(previous, next, sessionId);
+  }
+
+  /** Save rotating tokens only, without extending inactivity or replacing
+   * newer credentials. Shared by transfer preparation and notification auth. */
+  async saveBitwardenSessionTokens(previous: ProviderAccount, next: BitwardenSessionConfig, sessionId: string): Promise<ProviderAccount> {
     return this.runExclusive(async () => {
       const assertSession = () => this.assertLocalTransferSession(sessionId); await assertSession();
       const { state, envelope, key } = await this.mutableContext(), current = state.providers.find(row => row.id === previous.id);

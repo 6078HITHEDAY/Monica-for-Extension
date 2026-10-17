@@ -133,7 +133,7 @@ import type { AutofillFieldContext } from "../content/field-signature";
 import { configureSessionStorageAccess } from "./startup";
 import { runtimeInfo } from "../runtime/version";
 import { AutomaticSyncScheduler, mdbx2AutomaticSyncEligible } from "./automatic-sync";
-import { BitwardenNotifications } from "../providers/bitwarden/bitwarden-notifications";
+import { BitwardenNotifications, bitwardenNotificationSession } from "../providers/bitwarden/bitwarden-notifications";
 import { BitwardenPasswordProjectRemovalCoordinator } from '../providers/bitwarden/bitwarden-project-removal';
 import { BitwardenProjectRemovalRuntime } from './bitwarden-project-removal-runtime';
 import { AUTO_SYNC_PREFERENCES_KEY, readAutomaticSyncEnabled } from "../providers/sync-preferences";
@@ -3005,11 +3005,26 @@ function reconcileAutomaticSync(): Promise<void> {
         try {
           const channel = new BitwardenNotifications({
             vaultUrl: String(account.config.vaultUrl), userId: accountState.userId, deviceId: String(account.config.deviceId),
-            accessToken: async () => {
+            accessToken: signal => providerOperations.run(account.id, async () => {
+              const assertActive = () => {
+                signal.throwIfAborted();
+                if (generation !== automaticSyncGeneration || notificationChannels.get(account.id)?.channel !== channel) throw new VaultLockedError();
+              };
+              assertActive();
+              const sessionId = (await vaultSessions.read())?.id;
+              if (!sessionId) throw new VaultLockedError();
               const current = await service.getProvider(account.id);
               if (!current?.enabled || !current.config.accessToken || !sameProviderBinding(account, current)) throw new VaultLockedError();
-              return String(current.config.accessToken);
-            },
+              assertActive();
+              const refreshed = await bitwardenNotificationSession(bitwardenClient, readBitwardenSession(current), signal);
+              assertActive();
+              const saved = await service.saveBitwardenSessionTokens(current, refreshed, sessionId);
+              assertActive();
+              // A concurrent login must never supply an unvalidated bearer or
+              // apply stale refresh results to a replacement account/session.
+              if (saved.config.accessToken !== refreshed.accessToken || refreshed.expiresAt <= Date.now()) throw new VaultLockedError();
+              return refreshed.accessToken;
+            }),
             receive: hint => {
               if (notificationChannels.get(account.id)?.channel !== channel) return;
               if (hint.type === "logout") void invalidateBitwardenSession(account.id).catch(() => undefined);

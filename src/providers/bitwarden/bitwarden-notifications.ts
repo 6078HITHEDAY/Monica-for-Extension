@@ -1,9 +1,23 @@
 import { HubConnectionBuilder, HttpTransportType, LogLevel, type HubConnection } from "@microsoft/signalr";
 import { MessagePackHubProtocol } from "@microsoft/signalr-protocol-msgpack";
-import { inferBitwardenServerUrls } from "./bitwarden-client";
+import { inferBitwardenServerUrls, type BitwardenClient, type BitwardenSessionConfig } from "./bitwarden-client";
 import type { BitwardenSyncHint } from "./bitwarden-sync-cache";
+import { ProviderTransportError } from "../provider-transport";
 
 export type BitwardenNotification = BitwardenSyncHint | { type: "logout" };
+
+/** Validate the bearer over HTTP before putting it in a browser WebSocket URL.
+ * The client refreshes expiring/rejected tokens once. Older self-hosted servers
+ * without revision-date still have an authenticated sync endpoint. */
+export async function bitwardenNotificationSession(client: BitwardenClient, session: BitwardenSessionConfig, signal: AbortSignal): Promise<BitwardenSessionConfig> {
+  try { return (await client.accountRevision(session, signal)).session; }
+  catch (error) {
+    if (error instanceof ProviderTransportError && (error.status === 404 || error.status === 405)) {
+      return (await client.sync(session, signal)).session;
+    }
+    throw error;
+  }
+}
 
 /** Same hub, WebSocket transport and MessagePack protocol as the official extension. */
 export function bitwardenNotificationUrl(vaultUrl: string): string {
@@ -40,19 +54,27 @@ export class BitwardenNotifications {
   private stopped = false;
   private starting = false;
   private failures = 0;
+  private readonly abort = new AbortController();
+  private disconnectedReported = false;
   connected = false;
 
   constructor(input: {
     vaultUrl: string;
     userId: string;
     deviceId: string;
-    accessToken: () => Promise<string>;
+    accessToken: (signal: AbortSignal) => Promise<string>;
     receive: (hint: BitwardenNotification) => void;
     connected: () => void;
     disconnected: () => void;
   }) {
     this.connection = new HubConnectionBuilder()
-      .withUrl(bitwardenNotificationUrl(input.vaultUrl), { accessTokenFactory: input.accessToken, skipNegotiation: true, transport: HttpTransportType.WebSockets })
+      .withUrl(bitwardenNotificationUrl(input.vaultUrl), { accessTokenFactory: async () => {
+        this.abort.signal.throwIfAborted();
+        const token = await input.accessToken(this.abort.signal);
+        // Lock/disable can happen while the authenticated preflight is pending.
+        this.abort.signal.throwIfAborted();
+        return token;
+      }, skipNegotiation: true, transport: HttpTransportType.WebSockets })
       .withHubProtocol(new MessagePackHubProtocol())
       // SignalR URLs contain access_token. Never emit its transport messages.
       .configureLogging(LogLevel.None)
@@ -67,30 +89,40 @@ export class BitwardenNotifications {
     this.connection.onclose(() => {
       this.connected = false;
       if (this.stopped) return;
-      input.disconnected();
+      this.reportDisconnected();
       this.retry();
     });
     this.onConnected = input.connected;
+    this.onDisconnected = input.disconnected;
   }
 
   private readonly onConnected: () => void;
+  private readonly onDisconnected: () => void;
+
+  private reportDisconnected(): void {
+    if (this.stopped || this.disconnectedReported) return;
+    this.disconnectedReported = true;
+    this.onDisconnected();
+  }
 
   start(): void {
     if (this.stopped || this.starting || this.connected) return;
     if (this.retryTimer !== undefined) clearTimeout(this.retryTimer);
     this.retryTimer = undefined;
     this.starting = true;
+    this.disconnectedReported = false;
     void this.connection.start().then(() => {
       if (this.stopped) return this.connection.stop();
       this.connected = true;
       this.failures = 0;
       this.onConnected(); // Always reconcile changes made while disconnected.
-    }).catch(() => this.retry()).finally(() => { this.starting = false; });
+    }).catch(() => { this.reportDisconnected(); this.retry(); }).finally(() => { this.starting = false; });
   }
 
   stop(): void {
     this.stopped = true;
     this.connected = false;
+    this.abort.abort();
     if (this.retryTimer !== undefined) clearTimeout(this.retryTimer);
     this.retryTimer = undefined;
     void this.connection.stop().catch(() => undefined);

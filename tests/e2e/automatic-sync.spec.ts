@@ -1,5 +1,5 @@
 import { dialogContent } from "./fixtures/material";
-import { createServer, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { MessageType } from "@microsoft/signalr";
@@ -33,6 +33,7 @@ async function bitwardenServer() {
   let tokenVersion = 0;
   let acceptedToken = "";
   let handshakes = 0;
+  let rejectedHandshakes = 0;
   let lastRequestAt = 0;
   const requests: Array<{ method: string; path: string }> = [];
   const sockets = new Set<any>();
@@ -65,7 +66,11 @@ async function bitwardenServer() {
       json(response, {}, 404);
     })().catch(() => { if (!response.writableEnded) json(response, { Message: "Synthetic fixture error" }, 500); });
   });
-  const hub = new WebSocketServer({ server, path: "/notifications/hub" });
+  const hub = new WebSocketServer({ server, path: "/notifications/hub", verifyClient: (info: { req: IncomingMessage }, accept: (ok: boolean, status?: number) => void) => {
+    const token = new URL(info.req.url!, 'http://127.0.0.1').searchParams.get('access_token');
+    if (!acceptedToken || token !== acceptedToken) { rejectedHandshakes++; accept(false, 401); }
+    else accept(true);
+  } });
   hub.on("connection", (socket: any) => {
     let ready = false;
     socket.on("error", () => undefined);
@@ -90,6 +95,7 @@ async function bitwardenServer() {
   return {
     url: `http://127.0.0.1:${address.port}`, requests,
     handshakes: () => handshakes, connected: () => sockets.size,
+    rejectedHandshakes: () => rejectedHandshakes,
     quietFor: () => Date.now() - lastRequestAt,
     count: (method: string, pathname: string) => requests.filter(request => request.method === method && request.path === pathname).length,
     async edit(id: string, patch: Partial<LoginItem>, push = true) {
@@ -192,6 +198,22 @@ test("remote edits preserve an open draft and a normal local save uploads automa
     await expect.poll(async () => (await f.mock.login("cipher-0")).username, { timeout: 15_000 }).toBe("saved-on-browser");
     expect(f.mock.count("PUT", "/api/ciphers/cipher-0")).toBe(1);
     expect(await send(f.manager, { type: "PROVIDER_CONFLICT_LIST", providerId: f.providerId })).toEqual([]);
+  } finally { await f.close(); }
+});
+
+test("notification startup refreshes a revoked token before the WebSocket handshake", async ({}, testInfo) => {
+  const f = await openFixture(testInfo);
+  try {
+    await f.manager.evaluate(() => chrome.storage.local.set({ 'monica.sync.preferences.v1': { enabled: false } }));
+    await expect.poll(f.mock.connected).toBe(0);
+    const before = f.mock.handshakes();
+    f.mock.expireToken();
+    await f.mock.edit('cipher-0', { title: 'Changed while notifications paused' }, false);
+    await f.manager.evaluate(() => chrome.storage.local.set({ 'monica.sync.preferences.v1': { enabled: true } }));
+    await expect.poll(f.mock.handshakes).toBeGreaterThan(before);
+    await expect(f.manager.getByRole('button', { name: '查看Changed while notifications paused详情', exact: true })).toBeVisible();
+    expect(f.mock.count('POST', '/identity/connect/token')).toBe(2);
+    expect(f.mock.rejectedHandshakes()).toBe(0);
   } finally { await f.close(); }
 });
 
