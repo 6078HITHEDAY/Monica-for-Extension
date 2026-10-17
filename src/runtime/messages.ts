@@ -14,7 +14,7 @@ import type { BitwardenCollectionMutationResult, BitwardenCollectionPage } from 
 import type { BitwardenSendDetail, BitwardenSendFileInput, BitwardenSendPage, BitwardenSendTextInput, BitwardenSendUpdateInput } from "../providers/bitwarden/bitwarden-sends";
 import type { KeePassHistoryDetail, KeePassHistoryFieldValue, KeePassHistoryPage, KeePassHistoryRestoreResult } from "../providers/keepass/keepass-history";
 import type { MonicaWebDavConfig } from "../providers/webdav/monica-webdav-provider";
-import type { AndroidGeneratorHistoryEntry, AndroidTimelineEntrySummary } from "../providers/webdav/android-backup-codec";
+import type { AndroidGeneratorHistoryEntry } from "../providers/webdav/android-backup-codec";
 import type { SteamInventoryOverview, SteamInventoryPage, SteamMarketListingsPage, SteamMarketQuote, SteamMarketSellBatchResult, SteamMarketSellEntry, SteamMiniProfileBackground } from "../providers/steam/steam-market";
 import type { SteamAuthorizedDevice } from "../providers/steam/steam-network";
 import type { EncryptedVaultBackup, VaultLifecycleStatus } from "../security/secure-vault-service";
@@ -479,7 +479,6 @@ export type ExtensionRequest =
   | { type: "PROVIDER_ATTACHMENT_UPLOAD_FINISH"; providerId: string; itemId: string; transferId: string; operationId?: string }
   | { type: "PROVIDER_ATTACHMENT_UPLOAD_ABORT"; providerId: string; transferId: string }
   | { type: "PROVIDER_ATTACHMENT_DELETE"; providerId: string; itemId: string; attachmentId: string; operationId: string; confirmed: boolean; expectedRevision?: string }
-  | { type: "ANDROID_TIMELINE_LIST"; providerId: string }
   | { type: "ANDROID_GENERATOR_HISTORY_LIST"; providerId: string }
   | { type: "ANDROID_GENERATOR_HISTORY_DELETE"; providerId: string; entryId: string; confirmed: true }
   | { type: "KEEPASS_OPEN"; input: KeePassOpenInput }
@@ -517,7 +516,7 @@ export type VaultStatusResponse = VaultLifecycleStatus;
 export type { LoginItem, ProviderAccount, ProviderConflict, ProviderConflictResolution, ProviderDiagnosticExport, VaultItem };
 export type { ProviderAttachmentMutationResult, ProviderAttachmentPage, ProviderAttachmentReadBeginResult, ProviderAttachmentReadChunk, ProviderAttachmentUploadBeginResult, ProviderAttachmentUploadChunkResult };
 export type { ProviderAttachmentTransferRequest, ProviderAttachmentTransferResult };
-export type { AndroidGeneratorHistoryEntry, AndroidTimelineEntrySummary };
+export type { AndroidGeneratorHistoryEntry };
 export type { BitwardenSendDetail, BitwardenSendPage, BitwardenSendSummary, BitwardenSendTextInput, BitwardenSendUpdateInput } from "../providers/bitwarden/bitwarden-sends";
 export type { Mdbx2CollectionMutationResult, Mdbx2CollectionSummaryPage, Mdbx2CommitDiffResult, Mdbx2CommitHistoryPage, Mdbx2CommitRevertResult, Mdbx2ConflictResolutionChoice, Mdbx2ConflictResolutionResult, Mdbx2ConflictSummaryPage, Mdbx2HealthRepairApplyResult, Mdbx2HealthRepairDecision, Mdbx2HealthRepairPlan, Mdbx2HostStatus, Mdbx2ManagedSnapshotPage, Mdbx2ObjectDeleteResult, Mdbx2ObjectRecord, Mdbx2ObjectSummaryPage, Mdbx2ObjectUpsertInput, Mdbx2ObjectWriteResult, Mdbx2SnapshotCreateResult, Mdbx2SnapshotDeleteResult, Mdbx2SnapshotPrunePlan, Mdbx2SnapshotPruneResult, Mdbx2SnapshotRestoreResult, Mdbx2SnapshotStructurePage, Mdbx2SnapshotStructureSide, Mdbx2TransferBeginResult, Mdbx2TransferChunkResult, Mdbx2TransferFinishResult, Mdbx2VaultCredential, Mdbx2VaultDiagnosticsReport, Mdbx2VaultInspection, Mdbx2VaultRuntimeStatus, Mdbx2VaultSessionSummary, Mdbx2VaultSource, Mdbx2VaultTigaPosture, KeePassSessionSummary };
 export type { Mdbx2BatchTransferExecuteResult, Mdbx2BatchTransferPlanResult, Mdbx2BatchTransferRequest, Mdbx2BatchTransferStatus };

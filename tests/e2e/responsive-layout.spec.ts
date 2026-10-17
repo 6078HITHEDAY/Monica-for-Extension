@@ -77,7 +77,7 @@ for (const [width, height, scale] of sizes) {
     try {
       await expect(page.getByRole("heading", { name: "All items", exact: true })).toBeVisible();
       await expect(page.locator(".item-card")).toHaveCount(5);
-      for (const section of ["All items", "API key", "Login", "Wallet and identity", "Secure Note", "Verification codes", "Steam", "Passkey", "Secure Send", "Archive", "Recycle Bin", "Timeline", "Sources", "Settings and backups", "Generator"]) {
+      for (const section of ["All items", "Login", "Wallet and identity", "Secure Note", "Verification codes", "Steam", "Passkey", "Secure Send", "Archive", "Recycle Bin", "Sources", "Settings and backups", "Generator"]) {
         await navigate(page, section);
         await expectUsableControls(page.locator("#main-content"));
         if (["Login", "Wallet and identity", "Secure Note", "Verification codes", "Passkey"].includes(section)) {

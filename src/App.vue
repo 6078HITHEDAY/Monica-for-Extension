@@ -98,13 +98,12 @@ import { projectSteamItem } from "./core/steam-item";
 import { presentKeePassRemoteError, type KeePassRemoteErrorPresentation } from "./providers/keepass/keepass-remote-status";
 import type { Mdbx2HostStatus, Mdbx2VaultRuntimeStatus } from "./providers/mdbx2/native-contract";
 import type { MonicaWebDavConfig } from "./providers/webdav/monica-webdav-provider";
-import type { AndroidTimelineEntrySummary } from "./providers/webdav/android-backup-codec";
 import { ExtensionRuntimeError, vaultClient } from "./runtime/client";
 import type { KeePassRemoteManagerStatus, KeePassSessionSummary, Mdbx2ManagerSyncStatus, VaultWindowsHelloStatus } from "./runtime/messages";
 import { MIN_MASTER_PASSWORD_LENGTH } from "./security/master-password-policy";
 import type { EncryptedVaultBackup, VaultLifecycleStatus } from "./security/secure-vault-service";
 
-type Section = "vault" | VaultManagerSection | "steam" | "sends" | "archive" | "trash" | "timeline" | "generator" | "providers" | "settings";
+type Section = "vault" | VaultManagerSection | "steam" | "sends" | "archive" | "trash" | "generator" | "providers" | "settings";
 type LoginType = NonNullable<LoginItem["loginType"]>;
 type KeePassSourceMode = "local-file" | "webdav";
 
@@ -149,9 +148,6 @@ const archivedItems = shallowRef<VaultItem[]>([]);
 const unarchivingItemIds = ref<string[]>([]);
 const deletedItems = shallowRef<VaultItem[]>([]);
 const restoringProject = shallowRef<{ items: LoginItem[]; anchorItemId: string; sourceName: string; keepassProject?: LoginItem[] }>();
-const androidTimeline = shallowRef<Array<AndroidTimelineEntrySummary & { providerName: string }>>([]);
-const timelineBusy = ref(false);
-const timelineError = ref("");
 const providers = ref<ProviderAccount[]>([]);
 const providerQueues = ref<Array<{ providerId: string; pending: number; failed: number; recovering?: number; maxAttempts: number; lastError?: string }>>([]);
 const providerConflicts = ref<ProviderConflictSummary[]>([]);
@@ -351,7 +347,6 @@ const credentialGroups = computed(() => { const matching = new Set(filteredCrede
 const credentialGroupSizes = computed(() => new Map(allCredentialGroups.value.flatMap(group => group.map(item => [item.id, group.length] as const))));
 const credentialGroupSize = (item: LoginItem) => credentialGroupSizes.value.get(item.id) || 0;
 const credentialDisplayStacks = computed(() => passwordDisplayStacks(credentialGroups.value, passwordDisplayPreferences.value.passwordStackMode, passwordDisplayPreferences.value.passwordWebsiteMatch));
-const apiTokenItems = vaultDerived(() => vaultItems.value.filter(item => item.kind === "api-token"));
 const walletItems = vaultDerived(() => vaultItems.value.filter((item) => itemSection(item) === "wallet"));
 const noteItems = vaultDerived(() => vaultItems.value.filter((item) => itemSection(item) === "notes"));
 const totpItems = vaultDerived(() => vaultItems.value.filter((item): item is TotpItem => item.kind === "totp"));
@@ -439,7 +434,6 @@ const listTotal = computed(() => {
     case "steam": return filteredSteamItems.value.length;
     case "archive": return filteredArchiveItems.value.length;
     case "trash": return filteredDeletedItems.value.length;
-    case "timeline": return androidTimeline.value.length;
     case "vault": case "wallet": case "notes": case "totp": case "api-tokens": case "passkeys": return filteredSectionItems.value.length;
     default: return 0;
   }
@@ -747,7 +741,6 @@ function clearVaultView() {
   restoringProject.value = undefined;
   lifecycle.value = "locked";
   loading.value = false;
-  androidTimeline.value = [];
   providers.value = [];
   providerQueues.value = [];
   providerConflicts.value = [];
@@ -1017,7 +1010,6 @@ function navigate(section: Section) {
   if (mobileNavOpen.value) closeNavigation(true);
   void nextTick(() => window.scrollTo({ top: 0, behavior: "instant" }));
   if (section === "providers") void refreshProviders();
-  if (section === "timeline") void loadAndroidTimeline();
   if (section === "settings") void Promise.all([refreshWindowsHelloStatus(), refreshAutofillSitePolicy()]);
 }
 
@@ -1029,26 +1021,11 @@ function clearManagerFilters() {
 }
 
 function sectionTitle(section: Section): string {
-  return ({ vault: tr('全部项目'), 'api-tokens': tr('API 密钥'), passwords: tr('登录项'), wallet: tr('钱包与身份'), notes: tr('安全笔记'), totp: tr('动态验证码'), steam: "Steam", passkeys: "Passkey", sends: tr('安全发送'), archive: tr('归档'), trash: tr('回收站'), timeline: tr('Android 时间线'), generator: tr('生成器'), providers: tr('密码源'), settings: tr('设置与备份') } as const)[section];
+  return ({ vault: tr('全部项目'), 'api-tokens': tr('API 密钥'), passwords: tr('登录项'), wallet: tr('钱包与身份'), notes: tr('安全笔记'), totp: tr('动态验证码'), steam: "Steam", passkeys: "Passkey", sends: tr('安全发送'), archive: tr('归档'), trash: tr('回收站'), generator: tr('生成器'), providers: tr('密码源'), settings: tr('设置与备份') } as const)[section];
 }
 
 function sectionDescription(section: Section): string {
-  return ({ vault: tr('浏览当前范围内的全部项目。'), 'api-tokens': tr('管理服务商密钥、访问令牌与补充信息。'), passwords: tr('登录密码只在解锁后显示和编辑。'), wallet: tr('管理证件、账单地址、银行卡与支付账号。'), notes: tr('只管理加密安全笔记，不混入验证码。'), totp: tr('管理 TOTP、HOTP、Yandex、mOTP 和 Steam Guard 验证器。'), steam: tr('管理 Steam 登录批准、交易确认、库存、市场与授权设备。'), passkeys: tr('查看 Passkey 来源与使用状态；私钥始终保持隐藏。'), sends: tr('创建和管理 Bitwarden 文本与文件 Send；内容只在选择后由后台解密。'), archive: tr('归档项目从普通分类、自动填充和 Passkey 候选中隐藏，取消归档后恢复使用。'), trash: tr('远端回收站项目保存在加密墓碑中，可恢复且不会被静默永久删除。'), timeline: tr('查看 Android WebDAV 备份中的操作摘要，不显示字段旧值和新值。'), generator: tr('使用浏览器加密随机源生成密码、PIN 与密码短语。'), providers: tr('连接 MDBX2、Monica Android WebDAV、KeePass、Bitwarden 或使用本地库。'), settings: tr('管理外观、导入导出与安全边界。') } as const)[section];
-}
-
-async function loadAndroidTimeline() {
-  timelineBusy.value = true;
-  timelineError.value = "";
-  try {
-    const pages = await Promise.all(webDavProviders.value.map(async (provider) =>
-      (await vaultClient.listAndroidTimeline(provider.id)).map((entry) => ({ ...entry, providerName: provider.name }))
-    ));
-    androidTimeline.value = pages.flat().sort((left, right) => right.timestamp - left.timestamp);
-  } catch (error) {
-    timelineError.value = errorMessage(error);
-  } finally {
-    timelineBusy.value = false;
-  }
+  return ({ vault: tr('浏览当前范围内的全部项目。'), 'api-tokens': tr('管理服务商密钥、访问令牌与补充信息。'), passwords: tr('登录密码只在解锁后显示和编辑。'), wallet: tr('管理证件、账单地址、银行卡与支付账号。'), notes: tr('只管理加密安全笔记，不混入验证码。'), totp: tr('管理 TOTP、HOTP、Yandex、mOTP 和 Steam Guard 验证器。'), steam: tr('管理 Steam 登录批准、交易确认、库存、市场与授权设备。'), passkeys: tr('查看 Passkey 来源与使用状态；私钥始终保持隐藏。'), sends: tr('创建和管理 Bitwarden 文本与文件 Send；内容只在选择后由后台解密。'), archive: tr('归档项目从普通分类、自动填充和 Passkey 候选中隐藏，取消归档后恢复使用。'), trash: tr('远端回收站项目保存在加密墓碑中，可恢复且不会被静默永久删除。'), generator: tr('使用浏览器加密随机源生成密码、PIN 与密码短语。'), providers: tr('连接 MDBX2、Monica Android WebDAV、KeePass、Bitwarden 或使用本地库。'), settings: tr('管理外观、导入导出与安全边界。') } as const)[section];
 }
 
 function filterManagerItems(items: VaultItem[]): VaultItem[] {
@@ -2839,7 +2816,6 @@ function errorCode(error: unknown): string | undefined {
             <p class="nav-title">{{ tr('密码库') }}</p>
             <button class="nav-item" :class="{ selected: activeSection === 'vault' }" :aria-current="activeSection === 'vault' ? 'page' : undefined" type="button" @click="navigate('vault')"><m3e-icon name="list"></m3e-icon><span>{{ tr('全部项目') }}</span><span class="nav-count">{{ vaultItems.length - credentials.length + allCredentialGroups.length }}</span></button>
             <button class="nav-item" :class="{ selected: activeSection === 'passwords' }" :aria-current="activeSection === 'passwords' ? 'page' : undefined" type="button" @click="navigate('passwords')"><m3e-icon name="password"></m3e-icon><span>{{ tr('登录项') }}</span><span class="nav-count">{{ allCredentialGroups.length }}</span></button>
-            <button class="nav-item" :class="{ selected: activeSection === 'api-tokens' }" :aria-current="activeSection === 'api-tokens' ? 'page' : undefined" type="button" @click="navigate('api-tokens')"><m3e-icon name="key" /><span>{{ tr('API 密钥') }}</span><span class="nav-count">{{ apiTokenItems.length }}</span></button>
             <button class="nav-item" :class="{ selected: activeSection === 'wallet' }" :aria-current="activeSection === 'wallet' ? 'page' : undefined" type="button" @click="navigate('wallet')"><m3e-icon name="wallet"></m3e-icon><span>{{ tr('钱包与身份') }}</span><span class="nav-count">{{ walletItems.length }}</span></button>
             <button class="nav-item" :class="{ selected: activeSection === 'notes' }" :aria-current="activeSection === 'notes' ? 'page' : undefined" type="button" @click="navigate('notes')"><m3e-icon name="note_stack"></m3e-icon><span>{{ tr('安全笔记') }}</span><span class="nav-count">{{ noteItems.length }}</span></button>
             <button class="nav-item" :class="{ selected: activeSection === 'totp' }" :aria-current="activeSection === 'totp' ? 'page' : undefined" type="button" @click="navigate('totp')"><m3e-icon name="timer"></m3e-icon><span>{{ tr('动态验证码') }}</span><span class="nav-count">{{ totpItems.length }}</span></button>
@@ -2848,7 +2824,6 @@ function errorCode(error: unknown): string | undefined {
             <button class="nav-item" :class="{ selected: activeSection === 'sends' }" :aria-current="activeSection === 'sends' ? 'page' : undefined" type="button" @click="navigate('sends')"><m3e-icon name="send"></m3e-icon><span>{{ tr('安全发送') }}</span></button>
             <button class="nav-item" :class="{ selected: activeSection === 'archive' }" :aria-current="activeSection === 'archive' ? 'page' : undefined" type="button" @click="navigate('archive')"><m3e-icon name="archive"></m3e-icon><span>{{ tr('归档') }}</span><span class="nav-count">{{ archivedItems.length }}</span></button>
             <button class="nav-item" :class="{ selected: activeSection === 'trash' }" :aria-current="activeSection === 'trash' ? 'page' : undefined" type="button" @click="navigate('trash')"><m3e-icon name="delete"></m3e-icon><span>{{ tr('回收站') }}</span><span class="nav-count">{{ deletedItems.length }}</span></button>
-            <button class="nav-item" :class="{ selected: activeSection === 'timeline' }" :aria-current="activeSection === 'timeline' ? 'page' : undefined" type="button" @click="navigate('timeline')"><m3e-icon name="history"></m3e-icon><span>{{ tr('时间线') }}</span></button>
             <button class="nav-item" :class="{ selected: activeSection === 'providers' }" :aria-current="activeSection === 'providers' ? 'page' : undefined" type="button" @click="navigate('providers')"><m3e-icon name="cloud_sync"></m3e-icon><span>{{ tr('密码源') }}</span></button>
           </section>
           <section>
@@ -2941,17 +2916,6 @@ function errorCode(error: unknown): string | undefined {
         <GeneratorPanel v-else-if="activeSection === 'generator'" :providers="webDavProviders" />
 
         <BitwardenSendsPanel v-else-if="activeSection === 'sends'" :providers="providers" :query="query" />
-
-        <section v-else-if="activeSection === 'timeline'" class="content-grid lifecycle-page">
-          <m3e-card variant="filled" class="data-card motion-card">
-            <div slot="header" class="card-head"><h2>{{ tr('Android 操作记录') }}</h2><p>{{ tr('{0} 条', { 0: androidTimeline.length }) }}</p></div>
-            <p v-if="timelineError" class="form-error" slot="content">{{ timelineError }}</p>
-            <div v-else-if="androidTimeline.length" class="table-wrap"><table><thead><tr><th>{{ tr('操作') }}</th><th>{{ tr('类型') }}</th><th>{{ tr('变更字段') }}</th><th>{{ tr('设备') }}</th><th>{{ tr('时间') }}</th><th>{{ tr('状态') }}</th></tr></thead><tbody>
-              <tr v-for="entry in listPagination.slice(androidTimeline)" :key="`${entry.providerName}:${entry.id}:${entry.timestamp}`"><td :data-label="tr('操作')"><strong>{{ entry.operationType }}</strong><small class="timeline-title">{{ entry.itemTitle }}</small></td><td :data-label="tr('类型')">{{ entry.itemType }}</td><td :data-label="tr('变更字段')">{{ entry.changedFields.join('、') || '—' }}</td><td :data-label="tr('设备')">{{ entry.deviceName }}<small class="timeline-title">{{ entry.providerName }}</small></td><td :data-label="tr('时间')">{{ new Date(entry.timestamp).toLocaleString(locale) }}</td><td :data-label="tr('状态')"><span class="state" :class="entry.reverted ? 'state-attention' : 'state-healthy'">{{ entry.reverted ? tr('已恢复') : tr('有效') }}</span></td></tr>
-            </tbody></table></div>
-            <div v-else class="empty-state" slot="content"><m3e-icon :name="timelineBusy ? 'progress_activity' : 'history'" /><h2>{{ timelineBusy ? tr('正在读取时间线') : tr('暂无 Android 时间线') }}</h2><p>{{ timelineBusy ? tr('正在从已连接的 WebDAV 备份读取。') : tr('Android 开启时间线备份后，操作摘要会显示在这里。') }}</p></div>
-          </m3e-card>
-        </section>
 
         <section v-else-if="activeSection === 'archive' || activeSection === 'trash'" class="content-grid lifecycle-page">
           <PasswordProjectPendingRestores v-if="activeSection === 'trash'" :providers="providers" :runtime-statuses="mdbx2RuntimeStatuses" :revision="removalRevision" @unlock="openMdbx2Dialog" @completed="handleMdbx2BatchTransferCompleted" />

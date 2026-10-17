@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { LoginItem, PasskeyItem, SecureNoteItem, TotpItem, VaultItem } from "../../core/model";
 import { createAssertion } from "../../passkey/webauthn-core";
 const P256_PKCS8 = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgsloK6aKNvj0CZMYdBdSZs+AUAsFy1t66q4tq5SvyeJahRANCAASlCTbHlIcaKQ2lzoEFhtjkLEO++f3cYq6FMYG7eH3BmuLQPz71FAtWq4z+tIb7oequwhUJL3xos1nA8jFqpkDs";
-import { androidFolderKey, androidRecordToItem, deleteAndroidBackupItem, deleteAndroidGeneratorHistoryEntry, deleteAndroidPortableAttachment, listAndroidGeneratorHistory, listAndroidPortableAttachments, listAndroidTimeline, readAndroidBackup, readAndroidPortableAttachment, upsertAndroidPortableAttachment, writeAndroidBackup } from "./android-backup-codec";
+import { androidFolderKey, androidRecordToItem, deleteAndroidBackupItem, deleteAndroidGeneratorHistoryEntry, deleteAndroidPortableAttachment, listAndroidGeneratorHistory, listAndroidPortableAttachments, readAndroidBackup, readAndroidPortableAttachment, upsertAndroidPortableAttachment, writeAndroidBackup } from "./android-backup-codec";
 
 function fixtureZip() {
   const password = {
@@ -989,7 +989,7 @@ describe("Android backup ZIP codec", () => {
     ]));
   });
 
-  it("reads Android timeline summaries without exposing change values", () => {
+  it("preserves original Android timeline bytes without exposing them as vault items", () => {
     const timeline = [{
       id: 7,
       itemType: "PASSWORD",
@@ -1004,11 +1004,7 @@ describe("Android backup ZIP codec", () => {
       future: { keep: true }
     }];
     const document = readAndroidBackup(zipSync({ "timeline_history.json": strToU8(JSON.stringify(timeline)) }), "provider-timeline");
-    const summaries = listAndroidTimeline(document);
-
-    expect(summaries).toEqual([{ id: "7", itemType: "PASSWORD", itemId: 42, itemTitle: "PASSWORD#42", operationType: "UPDATE", deviceName: "Android Phone", timestamp: 1_700_000_002_000, reverted: true, changedFields: ["密码"] }]);
-    expect(JSON.stringify(summaries)).not.toContain("secret");
-    expect(JSON.stringify(summaries)).not.toContain("private-device-id");
+    expect(document.items).toEqual([]);
     const output = unzipSync(writeAndroidBackup(document, [], "provider-timeline"));
     expect(output["timeline_history.json"]).toEqual(strToU8(JSON.stringify(timeline)));
   });

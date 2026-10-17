@@ -1772,7 +1772,6 @@
     justify-content: flex-end;
   }
 }
-.timeline-title { display: block; margin-top: 2px; color: var(--app-muted); font-size: .78rem; font-weight: 400; overflow-wrap: anywhere; }
 
 .source-session-details > summary {
   cursor: pointer;

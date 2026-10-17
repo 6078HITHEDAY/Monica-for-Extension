@@ -86,23 +86,10 @@ export interface AndroidPortableAttachmentInput {
   updatedAt?: number;
 }
 
-export interface AndroidTimelineEntrySummary {
-  id: string;
-  itemType: string;
-  itemId: number;
-  itemTitle: string;
-  operationType: string;
-  deviceName: string;
-  timestamp: number;
-  reverted: boolean;
-  changedFields: string[];
-}
-
 const PORTABLE_ATTACHMENT_MANIFEST = "attachments_portable/attachments_portable.json";
 const PORTABLE_ATTACHMENT_PATH = /^attachments_portable\/([^/]+)\.bin$/;
 const PORTABLE_ATTACHMENT_MAX_BYTES = 256 * 1024 * 1024;
 const CATEGORIES_PATH = "categories.json";
-const TIMELINE_PATH = "timeline_history.json";
 const GENERATOR_HISTORY_SUFFIX = "_generated_history.json";
 const GENERATOR_HISTORY_MAX_ENTRIES = 1_000;
 
@@ -110,30 +97,6 @@ const GENERATOR_HISTORY_MAX_ENTRIES = 1_000;
 // passkeys at the archive root; Android restore still accepts that layout.
 const JSON_PATH = /^(?:folders\/([^/]+)\/)?(passwords|totp|authenticators|bank_cards|documents|billing_addresses|payment_accounts|notes|passkeys)\/[^/]+\.json$/i;
 const FUTURE_JSON_PATH = /^folders\/[^/]+\/[^/]+\/[^/]+\.json$/i;
-
-export function listAndroidTimeline(document: AndroidBackupDocument): AndroidTimelineEntrySummary[] {
-  const bytes = document.entries[TIMELINE_PATH];
-  if (!bytes) return [];
-  const parsed = parseLosslessJson(strFromU8(bytes)) as unknown;
-  if (!Array.isArray(parsed)) throw new Error("Android 时间线不是 JSON 数组");
-  return parsed.flatMap((value, index): AndroidTimelineEntrySummary[] => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return [];
-    const raw = value as Record<string, unknown>;
-    const timestamp = optionalNumber(raw.timestamp);
-    if (timestamp === undefined) return [];
-    return [{
-      id: jsonScalarText(raw.id ?? `${timestamp}:${index}`).slice(0, 128),
-      itemType: (stringValue(raw.itemType) || "UNKNOWN").slice(0, 64),
-      itemId: optionalNumber(raw.itemId) ?? 0,
-      itemTitle: (stringValue(raw.itemTitle) || "未命名操作").slice(0, 512),
-      operationType: (stringValue(raw.operationType) || "UNKNOWN").slice(0, 64),
-      deviceName: (stringValue(raw.deviceName) || "未知设备").slice(0, 128),
-      timestamp,
-      reverted: Boolean(raw.isReverted),
-      changedFields: timelineChangedFields(raw.changesJson)
-    }];
-  }).sort((left, right) => right.timestamp - left.timestamp);
-}
 
 export function listAndroidGeneratorHistory(document: AndroidBackupDocument): AndroidGeneratorHistoryEntry[] {
   return (document.generatorHistoryRecords || []).flatMap((record) => record.values.flatMap((value, index): AndroidGeneratorHistoryEntry[] => {
@@ -171,21 +134,6 @@ export function deleteAndroidGeneratorHistoryEntry(document: AndroidBackupDocume
 
 function generatorHistoryId(path: string, index: number, timestamp: number): string {
   return `${path}:${index}:${timestamp}`;
-}
-
-function timelineChangedFields(value: unknown): string[] {
-  if (typeof value !== "string" || !value) return [];
-  try {
-    const parsed = parseLosslessJson(value) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return [...new Set(parsed.flatMap((change) => {
-      if (!change || typeof change !== "object" || Array.isArray(change)) return [];
-      const name = optionalString((change as Record<string, unknown>).fieldName)?.trim();
-      return name ? [name.slice(0, 128)] : [];
-    }))].slice(0, 64);
-  } catch {
-    return [];
-  }
 }
 
 export function readAndroidBackup(zipBytes: Uint8Array, providerId: string, options: AndroidBackupCodecOptions = {}): AndroidBackupDocument {

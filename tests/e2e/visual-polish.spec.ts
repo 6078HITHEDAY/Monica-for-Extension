@@ -162,7 +162,7 @@ test("manager sections remain readable with 200% text", async ({}, testInfo) => 
     await expect(page.getByRole("heading", { name: "全部项目", exact: true })).toBeVisible();
     await expectNoHorizontalOverflow(page.locator(".page-view"));
 
-    const sections = ["全部项目", "API 密钥", "登录项", "钱包与身份", "安全笔记", "动态验证码", "Steam", "Passkey", "安全发送", "归档", "回收站", "密码源", "设置与备份", "生成器"];
+    const sections = ["全部项目", "登录项", "钱包与身份", "安全笔记", "动态验证码", "Steam", "Passkey", "安全发送", "归档", "回收站", "密码源", "设置与备份", "生成器"];
     for (const section of sections) {
       await page.getByRole("button", { name: new RegExp(`^${section}`) }).first().click();
       await expectNoHorizontalOverflow(page.locator("html"));
@@ -308,7 +308,7 @@ test("mobile manager actions remain complete with 200% text", async ({}, testInf
     await page.reload();
     await page.evaluate(() => { document.documentElement.style.fontSize = "200%"; });
 
-    const sections = ["全部项目", "API 密钥", "登录项", "钱包与身份", "安全笔记", "动态验证码", "Steam", "Passkey", "安全发送", "归档", "回收站", "密码源", "设置与备份", "生成器"];
+    const sections = ["全部项目", "登录项", "钱包与身份", "安全笔记", "动态验证码", "Steam", "Passkey", "安全发送", "归档", "回收站", "密码源", "设置与备份", "生成器"];
     const clipped: Array<{ section: string; text: string; clientWidth: number; scrollWidth: number }> = [];
     const overflow: Array<{ section: string; selector: string; text: string; left: number; right: number; width: number; scrollWidth: number }> = [];
     const scrollOffsets: Array<{ section: string; scrollX: number; scrollY: number }> = [];

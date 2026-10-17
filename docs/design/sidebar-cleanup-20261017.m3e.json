@@ -1,0 +1,359 @@
+{
+  "title": "Monica · 侧栏精简",
+  "frame": "phone",
+  "platform": "web",
+  "paletteKey": "teal",
+  "theme": {
+    "dark": true,
+    "bothModes": true,
+    "contrast": "standard",
+    "shape": "rounded",
+    "font": "system",
+    "emphasized": true,
+    "motion": "standard"
+  },
+  "frames": [
+    {
+      "id": "sidebar",
+      "name": "侧栏",
+      "x": 0,
+      "y": 0,
+      "w": 268,
+      "h": 930
+    },
+    {
+      "id": "passwords",
+      "name": "密码项目",
+      "x": 320,
+      "y": 0,
+      "w": 560,
+      "h": 660
+    }
+  ],
+  "groups": [
+    {
+      "id": "nav-0",
+      "x": 12,
+      "y": 12,
+      "axis": "y",
+      "items": [
+        {
+          "id": "nav-item-0",
+          "kind": "listItem",
+          "label": "全部项目",
+          "size": 244,
+          "radius": 16,
+          "variant": "tonal",
+          "supporting": "",
+          "icon": "grid_view"
+        }
+      ]
+    },
+    {
+      "id": "nav-1",
+      "x": 12,
+      "y": 80,
+      "axis": "y",
+      "items": [
+        {
+          "id": "nav-item-1",
+          "kind": "listItem",
+          "label": "登录项",
+          "size": 244,
+          "radius": 16,
+          "variant": "tonal",
+          "supporting": "",
+          "icon": "password"
+        }
+      ]
+    },
+    {
+      "id": "nav-2",
+      "x": 12,
+      "y": 148,
+      "axis": "y",
+      "items": [
+        {
+          "id": "nav-item-2",
+          "kind": "listItem",
+          "label": "钱包与身份",
+          "size": 244,
+          "radius": 16,
+          "variant": "tonal",
+          "supporting": "",
+          "icon": "wallet"
+        }
+      ]
+    },
+    {
+      "id": "nav-3",
+      "x": 12,
+      "y": 216,
+      "axis": "y",
+      "items": [
+        {
+          "id": "nav-item-3",
+          "kind": "listItem",
+          "label": "安全笔记",
+          "size": 244,
+          "radius": 16,
+          "variant": "tonal",
+          "supporting": "",
+          "icon": "description"
+        }
+      ]
+    },
+    {
+      "id": "nav-4",
+      "x": 12,
+      "y": 284,
+      "axis": "y",
+      "items": [
+        {
+          "id": "nav-item-4",
+          "kind": "listItem",
+          "label": "动态验证码",
+          "size": 244,
+          "radius": 16,
+          "variant": "tonal",
+          "supporting": "",
+          "icon": "timer"
+        }
+      ]
+    },
+    {
+      "id": "nav-5",
+      "x": 12,
+      "y": 352,
+      "axis": "y",
+      "items": [
+        {
+          "id": "nav-item-5",
+          "kind": "listItem",
+          "label": "Steam",
+          "size": 244,
+          "radius": 16,
+          "variant": "tonal",
+          "supporting": "",
+          "icon": "sports_esports"
+        }
+      ]
+    },
+    {
+      "id": "nav-6",
+      "x": 12,
+      "y": 420,
+      "axis": "y",
+      "items": [
+        {
+          "id": "nav-item-6",
+          "kind": "listItem",
+          "label": "Passkey",
+          "size": 244,
+          "radius": 16,
+          "variant": "tonal",
+          "supporting": "",
+          "icon": "key"
+        }
+      ]
+    },
+    {
+      "id": "nav-7",
+      "x": 12,
+      "y": 488,
+      "axis": "y",
+      "items": [
+        {
+          "id": "nav-item-7",
+          "kind": "listItem",
+          "label": "安全发送",
+          "size": 244,
+          "radius": 16,
+          "variant": "tonal",
+          "supporting": "",
+          "icon": "send"
+        }
+      ]
+    },
+    {
+      "id": "nav-8",
+      "x": 12,
+      "y": 556,
+      "axis": "y",
+      "items": [
+        {
+          "id": "nav-item-8",
+          "kind": "listItem",
+          "label": "归档",
+          "size": 244,
+          "radius": 16,
+          "variant": "tonal",
+          "supporting": "",
+          "icon": "archive"
+        }
+      ]
+    },
+    {
+      "id": "nav-9",
+      "x": 12,
+      "y": 624,
+      "axis": "y",
+      "items": [
+        {
+          "id": "nav-item-9",
+          "kind": "listItem",
+          "label": "回收站",
+          "size": 244,
+          "radius": 16,
+          "variant": "tonal",
+          "supporting": "",
+          "icon": "delete"
+        }
+      ]
+    },
+    {
+      "id": "nav-10",
+      "x": 12,
+      "y": 692,
+      "axis": "y",
+      "items": [
+        {
+          "id": "nav-item-10",
+          "kind": "listItem",
+          "label": "密码源",
+          "size": 244,
+          "radius": 16,
+          "variant": "tonal",
+          "supporting": "",
+          "icon": "storage"
+        }
+      ]
+    },
+    {
+      "id": "nav-11",
+      "x": 12,
+      "y": 760,
+      "axis": "y",
+      "items": [
+        {
+          "id": "nav-item-11",
+          "kind": "listItem",
+          "label": "设置与备份",
+          "size": 244,
+          "radius": 16,
+          "variant": "tonal",
+          "supporting": "",
+          "icon": "settings"
+        }
+      ]
+    },
+    {
+      "id": "nav-12",
+      "x": 12,
+      "y": 828,
+      "axis": "y",
+      "items": [
+        {
+          "id": "nav-item-12",
+          "kind": "listItem",
+          "label": "生成器",
+          "size": 244,
+          "radius": 16,
+          "variant": "tonal",
+          "supporting": "",
+          "icon": "tune"
+        }
+      ]
+    },
+    {
+      "id": "title",
+      "x": 332,
+      "y": 12,
+      "axis": "y",
+      "items": [
+        {
+          "id": "title-item",
+          "kind": "topAppBar",
+          "label": "登录项",
+          "size": 536,
+          "radius": 16,
+          "variant": "tonal",
+          "supporting": "",
+          "icon": "password"
+        }
+      ]
+    },
+    {
+      "id": "search",
+      "x": 332,
+      "y": 110,
+      "axis": "y",
+      "items": [
+        {
+          "id": "search-item",
+          "kind": "searchBar",
+          "label": "搜索密码库",
+          "size": 536,
+          "radius": 16,
+          "variant": "tonal",
+          "supporting": "",
+          "icon": null
+        }
+      ]
+    },
+    {
+      "id": "create",
+      "x": 332,
+      "y": 195,
+      "axis": "y",
+      "items": [
+        {
+          "id": "create-item",
+          "kind": "button",
+          "label": "新建 API 密钥",
+          "size": 536,
+          "radius": 16,
+          "variant": "filled",
+          "supporting": "",
+          "icon": "add"
+        }
+      ]
+    },
+    {
+      "id": "record",
+      "x": 332,
+      "y": 290,
+      "axis": "y",
+      "items": [
+        {
+          "id": "record-item",
+          "kind": "listItem",
+          "label": "GitHub 开发密钥",
+          "size": 536,
+          "radius": 16,
+          "variant": "tonal",
+          "supporting": "API 密钥 · Monica 本地库",
+          "icon": "key"
+        }
+      ]
+    },
+    {
+      "id": "edit",
+      "x": 332,
+      "y": 390,
+      "axis": "y",
+      "items": [
+        {
+          "id": "edit-item",
+          "kind": "button",
+          "label": "编辑登录项",
+          "size": 536,
+          "radius": 16,
+          "variant": "tonal",
+          "supporting": "",
+          "icon": "edit"
+        }
+      ]
+    }
+  ]
+}

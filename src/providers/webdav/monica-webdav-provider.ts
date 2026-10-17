@@ -1,7 +1,7 @@
 import type { ProviderAccount, ProviderReference, ProviderSourceRecord, VaultItem } from "../../core/model";
 import type { ProviderAdapter, ProviderSyncContext, ProviderSyncResult } from "../../core/provider";
 import { decryptAndroidBackup, encryptAndroidBackup, isAndroidEncryptedBackup } from "./android-backup-crypto";
-import { deleteAndroidBackupItem, deleteAndroidGeneratorHistoryEntry, deleteAndroidPortableAttachment, listAndroidGeneratorHistory, listAndroidPortableAttachments, listAndroidTimeline, readAndroidBackup, readAndroidPortableAttachment, upsertAndroidPortableAttachment, writeAndroidBackup, type AndroidBackupDocument, type AndroidGeneratorHistoryEntry, type AndroidTimelineEntrySummary } from "./android-backup-codec";
+import { deleteAndroidBackupItem, deleteAndroidGeneratorHistoryEntry, deleteAndroidPortableAttachment, listAndroidGeneratorHistory, listAndroidPortableAttachments, readAndroidBackup, readAndroidPortableAttachment, upsertAndroidPortableAttachment, writeAndroidBackup, type AndroidBackupDocument, type AndroidGeneratorHistoryEntry } from "./android-backup-codec";
 import type { ProviderAttachmentPage, ProviderAttachmentReadBeginResult, ProviderAttachmentSummary } from "../attachments/attachment-contract";
 import { WebDavClient, type WebDavBackupFile, type WebDavCredentials } from "./webdav-client";
 import { createSourceRecord } from "../../core/source-records";
@@ -161,11 +161,6 @@ export class MonicaWebDavProvider implements ProviderAdapter {
     bindDocumentIdentity(loaded.document, item, account.id);
     deleteAndroidBackupItem(loaded.document, item.id);
     await this.uploadDocument(account, loaded.document, loaded.document.items, signal, loaded.file);
-  }
-
-  async listTimeline(account: ProviderAccount, signal?: AbortSignal): Promise<AndroidTimelineEntrySummary[]> {
-    const loaded = await this.loadLatest(account, signal);
-    return loaded ? listAndroidTimeline(loaded.document) : [];
   }
 
   async listGeneratorHistory(account: ProviderAccount, signal?: AbortSignal): Promise<AndroidGeneratorHistoryEntry[]> {

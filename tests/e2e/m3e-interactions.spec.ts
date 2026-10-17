@@ -29,7 +29,6 @@ test("split primary action follows each page and the menu can create another typ
     for (const [section, button, dialog] of [
       [/^全部项目/, "新建", "添加密码"],
       [/^登录项/, "新建", "添加密码"],
-      [/^API 密钥/, "新建", "添加 API 密钥"],
       [/^钱包与身份/, "添加钱包项目", "添加银行卡"],
       [/^安全笔记/, "添加安全笔记", "添加安全笔记"],
       [/^动态验证码/, "添加验证码", "添加动态验证码"]
@@ -61,8 +60,29 @@ test("split primary action follows each page and the menu can create another typ
     await editor.getByRole("button", { name: "加密保存", exact: true }).click();
     await expect(editor).toHaveCount(0);
     await expect(page.getByRole("button", { name: "选择新建类型", exact: true })).toBeFocused();
-    await navigate(page, /^API 密钥/);
+    await navigate(page, /^全部项目/);
     await expect(page.getByText("Split-menu API", { exact: true })).toBeVisible();
+    const navigation = page.getByRole('navigation', { name: '主导航' });
+    await expect(navigation.getByRole('button', { name: /^API 密钥/ })).toHaveCount(0);
+    await expect(navigation.getByRole('button', { name: '时间线', exact: true })).toHaveCount(0);
+    await navigate(page, /^登录项/);
+    await page.getByRole('button', { name: '选择新建类型', exact: true }).click();
+    await page.getByRole('menu', { name: '选择新建类型' }).getByRole('menuitem', { name: 'API Key', exact: true }).click();
+    await page.getByLabel('名称 *', { exact: true }).fill('Password-page API key');
+    await dialogContent(page).getByRole('textbox', { name: 'API Key', exact: true }).fill('synthetic-password-page-key');
+    await page.getByLabel('API 地址', { exact: true }).fill('https://example.test/api');
+    await page.getByRole('button', { name: '加密保存', exact: true }).click();
+    await expect(dialogContent(page)).toHaveCount(0);
+    await expect(page.getByRole('row').filter({ hasText: 'Password-page API key' })).toBeVisible();
+    await page.reload(); await navigate(page, /^登录项/);
+    await expect(page.getByRole('row').filter({ hasText: 'Password-page API key' })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath('sidebar-password-api.png'), fullPage: true });
+    const saved = await page.evaluate(() => chrome.runtime.sendMessage({ type: 'VAULT_LIST_ITEMS' }));
+    expect(saved).toMatchObject({ ok: true });
+    expect(saved.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'api-token', title: 'Split-menu API', token: 'synthetic-split-menu-secret' }),
+      expect.objectContaining({ kind: 'login', loginType: 'API_KEY', title: 'Password-page API key', password: 'synthetic-password-page-key' })
+    ]));
   } finally { await context.close(); }
 });
 

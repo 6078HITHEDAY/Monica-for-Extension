@@ -1902,12 +1902,6 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
       if (account.kind === "monica-webdav") return monicaWebDavProvider.listAttachments(account, item);
       throw unsupportedAttachmentProvider(account.kind);
     }
-    case "ANDROID_TIMELINE_LIST": {
-      assertManagerPage(sender);
-      const account = await service.getProvider(request.providerId);
-      if (!account || account.kind !== "monica-webdav") throw new Error("Monica Android WebDAV 密码源不存在。");
-      return monicaWebDavProvider.listTimeline(account);
-    }
     case "ANDROID_GENERATOR_HISTORY_LIST": {
       assertManagerPage(sender);
       const account = await service.getProvider(request.providerId);

@@ -4,6 +4,8 @@
 
 ## 中文
 
+- 移除时间线页面、侧栏入口及后台读取接口，保留 Android 备份原有内容。移除侧栏独立的 API 密钥入口；密码项目中的 API 密钥类型继续可用，已有原生 API Token 记录仍可在“全部项目”中管理。
+
 - 整合 PR #13 与本地 Wi-Fi 开发改动，保留单一设置入口、MDBX 接收恢复与性能优化。补齐 Windows 通信组件配置下载、二维码／链接切换，移除手填 IP。配对成功不再误报同步完成；只有对方确认保存后才更新同步时间并弹出结果，显示本机实际保存／删除的项目及数量，不显示密码。对方保存失败或超时会明确报错。详见[合并验证](verification/pr13-integration-2026-10-17.md)；真实手机首次同步仍待复测，Android 自动同步所需 mDNS 在线广播尚未接入。
 
 - 修复大型密码库的界面卡顿：打开动态验证码页的最长主线程阻塞从约 3.1 秒降至约 0.37 秒，列表、搜索与详情也更流畅。详见 [PERFORMANCE.md](PERFORMANCE.md)。
@@ -35,6 +37,8 @@ Wi-Fi 首轮范围于 2026-10-16 冻结，保留[当时的阶段记录](verifica
 后续待办：部分原生归档与文件夹配置、Android 两版文件夹／根目录附件收发，以及 F-Droid、Android 界面与组播发现验收尚未完成。插件优先兼容 Android 现有协议；本次文件夹修复不要求 Android 修改。完整 Android 对齐还包含跨后端冲突、恢复与真实 OneDrive 验收。这些未完成内容不计入本次阶段完成范围，本记录不表示已发布。
 
 ## English
+
+- Removed the timeline page, navigation entry and background read API while preserving existing Android backup contents. Removed the separate API-key sidebar entry; API-key password projects remain available, and existing native API Token records can still be managed under All items.
 
 - Integrated PR #13 with local Wi-Fi development, retaining one settings entry, MDBX receive recovery and performance improvements. Added Windows communication-helper setup downloads and usable QR/link switching without manual IP entry. Pairing no longer claims a completed sync; timestamps and the result dialog require the peer save receipt. Results show actual local saved/deleted items and counts without passwords, and rejected/timed-out peer saves report failure. See [integration verification](verification/pr13-integration-2026-10-17.md). The reported first-sync failure on the user’s phone still needs retesting; Android automatic-sync mDNS presence is not implemented.
 

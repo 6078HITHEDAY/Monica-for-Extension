@@ -82,7 +82,7 @@ for (const colorScheme of ["light", "dark"] as const) {
       expect(await manager.evaluate(() => chrome.runtime.sendMessage({ type: "VAULT_SETUP", masterPassword: "English layout master password" }))).toMatchObject({ ok: true });
       await manager.reload();
       await manager.evaluate(() => { document.documentElement.style.fontSize = "200%"; });
-      const sections = ["All items", "API key", "Login", "Wallet and identity", "Secure Note", "Verification codes", "Steam", "Passkey", "Secure Send", "Archive", "Recycle Bin", "Sources", "Settings and backups", "Generator"];
+      const sections = ["All items", "Login", "Wallet and identity", "Secure Note", "Verification codes", "Steam", "Passkey", "Secure Send", "Archive", "Recycle Bin", "Sources", "Settings and backups", "Generator"];
       const issues: Array<{ section: string; label: string }> = [];
       for (const section of sections) {
         await manager.getByRole("button", { name: "Open navigation", exact: true }).click();
