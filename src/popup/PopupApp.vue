@@ -208,8 +208,10 @@ function loginSearchText(item: LoginMatchSummary): string {
   return `${item.title}\n${item.username}\n${item.uris.join(' ')}\n${formatAutofillCredential(item.credentialIdentity, tr)}`.toLowerCase();
 }
 
-const loginPagination = useListPagination(() => filteredLogins.value.length, () => [search.value, allLogins.value], 20);
-const matchPagination = useListPagination(() => visibleMatches.value.length, () => [search.value, matches.value], 20);
+// Live vault refreshes replace these arrays; only a different search or item set returns to page 1.
+const listKey = (items: readonly { id: string }[]) => `${search.value}\n${items.map((item) => item.id).join("\n")}`;
+const loginPagination = useListPagination(() => filteredLogins.value.length, () => listKey(allLogins.value), 20);
+const matchPagination = useListPagination(() => visibleMatches.value.length, () => listKey(matches.value), 20);
 const passkeyPagination = useListPagination(() => passkeys.value.length, () => passkeys.value, 20);
 const walletPagination = useListPagination(() => walletItems.value.length, () => walletItems.value, 20);
 
