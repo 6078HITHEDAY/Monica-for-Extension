@@ -35,6 +35,7 @@
     "test:security": "vitest run src/security src/runtime/sender-policy.test.ts src/passkey/request-policy.test.ts src/passkey/webauthn-core.test.ts src/content/wallet-dom.test.ts && npm run build && node scripts/security-audit.mjs",
     "test:popup-action": "npm run build && node scripts/action-popup-probe.mjs",
     "test:e2e": "npm run build && node scripts/action-popup-probe.mjs && playwright test",
+    "test:e2e:edge": "npm run build && node scripts/e2e-edge.mjs",
     "capture:store-assets": "npm run build && node scripts/capture-store-assets.mjs",
     "generate:icons": "node scripts/generate-icons.mjs",
     "build": "npm run check && node scripts/verify-icon-font.mjs && vite build && node scripts/build-workers.mjs && node scripts/verify-extension-pages.mjs",

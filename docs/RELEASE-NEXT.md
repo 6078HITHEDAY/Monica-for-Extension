@@ -4,6 +4,12 @@
 
 ## 中文
 
+- 整合 PR #13 与本地 Wi-Fi 开发改动，保留单一设置入口、MDBX 接收恢复与性能优化。补齐 Windows 通信组件配置下载、二维码／链接切换，移除手填 IP。配对成功不再误报同步完成；只有对方确认保存后才更新同步时间并弹出结果，显示本机实际保存／删除的项目及数量，不显示密码。对方保存失败或超时会明确报错。详见[合并验证](verification/pr13-integration-2026-10-17.md)；真实手机首次同步仍待复测，Android 自动同步所需 mDNS 在线广播尚未接入。
+
+- 修复大型密码库的界面卡顿：打开动态验证码页的最长主线程阻塞从约 3.1 秒降至约 0.37 秒，列表、搜索与详情也更流畅。详见 [PERFORMANCE.md](PERFORMANCE.md)。
+- 修复 Linux 上的 CI：固定哈希的测试夹具按 CRLF 检出、CodeQL 先构建浏览器引擎、Windows Hello 测试与脚本按平台判断、Popup 探针显式选择语言；更新与当前界面不符的 e2e 用例；需要 Windows Edge 的验收用例在缺少 Edge 时跳过并注明原因，另以 `npm run test:e2e:edge` 严格运行。
+- 修复与 Android 的 Wi-Fi 同步：遵循 Android 的设备 ID 角色规则，在对方监听时由浏览器发现并主动连接，避免双方同时等待；记住对方地址用于单播探测；保留真实错误代码；本机助手按 Android 格式广播同步请求与设置版本。详见 [nearby-wifi-sync-321.md](nearby-wifi-sync-321.md)。
+
 Wi-Fi 首轮范围于 2026-10-16 冻结，保留[当时的阶段记录](verification/wifi-stage-closeout-2026-10-16.md)。其后另行授权的 Android 1.0.320 资料字段对齐已完成[定向验收](verification/wallet-fields-320-2026-10-16.md)，本轮 Wi-Fi 中断接收的受限继续处理也已完成[验证](verification/wifi-recovery-continuation-2026-10-16.md)。以下均为尚未发布的开发改动。
 
 - 对齐 Android 新增的地址姓名分段、地址第三行、区/县、家庭及工作联系方式，以及银行卡持卡人姓名分段。沿用现有补充信息编辑入口，并分别展示详情；完整姓名与姓名分段独立保存，家庭／工作联系方式不使用默认联系方式代填。
@@ -29,6 +35,12 @@ Wi-Fi 首轮范围于 2026-10-16 冻结，保留[当时的阶段记录](verifica
 后续待办：部分原生归档与文件夹配置、Android 两版文件夹／根目录附件收发，以及 F-Droid、Android 界面与组播发现验收尚未完成。插件优先兼容 Android 现有协议；本次文件夹修复不要求 Android 修改。完整 Android 对齐还包含跨后端冲突、恢复与真实 OneDrive 验收。这些未完成内容不计入本次阶段完成范围，本记录不表示已发布。
 
 ## English
+
+- Integrated PR #13 with local Wi-Fi development, retaining one settings entry, MDBX receive recovery and performance improvements. Added Windows communication-helper setup downloads and usable QR/link switching without manual IP entry. Pairing no longer claims a completed sync; timestamps and the result dialog require the peer save receipt. Results show actual local saved/deleted items and counts without passwords, and rejected/timed-out peer saves report failure. See [integration verification](verification/pr13-integration-2026-10-17.md). The reported first-sync failure on the user’s phone still needs retesting; Android automatic-sync mDNS presence is not implemented.
+
+- Fixed UI freezes with large vaults: the longest main-thread block when opening the OTP page dropped from about 3.1 s to about 0.37 s; lists, search and details are smoother too. See [PERFORMANCE.md](PERFORMANCE.md).
+- Fixed Linux CI: the hash-pinned fixture checks out with CRLF, CodeQL builds the browser engine first, Windows Hello tests/scripts are platform-aware and the Popup probe selects its asserted language; e2e tests that drifted from the current UI are updated; Windows-Edge acceptance tests skip with a reason where Edge is absent and run strictly via `npm run test:e2e:edge`.
+- Fixed Wi-Fi sync with Android: follow Android's device-ID role rule so the browser discovers and dials a listening phone instead of both sides waiting; remember the peer address for unicast probes; keep real error codes; the Host advertises sync requests and settings versions in Android's format. See [nearby-wifi-sync-321.md](nearby-wifi-sync-321.md).
 
 The first Wi-Fi stage was frozen on 2026-10-16; its [historical closeout](verification/wifi-stage-closeout-2026-10-16.md) is retained. Separately authorized Android 1.0.320 profile-field alignment passed [targeted acceptance](verification/wallet-fields-320-2026-10-16.md), followed by [verified bounded continuation](verification/wifi-recovery-continuation-2026-10-16.md) for interrupted Wi-Fi receives. All changes below remain unpublished.
 

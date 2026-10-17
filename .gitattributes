@@ -1,3 +1,6 @@
 # Runtime overlay hashes cover exact patch bytes. Unified diff context lines
 # intentionally contain a single space; they are not source trailing whitespace.
 native/mdbx2-host/runtime-patches/*.patch text eol=lf -whitespace
+# The MDBX engine provenance pins this upstream fixture byte-for-byte with CRLF
+# line endings. Check it out identically on every platform so Linux CI matches.
+native/mdbx2-host/vendor/mdbx/crates/mdbx-storage/tests/fixtures/kdbx3-demopass.kdbx.b64 text eol=crlf

@@ -126,3 +126,22 @@ describe('encrypted nearby preference service', () => {
     expect(() => readNearbyPreferences(state.nearbyPreferences)).toThrow();
   });
 });
+
+describe('nearby connection hints', () => {
+  it('creates browser identities that take the outbound dialing role against Android IDs', () => {
+    const created = preferences();
+    expect(created.deviceId).toMatch(/^00[a-f0-9]{30}$/);
+    // Android IDs are UUID hex; a smaller browser ID makes the browser dial the phone.
+    expect(created.deviceId < '0a'.padEnd(32, '0')).toBe(true);
+  });
+
+  it('stores only a private IPv4 peer address and never exposes it in the view', () => {
+    const base = preferences(), paired = changeNearbyPreferences(base, { kind: 'remember', peer: { ...peer, address: '192.168.4.9' }, enrollment: true }, base.epoch);
+    expect(paired.peers[0].address).toBe('192.168.4.9');
+    expect(JSON.stringify(nearbyPreferencesView(paired))).not.toContain('192.168.4.9');
+    for (const address of ['8.8.8.8', '192.168.4', '192.168.04.9', 'fe80::1'])
+      expect(() => changeNearbyPreferences(base, { kind: 'remember', peer: { ...peer, address }, enrollment: true }, base.epoch)).toThrow('invalid-address');
+    // Saved trust from before this field existed still loads.
+    expect(readNearbyPreferences(changeNearbyPreferences(base, { kind: 'remember', peer, enrollment: true }, base.epoch))!.peers[0].address).toBeUndefined();
+  });
+});

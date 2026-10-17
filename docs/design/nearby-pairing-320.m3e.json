@@ -85,7 +85,7 @@
       ]
     },
     {
-      "id": "pair",
+      "id": "pair-0",
       "frameId": "pairing",
       "x": 12,
       "y": 200,
@@ -107,7 +107,17 @@
             "bl": 28,
             "br": 28
           }
-        },
+        }
+      ]
+    },
+    {
+      "id": "pair-1",
+      "frameId": "pairing",
+      "x": 12,
+      "y": 278,
+      "axis": "y",
+      "gap": 10,
+      "items": [
         {
           "id": "input",
           "kind": "textField",
@@ -123,7 +133,17 @@
             "bl": 16,
             "br": 16
           }
-        },
+        }
+      ]
+    },
+    {
+      "id": "pair-2",
+      "frameId": "pairing",
+      "x": 12,
+      "y": 380,
+      "axis": "y",
+      "gap": 10,
+      "items": [
         {
           "id": "connect",
           "kind": "button",
@@ -213,7 +233,7 @@
     {
       "id": "result-0",
       "frameId": "result",
-      "x": 12,
+      "x": 492,
       "y": 12,
       "axis": "y",
       "gap": 4,
@@ -239,7 +259,7 @@
     {
       "id": "result-1",
       "frameId": "result",
-      "x": 12,
+      "x": 492,
       "y": 92,
       "axis": "y",
       "gap": 4,
@@ -265,7 +285,7 @@
     {
       "id": "result-2",
       "frameId": "result",
-      "x": 12,
+      "x": 492,
       "y": 172,
       "axis": "y",
       "gap": 4,
@@ -291,7 +311,7 @@
     {
       "id": "result-3",
       "frameId": "result",
-      "x": 12,
+      "x": 492,
       "y": 252,
       "axis": "y",
       "gap": 4,
@@ -317,7 +337,7 @@
     {
       "id": "result-4",
       "frameId": "result",
-      "x": 12,
+      "x": 492,
       "y": 332,
       "axis": "y",
       "gap": 4,
@@ -343,7 +363,7 @@
     {
       "id": "result-5",
       "frameId": "result",
-      "x": 12,
+      "x": 492,
       "y": 412,
       "axis": "y",
       "gap": 4,
@@ -369,7 +389,7 @@
     {
       "id": "result-6",
       "frameId": "result",
-      "x": 12,
+      "x": 492,
       "y": 492,
       "axis": "y",
       "gap": 4,

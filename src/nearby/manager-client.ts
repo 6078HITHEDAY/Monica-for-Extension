@@ -15,6 +15,7 @@ export class NearbyManagerClient {
   private rejectReady!: (error: Error) => void;
   private readyTimer?: ReturnType<typeof setTimeout>;
   private dead = false;
+  private closeReason = 'connection-closed';
   constructor(private readonly disconnected: (reason: string) => void = () => {}, runtime: Pick<typeof chrome.runtime, 'connect'> = chrome.runtime) {
     this.ready = new Promise((resolve, reject) => { this.resolveReady = resolve; this.rejectReady = reject; });
     // Avoid an unhandled rejection when unmount precedes the first caller.
@@ -37,7 +38,7 @@ export class NearbyManagerClient {
   };
   async request<T>(command: NearbyManagerCommand): Promise<T> {
     await this.ready;
-    if (this.dead || !this.port) throw new NearbyManagerClientError('connection-closed');
+    if (this.dead || !this.port) throw new NearbyManagerClientError(this.closeReason);
     const id = ++this.next;
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => this.close('operation-timeout'), 180_000);
@@ -46,7 +47,7 @@ export class NearbyManagerClient {
     });
   }
   close(reason = 'cancelled'): void {
-    if (this.dead) return; this.dead = true;
+    if (this.dead) return; this.dead = true; this.closeReason = reason;
     clearTimeout(this.readyTimer); const error = new NearbyManagerClientError(reason); this.rejectReady(error);
     for (const value of this.pending.values()) { clearTimeout(value.timer); value.reject(error); } this.pending.clear();
     const port = this.port; this.port = undefined;

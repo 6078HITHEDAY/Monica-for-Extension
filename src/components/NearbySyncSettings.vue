@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import QRCode from 'qrcode';
+import { nearbyErrorMessage, nearbyStageLabel } from '../nearby/manager-messages';
 import { tr } from '../i18n';
 import { materialOptionTag, materialSelectTag } from '../lib/material-controls';
 import { NearbyManagerClient, NearbyManagerClientError, type NearbyManagerCommand } from '../nearby/manager-client';
@@ -41,7 +42,7 @@ let client: NearbyManagerClient | undefined, disposed = false, generation = 0, t
 let nextAutomatic = 0, automaticCursor = 0, searchStarted = 0, waitingStarted = 0, pendingEndpoint: NearbyEndpoint | undefined;
 const active = computed(() => ['pairing', 'preparing', 'review', 'ready', 'transferring', 'saving', 'confirming'].includes(view.value.phase));
 const editable = computed(() => connected.value && !busy.value && !active.value && !searching.value);
-const phaseText = computed(() => tr(view.value.phase==='completed' && view.value.kind==='pairing' ? '配对成功，尚未同步数据' : ({ idle: '准备同步', pairing: '等待配对设备', preparing: '正在准备同步', review: '请检查 Passkey 兼容性', ready: '准备完成', transferring: '正在连接或传输', saving: '正在安全保存', confirming:'等待对方确认保存', completed: '同步完成', failed: '同步未完成', cancelled: '同步已取消' })[view.value.phase]));
+const phaseText = computed(() => view.value.phase === 'transferring' && view.value.transport ? nearbyStageLabel(view.value.transport.stage) : tr(view.value.phase==='completed' && view.value.kind==='pairing' ? '配对成功，尚未同步数据' : ({ idle: '准备同步', pairing: '等待配对设备', preparing: '正在准备同步', review: '请检查 Passkey 兼容性', ready: '准备完成', transferring: '正在连接或传输', saving: '正在安全保存', confirming:'等待对方确认保存', completed: '同步完成', failed: '同步未完成', cancelled: '同步已取消' })[view.value.phase]));
 function errorText(code: string): string {
   const messages: Record<string, string> = {
     'host-update-required': '请更新 Monica 本机通信组件后重试。',
@@ -66,7 +67,9 @@ function errorText(code: string): string {
     'cancelled': '同步已取消。', 'connection-closed': '同步连接已关闭，请重新连接。',
     'operation-timeout': '同步等待超时，请重新连接。', 'connection-timeout': '同步连接超时，请重新连接。'
   };
-  return tr(messages[code] ?? '同步未完成，请检查本机通信组件和另一端状态后重试。');
+  if (messages[code]) return tr(messages[code]);
+  const detail = nearbyErrorMessage(code);
+  return [detail.message, detail.hint].filter(Boolean).join(' ');
 }
 function report(e: unknown) { if (!disposed) { recoveryReview.value = null; syncResult.value=null; error.value = errorText(e instanceof NearbyManagerClientError ? e.code : 'operation-failed'); view.value = {phase:'failed'}; searching.value=false; } }
 async function request<T>(command: NearbyManagerCommand): Promise<T> {
@@ -143,6 +146,7 @@ async function discover() {
   await run(async () => { const result = await request<NearbyDiscoveryView>({ type: 'discover' }); searching.value = result.searching; discovered.value = []; searchStarted = Date.now(); });
 }
 async function startPrepared() {
+  view.value = { ...view.value, phase: 'transferring', transport: { stage: 'connecting', transferred: 0, total: 0 } }; waitingStarted = Date.now();
   view.value = await request({ type: 'start', ...(pendingEndpoint ? { endpoint: pendingEndpoint } : {}) }); waitingStarted = Date.now();
 }
 async function synchronize(peerId: string, address?: NearbyEndpoint) {

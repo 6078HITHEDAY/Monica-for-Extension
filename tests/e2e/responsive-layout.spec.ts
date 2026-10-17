@@ -1,4 +1,4 @@
-import { dialogContent } from "./fixtures/material";
+import { dialogContent, editContentSection } from "./fixtures/material";
 import { chromium, expect, test, type Locator, type Page, type TestInfo } from "@playwright/test";
 import path from "node:path";
 
@@ -154,11 +154,17 @@ for (const [width, height, scale] of [[320, 480, 200], [560, 320, 100], [768, 60
       await expect(save).toBeInViewport({ ratio: 1 });
       const initial = await save.boundingBox();
       await dialog.getByLabel("名称 *", { exact: true }).fill("跨尺寸保存的项目");
-      await dialog.locator(".editor-disclosure [slot=\"header\"]").filter({ hasText: "自定义字段" }).click();
-      await dialog.getByRole("button", { name: "添加字段", exact: true }).click();
-      await dialog.getByLabel("自定义字段 1 名称").fill("自定义字段");
-      await dialog.getByLabel("自定义字段 1 值").fill("synthetic value");
-      await dialog.getByLabel("恢复备注与笔记", { exact: true }).fill("保留字段滚动与保存操作");
+      // Optional content opens in sections; each must stay usable at this size.
+      await editContentSection(page, "自定义字段", async section => {
+        await section.getByRole("button", { name: "添加字段", exact: true }).click();
+        await section.getByLabel("自定义字段 1 名称").fill("自定义字段");
+        await section.getByLabel("自定义字段 1 值").fill("synthetic value");
+        await expectUsableControls(section);
+      });
+      await editContentSection(page, "笔记与恢复备注", async section => {
+        await section.getByLabel("恢复备注与笔记", { exact: true }).fill("保留字段滚动与保存操作");
+        await expectUsableControls(section);
+      });
       await expectUsableControls(dialog);
       await expect(save).toBeInViewport({ ratio: 1 });
       const final = await save.boundingBox();

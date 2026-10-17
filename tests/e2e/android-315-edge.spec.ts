@@ -2,10 +2,12 @@ import { expect, test } from "@playwright/test";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
+import { requireInstalledEdge } from "./fixtures/edge";
 
 /** Dedicated runner: never consumes Playwright's default browser fixture. */
 test("Android 315 real Microsoft Edge surfaces, native messaging and locked restart", async ({}, testInfo) => {
   test.setTimeout(180_000);
+  await requireInstalledEdge(process.env.MONICA_315_EDGE_EXECUTABLE || undefined);
   const run = promisify(execFile);
   const { stdout, stderr } = await run(process.execPath, [path.resolve("scripts/interop-315-edge.mjs")], {
     cwd: path.resolve("."), env: process.env, windowsHide: true, maxBuffer: 4 * 1024 * 1024

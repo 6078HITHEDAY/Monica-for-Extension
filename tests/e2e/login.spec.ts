@@ -1,4 +1,4 @@
-import { chooseOption } from "./fixtures/material";
+import { chooseOption, editContentSection } from "./fixtures/material";
 import { expect, test, chromium, type BrowserContext } from "@playwright/test";
 import path from "node:path";
 
@@ -86,9 +86,10 @@ test("manager saves a metadata-only SSO login with empty username, password, and
     await manager.locator(".sidebar").getByRole("button", { name: /^登录项/ }).click();
     await manager.getByRole("button", { name: "新建", exact: true }).click();
     await manager.getByLabel("名称 *").fill("Company SSO");
-    await manager.locator(".editor-disclosure [slot=\"header\"]").filter({ hasText: "登录方式" }).click();
-    await chooseOption(manager.getByRole("combobox", { name: "登录方式", exact: true }), "SSO");
-    await manager.getByLabel("SSO 提供商").fill("GOOGLE");
+    await editContentSection(manager, "登录方式", async section => {
+      await chooseOption(section.getByRole("combobox", { name: "登录方式", exact: true }), "SSO");
+      await section.getByLabel("SSO 提供商").fill("GOOGLE");
+    });
     await manager.screenshot({ path: testInfo.outputPath("metadata-login-editor.png"), fullPage: true });
     await manager.getByRole("button", { name: "加密保存" }).click();
     await manager.getByRole("navigation", { name: "主导航" }).getByRole("button", { name: /^登录项/ }).click();

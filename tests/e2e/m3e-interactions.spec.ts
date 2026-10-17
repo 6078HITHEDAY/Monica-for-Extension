@@ -1,5 +1,5 @@
 import { launchTestContext } from './fixtures/edge';
-import { chooseOption, dialogContent } from "./fixtures/material";
+import { chooseOption, dialogContent, editContentSection } from "./fixtures/material";
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import path from "node:path";
 
@@ -102,11 +102,8 @@ test("collapsing optional fields retains API and wallet editor drafts", async ({
       const editor = dialogContent(page);
       const name = editor.getByLabel("名称 *", { exact: true });
       await name.fill(`Synthetic ${kind} draft`);
-      const disclosure = editor.getByRole("button", { name: /^自定义字段/ });
-      await disclosure.click();
-      await expect(disclosure).toHaveAttribute("aria-expanded", "true");
-      await disclosure.click();
-      await expect(disclosure).toHaveAttribute("aria-expanded", "false");
+      // Optional content opens in its own section and returns with Done.
+      await editContentSection(page, "自定义字段", section => expect(section.getByRole("button", { name: "添加字段", exact: true })).toBeVisible());
       await expect(editor).toBeVisible();
       await expect(name).toHaveValue(`Synthetic ${kind} draft`);
       await editor.getByRole("button", { name: "取消", exact: true }).click();

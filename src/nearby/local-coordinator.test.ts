@@ -16,14 +16,17 @@ import { NearbyDataError } from './wire-shape';
 const handle = '11111111-1111-4111-8111-111111111111';
 const peer = { deviceId: 'phone', name: 'Synthetic phone', pairId: 'pair-one', trustedKey: Buffer.alloc(32, 9).toString('base64url'),
   lastSyncedAt: 0, sentRevision: '', receivedRevision: '', receivedRequest: '0' };
-async function fixture(items: VaultItem[] = [createLoginItem({ title: 'Original', password: 'synthetic password' })]) {
+const discovered = { protocol: 'monica-lan', version: 2, session: peer.pairId, name: 'Synthetic phone', port: 5555,
+  address: '192.168.1.20', addresses: ['192.168.1.20', '10.0.0.7'], device_id: peer.deviceId, trusted: true, revision: 'r:0::0' };
+async function fixture(items: VaultItem[] = [createLoginItem({ title: 'Original', password: 'synthetic password' })], saved: typeof peer = peer,
+  devices: unknown[] = [discovered]) {
   const storage = new MemoryVaultStorage(), sessions = new MemoryVaultSessionStore(), service = new SecureVaultService(storage, sessions, Date.now, new MemoryVaultDeviceKeyStore());
   await service.setup('', items); const sessionId = (await service.passkeySessionId())!;
   const preferences = await service.nearbySessionPreferences(sessionId);
-  await service.updateNearbyPreferences({ kind: 'remember', peer, enrollment: true }, preferences.epoch, sessionId);
-  const operations: string[] = [];
-  const transport = { close: vi.fn(), call: vi.fn(async (operation: NearbyOperation) => {
-    operations.push(operation);
+  await service.updateNearbyPreferences({ kind: 'remember', peer: saved, enrollment: true }, preferences.epoch, sessionId);
+  const operations: string[] = [], params: Record<string, unknown>[] = [];
+  const transport = { close: vi.fn(), call: vi.fn(async (operation: NearbyOperation, input: Record<string, unknown> = {}) => {
+    operations.push(operation); params.push(input);
     switch (operation) {
       case 'snapshot_pairing': return { handle, revision: 'pairing-only-v1', asset_ids: [], pending: false };
       case 'snapshot_receive_only': return { handle, revision: 'receive-only-v1', asset_ids: [], pending: false };
@@ -33,11 +36,13 @@ async function fixture(items: VaultItem[] = [createLoginItem({ title: 'Original'
       case 'replica_revision': return { revision: 'revision', pending: false };
       case 'start': return { handle, code: '123456', invitations: [`monica-lan:2:127.0.0.1:12345:${peer.trustedKey}`] };
       case 'connect': return { handle };
+      case 'discover': return { handle };
+      case 'discovery_result': return { ready: true, result: { devices } };
       default: return {};
     }
   }) };
   const factory = vi.fn(() => transport as unknown as NearbyNativeTransport), coordinator = new NearbyLocalCoordinator(service, factory, '127.0.0.1');
-  return { storage, service, sessionId, transport, operations, factory, coordinator };
+  return { storage, service, sessionId, transport, operations, params, factory, coordinator };
 }
 
 describe('nearby coordinator authorization and cancellation', () => {
@@ -98,7 +103,8 @@ describe('nearby coordinator authorization and cancellation', () => {
     expect(JSON.stringify(view)).not.toContain(key.privateKeyPkcs8);
     await f.coordinator.confirm(view.review!.id);
     const started = await f.coordinator.start(); expect(started.phase).toBe('transferring');
-    expect(JSON.stringify(started)).not.toContain(peer.trustedKey); expect(started.endpoint).toEqual({ addresses: ['127.0.0.1'], port: 12345 });
+    expect(JSON.stringify(started)).not.toContain(peer.trustedKey); expect(started.role).toBe('dialing');
+    expect(started.endpoint).toEqual({ addresses: ['192.168.1.20', '10.0.0.7'], port: 5555 });
     f.coordinator.close();
     const blocked = await fixture([key]); await blocked.coordinator.prepare(peer.deviceId);
     await expect(blocked.coordinator.start()).rejects.toThrow('not-ready'); expect(blocked.operations).not.toContain('start');
@@ -152,6 +158,79 @@ describe('nearby coordinator authorization and cancellation', () => {
   });
 });
 
+describe('nearby connection roles and recovery hints', () => {
+  const progress = (address = '192.168.1.20') => ({ phase: 'received', remote_address: address, transferred: 10, total: 20, peer: {
+    device_id: peer.deviceId, name: peer.name, revision: 'remote-revision', content_type: 'vault', vault_content_version: 2,
+    receive_content: false, pairing: {}, sync_request: 0, interval_seconds: 60, settings_version: 0, settings_writer: '' } });
+
+  it('dials an Android peer with the greater ID instead of also listening', async () => {
+    const f = await fixture(); await f.coordinator.prepare(peer.deviceId);
+    const view = await f.coordinator.start();
+    expect(f.operations).toContain('discover'); expect(f.operations).not.toContain('start');
+    const connect = f.params[f.operations.indexOf('connect')];
+    expect(connect.invitation).toBe(`monica-lan:2:192.168.1.20,10.0.0.7:5555:${peer.trustedKey}`);
+    expect(connect.expected_device_id).toBe(peer.deviceId); expect(view.phase).toBe('transferring');
+  });
+
+  it('listens with the trusted key when the browser has the greater ID', async () => {
+    const lower = { ...peer, deviceId: '0' }, f = await fixture(undefined, lower);
+    await f.coordinator.prepare(lower.deviceId); const view = await f.coordinator.start();
+    expect(f.operations).not.toContain('discover'); expect(f.operations).toContain('start');
+    expect(view.role).toBe('listening'); expect(view.endpoint).toEqual({ addresses: ['127.0.0.1'], port: 12345 });
+  });
+
+  it('ignores untrusted or differently paired advertisements and reports a missing phone', async () => {
+    const f = await fixture(undefined, peer, [{ ...discovered, trusted: false }, { ...discovered, session: 'other-pair' }, { ...discovered, address: '8.8.8.8', addresses: [] }]);
+    await f.coordinator.prepare(peer.deviceId);
+    await expect(f.coordinator.start()).rejects.toThrow('peer-not-found');
+    expect(f.operations).not.toContain('connect'); expect(f.coordinator.status()).toMatchObject({ phase: 'failed', error: 'peer-not-found' });
+  }, 15_000);
+
+  it('remembers the authenticated peer address and probes it on the next sync', async () => {
+    const f = await fixture(); await f.coordinator.prepare(peer.deviceId); await f.coordinator.start();
+    const original = f.transport.call.getMockImplementation()!;
+    let phase: string = 'received';
+    f.transport.call.mockImplementation(async (operation, input) => operation === 'progress' ? ({ ...progress(), phase } as any) : original(operation, input));
+    const received = await f.coordinator.poll(); expect(received.transport).toEqual({ stage: 'received', transferred: 10, total: 20 });
+    phase = 'completed'; await f.coordinator.poll();
+    const saved = (await f.service.nearbySessionPreferences(f.sessionId)).peers.find(entry => entry.deviceId === peer.deviceId)!;
+    expect(saved.address).toBe('192.168.1.20');
+    f.transport.call.mockImplementation(original); await f.coordinator.prepare(peer.deviceId); await f.coordinator.start();
+    const probes = f.params.filter((_, index) => f.operations[index] === 'discover');
+    expect(probes[probes.length - 1]).toEqual({ targets: ['192.168.1.20'], multicast: true });
+  });
+
+  it('reports the native transfer failure code instead of a generic failure', async () => {
+    const f = await fixture(); await f.coordinator.prepare(peer.deviceId); await f.coordinator.start();
+    f.transport.call.mockImplementationOnce(async () => ({ phase: 'failed', error: 'connection_failed' }) as any);
+    await expect(f.coordinator.poll()).rejects.toThrow('connection-failed');
+  });
+
+  it('keeps native-host installation and engine codes for the manager', async () => {
+    const { Mdbx2NativeHostError } = await import('../providers/mdbx2/native-contract');
+    const f = await fixture();
+    f.transport.call.mockRejectedValueOnce(new Mdbx2NativeHostError('native-host-not-installed', 'secret path C:\\Users', false));
+    await expect(f.coordinator.pair()).rejects.toThrow('native-host-not-installed');
+    const g = await fixture();
+    g.transport.call.mockImplementation(async operation => {
+      if (operation === 'snapshot_pairing') return { handle, revision: 'pairing-only-v1' } as any;
+      throw new Mdbx2NativeHostError('nearby-engine-error', 'Nearby: listen_failed.', false);
+    });
+    await expect(g.coordinator.pair()).rejects.toThrow('listen-failed');
+  });
+
+  it('accepts a pasted invitation with surrounding whitespace and explains unusable invitations', async () => {
+    const f = await fixture();
+    await f.coordinator.pair(`  monica-lan:2:192.168.1.20:5555:${peer.trustedKey}\n`);
+    expect(f.params[f.operations.indexOf('connect')].invitation).toBe(`monica-lan:2:192.168.1.20:5555:${peer.trustedKey}`);
+    f.coordinator.close();
+    await expect((await fixture()).coordinator.pair(`monica-lan:1:192.168.1.20:5555:${peer.trustedKey}`)).rejects.toThrow('unsupported-protocol');
+    const g = await fixture(); g.transport.call.mockImplementation(async operation => operation === 'start'
+      ? { handle, code: 'x', invitations: [] } as any : { handle, revision: 'pairing-only-v1' } as any);
+    await expect(g.coordinator.pair()).rejects.toThrow('no-local-network');
+  });
+});
+
 describe('nearby pagination and complete dependency grouping', () => {
   async function records(count: number): Promise<NearbyIncomingRecord[]> {
     const data = await nearbyLocalItemToWire(createLoginItem({ title: 'Synthetic' }), {});
@@ -191,24 +270,14 @@ describe('nearby pagination and complete dependency grouping', () => {
 
 
 describe('authenticated discovery hints', () => {
-  it('waits for listener cancellation before releasing and connecting to the saved peer', async () => {
-    const f = await fixture(), original = f.transport.call.getMockImplementation()!;
-    let phase = 'waiting';
-    f.transport.call.mockImplementation(async op => {
-      if (op === 'progress') return {phase};
-      if (op === 'discover') return {handle};
-      if (op === 'discovery_result') return {ready:true,result:{devices:[{protocol:'monica-lan',version:2,trusted:true,
-        device_id:peer.deviceId,session:peer.pairId,address:'127.0.0.1',port:12345}]}} as any;
-      if (op === 'release' && phase === 'waiting') throw Error('native session busy');
-      return original(op);
-    });
-    await f.coordinator.prepare(peer.deviceId); await f.coordinator.start();
-    await f.coordinator.poll(); await f.coordinator.poll();
-    expect(f.operations).toContain('cancel'); expect(f.operations).not.toContain('release');
-    await f.coordinator.poll(); expect(f.operations).not.toContain('connect');
-    phase = 'cancelled'; await f.coordinator.poll();
-    expect(f.operations.slice(-2)).toEqual(['release','connect']);
-    expect(f.coordinator.status().phase).toBe('transferring'); f.coordinator.close();
+  it('cancels discovery before any connection and never releases an active listener', async () => {
+    const f = await fixture(); await f.coordinator.prepare(peer.deviceId);
+    const start = f.coordinator.start();
+    const rejected = expect(start).rejects.toMatchObject({ code: 'session-closed' });
+    await vi.waitFor(() => expect(f.operations).toContain('discover'));
+    f.coordinator.close(); await rejected;
+    expect(f.operations).not.toContain('start'); expect(f.operations).not.toContain('connect');
+    expect(f.operations).not.toContain('release'); expect(f.transport.close).toHaveBeenCalled();
   });
   it('uses saved names and matching device/pair identities; never exposes trust keys', async () => {
     const f=await fixture(); const original=f.transport.call.getMockImplementation()!;

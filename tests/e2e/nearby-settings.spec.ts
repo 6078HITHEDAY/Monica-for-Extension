@@ -81,15 +81,20 @@ test('settings UI pairs, discovers, synchronizes and cancels using actual Native
     }
     expect(await runtime(b, { type: 'VAULT_LIST_ITEMS' })).toHaveLength(0);
     await expect(a.getByRole('textbox', { name: '本次配对邀请', exact: true })).toHaveCount(0);
-    await a.locator('[data-nearby-sync]').click();
-    await expect(a.locator('[data-nearby-phase]')).toContainText('正在连接或传输');
-    await b.getByRole('button', { name: '查找附近设备', exact: true }).click();
-    await expect(b.getByText('找到 1 台已配对设备', { exact: true })).toBeVisible({ timeout: 15000 });
-    await b.locator('[data-nearby-sync]').click();
+    // Follow the same device-ID roles as Android, independent of random IDs.
+    const aId=await b.locator('[data-nearby-sync]').getAttribute('data-nearby-sync');
+    const bId=await a.locator('[data-nearby-sync]').getAttribute('data-nearby-sync');
+    const listener=aId! > bId! ? a : b, dialer=listener===a ? b : a;
+    await listener.locator('[data-nearby-sync]').click();
+    await expect(listener.locator('[data-nearby-phase]')).toContainText('等待手机连接', { timeout: 15000 });
+    await dialer.getByRole('button', { name: '查找附近设备', exact: true }).click();
+    await expect(dialer.getByText('找到 1 台已配对设备', { exact: true })).toBeVisible({ timeout: 15000 });
+    await dialer.locator('[data-nearby-sync]').click();
     for (const page of [a, b]) await expect(page.locator('[data-nearby-phase]')).toContainText('同步完成', { timeout: 20000 });
     await expect(b.locator('[data-nearby-result]')).toContainText('本机处理 1 项：保存 1 项，删除 0 项。');
     await expect(b.locator('[data-nearby-result]')).toContainText('Synthetic UI sync login');
     await expect(b.locator('[data-nearby-result]')).not.toContainText('synthetic UI password');
+    await b.evaluate(async () => { await Promise.all(document.getAnimations().filter(a=>a.effect?.getTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>{}))); });
     await b.screenshot({path:path.join(run,'sync-result.png'),fullPage:true});
     for(const page of [a,b]) await page.getByRole('button',{name:'知道了',exact:true}).click();
     const received = await runtime(b, { type: 'VAULT_LIST_ITEMS' }); expect(received).toHaveLength(1); expect(received[0].password).toBe('synthetic UI password');

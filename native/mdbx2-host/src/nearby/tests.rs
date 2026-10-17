@@ -641,3 +641,51 @@ fn discovery_does_not_block_native_message_processing() {
         std::thread::sleep(Duration::from_millis(25));
     }
 }
+
+#[test]
+fn trusted_listener_advertises_android_compatible_revision_parts() {
+    let _serial = SERIAL.lock().unwrap();
+    let mut a = Host::new();
+    let ar = a.open("browser");
+    a.scan(&ar, json!([]));
+    let ax = a.snapshot(&ar);
+    let revision = a.call("replica_revision", json!({"handle":ar}))["revision"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut hello = device("00browser", "bidirectional");
+    hello["pair_id"] = json!("synthetic-pair");
+    hello["settings_version"] = json!(7);
+    hello["settings_writer"] = json!("phone-writer");
+    hello["sync_request"] = json!(3);
+    let key = "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk";
+    let started = a.call(
+        "start",
+        json!({"snapshot":ax,"device":hello,"expected_device_id":"phone","trusted_key":key,"listen_address":"127.0.0.1"}),
+    );
+    let discovery = a.call(
+        "discover",
+        json!({"targets":["127.0.0.1"],"multicast":false}),
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let result = loop {
+        let result = a.call("discovery_result", json!({"handle":discovery["handle"]}));
+        if result["ready"] == true {
+            break result;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    let offer = result["result"]["devices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|offer| offer["device_id"] == "00browser")
+        .expect("trusted listener answers a unicast probe")
+        .clone();
+    assert_eq!(offer["trusted"], true);
+    assert_eq!(offer["session"], "synthetic-pair");
+    assert_eq!(offer["revision"], format!("{revision}:7:phone-writer:3"));
+    // Dropping the host cancels the listener and retires its scratch storage.
+    a.call("cancel", json!({"handle":handle(&started)}));
+}

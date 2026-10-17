@@ -1,4 +1,4 @@
-import { dialogContent, dialogSurface } from "./fixtures/material";
+import { dialogContent, dialogSurface, editContentSection } from "./fixtures/material";
 import { chromium, expect, test, type BrowserContext, type Page, type TestInfo } from "@playwright/test";
 import path from "node:path";
 
@@ -33,13 +33,14 @@ test("API keys can be created, edited and unlocked without becoming searchable l
     await page.getByLabel("API 密钥 *", { exact: true }).fill("synthetic-browser-api-token");
     await expect(page.getByLabel("API 密钥 *", { exact: true })).toHaveAttribute("type", "password");
     await page.getByLabel("API 地址（可选）").fill("https://api.github.com/");
-    await page.locator(".material-editor-dialog [slot=\"header\"]").filter({ hasText: "自定义字段" }).click();
-    await page.getByRole("button", { name: "添加字段", exact: true }).click();
-    await page.getByLabel("自定义字段 1 名称", { exact: true }).fill("scope");
-    await page.getByLabel("自定义字段 1 值", { exact: true }).fill("synthetic-hidden-scope");
-    await expect(page.getByLabel("自定义字段 1 值", { exact: true })).toHaveAttribute("type", "password");
-    await page.getByLabel("备注", { exact: true }).fill("Build automation");
-    await page.getByLabel("收藏并优先显示").check();
+    await editContentSection(page, "自定义字段", async () => {
+      await page.getByRole("button", { name: "添加字段", exact: true }).click();
+      await page.getByLabel("自定义字段 1 名称", { exact: true }).fill("scope");
+      await page.getByLabel("自定义字段 1 值", { exact: true }).fill("synthetic-hidden-scope");
+      await expect(page.getByLabel("自定义字段 1 值", { exact: true })).toHaveAttribute("type", "password");
+    });
+    await editContentSection(page, "备注", section => section.getByLabel("备注", { exact: true }).fill("Build automation"));
+    await editContentSection(page, "更多选项", section => section.getByLabel("收藏并优先显示").check());
     await page.getByRole("button", { name: "加密保存", exact: true }).click();
     await expect(dialogContent(page)).toHaveCount(0);
     await expect(page.getByText("Workspace API", { exact: true })).toBeVisible();
@@ -49,7 +50,7 @@ test("API keys can be created, edited and unlocked without becoming searchable l
     await page.getByLabel("搜索密码库").fill("");
     await page.getByRole("button", { name: "编辑API 密钥", exact: true }).click();
     await expect(page.getByLabel("API 密钥 *", { exact: true })).toHaveValue("synthetic-browser-api-token");
-    await expect(page.getByLabel("自定义字段 1 值", { exact: true })).toHaveValue("synthetic-hidden-scope");
+    await editContentSection(page, "自定义字段", () => expect(page.getByLabel("自定义字段 1 值", { exact: true })).toHaveValue("synthetic-hidden-scope"));
     await page.getByLabel("名称 *", { exact: true }).fill("Workspace API Updated");
     await page.getByRole("button", { name: "加密保存", exact: true }).click();
     await expect(dialogContent(page)).toHaveCount(0);
