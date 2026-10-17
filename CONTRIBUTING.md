@@ -16,6 +16,8 @@ npx playwright install chromium
 npm run release:check
 ```
 
+`release:check` 在 Linux CI 上使用 Playwright 自带的 Chromium。需要已安装的 Windows Microsoft Edge（及其注册的本机助手）的验收用例在找不到 Edge 时会显示为“已跳过”并附原因；请在 Windows 上运行 `npm run test:e2e:edge`，此模式下缺少 Edge 会直接失败，不会被跳过。可用 `MONICA_E2E_EDGE_EXECUTABLE` 指定 Edge 路径。
+
 提交内容不得依赖远程可执行代码。修改 Manifest 权限、CSP、运行时消息、密码库、Passkey、WebDAV、Bitwarden、导入解析或发布脚本时，必须同步增加对应的负向测试和安全文档。
 
 ## 供应链要求

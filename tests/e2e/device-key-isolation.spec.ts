@@ -29,7 +29,8 @@ async function contentProbe(cdp: CDPSession) {
 
 test('device-key vault remains readable while content scripts cannot access its key', async ({}, info) => {
   const extension = path.resolve('dist');
-  const options = { locale: 'zh-CN', args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`] };
+  // The bundled headless shell cannot load extensions; use full Chromium.
+  const options = { channel: 'chromium', locale: 'zh-CN', args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`] };
   let context = await launchTestContext(info.outputPath('profile'), options);
   try {
     let worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');

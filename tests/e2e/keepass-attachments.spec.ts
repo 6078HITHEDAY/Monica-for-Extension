@@ -266,9 +266,11 @@ test("KeePass Android-managed bank-card photos have front/back controls and pres
 
     await page.getByRole("button", { name: "打开导航" }).click();
     await page.getByRole("navigation", { name: "主导航" }).getByRole("button", { name: /^钱包与身份/ }).click();
-    const cardRow = page.locator(".item-card").filter({ hasText: "Android Bank Card" });
-    await expect(cardRow).toBeVisible();
-    await cardRow.getByRole("button", { name: "管理 Android Bank Card 的附件" }).click();
+    // Wallet items are tiles; attachments open from the tile's actions menu.
+    const cardTile = page.locator(".vault-tile").filter({ hasText: "Android Bank Card" });
+    await expect(cardTile).toBeVisible();
+    await cardTile.locator(".vault-tile-menu-trigger").click();
+    await page.locator(".vault-tile-menu:popover-open").getByRole("menuitem", { name: "附件", exact: true }).click();
 
     const dialog = dialogContent(page, { name: "附件 · Android Bank Card" });
     await expect(dialog).toBeVisible();

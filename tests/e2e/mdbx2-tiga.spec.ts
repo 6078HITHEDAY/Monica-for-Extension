@@ -169,7 +169,8 @@ test("MDBX2 Tiga posture is compact, read-only and truthful in narrow large-text
             tigaRequests += 1;
             (window as Window & { __mdbx2TigaRequests?: number }).__mdbx2TigaRequests = tigaRequests;
             if (tigaRequests === 2) return { ok: false, error: "MDBX2 vault Tiga posture failed.", code: "vault-tiga-failed" };
-            if (tigaRequests >= 3) await new Promise((resolve) => setTimeout(resolve, 80));
+            // Hold the refresh until the test has observed the busy state.
+            if (tigaRequests >= 3) await new Promise<void>((resolve) => { (window as Window & { __releaseMdbx2Tiga?: () => void }).__releaseMdbx2Tiga = resolve; });
             return { ok: true, data: tigaRequests >= 3 ? multiPosture : powerPosture };
           }
           if (message.type === "MDBX2_COLLECTION_LIST" || message.type === "MDBX2_CONFLICT_LIST" || message.type === "MDBX2_SNAPSHOT_LIST" || message.type === "MDBX2_HISTORY_LIST") return { ok: true, data: { items: [] } };
@@ -223,6 +224,7 @@ test("MDBX2 Tiga posture is compact, read-only and truthful in narrow large-text
     await refresh.click();
     await expect(panel).toHaveAttribute("aria-busy", "true");
     await expect(refresh).toBeDisabled();
+    await page.evaluate(() => (window as Window & { __releaseMdbx2Tiga?: () => void }).__releaseMdbx2Tiga?.());
     await expect(panel.getByRole("alert")).toHaveCount(0);
     await expect(panel.getByText("Multi 安全态势正常", { exact: true })).toBeVisible();
     await expect(panel.getByText("无额外限制", { exact: true })).toBeVisible();

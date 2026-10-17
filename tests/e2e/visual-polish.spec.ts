@@ -752,9 +752,10 @@ test("compact login list actions remain fully visible at a 1280px store viewport
     expect(mobileActions.x + mobileActions.width).toBeLessThanOrEqual(375);
     expect(mobileActions.y + mobileActions.height).toBeLessThanOrEqual(mobileRow.y + mobileRow.height + 1);
     await expectNoHorizontalOverflow(page.locator("html"));
+    // Pad to four actions (the most a row offers) whatever the source provides.
     await row.locator(".action-cell").evaluate((cell) => {
-      const buttons = [...cell.querySelectorAll("m3e-icon-button")];
-      for (const button of buttons) cell.append(button.cloneNode(true));
+      const template = cell.querySelector("m3e-icon-button")!;
+      while (cell.querySelectorAll("m3e-icon-button").length < 4) cell.append(template.cloneNode(true));
     });
     await expect(row.locator(".action-cell m3e-icon-button")).toHaveCount(4);
     const fourActionRow = (await row.boundingBox())!;

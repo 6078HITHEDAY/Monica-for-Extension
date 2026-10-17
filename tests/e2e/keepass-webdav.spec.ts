@@ -69,9 +69,12 @@ test("with automatic sync disabled, remote KeePass presents restorable and pendi
     const card = providerCard(page, "Remote KeePass UI");
     await expect(card).toBeVisible();
     await expect(card.getByText("已解锁", { exact: true }).first()).toBeVisible();
-    await expect(card.getByText("工作副本可用", { exact: true })).toBeVisible();
-    await expect(card.getByText("远端基线可用", { exact: true })).toBeVisible();
-    await expect(card.getByText("同步完成", { exact: true })).toBeVisible();
+    // The status summary reports the encrypted working copy as offline access and
+    // the available remote baseline as a synced cloud save.
+    const statusRow = (label: string) => card.locator(".keepass-source-status-row").filter({ hasText: label });
+    await expect(statusRow("离线访问").locator("dd")).toHaveText("可用");
+    await expect(statusRow("云端保存").locator("dd")).toHaveText("已同步");
+    await expect(card.getByText("同步队列：0 项", { exact: true })).toBeVisible();
     await expect(card.getByText("修改只在内存中", { exact: false })).toHaveCount(0);
     await expect(card.getByText("后台重启后必须重新选择", { exact: false })).toHaveCount(0);
     await expectNoGradients(card);
