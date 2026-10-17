@@ -166,7 +166,7 @@ test("short secrets stay fully masked, and special details expose their actual f
   await expect(detail.getByText("可发现凭据", { exact: true })).toBeVisible();
   await expect(detail.getByText("需要用户验证", { exact: true })).toBeVisible();
   await expect(detail.getByRole("button", { name: "编辑", exact: true })).toHaveCount(0);
-  await expect(detail.getByText(/仅保留元数据/)).toBeVisible();
+  await expect(detail.getByText(/仅含 Android 元数据/)).toBeVisible();
 });
 
 test("standalone HOTP copies and persists the counter across detail reopening", async ({ manager }) => {

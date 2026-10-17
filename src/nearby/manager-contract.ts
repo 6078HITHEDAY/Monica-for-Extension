@@ -40,7 +40,7 @@ export function readNearbyManagerRequest(value: unknown): NearbyManagerRequest {
       fields(p, ['id', 'type', 'endpoint']);
       if (p.endpoint !== undefined) {
         const e = object(p.endpoint); fields(e, ['addresses', 'port']);
-        if (!Array.isArray(e.addresses) || !e.addresses.length || e.addresses.length > 16
+        if (!Array.isArray(e.addresses) || !e.addresses.length || e.addresses.length > 8
           || e.addresses.some(a => typeof a !== 'string' || a.length > 15)
           || typeof e.port !== 'number' || !Number.isInteger(e.port) || e.port < 1 || e.port > 65535) invalid();
       }

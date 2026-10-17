@@ -16,7 +16,9 @@ use crate::runtime::RpcFailure;
 
 pub const HELLO_PROTOCOL_VERSION: u32 = 1;
 pub const HELLO_RP_ID: &str = "monica-extension.local";
+#[cfg(windows)]
 const HELLO_ORIGIN: &str = "https://monica-extension.local";
+#[cfg(windows)]
 const HELLO_TIMEOUT_MS: u32 = 120_000;
 const MAX_BINDING_ID_BYTES: usize = 64;
 const MAX_CHALLENGE_BYTES: usize = 64;
@@ -743,7 +745,13 @@ mod tests {
         let store = WindowsHelloStore::new(directory.path());
         let status = store.status(json!({ "bindingId": binding_id })).unwrap();
         assert_eq!(status["enrolled"], false);
-        assert_eq!(status["reason"], "binding-record-invalid");
+        // Off Windows the platform reason takes precedence over record checks.
+        let reason = if cfg!(windows) {
+            "binding-record-invalid"
+        } else {
+            "windows-only"
+        };
+        assert_eq!(status["reason"], reason);
         fs::remove_file(&path).unwrap();
         let revoked = store
             .revoke(json!({ "bindingId": binding_id, "confirmed": true }))

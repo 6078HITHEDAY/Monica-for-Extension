@@ -188,10 +188,16 @@ test("tiles reflow across themes and enlarged text with whole-card focus and key
   });
   expect(focus.width).toBeLessThanOrEqual(1);
   expect(focus.height).toBeLessThanOrEqual(1);
+  // Hidden per-tile menus are not rendered up front; building every one blocked
+  // the main thread for seconds on large OTP pages.
+  await expect(manager.locator(".vault-tile-menu m3e-menu-item")).toHaveCount(0);
   const trigger = first.locator(".vault-tile-menu-trigger");
   await trigger.focus();
   await trigger.press("ArrowDown");
-  await expect(manager.locator(".vault-tile-menu:popover-open")).toBeVisible();
+  const keyboardMenu = manager.locator(".vault-tile-menu:popover-open");
+  await expect(keyboardMenu).toBeVisible();
+  await expect(keyboardMenu.getByRole("menuitem", { name: "查看详情", exact: true })).toBeVisible();
+  await expect(keyboardMenu.getByRole("menuitem", { name: "移到回收站", exact: true })).toBeVisible();
   await manager.keyboard.press("Escape");
   await expect(trigger).toBeFocused();
   const accessibility = await new AxeBuilder({ page: manager }).include(".tile-page").analyze();

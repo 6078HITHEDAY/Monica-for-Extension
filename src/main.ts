@@ -8,6 +8,7 @@ import "@m3e/web/segmented-button";
 import "@m3e/web/tabs";
 import "@m3e/web/nav-bar";
 import "@m3e/web/list";
+import "./lib/list-item-layout";
 import App from "./App.vue";
 import "./styles.css";
 import "./manager.css";

@@ -26,6 +26,10 @@ const actionId = `tile-open-${uid}`;
 const menuId = `tile-menu-${uid}`;
 const menu = ref<M3eMenuElement>();
 const trigger = ref<HTMLElement>();
+// Each menu item carries its own shadow DOM, ripple and focus ring. A page of
+// tiles rendered every hidden menu eagerly and blocked the main thread, so build
+// the items once the trigger is hovered or focused, before it can be activated.
+const menuReady = ref(false);
 
 const metadata = computed(() => {
   const item = props.item;
@@ -61,6 +65,7 @@ const iconItem = computed(() => {
 });
 
 function sizeMenu() {
+  menuReady.value = true;
   if (!menu.value || !trigger.value) return;
   const bounds = trigger.value.getBoundingClientRect();
   const above = bounds.top - 12;
@@ -102,7 +107,7 @@ onBeforeUnmount(() => {
           <strong :title="item.title">{{ item.title }}<span v-if="(groupSize||0)>1"> · {{ tr('{0} 条密码', {0: groupSize}) }}</span></strong>
           <small slot="supporting-text" :title="metadata.subtitle">{{ metadata.subtitle }}</small>
         </m3e-list-action>
-        <m3e-icon-button ref="trigger" class="vault-tile-menu-trigger" :aria-label="tr('{0}的更多操作', { 0: item.title })" @click.capture="sizeMenu" @click.stop @keydown="openWithKeyboard">
+        <m3e-icon-button ref="trigger" class="vault-tile-menu-trigger" :aria-label="tr('{0}的更多操作', { 0: item.title })" @pointerenter="menuReady = true" @focusin="menuReady = true" @click.capture="sizeMenu" @click.stop @keydown="openWithKeyboard">
           <m3e-icon name="more_vert" />
           <m3e-menu-trigger :for="menuId" />
         </m3e-icon-button>
@@ -118,10 +123,12 @@ onBeforeUnmount(() => {
     </div>
   </m3e-card>
   <m3e-menu :id="menuId" ref="menu" class="vault-tile-menu" position-x="before" :aria-label="tr('{0}的更多操作', { 0: item.title })" @click.stop @toggle="menuToggled">
+    <template v-if="menuReady">
     <m3e-menu-item @click="select('details')"><m3e-icon slot="icon" name="info" />{{ tr('查看详情') }}</m3e-menu-item>
     <m3e-menu-item v-if="item.kind!=='opaque'" @click="select('edit')"><m3e-icon slot="icon" name="edit" />{{ tr('编辑') }}</m3e-menu-item>
     <m3e-menu-item v-if="hasAttachments" @click="select('attachments')"><m3e-icon slot="icon" name="attach_file" />{{ tr('附件') }}</m3e-menu-item>
     <m3e-menu-item v-if="hasHistory" @click="select('history')"><m3e-icon slot="icon" name="history" />{{ tr('KeePass 历史') }}</m3e-menu-item>
     <m3e-menu-item v-if="item.kind!=='opaque'" class="vault-tile-remove" @click="select('remove')"><m3e-icon slot="icon" name="delete" />{{ tr('移到回收站') }}</m3e-menu-item>
+    </template>
   </m3e-menu>
 </template>

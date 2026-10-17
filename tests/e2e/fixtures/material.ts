@@ -38,3 +38,15 @@ export async function chooseOption(control: Locator, choice: string | { label: s
   // for disposal so a subsequent click cannot land during the closing phase.
   await expect(panel).toHaveCount(0);
 }
+
+/** Editors keep optional content (custom fields, notes, options…) in sections that
+ * open their own dialog. Run `edit` inside the opened section, then return with Done. */
+export async function editContentSection(page: Page, title: string, edit: (section: Locator) => Promise<unknown>) {
+  await page.locator(`[data-content-section=${JSON.stringify(title)}] [data-content-open]`).click();
+  // The section dialog is nested in the editor dialog, so it is the last match.
+  const section = dialogContent(page, { name: title, exact: true }).last();
+  await expect(section).toBeVisible();
+  await edit(section);
+  await section.getByRole("button", { name: "完成", exact: true }).click();
+  await expect(section).toHaveCount(0);
+}
