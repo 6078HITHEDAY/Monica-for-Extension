@@ -501,6 +501,30 @@ describe("Android backup ZIP codec", () => {
     expect(JSON.parse(strFromU8(output[path]))).toEqual(raw);
   });
 
+  it("repairs authenticator secrets and parameters the way Monica Android does at read time", () => {
+    const path = "folders/_root/authenticators/totp_repair_1700000000000.json";
+    const decode = (itemData: Record<string, unknown>) => androidRecordToItem(path, { id: 940, itemType: "TOTP", title: "Repair", itemData: JSON.stringify(itemData), createdAt: 1_700_000_000_000, updatedAt: 1_700_000_000_000 }, "provider-repair") as TotpItem;
+
+    const fromUri = decode({ secret: "otpauth://totp/GitHub:joy?secret=gezd%20gnbvgy3tqojqgezdgnbvgy3tqojq&issuer=GitHub&digits=8&period=60" });
+    expect(fromUri).toMatchObject({ secret: "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", issuer: "GitHub", accountName: "joy", digits: 8, period: 60 });
+
+    const sharedSecret = Buffer.from("1234567890123456").toString("base64");
+    const fromSteamUri = decode({ secret: `steam://${sharedSecret}`, otpType: "TOTP" });
+    expect(fromSteamUri).toMatchObject({ otpType: "STEAM", secret: sharedSecret, steamSharedSecretBase64: sharedSecret, digits: 5, period: 30, algorithm: "SHA1" });
+
+    const unsafeParameters = decode({ secret: "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", period: 0, digits: 12 });
+    expect(unsafeParameters).toMatchObject({ period: 30, digits: 10 });
+
+    const contextSteam = decode({ secret: "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", issuer: "Steam Community", otpType: "TOTP" });
+    expect(contextSteam).toMatchObject({ otpType: "STEAM", digits: 5, period: 30 });
+
+    const messySecret = decode({ secret: "gezd gnbv-gy3tqojqgezdgnbvgy3tqojq" });
+    expect(messySecret.secret).toBe("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ");
+
+    const bareSharedSecret = decode({ secret: sharedSecret, otpType: "STEAM" });
+    expect(bareSharedSecret.secret).toBe(sharedSecret);
+  });
+
   it("maps all Android vault record kinds and legacy field aliases", () => {
     const document = readAndroidBackup(fixtureZip(), "provider-1");
     expect(document.warnings).toEqual([]);

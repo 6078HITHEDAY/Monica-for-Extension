@@ -54,6 +54,7 @@ const saving = ref(false);
 const otpTransferInput = ref("");
 const otpQrDataUrl = ref("");
 const otpTransferStatus = ref("");
+const revealSecret = ref(false);
 const fields = reactive(emptyFields());
 const customFieldEditor = createSecureCustomFieldEditor();
 
@@ -1015,9 +1016,9 @@ function exportMaFile() {
               }}
               *</label><input
               v-model="fields.secret"
-              type="password"
+              :type="revealSecret ? 'text' : 'password'"
               autocomplete="off"
-            /><small slot="hint">{{ tr('密钥只保存在加密密码库中；二维码在本机生成。') }}</small></m3e-form-field>
+            /><m3e-button slot="suffix" variant="text" type="button" toggle :selected.prop="revealSecret" @beforeinput.prevent @click="revealSecret = !revealSecret">{{ revealSecret ? tr('隐藏') : tr('显示') }}</m3e-button><small slot="hint">{{ tr('密钥只保存在加密密码库中；二维码在本机生成。') }}</small></m3e-form-field>
 <m3e-form-field v-field-label variant="filled" hide-required-marker class="field"
             ><label slot="label">{{ tr('签发方') }}</label><input v-model="fields.issuer" /></m3e-form-field>
 <m3e-form-field v-field-label variant="filled" hide-required-marker class="field"

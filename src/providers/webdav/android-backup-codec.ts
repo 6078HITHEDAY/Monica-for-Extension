@@ -3,6 +3,7 @@ import { passkeyKeyMaterialHint } from '../../passkey/private-key-portability';
 import { parseLosslessJson, jsonScalarText } from "../../core/lossless-json";
 import { capturePasswordHistory, assertPortablePasswordHistory } from '../../core/password-history';
 import { normalizeOtpCounter, otpCounterJson } from "../../core/otp-counter";
+import { parseOtpUris, type TotpParameters } from "../../core/totp";
 import { boundNoteLogicalId, boundNoteScope, resolveBoundNote } from "../../core/bound-notes";
 import { strFromU8, strToU8, zipSync } from "fflate";
 import type { BillingAddressItem, CardItem, IdentityItem, LoginItem, PasskeyItem, PaymentAccountItem, ProviderReference, SecureCustomField, SecureNoteItem, TotpItem, VaultItem } from "../../core/model";
@@ -533,7 +534,7 @@ export function androidRecordToItem(path: string, raw: Record<string, unknown>, 
     const otpType = rawOtpType ? normalizeOtpType(rawOtpType) : undefined;
     const steamSharedSecret = firstString(data, "steamSharedSecretBase64");
     const steamSession = parseSteamSession(firstString(data, "steamRawJson"));
-    return {
+    return normalizeAndroidTotp({
       ...base,
       kind: "totp",
       secret: otpType === "STEAM" || steamSharedSecret ? steamSharedSecret || firstString(data, "secret", "authenticatorKey") : firstString(data, "secret", "authenticatorKey"),
@@ -565,7 +566,7 @@ export function androidRecordToItem(path: string, raw: Record<string, unknown>, 
       algorithm: normalizeTotpAlgorithm(data.algorithm),
       digits: numberValue(data.digits, 6),
       period: numberValue(data.period, 30)
-    } satisfies TotpItem;
+    } satisfies TotpItem);
   }
 
   if (kindFolder === "passkeys") {
@@ -1498,6 +1499,72 @@ function dateValue(value: unknown, fallback = new Date().toISOString()): string 
   if (typeof value === "string" && !Number.isNaN(Date.parse(value))) return new Date(value).toISOString();
   return fallback;
 }
+// Read-time parity with Monica Android `TotpDataResolver.normalizeTotpData`: repaired records must
+// stay byte-stable on write-back, so this has to be idempotent.
+const ANDROID_TOTP_URI_REPAIR_DEPTH = 3;
+
+function normalizeAndroidTotp(item: TotpItem): TotpItem {
+  let { secret, otpType, digits, period, algorithm, steamSharedSecretBase64 } = item;
+  let issuer = item.issuer?.trim() || undefined;
+  let accountName = item.accountName?.trim() || undefined;
+
+  // Legacy records stored a whole URI (steam://, otpauth://) inside `secret`.
+  for (let depth = 0; depth < ANDROID_TOTP_URI_REPAIR_DEPTH && secret.includes("://"); depth += 1) {
+    const parsed = parseSingleOtpUri(secret);
+    if (!parsed || parsed.secret.includes("://")) break;
+    if ((parsed.otpType || "TOTP") === (otpType || "TOTP") && parsed.secret === secret) break;
+    secret = parsed.secret;
+    otpType = parsed.otpType || "TOTP";
+    digits = parsed.digits;
+    period = parsed.period;
+    algorithm = parsed.algorithm;
+    issuer = issuer || parsed.issuer?.trim() || undefined;
+    accountName = accountName || parsed.accountName?.trim() || undefined;
+    if (parsed.secretEncoding === "base64") steamSharedSecretBase64 = parsed.secret;
+  }
+
+  if ((otpType || "TOTP") === "TOTP") {
+    const context = [issuer, accountName, item.associatedApp, item.link].filter(Boolean).join(" ").toLowerCase();
+    if (context.includes("steamcommunity") || context.includes("steampowered") || context.includes("steam")) {
+      otpType = "STEAM";
+      digits = 5;
+      period = 30;
+      algorithm = "SHA1";
+    }
+  }
+
+  const type = otpType || "TOTP";
+  return {
+    ...item,
+    secret: normalizeAndroidTotpSecret(secret, type, steamSharedSecretBase64),
+    otpType,
+    digits: type === "STEAM" ? 5 : Math.min(10, Math.max(4, digits)),
+    period: type === "STEAM" ? 30 : period > 0 ? period : 30,
+    algorithm: type === "STEAM" ? "SHA1" : normalizeTotpAlgorithm(algorithm),
+    issuer,
+    accountName,
+    steamSharedSecretBase64
+  };
+}
+
+function parseSingleOtpUri(value: string): TotpParameters | undefined {
+  try {
+    const parsed = parseOtpUris(value);
+    return parsed.length === 1 ? parsed[0].parameters : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeAndroidTotpSecret(secret: string, otpType: NonNullable<TotpItem["otpType"]>, steamSharedSecretBase64: string | undefined): string {
+  if (otpType === "MOTP") return secret.trim();
+  if (otpType === "STEAM" && steamSharedSecretBase64) return secret;
+  const normalized = secret.trim().replace(/ /g, "").replace(/-/g, "").toUpperCase();
+  // A case-sensitive Base64 shared secret must not be folded into a base32 shape.
+  if (otpType === "STEAM" && /[^A-Z2-7]/.test(normalized)) return secret.trim();
+  return normalized;
+}
+
 function normalizeLoginType(value: unknown): NonNullable<LoginItem["loginType"]> {
   const normalized = stringValue(value).trim().toUpperCase();
   if (normalized === "SSH") return "SSH_KEY";
