@@ -11,6 +11,7 @@
 
 - 修复通过 Wi-Fi 同步到扩展的大量 TOTP 认证器显示“不可用”：解码时按 Monica Android `TotpDataResolver` 的读入规则修复旧记录，包括 `secret` 字段里存了整段 `otpauth://`/`steam://` URI、period 或 digits 越界、缺少 `otpType` 的 Steam 认证器，以及 `key`/`serviceName`/`account` 旧字段别名。
 - 修复 Android 写出的认证器被解码成 4 位验证码的问题。Kotlin 序列化会省略等于默认值的字段，扩展原先把缺失的 `digits`/`period` 读成 0；现在按 Android 的默认值 6 位、30 秒解码。
+- 修复 0.1.47 已导入的本地条目：解码修复无法追溯已写入密码库的 4 位参数，现在解锁时会用附近设备同步保留的原始 Android 记录重新核对，只修复 `item_data` 中确实没有 `digits` 字段的条目；Android 明确保存的位数（包括确实设为 4 位的钥匙）保持原样。回收站中的条目同样会修复，恢复后即可正常显示。
 - 生成端不再把 Android 仍能正常显示的钥匙判为不可用：非正 period 回退 30 秒、digits 收敛到 4–10、不可用计数器按 0 处理、Base32 字母表外的字符按 Android 生成器的方式跳过。
 - 登录条目里内嵌的 TOTP 现在按 Android 的上下文规则读取：网址（或标题）作为 issuer、用户名（或标题）作为账户名；Steam 登录自动切换到 5 位 Steam Guard 规则。
 - 带 issuer 的 Yandex 钥匙只有在 PIN 可用时才切换到 YAOTP；没有 PIN 时保持数字验证码，不再变成不可用。
@@ -41,6 +42,7 @@
 
 - Fixed the many TOTP authenticators synced over Wi-Fi that showed “unavailable”: decoding now repairs legacy records with Monica Android's `TotpDataResolver` read rules, including a whole `otpauth://`/`steam://` URI stored in `secret`, out-of-range period or digits, Steam authenticators without `otpType`, and the legacy `key`/`serviceName`/`account` aliases.
 - Fixed Android-written authenticators decoding to a 4-digit code. Kotlin serialisation omits fields equal to their defaults, and the extension previously read the missing `digits`/`period` as 0; they now decode to Android's defaults of 6 digits and 30 seconds.
+- Fixed local items already imported by 0.1.47: a decoder fix cannot retroactively correct digit counts persisted in the vault, so unlocking now re-checks the original Android record retained by Nearby Sync. Only items whose `item_data` has no `digits` field are repaired; a digit count Android explicitly stored (including a genuine 4-digit key) is left untouched. Trashed items are repaired too, so restoring one shows the correct code.
 - Generation no longer rejects keys Android still renders: a non-positive period falls back to 30 s, digits are clamped into 4–10, an unusable counter is read as 0, and characters outside the Base32 alphabet are skipped the way Android's generator does.
 - An inline TOTP on a login now follows Android's context rules: the website (or title) becomes the issuer and the username (or title) the account name; Steam logins switch to the 5-character Steam Guard rule.
 - An issuer-based Yandex key only switches to YAOTP when a usable PIN is present; without one it keeps rendering the numeric code instead of becoming unavailable.
