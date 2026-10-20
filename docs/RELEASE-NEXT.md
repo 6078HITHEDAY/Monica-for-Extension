@@ -1,6 +1,6 @@
 # Monica for Extension — 下一版 / Next release
 
-> 0.1.46 测试版（仅 Chrome）改动已归档至[发行说明](releases/Monica-Extension-0.1.46.md)及[验证记录](verification/release-0.1.46.md)。0.1.39 及更早历史记录保持原样。 / The 0.1.46 Chrome-only beta is archived; earlier records are unchanged.
+> 0.1.47 preview-beta 改动已归档至[发行说明](releases/Monica-Extension-0.1.47.md)及[验证记录](verification/release-0.1.47.md)。0.1.46 及更早历史记录保持原样。 / The 0.1.47 preview-beta is archived; 0.1.46 and earlier records are unchanged.
 
 ## 中文
 

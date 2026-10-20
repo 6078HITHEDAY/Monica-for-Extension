@@ -4,7 +4,7 @@ Monica 的 Chrome/Edge Manifest V3 浏览器插件。管理界面复用并独立
 
 ## 当前状态
 
-`0.1.46` 为 Chrome 测试版，供试用与反馈；本版不声明支持 Firefox 或其他浏览器。安装、升级（含固定扩展 ID 带来的备份迁移）及尚未完成的互通范围见 [发布说明](docs/releases/Monica-Extension-0.1.46.md)；问题可通过 [Bug 报告](https://github.com/Monica-Pass/Monica-for-Extension/issues/new?template=bug.yml) 提交。
+`0.1.47` 为 preview-beta 测试版，供试用与反馈；本版修复 Edge 侧栏的 Wi-Fi 同步连接，Chrome 128+ 仍为声明目标，不声明支持 Firefox。安装、升级及尚未完成的互通范围见 [发布说明](docs/releases/Monica-Extension-0.1.47.md)；问题可通过 [Bug 报告](https://github.com/Monica-Pass/Monica-for-Extension/issues/new?template=bug.yml) 提交。
 
 基础可用版本已经完成：
 
@@ -71,7 +71,7 @@ Monica 的 Chrome/Edge Manifest V3 浏览器插件。管理界面复用并独立
 - [0.1.24 功能、安装与互通验证记录](docs/VALIDATION-0.1.24.md)
 - [参与贡献](CONTRIBUTING.md)
 
-本阶段发布见 [0.1.46 测试版说明](docs/releases/Monica-Extension-0.1.46.md)和[发布验证记录](docs/verification/release-0.1.46.md)。同步与 Passkey 的兼容范围见[同步说明](docs/SYNC_COMPATIBILITY.md)和[Passkey 说明](docs/PASSKEY_COMPATIBILITY.md)。原 `docs/RELEASE-0.1.38.md` 至 `RELEASE-0.1.45.md` 是已纳入 0.1.37 的历史开发记录，保持原样；当前 0.1.46 阶段说明位于 `docs/releases/`。
+本阶段发布见 [0.1.47 preview-beta 说明](docs/releases/Monica-Extension-0.1.47.md)和[发布验证记录](docs/verification/release-0.1.47.md)。同步与 Passkey 的兼容范围见[同步说明](docs/SYNC_COMPATIBILITY.md)和[Passkey 说明](docs/PASSKEY_COMPATIBILITY.md)。原 `docs/RELEASE-0.1.38.md` 至 `RELEASE-0.1.45.md` 是已纳入 0.1.37 的历史开发记录，保持原样；当前 0.1.47 阶段说明位于 `docs/releases/`。
 
 ## 日常使用
 
@@ -105,7 +105,7 @@ API 密钥独立保存服务商、令牌、可选 API 地址、备注、自定�
 1. Windows 首次使用点按“配置本机通信组件”，下载并解压组件，按页面提供的命令配置当前扩展 ID。浏览器需要该组件建立局域网连接；MDBX 数据库引擎已内置。
 2. 电脑与手机连接同一个 Wi-Fi，关闭 VPN；访客网络或开启 AP 隔离的路由器会阻止设备互连。
 3. 配对：点按“显示本机邀请”，在手机 Monica 的附近设备同步中选择“添加设备”并扫码；也可以把手机生成的 `monica-lan:2:` 配对链接粘贴到页面中。
-4. 同步：在浏览器设备列表中点按“同步”，同时在手机上点按“立即同步”，保持两端同步页面打开。配对不代表已同步；双方确认保存后才更新同步时间并弹出结果。弹窗显示本机实际保存／删除的项目和数量，对方接收显示确认状态。浏览器的“页面打开时自动同步”按所选间隔重试；目前尚未发布 mDNS 在线广播，不能保证唤起 Android 自动同步。
+4. 同步：在 Android 的附近设备同步设置中务必选择“双向同步”；在浏览器设备列表中点按“同步”，同时在手机上点按“立即同步”，保持两端同步页面打开。配对不代表已同步；双方确认保存后才更新同步时间并弹出结果。弹窗显示本机实际保存／删除的项目和数量，对方接收显示确认状态。浏览器的“页面打开时自动同步”按所选间隔重试；目前尚未发布 mDNS 在线广播，不能保证唤起 Android 自动同步。
 
 扩展遵循 Android 的连接规则：设备 ID 较大的一方监听，较小的一方通过局域网发现并主动连接。新建的浏览器身份会主动连接手机，因此通常只需要出站连接，无需为本机助手开放入站防火墙。页面会针对缺少本机助手、找不到手机、防火墙或网络隔离、配对链接无效等情况给出具体处理建议。Bitwarden 与 KeePass 来源不参与 Wi-Fi 同步。
 

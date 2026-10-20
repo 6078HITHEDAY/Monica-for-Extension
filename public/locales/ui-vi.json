@@ -3524,6 +3524,7 @@
   "同步期间密码库发生了修改，请重新同步。": "The vault changed during sync. Start a new sync.",
   "设置已更新，请重新连接同步页面。": "Settings changed. Reconnect the sync page.",
   "另一窗口正在使用 Wi-Fi 同步，请先关闭该窗口的同步页面。": "Another window is using Wi-Fi sync. Close its sync page first.",
+  "Wi-Fi 同步需要在 Monica 的完整管理页或侧栏中打开。": "Đồng bộ Wi-Fi phải được mở trong trang quản lý đầy đủ hoặc thanh bên của Monica.",
   "密码库已锁定，请解锁后重新进入同步页面。": "The vault locked. Unlock it and reopen sync.",
   "同步会话已结束，请重新连接。": "The sync session ended. Reconnect to continue.",
   "配对邀请无效，请粘贴另一端显示的完整邀请。": "Invalid pairing invitation. Paste the complete invitation from the other device.",
