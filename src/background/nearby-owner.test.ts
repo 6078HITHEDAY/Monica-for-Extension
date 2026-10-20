@@ -76,6 +76,25 @@ describe('nearby manager boundary and lifecycle', () => {
     expect(p.disconnect).toHaveBeenCalledOnce(); expect(f.options.readSession).not.toHaveBeenCalled();
     expect(p.onMessage.listeners.size).toBe(0);
   });
+  it('lets an Edge side panel own the connection with only id, url and origin', async () => {
+    const f = fixture(), p = port({ tab: undefined, frameId: undefined, documentId: undefined, documentLifecycle: undefined,
+      url: `${root}index.html?surface=sidepanel` });
+    await ready(f, p);
+    expect(p.disconnect).not.toHaveBeenCalled(); expect(p.onMessage.listeners.size).toBeGreaterThan(0);
+  });
+  it('lets a Chrome side panel own the connection with document metadata', async () => {
+    const f = fixture(), p = port({ tab: undefined, frameId: 0, url: `${root}index.html?surface=sidepanel` });
+    await ready(f, p);
+    expect(p.disconnect).not.toHaveBeenCalled();
+  });
+  it.each([
+    { url: `${root}popup.html?surface=sidepanel`, tab: undefined, frameId: undefined },
+    { url: `${root}index.html?surface=sidepanel`, tab: undefined, frameId: 1 }
+  ])('still rejects a non-side-panel extension document: %j', async badSender => {
+    const f = fixture(), p = port(badSender); f.owner.attach(p.native);
+    expect(p.postMessage).toHaveBeenCalledWith({ type: 'closed', reason: 'manager-context-invalid' });
+    expect(p.disconnect).toHaveBeenCalledOnce(); expect(f.options.readSession).not.toHaveBeenCalled();
+  });
   it('does not let another manager steal an active connection', async () => {
     const f = fixture(), a = await ready(f), b = port(); f.owner.attach(b.native);
     expect(b.postMessage).toHaveBeenCalledWith({ type: 'closed', reason: 'manager-busy' });

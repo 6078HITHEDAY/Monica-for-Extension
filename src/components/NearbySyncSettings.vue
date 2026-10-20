@@ -55,6 +55,7 @@ function errorText(code: string): string {
     'native-recovery-overlap': '无法确认本机修改与接收内容互不影响，已保留冲突和接收内容。',
     'content-write-outcome-unknown': '上次保存的结果尚未确认。可以检查并继续接收，插件会核对原来的保存操作。',
     'stale-session': '设置已更新，请重新连接同步页面。', 'manager-busy': '另一窗口正在使用 Wi-Fi 同步，请先关闭该窗口的同步页面。',
+    'manager-context-invalid': 'Wi-Fi 同步需要在 Monica 的完整管理页或侧栏中打开。',
     'vault-locked': '密码库已锁定，请解锁后重新进入同步页面。', 'session-expired': '密码库已锁定，请解锁后重新进入同步页面。',
     'session-changed': '密码库已锁定，请解锁后重新进入同步页面。', 'session-closed': '同步会话已结束，请重新连接。',
     'invalid-invitation': '配对邀请无效，请粘贴另一端显示的完整邀请。', 'local-network-only': '配对邀请无效，请粘贴另一端显示的完整邀请。',

@@ -32,11 +32,22 @@ export class NearbyManagerOwner {
       const sender = port.sender ?? {};
       assertTrustedManagerPage(sender, this.options.runtimeId, this.options.extensionRoot);
       const root = new URL(this.options.extensionRoot);
-      if (sender.frameId !== 0 || !Number.isInteger(sender.tab?.id) || sender.tab!.id! < 0
-        || typeof sender.documentId !== 'string' || !/^[0-9a-f-]{16,64}$/i.test(sender.documentId)
+      const senderUrl = new URL(sender.url || '');
+      const tabDocument = Number.isInteger(sender.tab?.id) && sender.tab!.id! >= 0;
+      // Edge side-panel ports report only id, url and origin: no tab, frameId,
+      // documentId or lifecycle. The exact URL and extension origin are the boundary.
+      const sidePanelDocument = sender.tab === undefined && senderUrl.searchParams.get('surface') === 'sidepanel';
+      const documentIdValid = typeof sender.documentId === 'string' && /^[0-9a-f-]{16,64}$/i.test(sender.documentId);
+      if ((!tabDocument && !sidePanelDocument)
+        || (tabDocument && (sender.frameId !== 0 || !documentIdValid))
+        || (sidePanelDocument && sender.frameId !== undefined && sender.frameId !== 0)
+        || (sidePanelDocument && sender.documentId !== undefined && !documentIdValid)
         || sender.origin !== undefined && sender.origin !== `${root.protocol}//${root.host}`
         || sender.documentLifecycle !== undefined && sender.documentLifecycle !== 'active') throw new Error('Invalid manager document');
-    } catch { port.disconnect(); return; }
+    } catch {
+      try { port.postMessage({ type: 'closed', reason: 'manager-context-invalid' }); } catch { /* The document may already be gone. */ }
+      port.disconnect(); return;
+    }
     if (this.lease) { port.postMessage({ type: 'closed', reason: 'manager-busy' }); port.disconnect(); return; }
     const lease: Lease = { port, lastId: 0, busy: true,
       message: value => this.receive(lease, value), disconnect: () => { if (this.lease === lease) this.close('manager-closed'); } };
