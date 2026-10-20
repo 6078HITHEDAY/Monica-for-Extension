@@ -252,6 +252,17 @@ describe("keePassSecureItemToVaultItem", () => {
     const restored = keePassSecureItemToVaultItem(readKeePassSecureItemFields(written)!, base()) as SecureNoteItem;
     expect(restored.customFields).toEqual(original.customFields);
   });
+
+  it("decodes an Android authenticator with aliases and an unusable counter instead of failing the entry", () => {
+    const projection = readKeePassSecureItemFields(
+      fields({ Title: "Steam", MonicaItemType: "TOTP", MonicaItemData: secret(JSON.stringify({ key: "gezd gnbv-gy3tqojq", serviceName: "Steam Community", account: "joy", otpType: "TOTP", period: 0, digits: 12, counter: "not-a-number" })) })
+    );
+
+    const item = keePassSecureItemToVaultItem(projection!, base()) as TotpItem;
+
+    expect(item).toMatchObject({ kind: "totp", secret: "GEZDGNBVGY3TQOJQ", issuer: "Steam Community", accountName: "joy", otpType: "STEAM", digits: 5, period: 30, algorithm: "SHA1" });
+    expect(item.counter).toBeUndefined();
+  });
 });
 
 describe("buildKeePassSecureItemFields", () => {

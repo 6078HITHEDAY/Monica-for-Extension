@@ -87,7 +87,7 @@ export function findBoundTotpItem(login: LoginItem, items: readonly VaultItem[])
 }
 
 export function parametersFromItem(item: LoginItem | TotpItem) {
-  if (item.kind === "login") return parseTotpParameters(item.totpSecret || "");
+  if (item.kind === "login") return loginOtpParameters(item);
   const steam = item.otpType === 'STEAM'
     ? item.steamSharedSecretBase64
       ? { secret: item.steamSharedSecretBase64, secretEncoding: 'base64' as const }
@@ -106,6 +106,24 @@ export function parametersFromItem(item: LoginItem | TotpItem) {
     accountName: item.accountName,
     secretEncoding: steam?.secretEncoding || 'base32' as const
   };
+}
+
+/**
+ * Android reads an inline login key with the login as context (`PasswordEntryCard`): the website (or
+ * title) is the fallback issuer, the username (or title) the fallback account name, and the Steam
+ * context rule upgrades a plain TOTP. Without this a Steam login's key renders the wrong code.
+ */
+function loginOtpParameters(login: LoginItem) {
+  const parameters = parseTotpParameters(login.totpSecret || "");
+  const issuer = parameters.issuer?.trim() || login.uris[0]?.trim() || login.title.trim() || undefined;
+  const accountName = parameters.accountName?.trim() || login.username.trim() || login.title.trim() || undefined;
+  if (!parameters.otpType || parameters.otpType === "TOTP") {
+    const context = [issuer, accountName].join(" ").toLowerCase();
+    if (context.includes("steamcommunity") || context.includes("steampowered") || context.includes("steam")) {
+      return { ...parameters, issuer, accountName, otpType: "STEAM" as const, digits: 5, period: 30, algorithm: "SHA1" as const };
+    }
+  }
+  return { ...parameters, issuer, accountName };
 }
 
 function androidPasswordId(login: LoginItem): number | undefined {

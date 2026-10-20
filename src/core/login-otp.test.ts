@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { LoginItem, TotpItem } from "./model";
 import { advanceHotpCounter, findBoundTotpItem, parametersFromItem, resolveLoginOtp } from "./login-otp";
+import { generateOtpWithParameters, parseTotpParameters } from "./totp";
 
 const base = { title: "item", favorite: false, notes: "", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };
 const login: LoginItem = { ...base, id: "login", kind: "login", username: "u", password: "p", uris: [], customFields: [], providerRefs: [{ providerId: "dav", remoteId: "folders/_root/passwords/password_42_1700000000000.json" }] };
@@ -64,5 +65,20 @@ describe("login OTP binding", () => {
     expect(parametersFromItem({ ...hotp, otpType: "STEAM", steamSharedSecretBase64: "MTIzNDU2Nzg5MDEyMzQ1Njc4OTA=" })).toMatchObject({
       otpType: "STEAM", secretEncoding: "base64", secret: "MTIzNDU2Nzg5MDEyMzQ1Njc4OTA="
     });
+  });
+
+  it("reads an inline login key with Android's login context, upgrading a Steam account", async () => {
+    const steamLogin: LoginItem = { ...login, providerRefs: [], boundTotpItemId: undefined, uris: ["https://steamcommunity.com"], username: "joy", totpSecret: "IFBEGRCFIZDUQSKKJNGE2TSPKBIVEU2U" };
+    expect(parametersFromItem(steamLogin)).toMatchObject({ otpType: "STEAM", digits: 5, period: 30, algorithm: "SHA1", issuer: "https://steamcommunity.com", accountName: "joy" });
+    const resolution = await resolveLoginOtp(steamLogin, [steamLogin], 1_700_000_000_000);
+    expect(resolution?.code).toHaveLength(5);
+    expect([...resolution!.code].every((character) => "23456789BCDFGHJKMNPQRTVWXY".includes(character))).toBe(true);
+    expect(resolution!.code).toBe(await generateOtpWithParameters(parseTotpParameters("steam://IFBEGRCFIZDUQSKKJNGE2TSPKBIVEU2U"), 1_700_000_000_000));
+  });
+
+  it("attributes a plain inline key to the login's website and username without changing the code", async () => {
+    const plain: LoginItem = { ...login, providerRefs: [], uris: ["https://example.com"], username: "alice", totpSecret: "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ" };
+    expect(parametersFromItem(plain)).toMatchObject({ otpType: "TOTP", issuer: "https://example.com", accountName: "alice" });
+    expect((await resolveLoginOtp(plain, [plain], 59_000))?.code).toBe("287082");
   });
 });

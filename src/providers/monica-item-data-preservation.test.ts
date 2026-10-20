@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseLosslessJson } from "../core/lossless-json";
+import type { TotpItem } from "../core/model";
 import { mergeMonicaItemData, monicaItemDataToVaultItem, vaultItemToMonicaItemData } from "./monica-item-data";
 
 const base = { id: "synthetic-note", title: "note", notes: "", favorite: false, createdAt: "2026-09-30T00:00:00.000Z", updatedAt: "2026-09-30T00:00:00.000Z", providerRefs: [] };
@@ -25,5 +26,24 @@ describe("SecureItem custom field surgical edits", () => {
     const result = mergeMonicaItemData(source, { customFields: [{ label: "same", value: "changed", type: "TEXT" }, { label: "same", value: "b", type: "TEXT" }] });
     expect(result.customFields).toEqual([{ label: "same", value: "changed", type: "TEXT", id: 1 }, source.customFields[1], source.customFields[2]]);
     expect(mergeMonicaItemData(source, result)).toEqual(result);
+  });
+});
+
+describe("Android authenticator decode parity", () => {
+  it("reads legacy aliases and Kotlin's absent-field defaults", () => {
+    const aliased = monicaItemDataToVaultItem("TOTP", { key: "gezd gnbv-gy3tqojq", serviceName: "Steam Community", account: "joy", otpType: " totp ", period: 0, digits: 12 }, { ...base, id: "totp-alias" }) as TotpItem;
+    expect(aliased).toMatchObject({ kind: "totp", secret: "GEZDGNBVGY3TQOJQ", issuer: "Steam Community", accountName: "joy", otpType: "STEAM", digits: 5, period: 30, algorithm: "SHA1" });
+
+    const defaults = monicaItemDataToVaultItem("TOTP", { secret: "GEZDGNBVGY3TQOJQ" }, { ...base, id: "totp-defaults" }) as TotpItem;
+    expect(defaults).toMatchObject({ kind: "totp", digits: 6, period: 30, algorithm: "SHA1" });
+  });
+
+  it("repairs a URI stored in the secret field and drops an unusable HOTP counter", () => {
+    const repaired = monicaItemDataToVaultItem("TOTP", { secret: "otpauth://totp/GitHub:joy?secret=jbsw-y3dp%20ehpk3pxp&issuer=GitHub&digits=8&period=60" }, { ...base, id: "totp-uri" }) as TotpItem;
+    expect(repaired).toMatchObject({ secret: "JBSWY3DPEHPK3PXP", issuer: "GitHub", accountName: "joy", digits: 8, period: 60 });
+
+    const badCounter = monicaItemDataToVaultItem("TOTP", { secret: "GEZDGNBVGY3TQOJQ", otpType: "HOTP", counter: "not-a-number" }, { ...base, id: "totp-counter" }) as TotpItem;
+    expect(badCounter).toMatchObject({ kind: "totp", otpType: "HOTP" });
+    expect(badCounter.counter).toBeUndefined();
   });
 });

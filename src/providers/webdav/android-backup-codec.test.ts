@@ -525,6 +525,21 @@ describe("Android backup ZIP codec", () => {
     expect(bareSharedSecret.secret).toBe(sharedSecret);
   });
 
+  it("applies Kotlin's absent-field defaults and legacy aliases the way Android reads them", () => {
+    const path = "folders/_root/authenticators/totp_alias_1700000000000.json";
+    const decode = (itemData: Record<string, unknown>) => androidRecordToItem(path, { id: 941, itemType: "TOTP", title: "Alias", itemData: JSON.stringify(itemData), createdAt: 1_700_000_000_000, updatedAt: 1_700_000_000_000 }, "provider-repair") as TotpItem;
+
+    // The bare Kotlin writer drops every `TotpData` default, so absent digits/period decode back to 6 / 30.
+    const defaults = decode({ key: "gezd gnbv-gy3tqojq", serviceName: "GitHub", account: "joy" });
+    expect(defaults).toMatchObject({ kind: "totp", secret: "GEZDGNBVGY3TQOJQ", issuer: "GitHub", accountName: "joy", digits: 6, period: 30, algorithm: "SHA1" });
+
+    expect(decode({ secret: "GEZDGNBVGY3TQOJQ", otpType: " totp " }).otpType).toBe("TOTP");
+    expect(decode({ secret: "GEZDGNBVGY3TQOJQ", otpType: "HOTP", counter: -5 }).counter).toBeUndefined();
+    expect(decode({ secret: "GEZDGNBVGY3TQOJQ", otpType: "FUTURE_OTP" }).kind).toBe("opaque");
+    // `normalizeTotpData` falls back to 30 s for non-positive periods but never clamps a large one.
+    expect(decode({ secret: "GEZDGNBVGY3TQOJQ", period: 5000 }).period).toBe(5000);
+  });
+
   it("maps all Android vault record kinds and legacy field aliases", () => {
     const document = readAndroidBackup(fixtureZip(), "provider-1");
     expect(document.warnings).toEqual([]);
@@ -632,6 +647,21 @@ describe("Android backup ZIP codec", () => {
       counter: 4,
       future: { nested: [1, true, null] }
     });
+  });
+
+  it("keeps an authenticator's raw itemData untouched when only the outer record changed", () => {
+    const originalItemData = '{"secret":"GEZDGNBVGY3TQOJQ","period":0,"digits":12,"otpType":"HOTP","counter":4,"future":{"keep":true}}';
+    const path = "folders/_root/authenticators/totp_943_1700000000000.json";
+    const raw = { id: 943, itemType: "TOTP", title: "Stable OTP", itemData: originalItemData, notes: "", isFavorite: false, createdAt: 1_700_000_000_000, updatedAt: 1_700_000_000_000 };
+    const document = readAndroidBackup(zipSync({ [path]: strToU8(JSON.stringify(raw)) }), "provider-1");
+
+    expect(document.items[0]).toMatchObject({ kind: "totp", period: 30, digits: 10, counter: 4 });
+
+    const writtenZip = writeAndroidBackup(document, document.items.map((item) => ({ ...item, title: "Renamed OTP" })), "provider-1");
+    const written = JSON.parse(strFromU8(unzipSync(writtenZip)[path]));
+    expect(written.title).toBe("Renamed OTP");
+    expect(written.itemData).toBe(originalItemData);
+    expect(readAndroidBackup(writtenZip, "provider-1").items[0]).toMatchObject({ title: "Renamed OTP", period: 30, digits: 10, counter: 4 });
   });
 
   it("writes new Passkey metadata with Android's current filename and JSON shape", () => {

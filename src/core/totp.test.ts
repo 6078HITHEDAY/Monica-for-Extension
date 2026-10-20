@@ -70,4 +70,36 @@ describe("Android-compatible OTP", () => {
     expect(generateOtpUri(parseTotpParameters("steam://ABCDEFGHIJKLMNOPQRS+"))).toContain("secret=AAIIGECRQ4QJFCZQ2OHUCFF6");
     expect(parseTotpParameters("steam://IFBEGRCFIZDUQSKKJNGE2TSPKBIVEU2U")).toMatchObject({ otpType: "STEAM", secret: "IFBEGRCFIZDUQSKKJNGE2TSPKBIVEU2U", secretEncoding: "base32" });
   });
+
+  it("renders keys Android still shows instead of failing on unusable parameters", async () => {
+    // `normalizeTotpData` falls back to 30 s instead of rejecting, and coerceIn(4, 10) bounds digits.
+    await expect(generateTotp("otpauth://totp/RFC?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&period=400", 59_000)).resolves.toBe("755224");
+    await expect(generateTotp("otpauth://totp/RFC?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&period=0", 59_000)).resolves.toBe("287082");
+    const clamped = await generateTotp("otpauth://totp/RFC?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&digits=12", 59_000);
+    expect(clamped).toBe(await generateTotp("otpauth://totp/RFC?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&digits=10", 59_000));
+    expect(clamped).toHaveLength(10);
+    expect(await generateTotp("otpauth://totp/RFC?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&digits=2", 59_000)).toHaveLength(4);
+    expect(parseTotpParameters("otpauth://totp/RFC?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&period=0&digits=12")).toMatchObject({ period: 30, digits: 10 });
+  });
+
+  it("skips characters outside the Base32 alphabet the way Android's generator does", async () => {
+    await expect(generateTotp("GEZDGNBVGY3TQOJQ0GEZDGNBVGY3TQOJQ", 59_000)).resolves.toBe("287082");
+  });
+
+  it("switches an issuer-based Steam TOTP to Steam Guard like Android's context rule", async () => {
+    const parameters = parseTotpParameters("otpauth://totp/Steam:joy?secret=IFBEGRCFIZDUQSKKJNGE2TSPKBIVEU2U&issuer=Steam");
+    expect(parameters).toMatchObject({ otpType: "STEAM", digits: 5, period: 30, algorithm: "SHA1" });
+    const code = await generateOtpWithParameters(parameters, 1_700_000_000_000);
+    expect(code).toHaveLength(5);
+    expect([...code].every((character) => "23456789BCDFGHJKMNPQRTVWXY".includes(character))).toBe(true);
+    expect(code).toBe(await generateOtpWithParameters(parseTotpParameters("steam://IFBEGRCFIZDUQSKKJNGE2TSPKBIVEU2U"), 1_700_000_000_000));
+  });
+
+  it("reads an issuer-based Yandex key only when its PIN can drive the real YAOTP algorithm", async () => {
+    const pinned = parseTotpParameters("otpauth://totp/Yandex:user?secret=Q3GXYNZ7INQOWXTVKGKYBLKDU4&issuer=Yandex&pin=2452544424551078&pin_length=16");
+    expect(pinned).toMatchObject({ otpType: "YANDEX", pin: "2452544424551078", pinLength: 16 });
+    await expect(generateOtpWithParameters(pinned, 1_700_000_000_000)).resolves.toBe("dkpcmema");
+    // A pinless key must keep rendering Android's numeric code instead of turning into 不可用.
+    expect(parseTotpParameters("otpauth://totp/Yandex:user?secret=Q3GXYNZ7INQOWXTVKGKYBLKDU4&issuer=Yandex").otpType).toBe("TOTP");
+  });
 });

@@ -1,6 +1,7 @@
 import { profileValues, CARD_NAMES, PROFILE_EXTRAS, ADDRESS_EXTRAS } from "../core/profile-fields";
 import { parseLosslessJson, jsonScalarText } from "../core/lossless-json";
-import { normalizeOtpCounter, otpCounterJson } from "../core/otp-counter";
+import { normalizeOtpCounter, otpCounterJson, type OtpCounter } from "../core/otp-counter";
+import { parseOtpUris, type TotpParameters } from "../core/totp";
 import type {
   BillingAddressItem,
   CardFaceConfig,
@@ -113,14 +114,14 @@ function decodeTotp(data: Record<string, unknown>): Omit<TotpItem, keyof MonicaI
   const otpType = rawOtpType ? normalizeOtpType(rawOtpType) : undefined;
   const steamSharedSecret = firstString(data, "steamSharedSecretBase64");
   const steamSession = parseSteamSession(firstString(data, "steamRawJson"));
-  const secret = firstString(data, "secret", "authenticatorKey");
-  return {
+  const secret = firstString(data, "secret", "authenticatorKey", "key");
+  return normalizeAndroidTotp({
     kind: "totp",
     secret: otpType === "STEAM" || steamSharedSecret ? steamSharedSecret || secret : secret,
-    issuer: firstString(data, "issuer") || undefined,
-    accountName: firstString(data, "accountName") || undefined,
+    issuer: firstString(data, "issuer", "serviceName") || undefined,
+    accountName: firstString(data, "accountName", "account") || undefined,
     otpType: otpType || (steamSharedSecret ? "STEAM" : undefined),
-    counter: data.counter == null ? undefined : normalizeOtpCounter(data.counter),
+    counter: decodeOtpCounter(data.counter),
     pin: optionalString(firstString(data, "pin")),
     link: optionalString(firstString(data, "link")),
     associatedApp: optionalString(firstString(data, "associatedApp")),
@@ -141,9 +142,101 @@ function decodeTotp(data: Record<string, unknown>): Omit<TotpItem, keyof MonicaI
     steamTokenGid: optionalString(firstString(data, "steamTokenGid")),
     steamRawJson: optionalString(firstString(data, "steamRawJson")),
     algorithm: normalizeTotpAlgorithm(data.algorithm),
-    digits: numberValue(data.digits, 6),
-    period: numberValue(data.period, 30)
-  };
+    digits: androidTotpNumber(data.digits, 6),
+    period: androidTotpNumber(data.period, 30)
+  });
+}
+
+/**
+ * Android stores what its bare `Json` serializer emitted, which omits every property equal to the
+ * `TotpData` default, and Kotlin decodes an absent property back to that default. An absent or empty
+ * numeric field therefore means 6 digits / 30 s — never zero, which `Number("")` would produce and
+ * the 4..10 clamp would then turn into a 4-digit code Android never shows.
+ */
+export function androidTotpNumber(value: unknown, fallback: number): number {
+  return jsonScalarText(value).trim() === "" ? fallback : numberValue(value, fallback);
+}
+
+/** The fields `normalizeAndroidTotp` reads, shared by the KDBX projection and every payload codec. */
+type AndroidTotpFields = Pick<TotpItem, "secret" | "otpType" | "digits" | "period" | "algorithm" | "issuer" | "accountName" | "associatedApp" | "link" | "steamSharedSecretBase64">;
+
+/**
+ * Read-time parity with Monica Android `TotpDataResolver.normalizeTotpData`: repaired records must
+ * stay byte-stable on write-back, so this has to be idempotent.
+ */
+const ANDROID_TOTP_URI_REPAIR_DEPTH = 3;
+
+export function normalizeAndroidTotp<T extends AndroidTotpFields>(item: T): T {
+  const source: AndroidTotpFields = item;
+  let { secret, otpType, digits, period, algorithm, steamSharedSecretBase64 } = source;
+  let issuer = item.issuer?.trim() || undefined;
+  let accountName = item.accountName?.trim() || undefined;
+
+  // Legacy records stored a whole URI (steam://, otpauth://) inside `secret`.
+  for (let depth = 0; depth < ANDROID_TOTP_URI_REPAIR_DEPTH && secret.includes("://"); depth += 1) {
+    const parsed = parseSingleOtpUri(secret);
+    if (!parsed || parsed.secret.includes("://")) break;
+    if ((parsed.otpType || "TOTP") === (otpType || "TOTP") && parsed.secret === secret) break;
+    secret = parsed.secret;
+    otpType = parsed.otpType || "TOTP";
+    digits = parsed.digits;
+    period = parsed.period;
+    algorithm = parsed.algorithm;
+    issuer = issuer || parsed.issuer?.trim() || undefined;
+    accountName = accountName || parsed.accountName?.trim() || undefined;
+    if (parsed.secretEncoding === "base64") steamSharedSecretBase64 = parsed.secret;
+  }
+
+  if ((otpType || "TOTP") === "TOTP") {
+    const context = [issuer, accountName, item.associatedApp, item.link].filter(Boolean).join(" ").toLowerCase();
+    if (context.includes("steamcommunity") || context.includes("steampowered") || context.includes("steam")) {
+      otpType = "STEAM";
+      digits = 5;
+      period = 30;
+      algorithm = "SHA1";
+    }
+  }
+
+  const type = otpType || "TOTP";
+  return {
+    ...item,
+    secret: normalizeAndroidTotpSecret(secret, type, steamSharedSecretBase64),
+    otpType,
+    digits: type === "STEAM" ? 5 : Math.min(10, Math.max(4, digits)),
+    period: type === "STEAM" ? 30 : period > 0 ? period : 30,
+    algorithm: type === "STEAM" ? "SHA1" : normalizeTotpAlgorithm(algorithm),
+    issuer,
+    accountName,
+    steamSharedSecretBase64
+  } as T;
+}
+
+function parseSingleOtpUri(value: string): TotpParameters | undefined {
+  try {
+    const parsed = parseOtpUris(value);
+    return parsed.length === 1 ? parsed[0].parameters : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeAndroidTotpSecret(secret: string, otpType: NonNullable<TotpItem["otpType"]>, steamSharedSecretBase64: string | undefined): string {
+  if (otpType === "MOTP") return secret.trim();
+  if (otpType === "STEAM" && steamSharedSecretBase64) return secret;
+  const normalized = secret.trim().replace(/ /g, "").replace(/-/g, "").toUpperCase();
+  // A case-sensitive Base64 shared secret must not be folded into a base32 shape.
+  if (otpType === "STEAM" && /[^A-Z2-7]/.test(normalized)) return secret.trim();
+  return normalized;
+}
+
+/** A counter field the model cannot represent must not take the whole record down; generation uses 0. */
+export function decodeOtpCounter(value: unknown): OtpCounter | undefined {
+  if (value == null || value === "") return undefined;
+  try {
+    return normalizeOtpCounter(value);
+  } catch {
+    return undefined;
+  }
 }
 
 function decodeBankCard(data: Record<string, unknown>): Omit<CardItem, keyof MonicaItemBase> {
