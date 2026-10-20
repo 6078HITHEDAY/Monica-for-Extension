@@ -88,6 +88,24 @@
 #root .vault-list-card .item-card-actions { min-width: 0; flex-wrap: wrap; align-items: center; gap: 0; border: 0; padding: 0; margin: 0; }
 #root .vault-list-card .empty-state { min-height: 240px; margin: 0; padding: 32px 24px; border: 1px solid var(--app-outline); border-radius: 12px; }
 
+#root .lifecycle-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; margin: 0 0 8px; }
+#root .lifecycle-toolbar .danger-action {
+  margin-left: auto;
+  color: var(--md-sys-color-error, #ba1a1a);
+  --m3e-button-label-text-color: var(--md-sys-color-error, #ba1a1a);
+  --m3e-button-hover-label-text-color: var(--md-sys-color-error, #ba1a1a);
+  --m3e-button-focus-label-text-color: var(--md-sys-color-error, #ba1a1a);
+  --m3e-button-pressed-label-text-color: var(--md-sys-color-error, #ba1a1a);
+  --m3e-text-button-label-text-color: var(--md-sys-color-error, #ba1a1a);
+  --m3e-text-button-hover-label-text-color: var(--md-sys-color-error, #ba1a1a);
+  --m3e-text-button-focus-label-text-color: var(--md-sys-color-error, #ba1a1a);
+  --m3e-text-button-pressed-label-text-color: var(--md-sys-color-error, #ba1a1a);
+  --m3e-text-button-icon-color: var(--md-sys-color-error, #ba1a1a);
+  --m3e-text-button-hover-icon-color: var(--md-sys-color-error, #ba1a1a);
+  --m3e-text-button-focus-icon-color: var(--md-sys-color-error, #ba1a1a);
+  --m3e-text-button-pressed-icon-color: var(--md-sys-color-error, #ba1a1a);
+}
+
 @container manager-content (max-width: 58rem) {
   #root .vault-list-card .item-card { grid-template-columns: minmax(0, 1fr) minmax(7rem, .45fr) 132px; grid-template-areas: 'main meta actions' 'summary meta actions'; gap: 4px 16px; }
   #root .vault-list-card .item-card-main { grid-area: main; }

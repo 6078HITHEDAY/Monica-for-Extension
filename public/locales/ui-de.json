@@ -3699,5 +3699,13 @@
   "等待对方确认保存": "Warten auf die Speicherbestätigung des anderen Geräts",
   "请在 Android 端也点击同步，保持两端同步页面打开。": "Tippen Sie auch auf Android auf Synchronisieren und lassen Sie beide Synchronisierungsseiten geöffnet.",
   "另一端未能保存，本次同步未完成。请查看 Android 的错误提示后重试。": "Das andere Gerät konnte nicht speichern; die Synchronisierung ist unvollständig. Prüfen Sie den Fehler auf Android und versuchen Sie es erneut.",
-  "等待另一端保存确认超时，本次同步未完成。": "Zeitüberschreitung beim Warten auf die Speicherbestätigung; die Synchronisierung ist unvollständig."
+  "等待另一端保存确认超时，本次同步未完成。": "Zeitüberschreitung beim Warten auf die Speicherbestätigung; die Synchronisierung ist unvollständig.",
+  "清空回收站": "Papierkorb leeren",
+  "永久删除回收站中的 {0} 个本地项目？其他密码源项目会保留。": "{0} lokale Elemente im Papierkorb endgültig löschen? Elemente aus anderen Passwortquellen bleiben erhalten.",
+  "再次确认：此操作无法撤销。已同步的本地项目如果仍保留在 Android，下次同步会重新出现；请先在 Android 删除。": "Erneut bestätigen: Dies kann nicht rückgängig gemacht werden. Synchronisierte lokale Elemente, die noch auf Android vorhanden sind, erscheinen bei der nächsten Synchronisierung wieder; löschen Sie sie zuerst auf Android.",
+  "已永久删除 {0} 个本地项目。": "{0} lokale Elemente endgültig gelöscht.",
+  "已永久删除 {0} 个本地项目；{1} 个其他密码源项目保留在回收站。": "{0} lokale Elemente endgültig gelöscht; {1} Elemente aus anderen Passwortquellen bleiben im Papierkorb.",
+  "回收站项目还有待处理的同步或恢复操作，请先处理后再清空。": "Einige Elemente im Papierkorb haben noch ausstehende Synchronisierungs- oder Wiederherstellungsvorgänge. Schließen Sie diese ab, bevor Sie den Papierkorb leeren.",
+  "清空回收站失败，请重试。": "Papierkorb konnte nicht geleert werden. Bitte erneut versuchen.",
+  "没有可清空的本地项目；其他密码源项目请在对应密码源中删除。": "Es gibt keine lokalen Elemente zum Leeren; löschen Sie Elemente aus anderen Passwortquellen in der jeweiligen Quelle."
 }

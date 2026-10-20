@@ -3699,5 +3699,13 @@
   "等待对方确认保存": "Đang chờ thiết bị kia xác nhận lưu",
   "请在 Android 端也点击同步，保持两端同步页面打开。": "Hãy nhấn Đồng bộ trên Android và giữ trang đồng bộ mở trên cả hai thiết bị.",
   "另一端未能保存，本次同步未完成。请查看 Android 的错误提示后重试。": "Thiết bị kia không lưu được; đồng bộ chưa hoàn tất. Kiểm tra lỗi trên Android rồi thử lại.",
-  "等待另一端保存确认超时，本次同步未完成。": "Hết thời gian chờ thiết bị kia xác nhận lưu; đồng bộ chưa hoàn tất."
+  "等待另一端保存确认超时，本次同步未完成。": "Hết thời gian chờ thiết bị kia xác nhận lưu; đồng bộ chưa hoàn tất.",
+  "清空回收站": "Dọn sạch thùng rác",
+  "永久删除回收站中的 {0} 个本地项目？其他密码源项目会保留。": "Xóa vĩnh viễn {0} mục cục bộ trong thùng rác? Các mục từ nguồn mật khẩu khác sẽ được giữ lại.",
+  "再次确认：此操作无法撤销。已同步的本地项目如果仍保留在 Android，下次同步会重新出现；请先在 Android 删除。": "Xác nhận lại: thao tác này không thể hoàn tác. Các mục cục bộ đã đồng bộ vẫn còn trên Android sẽ xuất hiện lại trong lần đồng bộ tiếp theo; hãy xóa chúng trên Android trước.",
+  "已永久删除 {0} 个本地项目。": "Đã xóa vĩnh viễn {0} mục cục bộ.",
+  "已永久删除 {0} 个本地项目；{1} 个其他密码源项目保留在回收站。": "Đã xóa vĩnh viễn {0} mục cục bộ; {1} mục từ nguồn mật khẩu khác vẫn ở trong thùng rác.",
+  "回收站项目还有待处理的同步或恢复操作，请先处理后再清空。": "Một số mục trong thùng rác vẫn có thao tác đồng bộ hoặc khôi phục đang chờ. Hãy xử lý chúng trước khi dọn sạch thùng rác.",
+  "清空回收站失败，请重试。": "Không thể dọn sạch thùng rác. Vui lòng thử lại.",
+  "没有可清空的本地项目；其他密码源项目请在对应密码源中删除。": "Không có mục cục bộ nào để dọn; hãy xóa các mục từ nguồn mật khẩu khác trong chính nguồn đó."
 }

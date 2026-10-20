@@ -4,11 +4,11 @@ import type { TotpItem, VaultState } from "../core/model";
 
 const NOW = "2026-10-20T00:00:00.000Z";
 
-function totp(id: string, digits: number): TotpItem {
+function totp(id: string, digits: number, period = 30): TotpItem {
   return {
     id, kind: "totp", title: id, favorite: false, notes: "",
     createdAt: NOW, updatedAt: NOW, providerRefs: [],
-    secret: "JBSWY3DPEHPK3PXP", algorithm: "SHA1", digits, period: 30
+    secret: "JBSWY3DPEHPK3PXP", algorithm: "SHA1", digits, period
   };
 }
 
@@ -32,11 +32,11 @@ function stateWith(items: TotpItem[], receipts: unknown[]): VaultState {
   });
 }
 
-const digitsOf = (state: VaultState, id: string) => state.items.find(item => item.id === id)?.kind === "totp"
-  ? (state.items.find(item => item.id === id) as TotpItem).digits
-  : undefined;
+const totpOf = (state: VaultState, id: string) => state.items.find(item => item.id === id) as TotpItem | undefined;
+const digitsOf = (state: VaultState, id: string) => totpOf(state, id)?.digits;
+const periodOf = (state: VaultState, id: string) => totpOf(state, id)?.period;
 
-describe("repairNearbyLocalTotpDigits", () => {
+describe("repairPersistedTotpParameters", () => {
   it("restores Kotlin's omitted default when adoption persisted the 0.1.47 clamp", () => {
     const item = totp("omitted", 4);
     const state = stateWith([item], [receipt(item, JSON.stringify({ secret: "JBSWY3DPEHPK3PXP" }))]);
@@ -58,6 +58,27 @@ describe("repairNearbyLocalTotpDigits", () => {
     ]);
     expect(digitsOf(state, "eight")).toBe(4);
     expect(digitsOf(state, "five")).toBe(5);
+  });
+
+  it("heals zeroed digits and period persisted by older imports", () => {
+    const item = totp("zeroed", 0, 0);
+    const state = stateWith([item], []);
+    expect(digitsOf(state, "zeroed")).toBe(6);
+    expect(periodOf(state, "zeroed")).toBe(30);
+  });
+
+  it("uses explicit payload parameters when the persisted values are unusable", () => {
+    const item = totp("explicit-raw", 0, 0);
+    const state = stateWith([item], [receipt(item, JSON.stringify({ secret: "JBSWY3DPEHPK3PXP", digits: 8, period: 60 }))]);
+    expect(digitsOf(state, "explicit-raw")).toBe(8);
+    expect(periodOf(state, "explicit-raw")).toBe(60);
+  });
+
+  it("keeps a deliberately custom period and valid digits", () => {
+    const item = totp("custom", 6, 60);
+    const state = stateWith([item], [receipt(item, JSON.stringify({ secret: "JBSWY3DPEHPK3PXP" }))]);
+    expect(digitsOf(state, "custom")).toBe(6);
+    expect(periodOf(state, "custom")).toBe(60);
   });
 
   it("leaves local authenticators without a nearby receipt alone", () => {

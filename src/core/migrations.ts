@@ -7,7 +7,7 @@ import { readBitwardenBatches } from './bitwarden-batch-transfer';
 import { readNearbyPreferences } from '../nearby/preferences';
 import { readNearbyNativeJournal } from '../nearby/native-journal';
 import { readNearbyLocalMetadata } from '../nearby/local-metadata';
-import { repairNearbyLocalTotpDigits } from '../nearby/local-totp-repair';
+import { repairPersistedTotpParameters } from '../nearby/local-totp-repair';
 
 const URI_MATCH_TYPES = new Set<LoginUriMatchType>(["base-domain", "domain", "starts-with", "exact", "regex", "never"]);
 const LEGACY_MDBX_MESSAGE = "此密码源使用 Monica Extension 已停用的 MDBX1 实现。请使用 Monica Android 或桌面端升级为 MDBX2 后重新连接。";
@@ -50,7 +50,7 @@ export function migrateVaultState(input: unknown): VaultState {
     providerDiagnostics: Array.isArray(raw.providerDiagnostics) ? raw.providerDiagnostics : [],
     sourceRecords
   } as VaultState;
-  repairNearbyLocalTotpDigits(state);
+  repairPersistedTotpParameters(state);
   return state;
 }
 

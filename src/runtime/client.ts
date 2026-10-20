@@ -160,6 +160,7 @@ export const vaultClient = {
   lockedAutofillIds: () => send<string[]>({ type: "VAULT_LOCKED_AUTOFILL_IDS" }),
   setLockedAutofill: (itemId: string, enabled: boolean) => send<void>({ type: "VAULT_SET_LOCKED_AUTOFILL", itemId, enabled }),
   deleteItem: (itemId: string) => send<void>({ type: "VAULT_DELETE_ITEM", itemId }),
+  emptyLocalTrash: () => send<{ removed: number; retained: number }>({ type: "VAULT_EMPTY_LOCAL_TRASH" }),
   deletePasswordGroup: (anchorItemId: string, expected: Record<string, string>) => send<void>({ type: "VAULT_DELETE_PASSWORD_GROUP", anchorItemId, expected }),
   restoreItem: (itemId: string) => send<VaultItem>({ type: "VAULT_RESTORE_ITEM", itemId }),
   restorePasswordProject: (input: import('../background/password-project-restore').PasswordProjectRestoreRequest, confirmed: true) => send<import('../background/password-project-restore').PasswordProjectRestoreStatus>({ type: 'VAULT_PASSWORD_PROJECT_RESTORE', input, confirmed }),

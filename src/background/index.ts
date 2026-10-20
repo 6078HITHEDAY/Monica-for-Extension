@@ -869,6 +869,9 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
     case "VAULT_DELETE_ITEM":
       assertExtensionPage(sender);
       return service.deleteItem(request.itemId);
+    case "VAULT_EMPTY_LOCAL_TRASH":
+      assertManagerPage(sender);
+      return service.emptyLocalTrash();
     case "VAULT_DELETE_PASSWORD_GROUP":
       assertManagerPage(sender);
       return service.deletePasswordGroup(request.anchorItemId, request.expected);

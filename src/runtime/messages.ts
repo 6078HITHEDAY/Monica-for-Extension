@@ -325,6 +325,7 @@ export type ExtensionRequest =
   | { type: "VAULT_LOCKED_AUTOFILL_IDS" }
   | { type: "VAULT_SET_LOCKED_AUTOFILL"; itemId: string; enabled: boolean }
   | { type: "VAULT_DELETE_ITEM"; itemId: string }
+  | { type: "VAULT_EMPTY_LOCAL_TRASH" }
   | { type: "VAULT_DELETE_PASSWORD_GROUP"; anchorItemId: string; expected: Record<string, string> }
   | { type: "VAULT_RESTORE_ITEM"; itemId: string }
   | { type: 'VAULT_PASSWORD_PROJECT_RESTORE'; input: import('../background/password-project-restore').PasswordProjectRestoreRequest; confirmed: true }

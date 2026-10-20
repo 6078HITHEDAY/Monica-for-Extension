@@ -89,6 +89,7 @@ import FolderScopeList from './components/FolderScopeList.vue';
 import { independentImportedPasskey, normalizeImportedVaultItem } from "./manager/import-items";
 import { parseCsvToVaultItems } from "./manager/csv-import";
 import { projectSteamItem } from "./core/steam-item";
+import { isLocalTrashItem } from "./core/local-trash";
 import { presentKeePassRemoteError, type KeePassRemoteErrorPresentation } from "./providers/keepass/keepass-remote-status";
 import type { Mdbx2HostStatus, Mdbx2VaultRuntimeStatus } from "./providers/mdbx2/native-contract";
 import type { MonicaWebDavConfig } from "./providers/webdav/monica-webdav-provider";
@@ -140,6 +141,7 @@ function vaultDerived<T>(getter: () => T): ComputedRef<T> {
 const lockedAutofillIds = ref<string[]>([]);
 const archivedItems = shallowRef<VaultItem[]>([]);
 const unarchivingItemIds = ref<string[]>([]);
+const emptyingTrash = ref(false);
 const deletedItems = shallowRef<VaultItem[]>([]);
 const restoringProject = shallowRef<{ items: LoginItem[]; anchorItemId: string; sourceName: string; keepassProject?: LoginItem[] }>();
 const providers = ref<ProviderAccount[]>([]);
@@ -360,6 +362,7 @@ const archivedCredentials = vaultDerived(() => archivedItems.value.filter(isLogi
 const credentialById = vaultDerived(() => new Map([...credentials.value, ...archivedCredentials.value].map((item) => [item.id, item])));
 const filteredArchiveItems = vaultDerived(() => filterManagerItems(archivedItems.value));
 const filteredDeletedItems = vaultDerived(() => filterManagerItems(deletedItems.value));
+const removableTrashItems = vaultDerived(() => deletedItems.value.filter(item => isLocalTrashItem(item, providers.value)));
 const restoreCohortLeaders = vaultDerived(() => {
   const result = new Map<string, LoginItem[]>(), seen = new Set<string>();
   const allItems = [...vaultItems.value, ...archivedItems.value, ...deletedItems.value];
@@ -1190,6 +1193,28 @@ async function restoreDeletedItem(item: VaultItem) {
     showNotice(tr('{0}已从回收站恢复。', { 0: itemKindLabel(item.kind) }));
   } catch (error) {
     showNotice(error instanceof Error ? error.message : tr('恢复失败，请重试。'));
+  }
+}
+
+async function emptyTrash() {
+  if (emptyingTrash.value) return;
+  if (!removableTrashItems.value.length) {
+    showNotice(tr('没有可清空的本地项目；其他密码源项目请在对应密码源中删除。'));
+    return;
+  }
+  if (!window.confirm(tr('永久删除回收站中的 {0} 个本地项目？其他密码源项目会保留。', { 0: removableTrashItems.value.length }))) return;
+  if (!window.confirm(tr('再次确认：此操作无法撤销。已同步的本地项目如果仍保留在 Android，下次同步会重新出现；请先在 Android 删除。'))) return;
+  emptyingTrash.value = true;
+  try {
+    const result = await vaultClient.emptyLocalTrash();
+    await refreshItems();
+    showNotice(result.retained
+      ? tr('已永久删除 {0} 个本地项目；{1} 个其他密码源项目保留在回收站。', { 0: result.removed, 1: result.retained })
+      : tr('已永久删除 {0} 个本地项目。', { 0: result.removed }));
+  } catch (error) {
+    showNotice(error instanceof Error ? tr(error.message) : tr('清空回收站失败，请重试。'));
+  } finally {
+    emptyingTrash.value = false;
   }
 }
 
@@ -2826,6 +2851,9 @@ function errorCode(error: unknown): string | undefined {
 
         <section v-else-if="activeSection === 'archive' || activeSection === 'trash'" class="content-grid lifecycle-page">
           <PasswordProjectPendingRestores v-if="activeSection === 'trash'" :providers="providers" :runtime-statuses="mdbx2RuntimeStatuses" :revision="removalRevision" @unlock="openMdbx2Dialog" @completed="handleMdbx2BatchTransferCompleted" />
+          <div v-if="activeSection === 'trash' && deletedItems.length" class="lifecycle-toolbar">
+            <m3e-button variant="text" class="danger-action" data-empty-trash :disabled="emptyingTrash" @click="emptyTrash"><m3e-icon slot="icon" name="delete_sweep"></m3e-icon>{{ tr('清空回收站') }}</m3e-button>
+          </div>
           <m3e-card variant="filled" class="data-card vault-list-card motion-card">
             <div v-if="(activeSection === 'archive' ? filteredArchiveItems : filteredDeletedItems).length" slot="content" class="item-grid">
               <article v-for="item in listPagination.slice((activeSection === 'archive' ? filteredArchiveItems : filteredDeletedItems))" :key="item.id" class="item-card row-clickable" @click="openVaultDetail(item)">

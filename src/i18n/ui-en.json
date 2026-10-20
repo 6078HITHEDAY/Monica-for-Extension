@@ -3699,5 +3699,13 @@
   "等待对方确认保存": "Waiting for the other device to confirm saving",
   "请在 Android 端也点击同步，保持两端同步页面打开。": "Also tap Sync on Android and keep the sync page open on both devices.",
   "另一端未能保存，本次同步未完成。请查看 Android 的错误提示后重试。": "The other device could not save; sync is incomplete. Check the error on Android and retry.",
-  "等待另一端保存确认超时，本次同步未完成。": "Timed out waiting for the other device to confirm saving; sync is incomplete."
+  "等待另一端保存确认超时，本次同步未完成。": "Timed out waiting for the other device to confirm saving; sync is incomplete.",
+  "清空回收站": "Empty trash",
+  "永久删除回收站中的 {0} 个本地项目？其他密码源项目会保留。": "Permanently delete {0} local items in the trash? Items from other password sources will be kept.",
+  "再次确认：此操作无法撤销。已同步的本地项目如果仍保留在 Android，下次同步会重新出现；请先在 Android 删除。": "Confirm again: this cannot be undone. Synced local items still present on Android will reappear on the next sync; delete them on Android first.",
+  "已永久删除 {0} 个本地项目。": "Permanently deleted {0} local items.",
+  "已永久删除 {0} 个本地项目；{1} 个其他密码源项目保留在回收站。": "Permanently deleted {0} local items; {1} items from other password sources remain in the trash.",
+  "回收站项目还有待处理的同步或恢复操作，请先处理后再清空。": "Some trashed items still have pending sync or restore operations. Resolve them before emptying the trash.",
+  "清空回收站失败，请重试。": "Failed to empty the trash. Please try again.",
+  "没有可清空的本地项目；其他密码源项目请在对应密码源中删除。": "There are no local items to empty; delete items from other password sources in their own source."
 }

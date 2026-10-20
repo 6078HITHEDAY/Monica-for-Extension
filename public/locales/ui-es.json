@@ -3699,5 +3699,13 @@
   "等待对方确认保存": "Esperando la confirmación de guardado del otro dispositivo",
   "请在 Android 端也点击同步，保持两端同步页面打开。": "Pulsa también Sincronizar en Android y mantén abierta la página en ambos dispositivos.",
   "另一端未能保存，本次同步未完成。请查看 Android 的错误提示后重试。": "El otro dispositivo no pudo guardar; la sincronización está incompleta. Revisa el error en Android y vuelve a intentarlo.",
-  "等待另一端保存确认超时，本次同步未完成。": "Se agotó el tiempo de espera de confirmación de guardado; la sincronización está incompleta."
+  "等待另一端保存确认超时，本次同步未完成。": "Se agotó el tiempo de espera de confirmación de guardado; la sincronización está incompleta.",
+  "清空回收站": "Vaciar papelera",
+  "永久删除回收站中的 {0} 个本地项目？其他密码源项目会保留。": "¿Eliminar permanentemente {0} elementos locales de la papelera? Los elementos de otras fuentes de contraseñas se conservarán.",
+  "再次确认：此操作无法撤销。已同步的本地项目如果仍保留在 Android，下次同步会重新出现；请先在 Android 删除。": "Confirma de nuevo: esta acción no se puede deshacer. Los elementos locales sincronizados que sigan en Android volverán a aparecer en la próxima sincronización; elimínalos primero en Android.",
+  "已永久删除 {0} 个本地项目。": "Se eliminaron permanentemente {0} elementos locales.",
+  "已永久删除 {0} 个本地项目；{1} 个其他密码源项目保留在回收站。": "Se eliminaron permanentemente {0} elementos locales; {1} elementos de otras fuentes de contraseñas permanecen en la papelera.",
+  "回收站项目还有待处理的同步或恢复操作，请先处理后再清空。": "Algunos elementos de la papelera aún tienen operaciones de sincronización o restauración pendientes. Resuélvelas antes de vaciar la papelera.",
+  "清空回收站失败，请重试。": "No se pudo vaciar la papelera. Inténtalo de nuevo.",
+  "没有可清空的本地项目；其他密码源项目请在对应密码源中删除。": "No hay elementos locales que vaciar; elimina los elementos de otras fuentes de contraseñas en su propia fuente."
 }

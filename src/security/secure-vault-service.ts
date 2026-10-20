@@ -15,6 +15,7 @@ import { providerSourceRecordsFor, replaceProviderSourceRecords, validProviderMu
 import { sourceRecordsBudgetError } from "../core/source-records";
 import { applyLocalTransferBatch, isLocalTransferItem, prepareLocalTransferBatch, type LocalTransferBatch, type LocalTransferRequest, type LocalTransferResource } from '../core/local-transfer';
 import { applyLocalAttachmentMutation, localAttachmentOwner, type LocalAttachmentMutation } from '../core/local-attachments';
+import { isLocalTrashItem } from '../core/local-trash';
 import { readKeePassTransfers, assertKeePassTransferBindings, keePassTransferSnapshotHash, keePassTransferResult, type KeePassTransferIntent } from '../core/keepass-transfer-journal';
 import { readBitwardenCipherCopies, validateBitwardenCopyFiles, advanceBitwardenCipherCopy, assertBitwardenCopyTarget,
   bitwardenCopySourceHash, bitwardenCopyIntent, type BitwardenCipherCopyRecord } from '../core/bitwarden-transfer-journal';
@@ -3564,6 +3565,29 @@ export class SecureVaultService {
     });
   }
 
+  /** Removes local-only tombstones. Provider-backed entries keep their native deletion flow. */
+  async emptyLocalTrash(): Promise<{ removed: number; retained: number }> {
+    return this.runExclusive(async () => {
+      const { state, envelope, key } = await this.mutableContext();
+      const trashed = state.items.filter(item => item.deletedAt);
+      if (!trashed.length) return { removed: 0, retained: 0 };
+      const removable = trashed.filter(item => isLocalTrashItem(item, state.providers));
+      const retained = trashed.length - removable.length;
+      if (!removable.length) return { removed: 0, retained };
+      if (removable.some(item => hasPendingLocalTrashOperation(state, item.id)))
+        throw new Error('回收站项目还有待处理的同步或恢复操作，请先处理后再清空。');
+      const ids = new Set(removable.map(item => item.id));
+      const now = new Date(this.now()).toISOString();
+      state.items = state.items.filter(item => !ids.has(item.id)).map(item => withoutRemovedLocalLinks(item, ids));
+      state.nearbyLocalReceipts = (state.nearbyLocalReceipts ?? []).filter(receipt => !ids.has(receipt.itemId));
+      state.localItemAttachments = (state.localItemAttachments ?? []).filter(file => !ids.has(file.itemId));
+      state.localItemOrigins = (state.localItemOrigins ?? []).filter(row => !ids.has(row.itemId));
+      state.updatedAt = now;
+      await this.persist(state, key, envelope.kdf);
+      return { removed: ids.size, retained };
+    });
+  }
+
   /** A display operation: no project membership or credential ordering is rewritten. */
   async setPasswordStack(anchorItemIds: string[], action: import("../core/password-manual-stacks").PasswordStackAction, expected: Record<string, string>): Promise<LoginItem[]> {
     return this.runExclusive(async () => {
@@ -4033,6 +4057,29 @@ function queueProviderMutations(state: VaultState, item: VaultItem, operation: P
     if (layoutOnly && reference.remoteId && (provider.kind === 'bitwarden' || (provider.kind === 'keepass' && item.kind === 'card'))) continue;
     queueProviderMutation(state, item, provider.id, operation, now);
   }
+}
+
+function hasPendingLocalTrashOperation(state: VaultState, itemId: string): boolean {
+  return state.mutationQueue.some(row => row.itemId === itemId)
+    || state.providerConflicts.some(row => row.itemId === itemId)
+    || readPasswordProjectRemovalJournal(state.passwordProjectRemovals).some(row => isPasswordProjectRemovalPending(row)
+      && [...row.retained, ...row.removed].some(item => item.id === itemId))
+    || readMdbx2RestoreJournal(state.mdbx2Restores).some(row => row.status === 'prepared' && row.source.id === itemId)
+    || readMdbx2MoveJournal(state.mdbx2MoveFinalizations).some(row => row.status !== 'completed'
+      && row.entries.some(entry => entry.expected.id === itemId || entry.result.id === itemId))
+    || Boolean(state.bitwardenBatchTransfers?.some(row => row.status === 'writing' && row.request.action === 'move' && row.request.itemIds.includes(itemId)));
+}
+
+function withoutRemovedLocalLinks(item: VaultItem, removed: Set<string>): VaultItem {
+  if (item.kind !== 'login') return item;
+  const noteId = item.boundNoteEntryId?.startsWith('note:') ? item.boundNoteEntryId.slice(5) : item.boundNoteEntryId;
+  const ssoId = item.ssoRefLogicalId?.startsWith('password:') ? item.ssoRefLogicalId.slice(9) : item.ssoRefLogicalId;
+  const boundTotpItemId = item.boundTotpItemId && removed.has(item.boundTotpItemId) ? undefined : item.boundTotpItemId;
+  const boundNoteEntryId = noteId && removed.has(noteId) ? undefined : item.boundNoteEntryId;
+  const ssoRefLogicalId = ssoId && removed.has(ssoId) ? undefined : item.ssoRefLogicalId;
+  if (boundTotpItemId === item.boundTotpItemId && boundNoteEntryId === item.boundNoteEntryId
+    && ssoRefLogicalId === item.ssoRefLogicalId) return item;
+  return { ...item, boundTotpItemId, boundNoteEntryId, ssoRefLogicalId };
 }
 
 function queueProviderMutation(
