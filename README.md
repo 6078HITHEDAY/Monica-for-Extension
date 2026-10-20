@@ -4,7 +4,7 @@ Monica 的 Chrome/Edge Manifest V3 浏览器插件。管理界面复用并独立
 
 ## 当前状态
 
-`0.1.47` 为 preview-beta 测试版，供试用与反馈；本版修复 Edge 侧栏的 Wi-Fi 同步连接，Chrome 128+ 仍为声明目标，不声明支持 Firefox。安装、升级及尚未完成的互通范围见 [发布说明](docs/releases/Monica-Extension-0.1.47.md)；问题可通过 [Bug 报告](https://github.com/Monica-Pass/Monica-for-Extension/issues/new?template=bug.yml) 提交。
+`0.1.48` 为 preview-beta 测试版，供试用与反馈；本版修复 Wi-Fi 同步 TOTP 的解析与显示问题，Chrome 128+ 仍为声明目标，不声明支持 Firefox。安装、升级及尚未完成的互通范围见 [发布说明](docs/releases/Monica-Extension-0.1.48.md)；问题可通过 [Bug 报告](https://github.com/Monica-Pass/Monica-for-Extension/issues/new?template=bug.yml) 提交。
 
 基础可用版本已经完成：
 
@@ -71,7 +71,7 @@ Monica 的 Chrome/Edge Manifest V3 浏览器插件。管理界面复用并独立
 - [0.1.24 功能、安装与互通验证记录](docs/VALIDATION-0.1.24.md)
 - [参与贡献](CONTRIBUTING.md)
 
-本阶段发布见 [0.1.47 preview-beta 说明](docs/releases/Monica-Extension-0.1.47.md)和[发布验证记录](docs/verification/release-0.1.47.md)。同步与 Passkey 的兼容范围见[同步说明](docs/SYNC_COMPATIBILITY.md)和[Passkey 说明](docs/PASSKEY_COMPATIBILITY.md)。原 `docs/RELEASE-0.1.38.md` 至 `RELEASE-0.1.45.md` 是已纳入 0.1.37 的历史开发记录，保持原样；当前 0.1.47 阶段说明位于 `docs/releases/`。
+本阶段发布见 [0.1.48 preview-beta 说明](docs/releases/Monica-Extension-0.1.48.md)和[发布验证记录](docs/verification/release-0.1.48.md)。同步与 Passkey 的兼容范围见[同步说明](docs/SYNC_COMPATIBILITY.md)和[Passkey 说明](docs/PASSKEY_COMPATIBILITY.md)。原 `docs/RELEASE-0.1.38.md` 至 `RELEASE-0.1.45.md` 是已纳入 0.1.37 的历史开发记录，保持原样；当前 0.1.48 阶段说明位于 `docs/releases/`。
 
 ## 日常使用
 
