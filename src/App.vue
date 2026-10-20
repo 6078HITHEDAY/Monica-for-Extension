@@ -1203,7 +1203,7 @@ async function emptyTrash() {
     return;
   }
   if (!window.confirm(tr('永久删除回收站中的 {0} 个本地项目？其他密码源项目会保留。', { 0: removableTrashItems.value.length }))) return;
-  if (!window.confirm(tr('再次确认：此操作无法撤销。已同步的本地项目如果仍保留在 Android，下次同步会重新出现；请先在 Android 删除。'))) return;
+  if (!window.confirm(tr('再次确认：此操作无法撤销。已同步到 Android 的项目会在下次允许发送的 Wi-Fi 同步中从 Android 删除；「仅接收」模式不会发送删除。'))) return;
   emptyingTrash.value = true;
   try {
     const result = await vaultClient.emptyLocalTrash();

@@ -261,7 +261,7 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); client?.close(); clien
       <template v-if="view.review"><p>{{ tr('以下 Passkey 存在跨设备限制。原始密钥、凭据 ID 和计数历史会保留。') }}</p><ul><li v-for="issue in view.review.issues" :key="issue.id"><strong>{{ issue.account }}</strong> · {{ issue.relyingParty }}<p>{{ tr(issue.skipForCounter ? '已有正计数历史，本次跳过发送，保留本机凭据。' : issue.restriction==='device-only' ? '仅本机可用，另一端只能收到凭据引用。' : issue.restriction==='backup-restricted' ? '此凭据限制备份，另一端的可用性取决于网站策略。' : '另一端可能不支持此密钥算法。') }}</p></li></ul><m3e-button variant="filled" :disabled="busy" @click="confirm">{{ tr('了解限制并继续同步') }}</m3e-button></template>
       <m3e-button v-if="active || searching || busy" variant="tonal" @click="cancel">{{ tr('取消同步') }}</m3e-button>
     </section>
-    <NearbySyncResultDialog v-if="syncResult" :result="syncResult.result" :peer-name="syncResult.peerName" @close="syncResult=null" />
+    <NearbySyncResultDialog v-if="syncResult" :result="syncResult.result" :peer-name="syncResult.peerName" :mode="preferences?.mode" @close="syncResult=null" />
   </section>
 </template>
 
