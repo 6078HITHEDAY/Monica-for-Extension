@@ -41,7 +41,7 @@ EC/RSA 测试保留原 credential ID、PKCS#8、user handle、算法、counter=4
 
 [实际 WebDAV ES256 往返](android-webdav-passkeys-317.md) 也已完成插件自动上传、Android 实际下载/签名/条件回写及 Edge 自动取回/重启后登录。WebDAV 的成功不作为 Microsoft 条件写入的证据。
 
-1. Microsoft 应用注册需配置实际扩展的 SPA 回调，再验证真实登录、刷新及个人/企业盘权限。当前路径加载的扩展回调为 `https://dhocecodmplfgimajabbfokjbpdglnik.chromiumapp.org/onedrive`；默认公共应用 ID 为 `2aaf8c2c-b817-4085-9517-586a4a113dfc`，不用客户端密钥。商店/其他扩展 ID 必须登记其自己的回调。已向用户发出配置问题，尚待回复。Android 公共应用的设备代码能力探测返回 AADSTS70002，不能当作已支持设备代码登录。
+1. Microsoft 应用注册需配置实际扩展的 SPA 回调，再验证真实登录、刷新及个人/企业盘权限。扩展 ID 已由 manifest 公钥固定为 `lebnfedmijifofonogjdphpojihgohmc`，回调为 `https://lebnfedmijifofonogjdphpojihgohmc.chromiumapp.org/onedrive`；默认公共应用 ID 为 `2aaf8c2c-b817-4085-9517-586a4a113dfc`，不用客户端密钥。Chrome 与 Edge 加载同一构建时共用这一条回调；商店分配的 ID 不同，必须另行登记。该 SPA 回调已于 2026-10-20 在 Entra 中登记，真实登录仍需验证。Android 公共应用的设备代码能力探测返回 AADSTS70002，不能当作已支持设备代码登录。
 2. 使用测试数据库在真实 OneDrive 验证条件写入、并发冲突与下载地址域名；单元测试中的 ETag 服务行为不能代替 Microsoft 实测。当前文件客户端只更新已有 KDBX，不支持创建云端文件；共享快捷方式不作为可选数据库。
 3. 实际扩展创建 Passkey → OneDrive/WebDAV KDBX → Android 消费/签名 → 返回扩展，并继续 Bitwarden、MDBX、密码项目、自动填充和完整生命周期矩阵。Android BE/BS、历史正计数器以及 API34+ Credential Manager/真实用户验证问题仍未关闭。
 

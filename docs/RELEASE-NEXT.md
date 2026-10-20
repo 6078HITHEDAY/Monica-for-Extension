@@ -37,6 +37,7 @@ Wi-Fi 首轮范围于 2026-10-16 冻结，保留[当时的阶段记录](verifica
 - MDBX 原生目录、文件夹／根标签、密码项目、标签、关系和附件采用完整目录及版本检查，支持整笔接收、带附件移动和保留附件身份的替换；保留数值精度、Passkey 原密钥、凭据 ID 与零计数／已有正计数历史。修复重名文件夹旧标记导致名称回退，以及附件初始大小与当前大小不同造成的误判。无法完整处理的内容会明确阻止扫描，避免遗漏被误认成删除。
 - 修复 MDBX 后台文档误断开 Wi-Fi 管理端口，以及旧版原生对象 UUID 被误当作会话句柄而拒绝的问题；会话与操作句柄仍使用原有严格校验。取消后的旧操作不再改变新连接状态。
 - 本机项目同步保留原始来源归档，包括精确 JSON、二进制编码、未知格式和历史版本；接收、编辑、重启、便携备份恢复及再次复制均保留原文。归档保持加密，不自动创建远端连接或启用凭据。
+- 固定扩展 ID：manifest 加入公钥，不上架商店时从任意本地目录“加载已解压”都得到同一 ID `lebnfedmijifofonogjdphpojihgohmc`，OneDrive SPA 回调与原生通信宿主可按此 ID 一次登记。旧的路径派生 ID 会被替换，升级前需先导出备份，并在新 ID 下恢复。
 
 后续待办：部分原生归档与文件夹配置、Android 两版文件夹／根目录附件收发，以及 F-Droid、Android 界面与组播发现验收尚未完成。插件优先兼容 Android 现有协议；本次文件夹修复不要求 Android 修改。完整 Android 对齐还包含跨后端冲突、恢复与真实 OneDrive 验收。这些未完成内容不计入本次阶段完成范围，本记录不表示已发布。
 
@@ -75,5 +76,6 @@ The first Wi-Fi stage was frozen on 2026-10-16; its [historical closeout](verifi
 - Native catalogs, folder/root tags, password records, labels, relations and attachments use complete inventories and revision checks with atomic adoption, attachment moves and identity-preserving replacements. Numeric precision, original Passkey keys/credential IDs and zero or existing positive counter history are preserved. Fixed stale folder-name markers and attachment replacement size mismatches. Incomplete projections explicitly block scanning so omitted content cannot become deletions.
 - Fixed the MDBX offscreen document disconnecting unrelated Wi-Fi manager ports and historical native object UUIDs being rejected as session handles. Runtime session/operation handles keep strict validation. Cancelled operations cannot change a subsequent connection's state.
 - Local-item synchronization retains exact source archives, including JSON, binary-encoded data, unknown formats and historical versions through adoption, edits, restart, portable-backup restore and subsequent copies. Archives stay encrypted and never automatically create remote connections or activate credentials.
+- Pinned the extension ID by adding the public key to the manifest, so loading the unpacked build from any local directory without a store yields the same ID `lebnfedmijifofonogjdphpojihgohmc`; the OneDrive SPA redirect and native messaging hosts can be registered once for it. The previous path-derived ID is replaced, so export a backup before upgrading and restore it under the new ID.
 
 Deferred work: some native archives/profiles, folder/root byte adoption in both Android editions, F-Droid acceptance, and Android UI/multicast discovery are unfinished. The extension follows Android's existing protocol; this folder fix requires no Android changes. Full Android parity also requires cross-backend conflict/recovery and real OneDrive acceptance. These unfinished items are not counted as completed by this stage. These changes have not been published.
