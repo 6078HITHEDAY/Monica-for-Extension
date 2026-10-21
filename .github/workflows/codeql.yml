@@ -41,7 +41,8 @@ jobs:
           python .tmp/emsdk/emsdk.py install 4.0.18
           python .tmp/emsdk/emsdk.py activate 4.0.18
           source .tmp/emsdk/emsdk_env.sh
-          cargo +1.97.0 fetch --locked --manifest-path native/mdbx2-browser/Cargo.toml --target wasm32-unknown-emscripten
+          # Include host-target build-script dependencies before offline build.
+          cargo +1.97.0 fetch --locked --manifest-path native/mdbx2-browser/Cargo.toml
           npm run build:mdbx2-browser
       - run: npm run build
       - uses: github/codeql-action/analyze@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
