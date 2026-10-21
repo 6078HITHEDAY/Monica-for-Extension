@@ -10,6 +10,7 @@ const password = "multilingual synthetic vault password";
 const extraLanguages = localeOptions.filter((option) => option.value !== "zh-CN" && option.value !== "en");
 
 async function usable(root: Locator) {
+  await root.page().evaluate(() => document.fonts.ready);
   await root.evaluate(async element => {
     await Promise.all(element.getAnimations({ subtree: true })
       .filter(animation => animation.effect?.getTiming().iterations !== Infinity)
@@ -26,7 +27,7 @@ async function usable(root: Locator) {
       if (box.left < -1 || box.right > width + 1) issues.push(`Outside window: ${name}`);
       if (control.matches("button, m3e-button, m3e-icon-button, m3e-list-action, m3e-list-option") && (box.width < 43.5 || box.height < 43.5)) issues.push(`Small target: ${name}`);
       const label = control.shadowRoot?.querySelector<HTMLElement>(".label, .content") ?? control.shadowRoot?.querySelector("m3e-list-item-button")?.shadowRoot?.querySelector<HTMLElement>(".content");
-      if (label && (label.scrollHeight > label.clientHeight + 1 || label.scrollWidth > label.clientWidth + 1)) issues.push(`Clipped label: ${name}`);
+      if (label && (label.scrollHeight > label.clientHeight + 1 || label.scrollWidth > label.clientWidth + 1)) issues.push(`Clipped label: ${name} (${label.scrollWidth}x${label.scrollHeight} in ${label.clientWidth}x${label.clientHeight})`);
       const touch = control.shadowRoot?.querySelector(".touch")?.getBoundingClientRect();
       if (touch && (touch.left < box.left - 1 || touch.right > box.right + 1 || touch.top < box.top - 1 || touch.bottom > box.bottom + 1)) issues.push(`Overlapping target: ${name}`);
     }
@@ -112,10 +113,13 @@ for (const language of extraLanguages) {
       const navigate = async (index: number) => {
         await manager.getByRole("button", { name: catalog["打开导航"], exact: true }).click();
         await manager.locator(".sidebar .nav-item").nth(index).click();
-        await expect(manager.locator(".page-heading h1, .settings-page-header h1")).toBeVisible();
+        // Compact login pages deliberately omit their redundant heading.
+        await expect(manager.locator('.sidebar .nav-item').nth(index)).toHaveAttribute('aria-current', 'page');
+        await expect(manager.locator('#main-content')).toBeVisible();
       };
       const pages = await manager.locator(".sidebar .nav-item").count();
-      expect(pages).toBeGreaterThanOrEqual(14);
+      // CLI navigation is opt-in and hidden in a newly created vault.
+      expect(pages).toBe(13);
       for (const [width, height, scale] of [[390, 640, 100], [320, 480, 200]]) {
         await manager.setViewportSize({ width, height });
         await manager.evaluate((scale) => { document.documentElement.style.fontSize = `${scale}%`; }, scale);
@@ -130,7 +134,12 @@ for (const language of extraLanguages) {
       const save = editor.getByRole("button", { name: catalog["加密保存"], exact: true });
       await expect(save).toBeInViewport({ ratio: 1 });
       await editor.getByLabel(catalog["名称 *"], { exact: true }).fill("多语言编辑 / " + language.value);
-      await editor.getByLabel("恢复备注与笔记", { exact: true }).fill("保留原文 <>& {0}");
+      const notesTitle = catalog["笔记与恢复备注"] || "笔记与恢复备注";
+      await editor.getByRole('button', { name: notesTitle, exact: true }).click();
+      const notes = dialogContent(manager, { name: notesTitle, exact: true }).last();
+      await notes.getByLabel("恢复备注与笔记", { exact: true }).fill("保留原文 <>& {0}");
+      await notes.getByRole('button', { name: catalog['完成'] || '完成', exact: true }).click();
+      await expect(notes).toHaveCount(0);
       await usable(editor);
       await expect(save).toBeInViewport({ ratio: 1 });
       await manager.screenshot({ path: testInfo.outputPath(`editor-${language.value}-200.png`), animations: "disabled" });

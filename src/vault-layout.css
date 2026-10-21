@@ -2,7 +2,8 @@
    layout patterns. All palettes share the Material 3 Expressive hierarchy. */
 #root .page-view:has(> .vault-browse-bar) > .page-heading { padding-block: 20px; }
 #root .page-view:has(> .vault-browse-bar) > .page-heading h1 { font-size: clamp(1.75rem, 3vw, 2.25rem); }
-#root .vault-browse-bar { display: flex; align-items: center; gap: 12px; min-width: 0; margin: 0 0 12px; }
+#root .vault-browse-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; min-width: 0; margin: 0 0 12px; }
+#root .vault-browse-bar > m3e-button { flex: 0 0 auto; max-width: 100%; }
 #root .vault-result-count { flex: 1; margin: 0; text-align: end; color: var(--app-muted); font: 400 .75rem/1.5 var(--font-data); }
 
 #root .vault-list-card {

@@ -66,6 +66,9 @@ m3e-tab { --m3e-tab-icon-size: 24px; }
 input[type='checkbox'], input[type='radio'] { accent-color: var(--app-primary); }
 
 /* Action menus and form choices use the component library's own surfaces. */
+m3e-option-panel {
+  --m3e-option-panel-container-max-height: min(17.5rem, calc(100dvh - 24px));
+}
 m3e-menu {
   --m3e-menu-container-shape: 16px;
   --m3e-menu-active-container-shape: 20px;

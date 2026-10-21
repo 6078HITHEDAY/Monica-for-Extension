@@ -79,7 +79,8 @@ test("provider page is compact and decorated icon glyphs are centered", async ({
     await page.getByRole("button", { name: "选择新建类型", exact: true }).click();
     const picker = page.getByRole("menu", { name: "选择新建类型", exact: true });
     await expect(picker).toBeVisible();
-    await expect(picker.getByRole("menuitem")).toHaveCount(16);
+    await expect(picker.getByRole("menuitem")).toHaveCount(15);
+    await expect(picker.getByRole("menuitem", { name: "支付方式", exact: true })).toHaveCount(0);
     for (const option of await picker.getByRole("menuitem").all()) {
       await option.scrollIntoViewIfNeeded();
       await expect(option).toBeInViewport({ ratio: 1 });

@@ -49,7 +49,8 @@ test("split primary action follows each page and the menu can create another typ
     await navigate(page, /^登录项/);
     await page.getByRole("button", { name: "选择新建类型", exact: true }).click();
     const menu = page.getByRole("menu", { name: "选择新建类型" });
-    await expect(menu.getByRole("menuitem")).toHaveCount(16);
+    await expect(menu.getByRole("menuitem")).toHaveCount(15);
+    await expect(menu.getByRole("menuitem", { name: "支付方式", exact: true })).toHaveCount(0);
     await expect(menu.getByRole("menuitem", { name: /Passkey/ })).toHaveCount(0);
     await menu.getByRole("menuitem", { name: "API Token", exact: true }).click();
     const editor = dialogContent(page, { name: "添加 API 令牌" });

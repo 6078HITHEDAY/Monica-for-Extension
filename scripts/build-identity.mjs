@@ -23,7 +23,14 @@ for (const directory of ['src', 'public']) {
 }
 names.push('package.json', 'package-lock.json', 'vite.config.ts', 'scripts/build-workers.mjs');
 const hash = createHash('sha256');
-for (const name of names.sort()) { hash.update(name); hash.update('\0'); hash.update(await readFile(resolve(root, name))); hash.update('\0'); }
+for (const name of names.sort()) {
+  const bytes = await readFile(resolve(root, name));
+  // Git checkouts may use CRLF or LF. Hash the same text on either platform,
+  // while preserving every byte of binary resources such as icons and fonts.
+  const canonical = /\.(?:ts|vue|json|css|html|js|mjs|svg|txt)$/.test(name)
+    ? bytes.toString('utf8').replace(/\r\n/g, '\n') : bytes;
+  hash.update(name); hash.update('\0'); hash.update(canonical); hash.update('\0');
+}
 const buildId = hash.digest('hex').slice(0, 20);
 await writeFile(resolve(root, target), JSON.stringify({buildId}, null, 2) + '\n');
 console.log(`Source build identity: ${buildId}`);

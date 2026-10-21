@@ -1,4 +1,5 @@
 import { dialogContent } from "./fixtures/material";
+import { launchTestContext } from './fixtures/edge';
 import { chromium, expect, test, type BrowserContext, type Page, type Route, type TestInfo } from "@playwright/test";
 import path from "node:path";
 import { createLoginItem } from "../../src/core/model";
@@ -18,7 +19,7 @@ test("manager archive and recycle-bin views keep records recoverable and privile
   let context: BrowserContext | undefined;
   try {
     const extensionPath = path.resolve("dist");
-    context = await chromium.launchPersistentContext(testInfo.outputPath("p"), {
+    context = await launchTestContext(testInfo.outputPath("p"), {
       channel: "chromium",
       headless: true, locale: "zh-CN",
       viewport: { width: 375, height: 1100 },
@@ -57,7 +58,7 @@ test("manager archive and recycle-bin views keep records recoverable and privile
     await manager.getByRole("button", { name: "恢复 Deleted account" }).click();
     await expect(manager.locator(".item-card").filter({ hasText: "Deleted account" })).toHaveCount(0);
     await openMobileSection(manager, /^登录项/);
-    await expect(manager.locator("tr.row-clickable").filter({ hasText: "Deleted account" })).toBeVisible();
+    await expect(manager.locator(".vault-list-card .item-card").filter({ hasText: "Deleted account" })).toBeVisible();
 
     const popup = await context.newPage();
     await popup.goto(`chrome-extension://${extensionId}/popup.html`);
@@ -83,7 +84,7 @@ test("manager requires explicit confirmation before adopting an authenticated em
   const server = await createEmptyVaultServer();
   try {
     const extensionPath = path.resolve("dist");
-    context = await chromium.launchPersistentContext(testInfo.outputPath("p"), {
+    context = await launchTestContext(testInfo.outputPath("p"), {
       channel: "chromium",
       headless: true, locale: "zh-CN",
       viewport: { width: 375, height: 1100 },

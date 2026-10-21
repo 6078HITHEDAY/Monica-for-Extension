@@ -151,10 +151,11 @@ test("manager rotates the master password and atomically restores an encrypted f
     await manager.locator('[data-settings-entry="backup"]').click();
     await manager.getByRole("button", { name: "导出加密整库备份" }).click();
     const exportDialog = dialogContent(manager, { name: "导出加密整库备份" });
+    await exportDialog.getByLabel("当前主密码", { exact: true }).fill(originalPassword);
     await exportDialog.getByLabel("备份密码 *", { exact: true }).fill(originalPassword);
     await exportDialog.getByLabel("确认备份密码 *", { exact: true }).fill(originalPassword);
     const downloadPromise = manager.waitForEvent("download");
-    await exportDialog.getByRole("button", { name: "加密导出" }).click();
+    await exportDialog.getByRole("button", { name: "验证并导出" }).click();
     const download = await downloadPromise;
     const backupPath = testInfo.outputPath("encrypted-vault-backup.json");
     await download.saveAs(backupPath);
@@ -228,11 +229,12 @@ test("encrypted backup dialog rejects mismatched password and produces no downlo
     await manager.locator('[data-settings-entry="backup"]').click();
     await manager.getByRole("button", { name: "导出加密整库备份" }).click();
     const exportDialog = dialogContent(manager, { name: "导出加密整库备份" });
+    await exportDialog.getByLabel("当前主密码", { exact: true }).fill("export mismatch password");
     await exportDialog.getByLabel("备份密码 *", { exact: true }).fill("intended-backup-password");
     await exportDialog.getByLabel("确认备份密码 *", { exact: true }).fill("different-confirmation-value");
 
     const downloadPromise = manager.waitForEvent("download", { timeout: 1500 }).catch(() => null);
-    await exportDialog.getByRole("button", { name: "加密导出" }).click();
+    await exportDialog.getByRole("button", { name: "验证并导出" }).click();
     await expect(exportDialog.getByRole("alert")).toContainText("两次输入的备份密码不一致。");
     expect(await downloadPromise).toBeNull();
     await expect(exportDialog).toBeVisible();
@@ -274,7 +276,11 @@ test("device-key vault restores an encrypted backup while leaving the current pa
     const launched = await launchManager(testInfo, "device-key-restore-profile");
     context = launched.context;
     const { manager } = launched;
-    // Empty master password -> device-key vault.
+    // Export with fresh authentication, then switch the target to device-key
+    // protection before restoring. Device-key export without Hello is blocked.
+    const exportPassword = "device-key export authentication";
+    await manager.getByLabel("主密码", { exact: true }).fill(exportPassword);
+    await manager.getByLabel("确认主密码", { exact: true }).fill(exportPassword);
     await manager.getByRole("button", { name: "创建并解锁" }).click();
     await expect(manager.getByRole("heading", { name: "全部项目", exact: true })).toBeVisible();
 
@@ -291,14 +297,26 @@ test("device-key vault restores an encrypted backup while leaving the current pa
     await manager.getByRole("button", { name: "导出加密整库备份" }).click();
     const exportDialog = dialogContent(manager, { name: "导出加密整库备份" });
     const backupPassword = "independent-backup-password";
+    await exportDialog.getByLabel("当前主密码", { exact: true }).fill(exportPassword);
     await exportDialog.getByLabel("备份密码 *", { exact: true }).fill(backupPassword);
     await exportDialog.getByLabel("确认备份密码 *", { exact: true }).fill(backupPassword);
     const downloadPromise = manager.waitForEvent("download");
-    await exportDialog.getByRole("button", { name: "加密导出" }).click();
+    await exportDialog.getByRole("button", { name: "验证并导出" }).click();
     const download = await downloadPromise;
     const backupPath = testInfo.outputPath("device-key-encrypted-backup.json");
     await download.saveAs(backupPath);
 
+    await manager.locator('[data-settings-back]').click();
+    await manager.locator('[data-settings-entry="protection"]').click();
+    await manager.getByLabel("当前主密码（设备密钥模式留空）", { exact: true }).fill(exportPassword);
+    await manager.getByRole("button", { name: "更改主密码", exact: true }).click();
+    await expect(manager.getByText(/主密码已更改/)).toBeVisible();
+    await manager.locator('[data-settings-entry="backup"]').click();
+    await manager.getByRole("button", { name: "导出加密整库备份", exact: true }).click();
+    const blockedExport = dialogContent(manager, { name: "导出加密整库备份" });
+    await expect(blockedExport.getByRole("alert")).toContainText("设置主密码或注册 Windows Hello");
+    await expect(blockedExport.getByRole("button", { name: "验证并导出", exact: true })).toBeDisabled();
+    await blockedExport.getByRole("button", { name: "取消", exact: true }).click();
     await manager.locator("label.file-action").filter({ hasText: "选择加密整库备份" }).locator('input[type="file"]').setInputFiles(backupPath);
     // Device-key hint must be visible; current password stays empty on purpose.
     await expect(manager.locator('.settings-password-field small').filter({ hasText: /设备密钥模式可留空/ })).toBeVisible();
