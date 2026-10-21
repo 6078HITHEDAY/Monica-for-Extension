@@ -125,6 +125,10 @@ This feature deliberately changes the protection of selected passwords: anyone u
 
 ## Assurance status
 
+Firefox 153+ preserves native document identity: sensitive operations query the current tab/frame first, compare its native `documentId`, and target delivery to that document. Firefox omits Chromium's `documentLifecycle`; explicit non-active values remain rejected, while Chromium still requires `active`. Origin, active-tab and secure-context checks remain enforced.
+
+Firefox's private MDBX iframe lives only in the generated background page. Authorization binds the exact owned random-fragment URL, native document ID, runtime ID, absence of a tab, connected owned frame and official BACKGROUND context. The Firefox-only CSP allows same-extension framing; privileged pages remain absent from web-accessible resources. Normal visible tabs and forged ports are rejected. Chromium retains its offscreen path and stricter no-framing CSP. See [Firefox acceptance](verification/firefox-20261021.md).
+
 Automated evidence currently includes unit tests, security-boundary tests, Chromium MV3 end-to-end tests, production dependency audit, release secret/source-map scan and deterministic package verification.
 
 The [2026-10-10 extension security review](security-review-2026-10-10.md) records reproduced findings, fixes, actual Edge isolation/migration evidence, dependency results and the scope of this review. Historical CI/release controls above are not proof that every external repository setting was rechecked in that review.
@@ -137,3 +141,13 @@ Not yet complete:
 - formal verification of the cryptographic state machine.
 
 These limitations must remain visible until evidence exists. Security issues should be reported according to [SECURITY.md](../SECURITY.md).
+
+## Export, clipboard and recovery hardening (2026-10-21)
+
+The manager-only authenticated export operation verifies the current master password or bound Windows Hello identity on every plaintext/full-backup export. It captures the envelope, session and verifier binding before authentication and checks them again before producing data. Authentication and backup key derivation run outside the mutation queue so lock can cancel a pending request. The legacy runtime encrypted-export command is denied. The four-character minimum remains unchanged by user decision. An accessible manager can still reveal and copy individual fields; this is fresh authentication for export, not a new boundary against a compromised trusted extension page.
+
+Clipboard expiry is optional and off by default. Only enabling it requests optional clipboardRead/clipboardWrite. Foreground copy passes a SHA-256 digest to the background, never clipboard plaintext. A session-storage deadline and alarm survive worker suspension and copying-page closure. The authenticated shared offscreen document compares current text, hashes it, reads again synchronously and clears only matching text. Revoked permission, browser exit, OS sleep and clipboard contention may prevent cleanup. Windows clipboard history, cloud clipboard and copies on other devices remain outside this guarantee. No permission is requested on installation solely for this feature.
+
+IndexedDB stores the primary encrypted envelope and encrypted recovery history atomically. At most three modification-before checkpoints are retained, no more frequently than every 15 minutes, with total ciphertext capped at 64 MiB. Protection/KDF changes remove incompatible history. Quota failure retries without history to prioritize primary data. History can contain deleted data and previous passwords; it shares the browser profile and protection key, and is not an independent backup. Recovery export requires current authentication and reencrypts under a backup password. It does not automatically restore a damaged primary while locked or revert remote changes. Users can explicitly clear history.
+
+The runtime build identifier hashes source, public assets, package/lock metadata and bundling configuration. Both UI and worker bundle the same generated identifier; startup and credential-bearing export/unlock checks reject a mismatch even if both versions are 0.1.48. This detects stale installation state and is not a signature or tamper-proof attestation. Runtime diagnostic reports use explicit fields, excluding raw errors, provider URLs, local paths, item content and device/binding identifiers.

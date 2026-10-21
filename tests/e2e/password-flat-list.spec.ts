@@ -58,7 +58,7 @@ for (const mode of ['website', 'manual'] as const) test(`flat password lists ign
     await expect(page.locator('[data-item-id="project-one"]')).toBeVisible();
     await page.getByRole('searchbox').fill('');
     await expect(cards).toHaveCount(4);
-    await page.getByRole('heading', { name: '登录项', exact: true }).click();
+    await page.getByRole('searchbox').blur();
     await page.screenshot({ path: info.outputPath('logins.png') });
     for (const width of [420, 320]) {
       await page.setViewportSize({ width, height: 1100 });
@@ -72,7 +72,7 @@ for (const mode of ['website', 'manual'] as const) test(`flat password lists ign
         expect(box.width).toBeGreaterThanOrEqual(44); expect(box.height).toBeGreaterThanOrEqual(44);
         expect(box.x).toBeGreaterThanOrEqual(0); expect(box.x + box.width).toBeLessThanOrEqual(width);
       }
-      await page.getByRole('heading', { name: '登录项', exact: true }).click();
+      await page.getByRole('searchbox').blur();
       await page.evaluate(() => window.scrollTo(0, 0));
       await page.screenshot({ path: info.outputPath(`logins-${width}.png`) });
     }

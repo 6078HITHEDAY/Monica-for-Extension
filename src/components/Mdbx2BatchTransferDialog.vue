@@ -22,6 +22,7 @@ const props = defineProps<{
   providers: ProviderAccount[];
   runtimeStatuses: Record<string, Mdbx2VaultRuntimeStatus>;
   initialTargetProviderId?: string;
+  initialSelectedIds?: string[];
   scopeItemIds?: string[];
   scopeLabel?: string;
 }>();
@@ -32,7 +33,7 @@ const emit = defineEmits<{
   notice: [message: string];
 }>();
 
-const selectedIds = ref(new Set<string>());
+const selectedIds = ref(new Set((props.initialSelectedIds || []).filter(id => props.items.some(item => item.id === id && !item.deletedAt && (!props.scopeItemIds || props.scopeItemIds.includes(id)))).slice(0, MAX_SELECTION)));
 const query = ref("");
 const targetProviderId = ref("");
 const targetCollectionId = ref("");

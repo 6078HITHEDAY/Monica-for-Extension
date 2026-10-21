@@ -66,6 +66,8 @@ test('locked RSA registration and login resume with one scoped password verifica
   let context = await launchEdgeContext(profile, browserOptions());
   try {
     let { manager, page } = await setup(context);
+    // An explicit palette/scheme must win over the OS in the separate security window.
+    await manager.evaluate(() => { localStorage.setItem('monica.palette', 'sakura'); localStorage.setItem('monica.scheme', 'light'); });
     await page.setViewportSize({ width: 320, height: 760 });
     let registrations = 0;
     context.on('page', opened => { opened.waitForURL('**/passkey-verify.html?*').then(() => registrations++).catch(() => undefined); });
@@ -74,12 +76,38 @@ test('locked RSA registration and login resume with one scoped password verifica
     await focusedPrompt(page);
     await page.screenshot({ path: info.outputPath('locked-320.png'), animations: 'disabled' });
     const security = await unlockWindow(context, page);
+    await security.emulateMedia({ colorScheme: 'dark' });
+    await expect(security.locator('html')).toHaveAttribute('data-palette', 'sakura');
+    await expect(security.locator('html')).toHaveAttribute('data-theme', 'light');
+    const paletteColors = [
+      ['nothing', '#1a1a1a', '#ffffff'], ['monica', '#0b6f69', '#8de8dc'],
+      ['ocean', '#1769aa', '#a9c7ff'], ['forest', '#2f6b3f', '#b5d7b2'],
+      ['sakura', '#9d405f', '#ffb1c8'], ['amber', '#7c5a00', '#ffdc7a']
+    ];
+    // Change preferences in the manager while the real verification request remains open.
+    for (const [palette, light, dark] of paletteColors) {
+      for (const scheme of ['light', 'dark']) {
+        await manager.evaluate(({ palette, scheme }) => { localStorage.setItem('monica.palette', palette); localStorage.setItem('monica.scheme', scheme); }, { palette, scheme });
+        await expect(security.locator('html')).toHaveAttribute('data-palette', palette);
+        await expect(security.locator('html')).toHaveAttribute('data-theme', scheme);
+        await expect.poll(() => security.evaluate(() => document.documentElement.style.getPropertyValue('--app-primary'))).toBe(scheme === 'dark' ? dark : light);
+        await expect(security.locator('#confirm')).toHaveCSS('background-color', rgb(scheme === 'dark' ? dark : light));
+      }
+    }
+    await manager.evaluate(() => localStorage.setItem('monica.scheme', 'auto'));
+    await expect(security.locator('html')).toHaveAttribute('data-theme', 'dark');
+    await security.emulateMedia({ colorScheme: 'light' });
+    await expect(security.locator('html')).toHaveAttribute('data-theme', 'light');
+    await manager.evaluate(() => { localStorage.setItem('monica.palette', 'sakura'); localStorage.setItem('monica.scheme', 'light'); });
+    await expect(security.locator('html')).toHaveAttribute('data-palette', 'sakura');
+    await security.screenshot({ path: path.resolve('docs/design/passkey-verification-sakura-light.png') });
     await security.setViewportSize({ width: 320, height: 650 });
     await security.getByLabel('Monica 主密码', { exact: true }).fill('wrong synthetic password');
     await security.getByRole('button', { name: '解锁并继续', exact: true }).click();
     await expect(security.getByRole('alert')).toContainText('主密码错误');
     expect(await send(manager, { type: 'VAULT_STATUS' })).toBe('locked');
     await security.screenshot({ path: info.outputPath('unlock-error-320.png') });
+    await security.screenshot({ path: path.resolve('docs/design/passkey-verification-error-320.png') });
     expect(await security.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await unlock(security);
     await focusedPrompt(page);
@@ -103,6 +131,8 @@ test('locked RSA registration and login resume with one scoped password verifica
     await page.evaluate(id => { (window as any).credentialId = id; }, credentialId);
     await page.locator('#login').click();
     const loginSecurity = await unlockWindow(context, page);
+    await expect(loginSecurity.locator('html')).toHaveAttribute('data-palette', 'sakura');
+    await expect(loginSecurity.locator('html')).toHaveAttribute('data-theme', 'light');
     await unlock(loginSecurity);
     await confirm(page, 'get');
     await expect(page.locator('#result')).toHaveText('authenticated');
@@ -121,6 +151,11 @@ test('locked RSA registration and login resume with one scoped password verifica
     expect(websiteMessages).not.toContain('unlockSessionId');
   } finally { await context.close(); }
 });
+
+function rgb(hex: string): string {
+  const channels = hex.slice(1).match(/../g)!.map(value => parseInt(value, 16));
+  return `rgb(${channels.join(', ')})`;
+}
 
 test('locked requests cancel on Escape, abort, navigation, timeout and explicit relock without signing', async ({}, info) => {
   test.setTimeout(150_000);

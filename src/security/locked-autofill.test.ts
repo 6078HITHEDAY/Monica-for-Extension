@@ -5,6 +5,8 @@ import { SecureVaultService, VaultLockedError } from "./secure-vault-service";
 import { MemoryVaultStorage } from "./vault-storage";
 import { MemoryVaultSessionStore } from "./vault-session";
 import { MemoryVaultDeviceKeyStore } from "./vault-device-key";
+import { ANDROID_URL_RULE_FIELD } from '../core/url-rules';
+import { loginMatchScore } from '../core/matching';
 
 async function fixture() {
   const storage = new MemoryVaultStorage();
@@ -25,6 +27,18 @@ async function fixture() {
 }
 
 describe("device-local selective autofill", () => {
+  it('retains Android case-sensitive matching while stripping private carrier metadata from the locked cache', async () => {
+    const { service, item } = await fixture();
+    const value = JSON.stringify({ version: 1, private: 'future-secret-sentinel', urls: [{ url: '^https://example.com/Case$', mode: 'REGEX', private: 'row-secret-sentinel' }] });
+    await service.upsertItem({ ...item, customFields: [...item.customFields, { name: ANDROID_URL_RULE_FIELD, value, protected: true }] });
+    await service.setLockedAutofill(item.id, true);
+    await service.lock();
+    const copy = (await service.readAutofillContext()).items[0] as LoginItem;
+    expect(loginMatchScore(copy, 'https://example.com/Case')).toBeGreaterThan(0);
+    expect(loginMatchScore(copy, 'https://example.com/case')).toBe(0);
+    for (const secret of ['future-secret-sentinel', 'row-secret-sentinel', 'private-field-sentinel', 'private-note-sentinel']) expect(JSON.stringify(copy)).not.toContain(secret);
+    expect(copy.customFields).toHaveLength(1);
+  });
   it('retains the granted member number across lock/restart and removes all revoked identity data', async () => {
     const { service, storage, sessions, device, cache, item, other } = await fixture();
     const first = {...item, passwordGroupId: 'explicit-project', customFields: []};
@@ -47,9 +61,9 @@ describe("device-local selective autofill", () => {
     expect((await restarted.readAutofillContext()).credentialIdentities).toEqual({});
   });
 
-  it("rejects a prepared fill after the vault locks or a grant is revoked", async () => {
+  it.each(['full', 'selected'])("rejects a prepared %s fill after the vault locks or a grant is revoked", async (scope) => {
     const { service, item } = await fixture();
-    const unlocked = await service.readAutofillContext();
+    const unlocked = await service.readAutofillContext(scope === 'selected' ? item.id : undefined);
     const send = vi.fn(async () => ({ ok: true }));
     await service.lock();
     await expect(service.dispatchAutofill(unlocked, send)).rejects.toThrow("填写权限");
@@ -57,7 +71,7 @@ describe("device-local selective autofill", () => {
     await service.unlock("selective autofill master password");
     await service.setLockedAutofill(item.id, true);
     await service.lock();
-    const granted = await service.readAutofillContext();
+    const granted = await service.readAutofillContext(scope === 'selected' ? item.id : undefined);
     await service.unlock("selective autofill master password");
     await service.setLockedAutofill(item.id, false);
     await service.lock();

@@ -76,6 +76,12 @@ import { mdbxDirectWriteProvider } from './mdbx-direct-write';
 import { readMdbx2TransferBinding } from '../providers/mdbx2/mdbx2-transfer-verification';
 import { prepareMdbx2TransferSourceDeletion, deleteMdbx2TransferSources } from '../providers/mdbx2/mdbx2-transfer-source-delete';
 import { MDBX2_MAX_BINARY_CHUNK_BYTES, MDBX2_WINDOWS_HELLO_PROTOCOL_VERSION, MDBX2_WINDOWS_HELLO_RP_ID, Mdbx2NativeHostError, type Mdbx2SyncStateStatus, type Mdbx2WindowsHelloStatus } from "../providers/mdbx2/native-contract";
+import { ClipboardLifecycle } from './clipboard';
+import { currentFrameDocument } from '../runtime/document-target';
+import { isFirefoxExtension } from '../runtime/browser-platform';
+import { CLIPBOARD_ALARM, CLIPBOARD_CLEAR_MESSAGE, CLIPBOARD_PREFERENCES_KEY } from '../security/clipboard-lifecycle';
+
+const clipboardLifecycle = new ClipboardLifecycle();
 import { Mdbx2Provider } from "../providers/mdbx2/mdbx2-provider";
 import { Mdbx2BatchTransferCoordinator, type Mdbx2BatchTransferProgress, type Mdbx2BatchTransferStatus } from "../providers/mdbx2/mdbx2-batch-transfer-coordinator";
 import { assertMdbx2TransferOperationId } from "../providers/mdbx2/mdbx2-transfer-identity";
@@ -555,6 +561,7 @@ const WEB_PAGE_REQUEST_TYPES = new Set<ExtensionRequest["type"]>([
 void configureSessionStorageAccess(chrome.storage.session.setAccessLevel?.bind(chrome.storage.session));
 
 chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes[CLIPBOARD_PREFERENCES_KEY]) void clipboardLifecycle.cancel().catch(() => undefined);
   const change = changes["monica.secureVault.session.v1"];
   const previous = change?.oldValue as { id?: unknown; rawKey?: unknown } | undefined;
   const next = change?.newValue as { id?: string; rawKey?: unknown; expiresAt: number } | undefined;
@@ -564,7 +571,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
     keePassRecoveryDownloads.clear();
     oneDriveSessions.clear();
     void dismissInlineMenus();
-    if (!next?.rawKey) stopAutomaticSync();
+    if (!next?.rawKey) { stopAutomaticSync(); void clipboardLifecycle.expire(true).catch(() => undefined); }
     else void reconcileAutomaticSync().catch(() => undefined);
   }
   if (area === "local" && changes[AUTO_SYNC_PREFERENCES_KEY]) {
@@ -623,6 +630,7 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === CLIPBOARD_ALARM) void clipboardLifecycle.expire().catch(() => undefined);
   if (alarm.name === AUTO_SYNC_ALARM) void reconcileAutomaticSync().catch(() => undefined);
   if (alarm.name === AUTO_LOCK_ALARM) {
     void purgeExpiredPasskeySessionState().catch(() => undefined);
@@ -647,9 +655,10 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 chrome.runtime.onMessage.addListener((message: ExtensionRequest, sender, sendResponse: (response: ExtensionResponse) => void) => {
   if (isBrowserMdbxControlMessage(message)) return false;
+  if ((message as {type?: string})?.type === CLIPBOARD_CLEAR_MESSAGE) return false;
   handleRequest(message, sender)
     .then((data) => {
-      if (["VAULT_DELETE_ITEM", "VAULT_DELETE_PASSWORD_GROUP", "VAULT_CONSUME_HOTP", "VAULT_UNARCHIVE_ITEM", "VAULT_DELETE_PASSWORD_HISTORY", "VAULT_UPSERT_ITEM", "VAULT_SAVE_PASSWORD_GROUP", "VAULT_SET_PASSWORD_COVER", "VAULT_SET_PASSWORD_STACK", "VAULT_PASSWORD_PROJECT_REMOVE", "VAULT_PASSWORD_PROJECT_REMOVAL_RESUME", "VAULT_PASSWORD_PROJECT_REMOVAL_CANCEL", "VAULT_KEEPASS_PROJECT_REMOVE", "VAULT_KEEPASS_PROJECT_REMOVAL_RESUME", "VAULT_KEEPASS_PROJECT_REMOVAL_CANCEL", "VAULT_PASSWORD_PROJECT_RESTORE", "VAULT_PASSWORD_PROJECT_RESTORE_RESUME", "VAULT_SET_LOCKED_AUTOFILL", "VAULT_RESTORE_ENCRYPTED", "AUTOFILL_SITE_POLICY_SET", "AUTOFILL_FIELD_POLICY_SET_CURRENT", "AUTOFILL_FIELD_POLICY_REMOVE"].includes(message.type)) void dismissInlineMenus();
+      if (["VAULT_BATCH_MUTATE", "VAULT_DELETE_ITEM", "VAULT_DELETE_PASSWORD_GROUP", "VAULT_CONSUME_HOTP", "VAULT_UNARCHIVE_ITEM", "VAULT_DELETE_PASSWORD_HISTORY", "VAULT_UPSERT_ITEM", "VAULT_SAVE_PASSWORD_GROUP", "VAULT_SET_PASSWORD_COVER", "VAULT_SET_PASSWORD_STACK", "VAULT_PASSWORD_PROJECT_REMOVE", "VAULT_PASSWORD_PROJECT_REMOVAL_RESUME", "VAULT_PASSWORD_PROJECT_REMOVAL_CANCEL", "VAULT_KEEPASS_PROJECT_REMOVE", "VAULT_KEEPASS_PROJECT_REMOVAL_RESUME", "VAULT_KEEPASS_PROJECT_REMOVAL_CANCEL", "VAULT_PASSWORD_PROJECT_RESTORE", "VAULT_PASSWORD_PROJECT_RESTORE_RESUME", "VAULT_SET_LOCKED_AUTOFILL", "VAULT_RESTORE_ENCRYPTED", "AUTOFILL_SITE_POLICY_SET", "AUTOFILL_FIELD_POLICY_SET_CURRENT", "AUTOFILL_FIELD_POLICY_REMOVE"].includes(message.type)) void dismissInlineMenus();
       sendResponse({ ok: true, data });
       void afterRuntimeRequest(message, data).catch(() => undefined);
     })
@@ -693,6 +702,9 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
   switch (request.type) {
     case "RUNTIME_INFO":
       return runtimeInfo;
+    case "CLIPBOARD_ARM":
+      assertExtensionPage(sender);
+      return clipboardLifecycle.arm(request.digest);
     case "VAULT_STATUS":
       return service.status();
     case "VAULT_UNLOCK_HELLO": {
@@ -778,8 +790,21 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
       nearbyOwner.close('protection-changed');
       return service.changeMasterPassword(request.currentPassword, request.newPassword);
     case "VAULT_EXPORT_ENCRYPTED":
-      assertExtensionPage(sender);
-      return service.exportEncryptedBackup(request.backupPassword);
+      assertManagerPage(sender);
+      throw new Error('导出需要重新验证身份，请重新打开导出窗口。');
+    case "VAULT_AUTHENTICATED_EXPORT":
+      assertManagerPage(sender);
+      return service.authenticatedExport(request.input, async (bindingId, challenge) => {
+        const result = await windowsHelloNativeClient.verifyWindowsHello(bindingId, challenge);
+        if (!result.verified) throw new Error('Windows Hello 未确认用户身份。');
+      });
+    case "VAULT_STORAGE_OVERVIEW":
+      assertManagerPage(sender);
+      return service.storageOverview();
+    case "VAULT_RECOVERY_CLEAR":
+      assertManagerPage(sender);
+      if (request.confirmed !== true) throw new Error('清理恢复副本需要明确确认。');
+      return service.clearRecoveryCopies();
     case "VAULT_RESTORE_ENCRYPTED": {
       assertExtensionPage(sender);
       nearbyOwner.close('vault-restored');
@@ -866,6 +891,9 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
       assertManagerPage(sender);
       if (typeof request.enabled !== "boolean") throw new Error("免解锁填写标记无效。");
       return service.setLockedAutofill(request.itemId, request.enabled);
+    case 'VAULT_BATCH_MUTATE':
+      assertManagerPage(sender);
+      return service.batchMutateItems(request.input);
     case "VAULT_DELETE_ITEM":
       assertExtensionPage(sender);
       return service.deleteItem(request.itemId);
@@ -3109,7 +3137,7 @@ async function afterRuntimeRequest(request: ExtensionRequest, data?: unknown): P
     }
   }
   if (["VAULT_FILL_LOGIN", "VAULT_FILL_WALLET", "AUTOFILL_INLINE_FILL", "PASSKEY_ACCEPT", "CREDENTIAL_ACCEPT"].includes(type)) void service.recordUserActivity().catch(() => undefined);
-  const itemMutation = ["VAULT_CONSUME_HOTP", "VAULT_UNARCHIVE_ITEM", "VAULT_DELETE_PASSWORD_HISTORY", "VAULT_UPSERT_ITEM", "VAULT_SAVE_PASSWORD_GROUP", "VAULT_SET_PASSWORD_COVER", "VAULT_SET_PASSWORD_STACK", "VAULT_PASSWORD_PROJECT_REMOVE", "VAULT_PASSWORD_PROJECT_REMOVAL_RESUME", "VAULT_PASSWORD_PROJECT_REMOVAL_CANCEL", "VAULT_KEEPASS_PROJECT_REMOVE", "VAULT_KEEPASS_PROJECT_REMOVAL_RESUME", "VAULT_KEEPASS_PROJECT_REMOVAL_CANCEL", "VAULT_PASSWORD_PROJECT_RESTORE", "VAULT_PASSWORD_PROJECT_RESTORE_RESUME", "VAULT_DELETE_ITEM", "VAULT_DELETE_PASSWORD_GROUP", "VAULT_RESTORE_ITEM", "VAULT_IMPORT_ITEMS", "PROVIDER_CONFLICT_RESOLVE", "CREDENTIAL_ACCEPT", "PASSKEY_ACCEPT"].includes(type);
+  const itemMutation = ["VAULT_BATCH_MUTATE", "VAULT_CONSUME_HOTP", "VAULT_UNARCHIVE_ITEM", "VAULT_DELETE_PASSWORD_HISTORY", "VAULT_UPSERT_ITEM", "VAULT_SAVE_PASSWORD_GROUP", "VAULT_SET_PASSWORD_COVER", "VAULT_SET_PASSWORD_STACK", "VAULT_PASSWORD_PROJECT_REMOVE", "VAULT_PASSWORD_PROJECT_REMOVAL_RESUME", "VAULT_PASSWORD_PROJECT_REMOVAL_CANCEL", "VAULT_KEEPASS_PROJECT_REMOVE", "VAULT_KEEPASS_PROJECT_REMOVAL_RESUME", "VAULT_KEEPASS_PROJECT_REMOVAL_CANCEL", "VAULT_PASSWORD_PROJECT_RESTORE", "VAULT_PASSWORD_PROJECT_RESTORE_RESUME", "VAULT_DELETE_ITEM", "VAULT_DELETE_PASSWORD_GROUP", "VAULT_RESTORE_ITEM", "VAULT_IMPORT_ITEMS", "PROVIDER_CONFLICT_RESOLVE", "CREDENTIAL_ACCEPT", "PASSKEY_ACCEPT"].includes(type);
   const providerMutation = ["BITWARDEN_CIPHER_MOVE_FOLDER", "BITWARDEN_CIPHER_MOVE_COLLECTIONS", "PROVIDER_ATTACHMENT_UPLOAD_FINISH", "PROVIDER_ATTACHMENT_DELETE"].includes(type)
     || /^(?:BITWARDEN_(?:FOLDER|CIPHER)_|KEEPASS_(?:GROUP|HISTORY)_|MDBX2_(?:OBJECT|COLLECTION|HISTORY|CONFLICT|SNAPSHOT)_)/.test(type)
       && /(?:CREATE|RENAME|MOVE|DELETE|RESTORE|UPSERT|REVERT|RESOLVE)$/.test(type);
@@ -4032,8 +4060,8 @@ function waitForPasskeySyncCompletion(operation: Promise<unknown>, signal: Abort
 
 async function assertPasskeyDocumentCurrent(pending: PendingPasskeyRequest): Promise<void> {
   if (cancelledPasskeyRequests.has(pending.id) || pending.expiresAt <= Date.now()) throw new PasskeyCancelledError("Passkey 请求已取消或过期。");
-  const frame = await chrome.webNavigation.getFrame({ tabId: pending.tabId, frameId: pending.frameId, documentId: pending.documentId });
-  if (!frame || frame.documentLifecycle !== "active" || new URL(frame.url).origin !== pending.origin) throw new PasskeyCancelledError("网站页面已变化，请重新发起 Passkey 登录。");
+  const frame = await chrome.webNavigation.getFrame({ tabId: pending.tabId, frameId: pending.frameId });
+  if (!currentFrameDocument(frame, pending.documentId, isFirefoxExtension()) || new URL(frame!.url).origin !== pending.origin) throw new PasskeyCancelledError("网站页面已变化，请重新发起 Passkey 登录。");
 }
 
 async function dismissPasskeyRequest(candidateId: string, sender: chrome.runtime.MessageSender): Promise<PasskeyDismissResult> {
@@ -4075,10 +4103,8 @@ interface SensitiveFillTarget {
 async function resolveSensitiveFillTarget(tabId: number, frameId = 0, documentId?: string, expectedOrigin?: string): Promise<SensitiveFillTarget> {
   const tab = await chrome.tabs.get(tabId);
   if (!tab.active) throw new Error("已阻止向非活动标签页填充敏感信息。");
-  const target = documentId
-    ? await chrome.webNavigation.getFrame({ tabId, frameId, documentId })
-    : ((await chrome.webNavigation.getAllFrames({ tabId })) || []).find((frame) => frame.frameId === frameId) || null;
-  if (!target || target.documentLifecycle !== "active") throw new Error("页面已变化，请重新打开 Monica 后再填充。");
+  const target = await chrome.webNavigation.getFrame({ tabId, frameId });
+  if (!currentFrameDocument(target, documentId, isFirefoxExtension())) throw new Error("页面已变化，请重新打开 Monica 后再填充。");
   const origin = new URL(target.url).origin;
   if (expectedOrigin && origin !== expectedOrigin) throw new Error("页面来源已变化，已阻止敏感信息填充。");
   if (!isSecureSensitivePageUrl(target.url)) throw new Error("已阻止向不安全的 HTTP 页面填充敏感信息。");
@@ -4132,7 +4158,7 @@ async function queryInlineAutofill(sender: chrome.runtime.MessageSender, session
 async function fillLogin(itemId: string, tabId: number, frameId?: number, documentId?: string, expectedOrigin?: string, inlineSessionId?: string) {
   if (inlineSessionId && !await readInlineAutofillEnabled()) throw new Error("自动填充菜单已失效，请重新选择输入框。");
   const target = await resolveSensitiveFillTarget(tabId, frameId ?? 0, documentId, expectedOrigin);
-  const context = await service.readAutofillContext();
+  const context = await service.readAutofillContext(itemId);
   if (isAutofillBlocked(target.url, { blockedHosts: context.blockedHosts, saveBlockedHosts: [] })) throw new Error("此网站已禁止使用 Monica 自动填充。");
   const field = await assertCurrentFieldAllowed(tabId, target, context.blockedFieldSignatures, inlineSessionId);
   const item = context.items.find((candidate) => candidate.id === itemId);
@@ -4183,7 +4209,7 @@ async function fillWalletItem(itemId: string, tabId: number, frameId?: number, d
 
 
 function isWalletItem(item: VaultItem): item is WalletItem {
-  return !item.deletedAt && !item.archivedAt && isWalletKind(item.kind);
+  return !item.deletedAt && !item.archivedAt && isWalletKind(item.kind) && !(item.kind === 'identity' && item.walletTemplate?.trim());
 }
 
 function isWalletKind(kind: string): kind is WalletFillKind {
@@ -4227,7 +4253,7 @@ async function requireMdbx2Account(providerId: string): Promise<ProviderAccount>
 }
 
 function mdbx2ExportOwner(sender: chrome.runtime.MessageSender): string {
-  if (!sender.documentId) throw new Error("此 Edge 页面缺少安全下载会话标识，请重新打开拓展页面。");
+  if (!sender.documentId) throw new Error("此浏览器页面缺少安全下载会话标识，请重新打开拓展页面。");
   return sender.documentId;
 }
 

@@ -13,6 +13,7 @@ import { adoptNearbyNativeGroups } from './native-batches';
 import type { NearbyIncomingRecord, NearbyLocalAcknowledgement } from './local-adoption';
 import { NearbyDataError, wireInteger, wireObject, wireText } from './wire-shape';
 import { nearbyEngineCode, nearbyErrorCode } from './errors';
+import { mdbx2TransferOperationScope as hash } from '../providers/mdbx2/mdbx2-transfer-identity';
 
 type Store = Pick<SecureVaultService, 'passkeySessionId' | 'nearbySessionPreferences' | 'assertNearbySession' | 'updateNearbyPreferences'
   | 'captureNearbyLocalRecords' | 'nearbyLocalSnapshotHash' | 'nearbySavedAcknowledgements' | 'nearbyPendingPasswordGroups' | 'adoptNearbyLocalTransaction'>;
@@ -21,6 +22,8 @@ export interface NearbyDiscoveredPeer { deviceId: string; name: string; endpoint
 export interface NearbyDiscoveryView { searching: boolean; devices: NearbyDiscoveredPeer[] }
 export interface NearbySyncResult {
   sent: boolean; received: boolean; processed: number; deleted: number;
+  /** Explicit per-transfer exception to incremental-only sending. */
+  includedDeletions?: number;
   items: { title: string; type: NearbyEntryType | 'unknown'; deleted: boolean }[];
 }
 /** Android: the greater device ID listens, the smaller one discovers and dials. */
@@ -33,6 +36,7 @@ export interface NearbyCoordinatorView {
   /** Native transfer stage and byte counters, for progress display only. */
   transport?: { stage: string; transferred: number; total: number };
   review?: NearbyPasskeyReview; applied?: number; error?: string;
+  deletionReview?: { id: string; count: number };
 }
 export class NearbyCoordinatorError extends Error {
   constructor(readonly code: string) { super(`Nearby: ${code}.`); this.name = 'NearbyCoordinatorError'; }
@@ -105,6 +109,7 @@ export class NearbyLocalCoordinator {
   private generation = 0;
   private discovery?: string;
   private source?: NearbySourceAdapter;
+  private connectionDeadline = 0;
 
   constructor(private readonly store: Store, private readonly factory: () => NearbyNativeTransport, private readonly listenAddress?: string,
     private readonly assertOwner?: () => void,
@@ -115,7 +120,7 @@ export class NearbyLocalCoordinator {
     this.abort.abort(); this.transport?.close(); this.transport = undefined;
     this.consent.reset(); this.preferences = undefined; this.peer = undefined; this.sessionId = undefined;
     this.replica = this.snapshot = this.transfer = this.sourceHash = this.remoteAddress = undefined;
-    this.discovery = undefined; this.source = undefined;
+    this.discovery = undefined; this.source = undefined; this.connectionDeadline = 0;
     this.pendingRemote = undefined; this.result = { sent: false, received: false, processed: 0, deleted: 0, items: [] }; this.reported.clear();
     this.view = { phase: 'cancelled' };
   }
@@ -265,8 +270,13 @@ export class NearbyLocalCoordinator {
       })).handle);
       const recovered = await this.source!.recover(); await this.guard();
       if (recovered.length) await this.applyAcknowledgements(recovered);
-      if (this.source!.native) await this.refreshNativeBindings();
       let pending = await collectNearbyPending(this.transport!, this.replica, this.abort.signal, this.source!.scope);
+      // Pending records may be left by an interrupted receive. A protected scan
+      // must not shadow an actual deleted native item with that unapplied record.
+      if (this.source!.native && !pending.length) {
+        await this.refreshNativeBindings();
+        pending = await collectNearbyPending(this.transport!, this.replica, this.abort.signal, this.source!.scope);
+      }
       if (pending.length) {
         const saved = await this.source!.saved(pending);
         if (saved.length) { await this.applyAcknowledgements(saved); pending = await collectNearbyPending(this.transport!, this.replica, this.abort.signal, this.source!.scope); }
@@ -279,42 +289,91 @@ export class NearbyLocalCoordinator {
         this.snapshot = token(empty.handle); this.revision = string(empty.revision); this.view.phase = 'ready';
       } else {
         const source = await this.source!.capture(); this.sourceHash = source.sourceHash;
+        source.records = await this.prepareScanRecords(source);
         const review = await this.consent.review(source.records.map(row => ({ localId: row.local_id, deleted: row.deleted, data: row.data as NearbyWireData })),
           [peerId], `${this.sessionId}:${this.preferences!.epoch}:${source.sourceHash}:${this.view.operationId}`);
         await this.guard(true);
         await this.scan(source);
-        this.view.phase = review ? 'review' : 'ready'; this.view.review = review;
+        this.view.phase = review || this.view.deletionReview ? 'review' : 'ready'; this.view.review = review;
       }
       return this.status();
     });
   }
-  private async scanRecords(source: NearbySourceSnapshot): Promise<void> {
+  /** With incremental-only on, a scanned deletion is replaced by the replica's
+   * exact current record: omitting it would synthesize a tombstone, while
+   * resending stale data would bump its clock. Unbound ids are simply dropped. */
+  private async prepareScanRecords(source: NearbySourceSnapshot): Promise<NearbySourceSnapshot['records']> {
+    let records = source.records;
     if (this.source!.native) {
-      const map = new Map<string, string>();
-      for (const records of chunks(source.records)) {
-        const result = await this.call('replica_local', { handle: this.replica, local_ids: records.map(r => r.local_id) });
+      const map = new Map<string, string>(), identified = new Set<string>();
+      for (const part of chunks(records)) {
+        const result = await this.call('replica_local', { handle: this.replica, local_ids: part.map(r => r.local_id) });
         if (!Array.isArray(result.items)) failure('invalid-binding');
         for (const raw of result.items) {
           const row = wireObject(raw), localId = string(row.local_id, 256), globalId = validId(row.global_id);
-          const match = records.find(r => r.local_id === localId); if (!match || map.has(match.global_id)) failure('invalid-binding');
-          map.set(match.global_id, globalId);
+          const match = part.find(r => r.local_id === localId);
+          if (!match || identified.has(match.global_id)) failure('invalid-binding');
+          identified.add(match.global_id); map.set(match.global_id, globalId);
         }
       }
-      source.records = source.records.map(r => ({ ...r, global_id: map.get(r.global_id) ?? r.global_id,
+      records = records.map(r => ({ ...r, global_id: map.get(r.global_id) ?? r.global_id,
         data: Object.keys(r.data).length ? remapNearbyReferences(r.data as NearbyWireData, id => map.get(id) ?? id) : r.data }));
     }
+    if (!this.preferences!.incrementalOnly) return records;
+    const kept: NearbySourceSnapshot['records'] = [], shadowed = new Map<string, string>();
+    for (const record of records) {
+      if (record.deleted) shadowed.set(record.local_id, record.guard);
+      else kept.push(record);
+    }
+    for (const id of source.retained ?? []) if (!shadowed.has(id) && !kept.some(row => row.local_id === id)) shadowed.set(id, '');
+    if (!shadowed.size) return records;
+    for (const part of chunks([...shadowed.keys()])) {
+      const result = await this.call('replica_local', { handle: this.replica, local_ids: part, include_data: true });
+      if (!Array.isArray(result.items)) failure('invalid-binding');
+      const seen = new Set<string>();
+      for (const raw of result.items) {
+        const row = wireObject(raw), localId = string(row.local_id, 256);
+        if (!shadowed.has(localId) || seen.has(localId) || typeof row.deleted !== 'boolean') failure('invalid-binding');
+        const guard = shadowed.get(localId) || await hash(['nearby-retained', localId]);
+        seen.add(localId);
+        kept.push({ local_id: localId, global_id: validId(row.global_id), scope: this.source!.scope,
+          guard, deleted: row.deleted, data: wireObject(row.data) as NearbyWireData });
+      }
+    }
+    return kept;
+  }
+  private async applyScan(records: NearbySourceSnapshot['records']): Promise<void> {
     await this.call('replica_scan_begin', { handle: this.replica, scopes: [this.source!.scope] });
-    for (const entries of chunks(source.records)) await this.call('replica_scan_batch', { handle: this.replica, entries });
+    for (const entries of chunks(records)) await this.call('replica_scan_batch', { handle: this.replica, entries });
     await this.guard(true); await this.call('replica_scan_end', { handle: this.replica });
   }
   private async refreshNativeBindings(): Promise<NearbySourceSnapshot> {
     const source = await this.source!.capture(); this.sourceHash = source.sourceHash;
-    await this.scanRecords(source);
+    source.records = await this.prepareScanRecords(source);
+    await this.applyScan(source.records);
+    return source;
+  }
+  private async captureNativeBindings(): Promise<NearbySourceSnapshot> {
+    await this.guard(true);
+    const source = await this.source!.capture();
+    if (source.sourceHash !== this.sourceHash) failure('source-changed');
     return source;
   }
   private async scan(source: NearbySourceSnapshot): Promise<void> {
-    await this.scanRecords(source);
-    const exported = await this.call('replica_export', { handle: this.replica });
+    await this.applyScan(source.records);
+    const count = await this.exportSource(source, this.preferences!.incrementalOnly ? 'omit' : undefined);
+    if (count > 0 && this.preferences!.incrementalOnly) this.view.deletionReview = { id: crypto.randomUUID(), count };
+  }
+  private async exportSource(source: NearbySourceSnapshot, policy?: 'omit' | 'include'): Promise<number> {
+    let exported: Record<string, unknown>;
+    try { exported = await this.call('replica_export', { handle: this.replica, ...(policy ? { deletion_policy: policy } : {}) }); }
+    catch (error) {
+      if (policy && nearbyErrorCode(error) === 'nearby-invalid-request') failure('host-update-required');
+      throw error;
+    }
+    // Older helpers must fail closed, even if they silently ignore the policy.
+    if (policy && (exported.deletion_policy !== policy || typeof exported.deletion_count !== 'number'
+      || !Number.isSafeInteger(exported.deletion_count) || exported.deletion_count < 0 || exported.deletion_count > 100_000)) failure('host-update-required');
     if (exported.pending !== false || !Array.isArray(exported.asset_ids)) failure('pending-adoption-required');
     this.snapshot = token(exported.handle); this.revision = string(exported.revision);
     const required = new Set(exported.asset_ids.map(value => string(value, 64)));
@@ -324,17 +383,43 @@ export class NearbyLocalCoordinator {
       finally { bytes.fill(0); }
     }
     await this.guard(true);
+    return policy ? exported.deletion_count as number : 0;
   }
   async confirm(reviewId: string): Promise<NearbyCoordinatorView> {
     return this.run(async () => {
       await this.guard(true);
       if (this.view.phase !== 'review' || !this.consent.confirm(reviewId)) failure('review-stale');
-      this.view.phase = 'ready'; delete this.view.review; return this.status();
+      delete this.view.review; this.view.phase = this.view.deletionReview ? 'review' : 'ready'; return this.status();
+    });
+  }
+  async confirmDeletions(reviewId: string, choice: 'omit' | 'include'): Promise<NearbyCoordinatorView> {
+    return this.run(async () => {
+      await this.guard(true);
+      const review = this.view.deletionReview;
+      if (this.view.phase !== 'review' || !review || review.id !== reviewId || !['omit', 'include'].includes(choice)) failure('review-stale');
+      if (choice === 'include') {
+        const source = await this.source!.capture();
+        await this.guard(true);
+        const previous = this.snapshot;
+        const count = await this.exportSource(source, 'include');
+        if (count !== review.count) failure('review-stale');
+        if (previous) await this.call('snapshot_release', { handle: previous });
+        this.result.includedDeletions = count;
+      }
+      delete this.view.deletionReview;
+      this.view.phase = this.view.review ? 'review' : 'ready';
+      return this.status();
     });
   }
   async start(address?: NearbyEndpoint): Promise<NearbyCoordinatorView> {
     return this.run(async () => {
       if (this.view.phase !== 'ready' || !this.peer || !this.snapshot) failure('not-ready');
+      this.connectionDeadline = Date.now() + 120_000;
+      return this.connectPrepared(address);
+    });
+  }
+  private async connectPrepared(address?: NearbyEndpoint): Promise<NearbyCoordinatorView> {
+      if (!this.peer || !this.snapshot) failure('not-ready');
       await this.guard(true);
       const device = nearbyDeviceHello(this.preferences!, this.peer.deviceId);
       if (this.view.recoveryOnly) device.sync_mode = 'receive_only';
@@ -353,7 +438,6 @@ export class NearbyLocalCoordinator {
         this.view.endpoint = link.address;
       }
       return this.status();
-    });
   }
   private role(): NearbyConnectionRole {
     return this.preferences!.deviceId < this.peer!.deviceId ? 'dialing' : 'listening';
@@ -371,7 +455,11 @@ export class NearbyLocalCoordinator {
    * last known address still work where Wi-Fi access points filter multicast. */
   private async locate(): Promise<NearbyEndpoint> {
     const peer = this.peer!;
-    for (let round = 0; round < 3; round++) {
+    // The phone may still be exporting its selected vault. Retain the explicit
+    // request while it becomes ready, with the same bounded window as Android.
+    for (let round = 0; round < 60 && Date.now() < this.connectionDeadline; round++) {
+      await this.guard(true);
+      if (round > 0) await this.pause(1_000);
       const begun = await this.call('discover', { targets: peer.address ? [peer.address] : [], multicast: true });
       const discovery = token(begun.handle);
       let result: Record<string, unknown> | undefined;
@@ -396,6 +484,15 @@ export class NearbyLocalCoordinator {
       await this.guard(!this.enrolling && !this.acknowledged);
       const progress = await this.call('progress', { handle: this.transfer });
       if (progress.phase === 'failed' || progress.phase === 'cancelled') {
+        if (progress.phase === 'failed' && !this.enrolling && !this.acknowledged &&
+          Date.now() < this.connectionDeadline && ['connecting', 'authenticating'].includes(String(progress.failed_at)) &&
+          ['connection_failed', 'connection_closed', 'transfer_timeout'].includes(String(progress.error))) {
+          // A paired listener can be replaced while the phone finishes preparing.
+          // Retry setup only: never replay payloads, saves or authentication rejection.
+          await this.call('release', { handle: this.transfer }); this.transfer = undefined;
+          await this.pause(1_000);
+          return this.connectPrepared();
+        }
         if (progress.error === 'peer_merge_failed') failure('peer-save-rejected');
         if (progress.error === 'merge_timeout') failure('peer-save-timeout');
         failure(nearbyEngineCode(progress.error) ?? 'transfer-failed');
@@ -443,8 +540,19 @@ export class NearbyLocalCoordinator {
     let rounds = 0;
     do {
     if (++rounds > 20_000) failure('pending-adoption-limit');
-    const nativeSnapshot = this.source!.native ? await this.refreshNativeBindings() : undefined;
+    const nativeSnapshot = this.source!.native ? await this.captureNativeBindings() : undefined;
     const pending = await collectNearbyPending(this.transport!, this.replica!, this.abort.signal, this.source!.scope);
+    if (nativeSnapshot) {
+      // Native writes in an earlier batch can change guards for related rows.
+      // Refresh the optimistic write guards from the verified source revision,
+      // without scanning received replica content as if it were already saved.
+      const byLocal = new Map(nativeSnapshot.records.map(row => [row.local_id, row]));
+      for (const record of pending) if (record.localId) {
+        const current = byLocal.get(record.localId);
+        if (!current) failure('invalid-binding');
+        record.expectedGuard = current.guard;
+      }
+    }
     if (!pending.length) break;
     const lookup = new Map(pending.map(row => [row.id, row]));
     const canonicalIds = new Map<string, string>();

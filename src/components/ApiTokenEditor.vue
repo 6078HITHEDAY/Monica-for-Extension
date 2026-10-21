@@ -1,21 +1,30 @@
 <script setup lang="ts">
 import EditorContentSection from "./EditorContentSection.vue";
 import { materialSelectTag, materialOptionTag } from "../lib/material-controls";
-import { computed, reactive, ref } from "vue";
+import { computed, reactive, ref, toRaw } from "vue";
+import CredentialTypeSelect from './CredentialTypeSelect.vue';
+import type { ApiTokenDraft, CredentialCreateType } from '../manager/editor-types';
 import { tr } from "../i18n";
 import type { ApiTokenItem, ProviderAccount, VaultItem } from "../core/model";
 import { apiTokenValidationError, serializeApiTokenMetadata, serializeApiTokenPayload } from "../core/api-token";
 
-const props = defineProps<{ item?: ApiTokenItem; providers: ProviderAccount[]; saveItem: (item: VaultItem) => Promise<void> }>();
-const emit = defineEmits<{ cancel: [] }>();
+const props = defineProps<{ item?: ApiTokenItem; initialDraft?: ApiTokenDraft; providers: ProviderAccount[]; saveItem: (item: VaultItem) => Promise<void> }>();
+const emit = defineEmits<{ cancel: []; switchType: [type: CredentialCreateType, draft: ApiTokenDraft] }>();
 const providers = computed(() => props.providers.filter(provider => provider.enabled && ["local", "mdbx2"].includes(provider.kind)));
 const defaultProvider = providers.value.find(provider => provider.isDefaultSaveTarget) || providers.value.find(provider => provider.kind === "local") || providers.value[0];
-const fields = reactive({
+const fields = reactive<ApiTokenDraft>({
   title: props.item?.title || "", provider: props.item?.provider || "", apiBase: props.item?.apiBase || "", token: props.item?.token || "",
   notes: props.item?.notes || "", favorite: props.item?.favorite || false,
   customFields: (props.item?.customFields || []).map(field => ({ ...field })) as ApiTokenItem["customFields"],
   providerId: props.item?.providerRefs[0]?.providerId || defaultProvider?.id || ""
 });
+if (!props.item && props.initialDraft) {
+  Object.assign(fields, structuredClone(toRaw(props.initialDraft)));
+  if (!providers.value.some(provider => provider.id === fields.providerId)) fields.providerId = defaultProvider?.id || '';
+}
+function switchType(type: CredentialCreateType) {
+  if (!props.item && !saving.value && type !== 'api-token') emit('switchType', type, structuredClone(toRaw(fields)));
+}
 const reveal = ref(false);
 const error = ref("");
 const saving = ref(false);
@@ -47,12 +56,12 @@ async function submit() {
 
 <template>
   <m3e-dialog v-material-dialog open class="material-dialog material-editor-dialog" :disableClose.prop="saving" :dismissible="!saving" :close-label="tr('关闭')" @closed.self="emit('cancel')">
-<h2 slot="header" id="api-token-editor-title">{{ item ? tr('编辑 API 密钥') : tr('添加 API 密钥') }}</h2>
+<h2 slot="header" id="api-token-editor-title">{{ item ? tr('编辑 API 令牌') : tr('添加 API 令牌') }}</h2>
 <form id="api-token-form" class="material-editor-form editor-form editor-with-actions" @submit.prevent="submit">
         <div class="editor-fields structured-editor">
           <section class="editor-section editor-basics" :aria-label="tr('基本信息')">
             <m3e-form-field v-field-label variant="filled" hide-required-marker class="field editor-title-field"><label slot="label">{{ tr('名称 *') }}</label><input v-model="fields.title" autofocus autocomplete="off" :placeholder="tr('例如：GitHub 工作密钥')" maxlength="256" /></m3e-form-field>
-            <div class="editor-meta-grid"><m3e-form-field v-field-label variant="filled" hide-required-marker class="field"><label slot="label">{{ tr('保存到') }}</label><component :is="materialSelectTag" @input="fields.providerId = ($event.target as HTMLElement &amp; { value: string }).value"  :disabled="Boolean(item) || saving"><component :is="materialOptionTag" :selected.prop="String(fields.providerId ?? '') === String(provider.id)" v-for="provider in providers" :key="provider.id" :value="provider.id">{{ provider.kind === 'local' ? tr('Monica 本地库') : provider.name }}</component></component></m3e-form-field></div>
+            <div class="editor-meta-grid"><CredentialTypeSelect v-if="!item" value="api-token" :disabled="saving" @select="switchType" /><m3e-form-field v-field-label variant="filled" hide-required-marker class="field"><label slot="label">{{ tr('保存到') }}</label><component :is="materialSelectTag" @input="fields.providerId = ($event.target as HTMLElement &amp; { value: string }).value"  :disabled="Boolean(item) || saving"><component :is="materialOptionTag" :selected.prop="String(fields.providerId ?? '') === String(provider.id)" v-for="provider in providers" :key="provider.id" :value="provider.id">{{ provider.kind === 'local' ? tr('Monica 本地库') : provider.name }}</component></component></m3e-form-field></div>
           </section>
           <section class="editor-section" :aria-label="tr('密钥信息')"><h3>{{ tr('密钥信息') }}</h3>
             <m3e-form-field v-field-label variant="filled" hide-required-marker class="field"><label slot="label">{{ tr('服务商 *') }}</label><input v-model="fields.provider" list="api-token-providers" autocomplete="off" placeholder="GitHub, GitLab, OpenAI…" maxlength="128" /><datalist id="api-token-providers"><option value="github" /><option value="gitlab" /><option value="openai" /><option value="anthropic" /><option value="cloudflare" /></datalist></m3e-form-field>

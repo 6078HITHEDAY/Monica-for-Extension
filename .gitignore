@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-firefox/
 release/
 coverage/
 playwright-report/
@@ -18,6 +19,9 @@ native/mdbx2-browser/target/
 native/mdbx2-browser/pkg/
 native/mdbx2-browser/vendor/tempfile/.cargo-ok
 .codex-tmp/
+
+# Editable UI drafts and browser screenshots remain local.
+/docs/design/
 
 # Local credentials, password databases and browser profiles are never source assets.
 .env

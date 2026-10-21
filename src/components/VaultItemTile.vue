@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import "@m3e/web/menu";
 import type { M3eMenuElement } from "@m3e/web/menu";
-import { computed, onBeforeUnmount, ref, useId } from "vue";
+import { computed, onBeforeUnmount, ref, useId, watch } from "vue";
 import type { LoginItem, TotpItem, VaultItem } from "../core/model";
 import { websiteOrigin } from "../core/website-icon";
 import { documentLabel, itemIcon, itemKindLabel, maskedSuffix } from "../manager/item-metadata";
@@ -9,6 +9,8 @@ import { tr } from "../i18n";
 import TotpCodeCell from "./TotpCodeCell.vue";
 import WebsiteIcon from "./WebsiteIcon.vue";
 import WalletCardFace from "./WalletCardFace.vue";
+import ItemSelectionCheck from './ItemSelectionCheck.vue';
+import { vItemSelection, type ItemSelectionBinding } from '../lib/item-selection';
 
 const props = defineProps<{
   item: VaultItem;
@@ -18,6 +20,8 @@ const props = defineProps<{
   hasHistory: boolean;
   groupSize?: number;
   consumeOtp: (item: LoginItem | TotpItem) => Promise<void>;
+  selection?: ItemSelectionBinding;
+  selected?: boolean;
 }>();
 type TileAction = "open" | "details" | "edit" | "remove" | "attachments" | "history";
 const emit = defineEmits<(event: TileAction) => void>();
@@ -30,6 +34,7 @@ const trigger = ref<HTMLElement>();
 // tiles rendered every hidden menu eagerly and blocked the main thread, so build
 // the items once the trigger is hovered or focused, before it can be activated.
 const menuReady = ref(false);
+watch(() => props.selection?.active, active => { if (active) void menu.value?.hide(); });
 
 const metadata = computed(() => {
   const item = props.item;
@@ -97,22 +102,23 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <m3e-card variant="filled" class="vault-tile" :class="[`vault-tile--${item.kind}`, { 'vault-tile--card-face': ['card', 'identity', 'billing-address'].includes(item.kind) }]" :data-item-id="item.id" @click="emit('open')">
+  <m3e-card v-item-selection="selection ?? { active: false, disabled: true, enter: () => {}, toggle: () => {} }" variant="filled" class="vault-tile" :class="[`vault-tile--${item.kind}`, { 'vault-tile--card-face': ['card', 'identity', 'billing-address'].includes(item.kind), 'item-selection-active': selection?.active, 'item-selected': selected }]" :data-item-id="item.id" @click="emit('open')">
     <div class="vault-tile-content">
       <m3e-focus-ring class="vault-tile-focus" :for="actionId" inward />
       <WalletCardFace v-if="['card', 'identity', 'billing-address'].includes(item.kind)" :item="item" />
       <header class="vault-tile-header">
-        <m3e-list-action :id="actionId" role="presentation" class="vault-tile-open" v-list-action="tr('查看{0}详情', { 0: item.title })" @click.stop="emit('open')">
+        <m3e-list-action :id="actionId" role="presentation" class="vault-tile-open" v-list-action="selection?.active ? tr('选择或取消选择 {0}', {0: item.title}) : tr('查看{0}详情', { 0: item.title })" @click.stop="emit('open')">
           <WebsiteIcon slot="leading" class="vault-tile-icon" :item="iconItem" :fallback="item.kind === 'totp' && item.otpType === 'STEAM' ? 'sports_esports' : itemIcon(item.kind)" />
           <strong :title="item.title">{{ item.title }}<span v-if="(groupSize||0)>1"> · {{ tr('{0} 条密码', {0: groupSize}) }}</span></strong>
           <small slot="supporting-text" :title="metadata.subtitle">{{ metadata.subtitle }}</small>
         </m3e-list-action>
-        <m3e-icon-button ref="trigger" class="vault-tile-menu-trigger" :aria-label="tr('{0}的更多操作', { 0: item.title })" @pointerenter="menuReady = true" @focusin="menuReady = true" @click.capture="sizeMenu" @click.stop @keydown="openWithKeyboard">
+        <ItemSelectionCheck v-if="selection?.active" :title="item.title" :selected="Boolean(selected)" :disabled="selection.disabled" />
+        <m3e-icon-button v-else ref="trigger" class="vault-tile-menu-trigger" :aria-label="tr('{0}的更多操作', { 0: item.title })" @pointerenter="menuReady = true" @focusin="menuReady = true" @click.capture="sizeMenu" @click.stop @keydown="openWithKeyboard">
           <m3e-icon name="more_vert" />
           <m3e-menu-trigger :for="menuId" />
         </m3e-icon-button>
       </header>
-      <div v-if="item.kind === 'totp'" class="vault-tile-code" @click.stop>
+      <div v-if="item.kind === 'totp'" class="vault-tile-code" :inert="selection?.active" data-selection-ignore @click.stop>
         <TotpCodeCell :item="item" layout="tile" allow-use :hide-timer="Boolean(sharedPeriod)" :consume-code="consumeOtp" />
       </div>
       <div v-else-if="!['card', 'identity', 'billing-address'].includes(item.kind)" class="wallet-tile-preview">

@@ -78,9 +78,13 @@ test('production Wi-Fi coordinator receives into bundled MDBX and returns native
     const complete=async()=>expect.poll(async()=>{const result=await Promise.all([command(a,{type:'progress'}),command(b,{type:'progress'})]);return result.map(v=>v.phase);},{timeout:45000}).toEqual(['completed','completed']);
     const pair=await command(a,{type:'pair'});await command(b,{type:'pair',invitation:pair.pairing.invitations[0]});await complete();
     const peerA=(await command(a,{type:'status'})).peerId,peerB=(await command(b,{type:'status'})).peerId;
-    const exchange=async(automaticDiscovery=false)=>{
-      for(const [page,peerId]of [[a,peerA],[b,peerB]]as const){const v=await command(page,{type:'prepare',peerId});if(v.phase==='review')await command(page,{type:'confirm',reviewId:v.review.id});else expect(v.phase).toBe('ready');}
-      const transfer=await command(a,{type:'start'});await command(b,{type:'start',...(!automaticDiscovery?{endpoint:transfer.endpoint}:{})});await complete();
+    const exchange=async(automaticDiscovery=false,includeDeletions=false)=>{
+      for(const [page,peerId]of [[a,peerA],[b,peerB]]as const){let v=await command(page,{type:'prepare',peerId});
+        if(v.review)v=await command(page,{type:'confirm',reviewId:v.review.id});
+        if(v.deletionReview)v=await command(page,{type:'confirm-deletions',reviewId:v.deletionReview.id,choice:includeDeletions?'include':'omit'});
+        expect(v.phase).toBe('ready');}
+      const aListens=peerB>peerA;
+      const transfer=await command(aListens?a:b,{type:'start'});await command(aListens?b:a,{type:'start',...(!automaticDiscovery?{endpoint:transfer.endpoint}:{})});await complete();
     };
     await exchange();
     const collections=await runtime(b,{type:'MDBX2_COLLECTION_LIST',providerId});expect(collections.items.length).toBeGreaterThan(0);
@@ -96,9 +100,23 @@ test('production Wi-Fi coordinator receives into bundled MDBX and returns native
     await exchange(true);expect(await runtime(b,{type:'MDBX2_OBJECT_LIST',providerId,collectionId:saved.collectionId})).toEqual(beforeRepeat);const again=await runtime(a,{type:'VAULT_LIST_ITEMS'});expect(again).toHaveLength(items.length);
     const current=await runtime(b,{type:'MDBX2_OBJECT_REVEAL',providerId,objectId:saved.objectId});
     await runtime(b,{type:'MDBX2_OBJECT_DELETE',providerId,operationId:crypto.randomUUID(),logicalObjectId:`native:${saved.objectId}`,expectedHeadCommitId:current.headCommitId});
-    await exchange();expect((await runtime(a,{type:'VAULT_LIST_ITEMS'})).some((row:any)=>row.id===login.id)).toBe(false);
+    await exchange();expect((await runtime(a,{type:'VAULT_LIST_ITEMS'})).some((row:any)=>row.id===login.id)).toBe(true);
+    // The default scan preserves the previous live replica record, so there is
+    // no tombstone to explicitly include yet. Create a historical deletion in
+    // a cancelled full-sync preparation, then test the one-transfer choice.
+    const beforeFull=await command(b,{type:'preferences'});
+    await command(b,{type:'update',epoch:beforeFull.epoch,change:{kind:'preferences',incrementalOnly:false}});
+    let full=await command(b,{type:'prepare',peerId:peerB});
+    if(full.review)full=await command(b,{type:'confirm',reviewId:full.review.id});
+    expect(full.phase).toBe('ready');await cancel(b);await connect(b);
+    const beforeProtected=await command(b,{type:'preferences'});
+    await command(b,{type:'update',epoch:beforeProtected.epoch,change:{kind:'preferences',incrementalOnly:true}});
+    await exchange(false,true);expect((await runtime(a,{type:'VAULT_LIST_ITEMS'})).some((row:any)=>row.id===login.id)).toBe(false);
     await runtime(a,{type:'VAULT_RESTORE_ITEM',itemId:login.id});
     await exchange();
+    expect((await runtime(a,{type:'VAULT_LIST_ITEMS'})).find((row:any)=>row.id===login.id)).toBeTruthy();
+    expect((await runtime(b,{type:'MDBX2_OBJECT_LIST',providerId,collectionId:saved.collectionId})).items
+      .find((row:any)=>row.objectId===saved.objectId)).toMatchObject({deleted:false});
     expect(JSON.parse((await runtime(b,{type:'MDBX2_OBJECT_REVEAL',providerId,objectId:saved.objectId})).payloadJson).password_plain).toBe('synthetic reciprocal password');
     expect((await runtime(a,{type:'VAULT_LIST_ITEMS'})).filter((row:any)=>row.id===login.id)).toHaveLength(1);
     const files=await runtime(a,{type:'PROVIDER_ATTACHMENT_LIST',providerId:localProvider,itemId:login.id});expect(files.items).toHaveLength(1);

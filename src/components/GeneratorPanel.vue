@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { writeSecretClipboard } from '../lib/secret-clipboard';
 import "@m3e/web/slider";
 import { materialSelectTag, materialOptionTag } from "../lib/material-controls";
 import { tr } from '../i18n';
@@ -143,7 +144,7 @@ async function generate() {
 }
 
 async function copyText(value: string) {
-  try { await navigator.clipboard.writeText(value); status.value = tr('已复制到剪贴板。'); }
+  try { await writeSecretClipboard(value); status.value = tr('已复制到剪贴板。'); }
   catch { status.value = tr('复制失败，请手动选择内容。'); }
 }
 

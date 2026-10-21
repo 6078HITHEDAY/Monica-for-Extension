@@ -24,7 +24,8 @@ export function passwordProjectGroups(members: LoginItem[]): PasswordProjectGrou
     if (group) {
       const first = group.rows[0].item;
       if (metadata.label !== group.label || metadata.primary !== group.primary || metadata.groupOrder !== group.order
-        || item.username !== first.username || (item.totpSecret ?? '') !== (first.totpSecret ?? '')) return undefined;
+        || item.username !== first.username || (item.totpSecret ?? '') !== (first.totpSecret ?? '')
+        || (metadata.note ?? '') !== (group.rows[0].metadata.note ?? '')) return undefined;
       group.rows.push({ item, metadata });
     } else groups.set(metadata.groupId, { id: metadata.groupId, label: metadata.label,
       primary: metadata.primary, order: metadata.groupOrder, rows: [{ item, metadata }] });

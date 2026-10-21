@@ -22,6 +22,19 @@ export interface NearbyLocalReceipt {
   /** Portable restore keeps content identity but starts a different native replica history. */
   replayInvalidated?: boolean;
 }
+export const NEARBY_RETAINED_LOCAL_LIMIT = 20_000;
+const retainedLocalId = /^local:[A-Za-z0-9_-]{1,64}$/;
+/** Local ids whose native record is kept live even though the item is gone locally. */
+export function readNearbyRetainedLocals(value: unknown): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > NEARBY_RETAINED_LOCAL_LIMIT) invalidNearby('retained-list');
+  const ids = new Set<string>();
+  for (const raw of value) {
+    if (typeof raw !== 'string' || !retainedLocalId.test(raw) || ids.has(raw)) invalidNearby('retained-invalid');
+    ids.add(raw);
+  }
+  return [...ids];
+}
 export interface NearbyLocalBatch {
   providerId: string;
   sourceHash: string;
@@ -88,6 +101,7 @@ export async function nearbyLocalSourceHash(state: VaultState): Promise<string> 
   return hash({ items: state.items.filter(item => isLocalTransferItem(item, state.providers)),
     providers: state.providers.filter(provider => provider.kind === 'local'), nearbyEpoch: state.nearbyPreferences?.epoch ?? null, attachments: state.localItemAttachments ?? [],
     origins: state.localItemOrigins ?? [], folders: state.localTransferFolders ?? [], receipts: readNearbyLocalReceipts(state.nearbyLocalReceipts), metadata: readNearbyLocalMetadata(state.nearbyLocalMetadata),
+    retained: readNearbyRetainedLocals(state.nearbyRetainedLocals),
     removals: state.passwordProjectRemovals ?? [], transfers: state.bitwardenBatchTransfers ?? [], queue: state.mutationQueue, conflicts: state.providerConflicts });
 }
 
@@ -130,6 +144,8 @@ export interface NearbyLocalSnapshot {
   sourceHash: string;
   records: Array<{ local_id: string; global_id: string; scope: 'local'; guard: string; deleted: boolean; data: NearbyWireData }>;
   assets: Array<{ id: string; dataBase64: string }>;
+  /** Bindings kept live for permanently deleted items while incremental-only sync is on. */
+  retained: string[];
 }
 
 function uuidFromDigest(digest: string): string { return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-${digest.slice(12, 16)}-${digest.slice(16, 20)}-${digest.slice(20, 32)}`; }
@@ -139,6 +155,8 @@ function uuidFromDigest(digest: string): string { return `${digest.slice(0, 8)}-
 export async function captureNearbyLocalSnapshot(state: VaultState): Promise<NearbyLocalSnapshot> {
   const receipts = readNearbyLocalReceipts(state.nearbyLocalReceipts), locals = state.items.filter(item => isLocalTransferItem(item, state.providers));
   const metadata = await captureNearbyMetadata(state), originIndex = originIndexForState(state, receipts);
+  const liveLocalIds = new Set(locals.map(item => `local:${item.id}`));
+  const retained = readNearbyRetainedLocals(state.nearbyRetainedLocals).filter(id => !liveLocalIds.has(id));
   const identities = new Map<string, string>(), references = new Map<string, string>();
   for (const item of locals) {
     requireUncontended(state, item.id);
@@ -197,7 +215,18 @@ export async function captureNearbyLocalSnapshot(state: VaultState): Promise<Nea
     }
     records.push({ local_id: row.value.localId, global_id: row.value.recordId, scope: 'local', guard: row.guard, deleted: row.value.deleted, data: row.data });
   }
-  return { sourceHash: await nearbyLocalSourceHash(state), records, assets: [...assets].map(([id, dataBase64]) => ({ id, dataBase64 })) };
+  // A permanently deleted item can still own the asset bytes referenced by its
+  // live replica record; export fails unless those exact bytes stay available.
+  for (const id of retained) {
+    const files = (state.localItemAttachments ?? []).filter(file => file.itemId === id.slice('local:'.length));
+    if (!files.length) continue;
+    await validateLocalAttachments(files, id.slice('local:'.length));
+    for (const file of files) {
+      if (assets.has(file.sha256) && assets.get(file.sha256) !== file.dataBase64) invalidNearby('conflicting-asset-content');
+      assets.set(file.sha256, file.dataBase64);
+    }
+  }
+  return { sourceHash: await nearbyLocalSourceHash(state), records, assets: [...assets].map(([id, dataBase64]) => ({ id, dataBase64 })), retained };
 }
 
 function requireUncontended(state: VaultState, id: string): void {
@@ -224,6 +253,7 @@ export async function applyNearbyLocalBatch(state: VaultState, input: NearbyLoca
   const receipts = readNearbyLocalReceipts(state.nearbyLocalReceipts), byId = new Map(receipts.map(row => [row.recordId, row]));
   const metadata = readNearbyLocalMetadata(state.nearbyLocalMetadata), metadataById = new Map(metadata.map(row => [row.recordId, row]));
   const originalMetadata = await captureNearbyMetadata(state);
+  const retainedLocals = new Set(readNearbyRetainedLocals(state.nearbyRetainedLocals));
   const ids = new Set<string>(), assets = new Map<string, string>();
   for (const asset of input.assets) {
     if (!digestPattern.test(asset.id) || assets.has(asset.id) || typeof asset.dataBase64 !== 'string' || asset.dataBase64.length > 24 * 1024 * 1024) invalidNearby('adoption-assets');
@@ -232,7 +262,12 @@ export async function applyNearbyLocalBatch(state: VaultState, input: NearbyLoca
   const work = await Promise.all(input.records.map(async record => {
     if (!idPattern.test(record.id) || ids.has(record.id) || typeof record.deleted !== 'boolean' || typeof record.dataJson !== 'string' || record.dataJson.length > 1024 * 1024) invalidNearby('adoption-record');
     ids.add(record.id);
-    const vector = clock(record.clockJson);
+    const vector = clock(record.clockJson), fingerprint = await recordFingerprint(record);
+    // A permanently deleted local item keeps its native record alive. Its old
+    // binding must not block adoption until the peer sends live content again.
+    const retired = record.localId !== undefined && retainedLocals.has(record.localId);
+    if (retired && record.deleted) return { record, data: {} as NearbyWireData, fingerprint, old: byId.get(record.id),
+      previous: byId.get(record.id) ?? metadataById.get(record.id), restoringTombstone: false, replay: false, retired, retiredDeletion: true };
     let data = wireObject(parseLosslessJson(record.dataJson)) as NearbyWireData;
     if (record.deleted && isNearbyTombstone(data)) {
       const known = byId.get(record.id)?.dataJson ?? metadataById.get(record.id)?.dataJson
@@ -247,7 +282,7 @@ export async function applyNearbyLocalBatch(state: VaultState, input: NearbyLoca
     const bound = record.localId !== undefined || record.scope !== undefined || record.expectedGuard !== undefined;
     if (bound && (typeof record.localId !== 'string' || !record.localId.startsWith('local:') || record.scope !== 'local'
       || typeof record.expectedGuard !== 'string' || !digestPattern.test(record.expectedGuard))) invalidNearby('adoption-binding');
-    const fingerprint = await recordFingerprint(record), old = byId.get(record.id);
+    const old = byId.get(record.id);
     const oldMetadata = metadataById.get(record.id), previous = old ?? oldMetadata;
     const restoringTombstone = oldMetadata && isNearbyTombstone(wireObject(parseLosslessJson(oldMetadata.dataJson))) && !isNearbyMetadata(data);
     if (old && oldMetadata || old && isNearbyMetadata(data) || oldMetadata && !isNearbyMetadata(data) && !restoringTombstone) invalidNearby('metadata-type-changed');
@@ -260,16 +295,18 @@ export async function applyNearbyLocalBatch(state: VaultState, input: NearbyLoca
       for (const [device, count] of vector) if (count > (before.get(device) ?? 0n)) newer = true;
       if (!newer) invalidNearby('adoption-clock-conflict');
     }
-    return { record, data, fingerprint, old, previous, restoringTombstone, replay: previous?.fingerprint === fingerprint && !previous.replayInvalidated };
+    return { record, data, fingerprint, old, previous, restoringTombstone, replay: previous?.fingerprint === fingerprint && !previous.replayInvalidated, retired, retiredDeletion: false };
   }));
-  if (work.every(row => row.replay)) return { state, acknowledgements: work.map(row => structuredClone(row.previous!.acknowledgement!)), changed: false };
+  if (work.every(row => row.replay || row.retiredDeletion)) return { state, changed: false, acknowledgements: work.map(row => row.retiredDeletion
+    ? { recordId: row.record.id, clockJson: row.record.clockJson, localId: row.record.localId!, scope: 'local', guard: '0'.repeat(64), dataJson: row.record.dataJson }
+    : structuredClone(row.previous!.acknowledgement!)) };
   if (await nearbyLocalSourceHash(state) !== input.sourceHash) invalidNearby('local-source-changed');
   const originIndex = originIndexForState(state, receipts);
   const next = structuredClone(state), acknowledgements: NearbyLocalAcknowledgement[] = [], changedItems = new Set<string>();
   const metadataChanges: Array<Awaited<ReturnType<typeof stageNearbyMetadata>>> = [];
   // Prepare folder membership before projecting items. Do not mutate existing
   // item guards until every incoming item has passed its original binding check.
-  for (const row of work.filter(row => !row.replay && isNearbyMetadata(row.data))) {
+  for (const row of work.filter(row => !row.replay && !row.retiredDeletion && isNearbyMetadata(row.data))) {
     const files: LocalItemAttachment[] = [];
     const localId = originalMetadata.find(entry => entry.value.recordId === row.record.id || entry.value.localId === row.record.localId)?.value.localId ?? `local:metadata-${row.record.id}`;
     const retained = row.record.deleted && (row.data.assets === undefined || isNearbyTombstone(wireObject(parseLosslessJson(row.record.dataJson))))
@@ -287,13 +324,19 @@ export async function applyNearbyLocalBatch(state: VaultState, input: NearbyLoca
   }
   for (const row of work) {
     if (row.replay) { acknowledgements.push(structuredClone(row.previous!.acknowledgement!)); continue; }
+    if (row.retiredDeletion) {
+      acknowledgements.push({ recordId: row.record.id, clockJson: row.record.clockJson, localId: row.record.localId!, scope: 'local',
+        guard: '0'.repeat(64), dataJson: row.record.dataJson });
+      continue;
+    }
     if (isNearbyMetadata(row.data)) continue;
     const { record, old } = row;
+    const retired = row.retired;
     let data = row.data;
     if (row.restoringTombstone) next.nearbyLocalMetadata = readNearbyLocalMetadata(next.nearbyLocalMetadata).filter(entry => entry.recordId !== record.id);
     let existing = old ? next.items.find(item => item.id === old.itemId) : undefined;
-    if (old && !existing) invalidNearby('local-item-missing');
-    if (record.localId && !row.restoringTombstone) {
+    if (old && !existing && !retired) invalidNearby('local-item-missing');
+    if (record.localId && !row.restoringTombstone && !retired) {
       const boundId = record.localId.slice('local:'.length);
       const bound = next.items.find(item => item.id === boundId);
       if (!bound || old && old.itemId !== boundId || !isLocalTransferItem(bound, next.providers)) invalidNearby('local-binding-changed');
@@ -308,6 +351,13 @@ export async function applyNearbyLocalBatch(state: VaultState, input: NearbyLoca
     }
     if (existing && !isLocalTransferItem(existing, next.providers)) invalidNearby('local-item-source-changed');
     const itemId = existing?.id ?? `nearby-${record.id}`;
+    if (retired) {
+      // The peer revived a record whose local item was purged. The old binding
+      // is retired: drop its shadow bookkeeping and orphaned attachment bytes.
+      const oldItemId = record.localId!.slice('local:'.length);
+      next.nearbyRetainedLocals = readNearbyRetainedLocals(next.nearbyRetainedLocals).filter(id => id !== record.localId);
+      next.localItemAttachments = (next.localItemAttachments ?? []).filter(file => file.itemId !== oldItemId);
+    }
     if (changedItems.has(itemId) || [...byId.values()].some(receipt => receipt.itemId === itemId && receipt.recordId !== record.id)) invalidNearby('duplicate-record-target');
     changedItems.add(itemId);
     if (!existing && next.items.some(item => item.id === itemId)) invalidNearby('local-item-collision');
@@ -391,7 +441,7 @@ export async function applyNearbyLocalBatch(state: VaultState, input: NearbyLoca
     if (!item || !isLocalTransferItem(item, next.providers)) invalidNearby('reference-target-missing');
     return item;
   };
-  for (const row of work.filter(row => !row.replay && !isNearbyMetadata(row.data))) {
+  for (const row of work.filter(row => !row.replay && !row.retiredDeletion && !isNearbyMetadata(row.data))) {
     const receipt = byId.get(row.record.id)!, item = next.items.find(item => item.id === receipt.itemId)!;
     const payload = wireObject(row.data.entry_type === 'login' || row.data.entry_type === 'ssh-key' ? row.data.extensions ?? {} : row.data.payload);
     if (item.kind === 'login') {
@@ -409,7 +459,7 @@ export async function applyNearbyLocalBatch(state: VaultState, input: NearbyLoca
       item.boundPasswordId = undefined;
     }
   }
-  for (const row of work.filter(row => !row.replay && !isNearbyMetadata(row.data))) {
+  for (const row of work.filter(row => !row.replay && !row.retiredDeletion && !isNearbyMetadata(row.data))) {
     const receipt = byId.get(row.record.id)!, item = next.items.find(item => item.id === receipt.itemId)!;
     receipt.baseline = structuredClone(item);
     receipt.acknowledgement.guard = await itemGuard(item, (next.localItemAttachments ?? []).filter(file => file.itemId === item.id), (originIndex.get(item.id) ?? []));

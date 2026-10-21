@@ -2,6 +2,7 @@
 param(
     [string]$ChromeExtensionId = "",
     [string]$EdgeExtensionId = "",
+    [string]$FirefoxExtensionId = "",
     [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA "Monica\Extension\MDBX2")
 )
 
@@ -20,8 +21,11 @@ function Assert-ExtensionId([string]$Value, [string]$Label) {
 
 Assert-ExtensionId $ChromeExtensionId "ChromeExtensionId"
 Assert-ExtensionId $EdgeExtensionId "EdgeExtensionId"
-if (-not $ChromeExtensionId -and -not $EdgeExtensionId) {
-    throw "Provide ChromeExtensionId, EdgeExtensionId, or both."
+if ($FirefoxExtensionId -and $FirefoxExtensionId -cne 'monica@monica-pass.github.io') {
+    throw "FirefoxExtensionId must be the Monica add-on ID: monica@monica-pass.github.io"
+}
+if (-not $ChromeExtensionId -and -not $EdgeExtensionId -and -not $FirefoxExtensionId) {
+    throw "Provide ChromeExtensionId, EdgeExtensionId, or FirefoxExtensionId."
 }
 if (-not (Test-Path -LiteralPath $SourceExecutable -PathType Leaf)) {
     throw "The package is missing monica-mdbx2-host.exe."
@@ -46,18 +50,30 @@ $Manifest = [ordered]@{
     description = "Monica MDBX2 Native Host"
     path = $ExecutablePath
     type = "stdio"
-    allowed_origins = $Origins
+    allowed_origins = @($Origins)
 }
 $WindowsHelloManifest = [ordered]@{
     name = $WindowsHelloHostName
     description = "Monica Windows Hello Host"
     path = $ExecutablePath
     type = "stdio"
-    allowed_origins = $Origins
+    allowed_origins = @($Origins)
 }
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [IO.File]::WriteAllText($ManifestPath, ($Manifest | ConvertTo-Json -Depth 4), $Utf8NoBom)
 [IO.File]::WriteAllText($WindowsHelloManifestPath, ($WindowsHelloManifest | ConvertTo-Json -Depth 4), $Utf8NoBom)
+
+# Firefox uses an add-on ID allowlist and its own manifests, never Chromium origins.
+if ($FirefoxExtensionId) {
+    foreach ($Entry in @(@{ Name = $HostName; Description = 'Monica MDBX2 Native Host' }, @{ Name = $WindowsHelloHostName; Description = 'Monica Windows Hello Host' })) {
+        $FirefoxManifestPath = Join-Path $InstallRoot "$($Entry.Name).firefox.json"
+        $FirefoxManifest = [ordered]@{ name = $Entry.Name; description = $Entry.Description; path = $ExecutablePath; type = 'stdio'; allowed_extensions = @($FirefoxExtensionId) }
+        [IO.File]::WriteAllText($FirefoxManifestPath, ($FirefoxManifest | ConvertTo-Json -Depth 4), $Utf8NoBom)
+        $FirefoxKey = "HKCU:\Software\Mozilla\NativeMessagingHosts\$($Entry.Name)"
+        New-Item -Path $FirefoxKey -Force | Out-Null
+        Set-Item -Path $FirefoxKey -Value $FirefoxManifestPath
+    }
+}
 
 if ($ChromeExtensionId) {
     $ChromeKey = "HKCU:\Software\Google\Chrome\NativeMessagingHosts\$HostName"

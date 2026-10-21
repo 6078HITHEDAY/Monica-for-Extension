@@ -1,7 +1,7 @@
 {
   "name": "monica-browser-extension",
   "private": true,
-  "version": "0.1.48",
+  "version": "1.0.101",
   "packageManager": "npm@10.9.2",
   "engines": {
     "node": ">=22.14.0 <25.0.0",
@@ -38,7 +38,10 @@
     "test:e2e:edge": "npm run build && node scripts/e2e-edge.mjs",
     "capture:store-assets": "npm run build && node scripts/capture-store-assets.mjs",
     "generate:icons": "node scripts/generate-icons.mjs",
-    "build": "npm run check && node scripts/verify-icon-font.mjs && vite build && node scripts/build-workers.mjs && node scripts/verify-extension-pages.mjs",
+    "build": "node scripts/build-identity.mjs && npm run check && node scripts/verify-icon-font.mjs && vite build && node scripts/build-workers.mjs && node scripts/verify-extension-pages.mjs",
+    "build:firefox": "npm run build && node scripts/build-firefox.mjs && node scripts/verify-firefox.mjs",
+    "test:firefox": "npm run build:firefox && node scripts/firefox-acceptance.mjs && node scripts/firefox-ui-acceptance.mjs",
+    "package:firefox": "npm run build:firefox && node scripts/package-firefox.mjs",
     "build:mdbx2-host": "cargo build --locked --release --manifest-path native/mdbx2-host/Cargo.toml",
     "validate": "npm test && npm run build",
     "package:release": "npm run build && node scripts/package-release.mjs",

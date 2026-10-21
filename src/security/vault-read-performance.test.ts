@@ -2,8 +2,9 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { SecureVaultService } from './secure-vault-service';
 import { MemoryVaultStorage } from './vault-storage';
 import { MemoryVaultSessionStore } from './vault-session';
-import { createLoginItem } from '../core/model';
+import { createLoginItem, type TotpItem } from '../core/model';
 import { encryptVaultState, importVaultKey } from './vault-crypto';
+import { resolveLoginOtp } from '../core/login-otp';
 
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
@@ -14,6 +15,67 @@ async function fixture() {
   await vault.setup('', [item]);
   return { storage, sessions, vault, item };
 }
+
+function createTotpItem(): TotpItem {
+  const now = new Date().toISOString();
+  return { id: 'bound-otp', kind: 'totp', title: 'Bound OTP', secret: 'JBSWY3DPEHPK3PXP',
+    algorithm: 'SHA1', digits: 6, period: 30, favorite: false, notes: '', providerRefs: [], createdAt: now, updatedAt: now };
+}
+
+it('prepares only the chosen login and its bound OTP without copying unrelated vault records', async () => {
+  const { vault, item } = await fixture();
+  const otp = createTotpItem();
+  const selected = { ...item, boundTotpItemId: otp.id };
+  const unrelated = createLoginItem({ title: 'Unrelated', password: 'unrelated-secret' });
+  await vault.importItems([selected, otp, unrelated]);
+  const context = await vault.readAutofillContext(item.id);
+  expect(context.items.map(row => row.id)).toEqual([item.id, otp.id]);
+  expect(context.credentialIdentities).toEqual({});
+  const login = context.items[0] as typeof item;
+  expect(await resolveLoginOtp(login, context.items, 0)).toEqual(await resolveLoginOtp(selected, [otp], 0));
+  login.password = 'caller edit';
+  expect(await vault.getItem(item.id)).toMatchObject({ password: 'synthetic' });
+  expect((await vault.readAutofillContext('missing')).items).toEqual([]);
+  expect((await vault.readAutofillContext()).items).toHaveLength(3);
+  await vault.lock();
+});
+
+it('keeps legacy Android OTP binding and excludes archived or deleted sources in a selected fill', async () => {
+  const { vault, item } = await fixture();
+  const providerId = (await vault.listProviders()).find(provider => provider.kind === 'local')!.id;
+  const selected = { ...item, providerRefs: [{ providerId, remoteId: '/password_42_0.json' }] };
+  const otp = { ...createTotpItem(), boundPasswordId: 42, providerRefs: [{ providerId }] };
+  await vault.importItems([selected, otp]);
+  expect((await vault.readAutofillContext(item.id)).items.map(row => row.id)).toEqual([item.id, otp.id]);
+  await vault.upsertItem({ ...otp, archivedAt: new Date().toISOString() });
+  expect((await vault.readAutofillContext(item.id)).items.map(row => row.id)).toEqual([item.id]);
+  await vault.deleteItem(item.id);
+  expect((await vault.readAutofillContext(item.id)).items).toEqual([]);
+  await vault.lock();
+});
+
+it('rejects a selected fill if encrypted bytes change with an unchanged timestamp', async () => {
+  const { vault, storage, item } = await fixture();
+  const context = await vault.readAutofillContext(item.id);
+  // Mutate the storage object itself, as another writer/test storage may do.
+  storage.envelope!.ciphertext = 'AAAA';
+  const send = vi.fn(async () => true);
+  await expect(vault.dispatchAutofill(context, send)).rejects.toThrow('填写权限');
+  expect(send).not.toHaveBeenCalled();
+  await vault.lock();
+});
+
+it.each(['iv', 'cipher', 'version', 'updatedAt', 'kdf'] as const)('rejects a selected fill after its encrypted envelope %s changes', async field => {
+  const { vault, storage, item } = await fixture();
+  const context = await vault.readAutofillContext(item.id);
+  const changed = storage.envelope! as unknown as Record<string, unknown>;
+  if (field === 'kdf') storage.envelope!.kdf = { ...storage.envelope!.kdf, name: 'DEVICE-KEY', keyId: 'replaced' };
+  else changed[field] = 'changed';
+  const send = vi.fn(async () => true);
+  await expect(vault.dispatchAutofill(context, send)).rejects.toThrow('填写权限');
+  expect(send).not.toHaveBeenCalled();
+  await vault.lock();
+});
 
 it('decodes once across the read chain used by matching and Passkey prompts', async () => {
   const { vault } = await fixture();

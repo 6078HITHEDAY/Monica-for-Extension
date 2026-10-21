@@ -48,6 +48,9 @@ async function setup(seed:boolean){
   await service.upsertProvider({id:providerId,kind:'mdbx2',name:'Synthetic hierarchy',enabled:true,isDefaultSaveTarget:false,config:{vaultHandle:vault.vaultHandle}});
   const session=(await service.passkeySessionId())!,p=await service.nearbySessionPreferences(session);
   await service.updateNearbyPreferences({kind:'source',providerId},p.epoch,session);
+  // This lifecycle suite explicitly exercises full trash/restore propagation.
+  const full=await service.nearbySessionPreferences(session);
+  await service.updateNearbyPreferences({kind:'preferences',incrementalOnly:false},full.epoch,session);
   const binding={providerId,vaultHandle:vault.vaultHandle};
   if(seed){
     const root=await nearbyNativeRootId((await client.readWriteRevision(vault.vaultHandle)).vaultId);

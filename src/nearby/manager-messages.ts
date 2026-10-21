@@ -72,7 +72,7 @@ export function nearbyClosedMessage(reason: string): NearbyMessage | undefined {
 }
 
 const stages: Record<string, () => string> = {
-  waiting: () => tr('等待手机连接'),
+  waiting: () => tr('等待手机就绪'),
   connecting: () => tr('正在连接手机'),
   authenticating: () => tr('正在验证加密连接'),
   checking: () => tr('正在核对同步内容'),

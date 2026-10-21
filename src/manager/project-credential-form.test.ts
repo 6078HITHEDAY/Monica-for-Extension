@@ -3,7 +3,7 @@ import { createLoginItem } from '../core/model';
 import type { LoginForm } from './login-form';
 import { moveProjectCredentialPassword, projectCredentialContentTokens, updateProjectContentFields } from './project-credential-form';
 import { withContentOrder } from '../core/password-content';
-import { addProjectCredentialGroup, startProjectCredentialGroups, setProjectCredentialGroupLabel, addProjectCredentialPassword, projectCredentialFormGroups, setProjectCredentialFormValue } from './project-credential-form';
+import { addProjectCredentialGroup, startProjectCredentialGroups, setProjectCredentialGroupLabel, setProjectCredentialGroupNote, addProjectCredentialPassword, projectCredentialFormGroups, setProjectCredentialFormValue } from './project-credential-form';
 function draft() {
   const fields = (passwordOrder: number) => [{ name: 'monica.content.credential', protected: true, value: JSON.stringify({ version: 1,
     groupId: '00000000-0000-0000-0000-000000000001', passwordId: `00000000-0000-0000-0000-00000000001${passwordOrder}`,
@@ -12,6 +12,18 @@ function draft() {
   return { username: 'shared', password: 'second', totpSecret: '', passwordGroupId: 'explicit', customFields: fields(1),
     groupMembers: [{ id: original.id, username: original.username, password: original.password, original }] } as LoginForm;
 }
+it('edits per-group notes without rewriting source snapshots and carries the note to added passwords', () => {
+  const form = draft(), before = JSON.stringify(form.groupMembers[0].original);
+  const id = projectCredentialFormGroups(form)![0].id;
+  form.customFields[0].value = form.customFields[0].value.replace(/}$/, ',"future":9007199254740993}');
+  setProjectCredentialGroupNote(form, id, '  Independent\r\n备注  ');
+  addProjectCredentialPassword(form, id);
+  expect(projectCredentialFormGroups(form)![0].rows.map(row => row.metadata!.note)).toEqual(Array(3).fill('  Independent\r\n备注  '));
+  expect(form.customFields[0].value).toContain('9007199254740993');
+  expect(JSON.stringify(form.groupMembers[0].original)).toBe(before);
+  setProjectCredentialGroupNote(form, id, '');
+  expect(projectCredentialFormGroups(form)![0].note).toBe('');
+});
 it('reorders password identities without moving secrets, attachments, source snapshots or unknown metadata', () => {
   const form = draft();
   form.customFields[0].value = form.customFields[0].value.replace(/}$/, ',"future":9007199254740993}');

@@ -3,6 +3,7 @@ import type { WalletFillPayload } from "../runtime/messages";
 import { profileValues, PROFILE_EXTRAS, ADDRESS_EXTRAS, CARD_NAMES } from "../core/profile-fields";
 type WalletItem = IdentityItem | BillingAddressItem | CardItem | PaymentAccountItem;
 export function walletPayload(item: WalletItem): WalletFillPayload {
+  if (item.kind === 'identity' && item.walletTemplate?.trim()) return { kind: item.kind, fields: {} };
   if (item.kind === "identity") return { kind: item.kind, fields: {
     ...profileValues(item, PROFILE_EXTRAS),
     addressLine3: item.address3, fullName: item.fullName, firstName: item.firstName, middleName: item.middleName, lastName: item.lastName,

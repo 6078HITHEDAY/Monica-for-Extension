@@ -13,7 +13,8 @@ const included = new Set(inventory.symbols);
 const missing = new Set();
 for (const file of await readdir(path.join(root, 'src'), { recursive: true })) {
   if (!/\.(ts|vue)$/.test(file) || file.endsWith('.test.ts')) continue;
-  const source = await readFile(path.join(root, 'src', file), 'utf8');
+  // DOM tag names can also be Material Symbols names (for example iframe).
+  const source = (await readFile(path.join(root, 'src', file), 'utf8')).replace(/\.createElement\(["'][a-z][a-z0-9-]*["']\)/g, '');
   for (const [, name] of source.matchAll(/["']([a-z][a-z0-9_]*)["']/g)) if (available.has(name) && !included.has(name)) missing.add(name);
 }
 if (missing.size) throw new Error('New icons need font regeneration: ' + [...missing].join(', '));

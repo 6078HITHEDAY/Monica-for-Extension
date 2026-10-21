@@ -23,10 +23,13 @@ import { createSecureCustomFieldEditor } from '../core/secure-custom-field-edito
 import BillingAddressFields from "./BillingAddressFields.vue";
 import WalletCardFace from "./WalletCardFace.vue";
 import WalletContentEditor from "./WalletContentEditor.vue";
+import WalletPassFields from './WalletPassFields.vue';
+import { WALLET_TEMPLATES, WALLET_TEMPLATE_LABELS, WALLET_TEMPLATE_FIELDS, type WalletTemplate } from '../core/wallet-pass';
 import CardFaceImagePicker from "./CardFaceImagePicker.vue";
 import { createOtpQrDataUrl, decodeOtpQrImage } from "../core/otp-qr";
 import { exportSteamMaFile, parseSteamMaFileBundle } from "../core/steam-mafile";
 import { itemKindLabel } from "../manager/item-metadata";
+import { WALLET_CREATE_TYPES, walletCreateOptions, type WalletCreateType } from '../manager/editor-types';
 
 export type EditableVaultKind =
   | "card"
@@ -39,6 +42,7 @@ export type EditableVaultKind =
 const props = defineProps<{
   item?: VaultItem;
   initialKind: EditableVaultKind;
+  initialWalletTemplate?: WalletTemplate;
   providers: ProviderAccount[];
   saveItem: (item: VaultItem) => Promise<void>;
 }>();
@@ -56,6 +60,21 @@ const otpQrDataUrl = ref("");
 const otpTransferStatus = ref("");
 const revealSecret = ref(false);
 const fields = reactive(emptyFields());
+const isPass = computed(() => kind.value === 'identity' && Boolean(fields.walletTemplate.trim()));
+const unknownPass = computed(() => isPass.value && !WALLET_TEMPLATE_FIELDS[fields.walletTemplate]);
+const canSwitchWallet = !props.item && ['card', 'identity', 'billing-address', 'payment-account'].includes(props.initialKind);
+const walletType = computed(() => isPass.value ? fields.walletTemplate : kind.value);
+const walletDrafts = new Map<string, ReturnType<typeof emptyFields>>();
+function selectWalletType(value: WalletCreateType) {
+  if (!canSwitchWallet || !WALLET_CREATE_TYPES.includes(value) || value === walletType.value) return;
+  walletDrafts.set(walletType.value, structuredClone(toRaw(fields)));
+  const common = { title: fields.title, notes: fields.notes, favorite: fields.favorite, providerId: fields.providerId };
+  Object.assign(fields, emptyFields(), walletDrafts.get(value), common);
+  const template = WALLET_TEMPLATES.find(template => template === value);
+  fields.walletTemplate = template || '';
+  kind.value = template ? 'identity' : value as EditableVaultKind;
+  error.value = '';
+}
 const customFieldEditor = createSecureCustomFieldEditor();
 
 const isOrderedWallet = computed(() => kind.value === 'card' || kind.value === 'identity');
@@ -71,7 +90,7 @@ const walletContentOrder = computed({
 const walletSections = computed(() => [
   ...(kind.value === 'card'
     ? [{ key: 'billing', title: '账单地址', icon: 'home' }, { key: 'extended', title: '更多银行卡信息', icon: 'tune' }]
-    : [{ key: 'identity', title: '更多身份信息', icon: 'badge' }, { key: 'address', title: '地址与其他信息', icon: 'home' }]),
+    : isPass.value ? [] : [{ key: 'identity', title: '更多身份信息', icon: 'badge' }, { key: 'address', title: '地址与其他信息', icon: 'home' }]),
   { key: 'custom', title: '自定义字段', icon: 'text_fields' }, { key: 'notes', title: '备注', icon: 'notes' }
 ]);
 
@@ -101,7 +120,13 @@ function initialize() {
   Object.assign(fields, emptyFields());
   fields.providerId =
     props.item?.providerRefs[0]?.providerId || defaultProviderId();
-  if (!props.item) return;
+  if (!props.item) {
+    if (kind.value === 'identity' && props.initialWalletTemplate) {
+      fields.walletTemplate = props.initialWalletTemplate;
+      fields.documentType = 'OTHER';
+    }
+    return;
+  }
   fields.title = props.item.title;
   fields.notes = props.item.notes;
   fields.favorite = props.item.favorite;
@@ -141,6 +166,8 @@ function initialize() {
       break;
     case "identity":
       Object.assign(fields, {
+        walletTemplate: props.item.walletTemplate ?? '',
+        walletFields: { ...props.item.walletFields },
         documentType: props.item.documentType,
         documentTitle: props.item.documentTitle || "",
         documentNumber: props.item.documentNumber,
@@ -261,7 +288,7 @@ async function submit() {
   if (!title) return void (error.value = tr('请输入名称。'));
   if (!props.item && kind.value === "card" && !fields.number.trim())
     return void (error.value = tr('请输入银行卡号。'));
-  if (!props.item && kind.value === "identity" && !fields.documentNumber.trim())
+  if (!props.item && kind.value === "identity" && !isPass.value && !fields.documentNumber.trim())
     return void (error.value = tr('请输入证件号码。'));
   if (!props.item && kind.value === "billing-address" && !fields.streetAddress.trim())
     return void (error.value = tr('请输入街道地址。'));
@@ -335,9 +362,11 @@ function buildCandidate(title: string, validateCustomFields = false): VaultItem 
       return {
         ...base,
         kind: "identity",
+        ...(fields.walletTemplate || props.item?.kind === 'identity' && props.item.walletTemplate !== undefined ? { walletTemplate: fields.walletTemplate } : {}),
+        ...(Object.keys(fields.walletFields).length || props.item?.kind === 'identity' && props.item.walletFields !== undefined ? { walletFields: { ...fields.walletFields } } : {}),
         documentType: fields.documentType,
         documentTitle: fields.documentTitle,
-        documentNumber: fields.documentNumber.trim(),
+        documentNumber: isPass.value ? fields.documentNumber : fields.documentNumber.trim(),
         firstName: fields.firstName.trim(),
         middleName: fields.middleName.trim(),
         lastName: fields.lastName.trim(),
@@ -550,7 +579,7 @@ function emptyFields() {
     brand: "",
     billingAddressId: "",
     bankName: "",
-    cardType: "CREDIT" as NonNullable<CardItem["cardType"]>,
+    cardType: "DEBIT" as NonNullable<CardItem["cardType"]>,
     billingAddress: "",
     nickname: "",
     validFromMonth: "",
@@ -560,6 +589,8 @@ function emptyFields() {
     branchCode: "",
     customerServicePhone: "",
     documentType: "OTHER" as IdentityItem["documentType"],
+    walletTemplate: '',
+    walletFields: {} as Record<string, string>,
     documentNumber: "",
     firstName: "",
     middleName: "",
@@ -806,18 +837,13 @@ function exportMaFile() {
   <m3e-dialog v-material-dialog open class="material-dialog material-editor-dialog" :disableClose.prop="saving" :dismissible="!saving" :close-label="tr('关闭')" @closed.self="emit('cancel')">
 <h2 slot="header" id="vault-item-editor-title">
             {{
-              item ? tr('编辑{0}', { 0: itemKindLabel(kind) }) : tr('添加{0}', { 0: itemKindLabel(kind) })
+              item ? tr('编辑{0}', { 0: isPass ? tr(WALLET_TEMPLATE_LABELS[fields.walletTemplate] ?? '卡包') : itemKindLabel(kind) }) : tr('添加{0}', { 0: isPass ? tr(WALLET_TEMPLATE_LABELS[fields.walletTemplate] ?? '卡包') : itemKindLabel(kind) })
             }}
           </h2>
 <form id="vault-item-form" class="material-editor-form editor-form editor-with-actions" @submit.prevent="submit">
-        <div class="editor-fields vault-item-form structured-editor"><section class="editor-section editor-basics" :aria-label="tr('基本信息')"><m3e-form-field v-field-label variant="filled" hide-required-marker class="field editor-title-field"><label slot="label">{{ tr('名称 *') }}</label><input v-model="fields.title" autofocus autocomplete="off" /></m3e-form-field><div class="editor-meta-grid"><m3e-form-field v-field-label variant="filled" hide-required-marker v-if="!item" class="field"
-          ><label slot="label">{{ tr('项目类型') }}</label><component :is="materialSelectTag" @input="kind = ($event.target as HTMLElement &amp; { value: string }).value" >
-            <component :is="materialOptionTag" :selected.prop="String(kind ?? '') === String('card')" value="card">{{ tr('银行卡') }}</component>
-            <component :is="materialOptionTag" :selected.prop="String(kind ?? '') === String('identity')" value="identity">{{ tr('证件') }}</component>
-            <component :is="materialOptionTag" :selected.prop="String(kind ?? '') === String('billing-address')" value="billing-address">{{ tr('账单地址') }}</component>
-            <component :is="materialOptionTag" :selected.prop="String(kind ?? '') === String('payment-account')" value="payment-account">{{ tr('支付账号') }}</component>
-            <component :is="materialOptionTag" :selected.prop="String(kind ?? '') === String('secure-note')" value="secure-note">{{ tr('安全笔记') }}</component>
-            <component :is="materialOptionTag" :selected.prop="String(kind ?? '') === String('totp')" value="totp">{{ tr('动态验证码') }}</component>
+        <div class="editor-fields vault-item-form structured-editor"><section class="editor-section editor-basics" :aria-label="tr('基本信息')"><m3e-form-field v-field-label variant="filled" hide-required-marker class="field editor-title-field"><label slot="label">{{ tr('名称 *') }}</label><input v-model="fields.title" autofocus autocomplete="off" /></m3e-form-field><div class="editor-meta-grid"><m3e-form-field v-field-label variant="filled" hide-required-marker v-if="canSwitchWallet" class="field">
+          <label slot="label">{{ tr('卡包类型') }}</label><component :is="materialSelectTag" @input="selectWalletType(($event.target as any).value)">
+            <component :is="materialOptionTag" v-for="option in walletCreateOptions()" :key="option.value" :value="option.value" :selected.prop="walletType === option.value">{{ option.label }}</component>
           </component></m3e-form-field><m3e-form-field v-field-label variant="filled" hide-required-marker hide-subscript="never" class="field"
           ><label slot="label">{{ tr('保存到') }}</label><component :is="materialSelectTag" @input="fields.providerId = ($event.target as HTMLElement &amp; { value: string }).value"  :disabled="Boolean(item)">
             <component :is="materialOptionTag" :selected.prop="String(fields.providerId ?? '') === String(provider.id)"
@@ -834,6 +860,12 @@ function exportMaFile() {
             "
             >{{ tr('Bitwarden 不支持该独立记录类型，因此不会显示为目标。') }}</small
           ></m3e-form-field></div></section><section v-if="kind === 'card'" class="editor-section"><h3>{{ tr('银行卡信息') }}</h3><div class="editor-field-grid"><m3e-form-field v-field-label variant="filled" hide-required-marker class="field"
+            ><label slot="label">{{ tr('卡类型') }}</label><component :is="materialSelectTag" @input="fields.cardType = ($event.target as HTMLElement &amp; { value: string }).value" >
+
+              <component :is="materialOptionTag" :selected.prop="String(fields.cardType ?? '') === String('DEBIT')" value="DEBIT">{{ tr('借记卡') }}</component>
+              <component :is="materialOptionTag" :selected.prop="String(fields.cardType ?? '') === String('CREDIT')" value="CREDIT">{{ tr('信用卡') }}</component>
+              <component :is="materialOptionTag" :selected.prop="String(fields.cardType ?? '') === String('PREPAID')" value="PREPAID">{{ tr('预付卡') }}</component>
+            </component></m3e-form-field><m3e-form-field v-field-label variant="filled" hide-required-marker class="field"
             ><label slot="label">{{ tr('持卡人') }}</label><input
               v-model="fields.cardholderName"
               autocomplete="cc-name" /></m3e-form-field>
@@ -860,7 +892,9 @@ function exportMaFile() {
               type="password"
               inputmode="numeric"
               autocomplete="cc-csc" /></m3e-form-field></div></section>
-<section v-if="kind === 'identity'" class="editor-section"><h3>{{ tr('身份信息') }}</h3><div class="editor-field-grid"><m3e-form-field v-field-label variant="filled" hide-required-marker class="field"
+<section v-if="item && kind === 'identity'" class="editor-section" data-wallet-template><m3e-form-field v-field-label variant="filled" class="field"><label slot="label">{{ tr('卡包模板') }}</label><component :is="materialSelectTag" :disabled.prop="unknownPass" @input="fields.walletTemplate = ($event.target as any).value"><component :is="materialOptionTag" value="" :selected.prop="!fields.walletTemplate">{{ tr('证件') }}</component><component :is="materialOptionTag" v-for="template in WALLET_TEMPLATES" :key="template" :value="template" :selected.prop="fields.walletTemplate === template">{{ tr(WALLET_TEMPLATE_LABELS[template]) }}</component><component v-if="unknownPass" :is="materialOptionTag" :value="fields.walletTemplate" :selected.prop="true">{{ fields.walletTemplate }}</component></component></m3e-form-field><p v-if="unknownPass" class="editor-hint">{{ tr('此卡包模板暂不支持，原始字段已保留。') }}</p></section>
+<section v-if="isPass" class="editor-section" data-wallet-pass-common><h3>{{ tr(WALLET_TEMPLATE_LABELS[fields.walletTemplate] || '卡包') }}</h3><div class="wallet-pass-common-grid"><m3e-form-field v-field-label variant="filled" hide-subscript="always" class="field"><label slot="label">{{ tr('卡号或票号') }}</label><input v-model="fields.documentNumber" autocomplete="off" /></m3e-form-field><m3e-form-field v-field-label variant="filled" hide-subscript="always" class="field"><label slot="label">{{ tr('持有人') }}</label><input v-model="fields.fullName" autocomplete="off" /></m3e-form-field><m3e-form-field v-field-label variant="filled" hide-subscript="always" class="field"><label slot="label">{{ tr('发行方') }}</label><input v-model="fields.issuedBy" /></m3e-form-field><m3e-form-field v-field-label variant="filled" hide-subscript="always" class="field"><label slot="label">{{ tr('有效期至') }}</label><input v-model="fields.expiryDate" /></m3e-form-field></div><WalletPassFields v-model="fields.walletFields" :template="fields.walletTemplate" /></section>
+<section v-if="kind === 'identity' && !isPass" class="editor-section"><h3>{{ tr('身份信息') }}</h3><div class="editor-field-grid"><m3e-form-field v-field-label variant="filled" hide-required-marker class="field"
             ><label slot="label">{{ tr('证件类型') }}</label><component :is="materialSelectTag" @input="fields.documentType = ($event.target as HTMLElement &amp; { value: string }).value" >
               <component :is="materialOptionTag" :selected.prop="String(fields.documentType ?? '') === String('ID_CARD')" value="ID_CARD">{{ tr('身份证') }}</component>
               <component :is="materialOptionTag" :selected.prop="String(fields.documentType ?? '') === String('PASSPORT')" value="PASSPORT">{{ tr('护照') }}</component>
@@ -1145,12 +1179,7 @@ function exportMaFile() {
   <template #billing><BillingAddressFields v-model="fields.billingAddress" /></template>
   <template #extended><div class="editor-field-grid"><ProfileExtraFields :values="fields" :names="CARD_NAMES" @edit="(key,value)=>fields[key]=value" /><m3e-form-field v-field-label variant="filled" hide-required-marker class="field"
             ><label slot="label">{{ tr('银行') }}</label><input v-model="fields.bankName" /></m3e-form-field>
-<m3e-form-field v-field-label variant="filled" hide-required-marker class="field"
-            ><label slot="label">{{ tr('卡类型') }}</label><component :is="materialSelectTag" @input="fields.cardType = ($event.target as HTMLElement &amp; { value: string }).value" >
-              <component :is="materialOptionTag" :selected.prop="String(fields.cardType ?? '') === String('CREDIT')" value="CREDIT">{{ tr('信用卡') }}</component>
-              <component :is="materialOptionTag" :selected.prop="String(fields.cardType ?? '') === String('DEBIT')" value="DEBIT">{{ tr('借记卡') }}</component>
-              <component :is="materialOptionTag" :selected.prop="String(fields.cardType ?? '') === String('PREPAID')" value="PREPAID">{{ tr('预付卡') }}</component>
-            </component></m3e-form-field>
+
 <m3e-form-field v-field-label variant="filled" hide-required-marker class="field"
             ><label slot="label">{{ tr('昵称') }}</label><input v-model="fields.nickname" /></m3e-form-field>
 <m3e-form-field v-field-label variant="filled" hide-required-marker class="field"
@@ -1337,3 +1366,10 @@ function exportMaFile() {
         </footer>
 </m3e-dialog>
 </template>
+
+<style scoped>
+.wallet-pass-common-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; }
+.wallet-pass-common-grid m3e-form-field { width: 100%; min-width: 0; --m3e-form-field-container-shape: 4px; }
+.wallet-pass-common-grid m3e-form-field:first-child { --m3e-form-field-container-shape: 24px 24px 4px 4px; }
+.wallet-pass-common-grid m3e-form-field:last-child { --m3e-form-field-container-shape: 4px 4px 24px 24px; }
+</style>

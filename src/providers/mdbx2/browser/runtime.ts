@@ -1,10 +1,13 @@
 import { parseLosslessJson } from '../../../core/lossless-json';
+import { isFirefoxExtension } from '../../../runtime/browser-platform';
 import { MDBX2_NATIVE_HOST_NAME } from '../native-contract';
 import type { Mdbx2NativePort, Mdbx2NativeRuntime } from '../native-client';
-import { boundedBridgeJson, bridgeObject, browserRequest, MDBX_BROWSER_DOCUMENT, MDBX_BROWSER_DOCUMENT_AUTH, MDBX_BROWSER_DOCUMENT_READY, MDBX_BROWSER_HEARTBEAT_MS, MDBX_BROWSER_PORT, MDBX_BROWSER_RESPONSE_BYTES, MDBX_BROWSER_START_MS } from './bridge-protocol';
+import { boundedBridgeJson, bridgeObject, browserRequest, trustedFirefoxEngineDocument, MDBX_BROWSER_DOCUMENT, MDBX_BROWSER_DOCUMENT_AUTH, MDBX_BROWSER_DOCUMENT_READY, MDBX_BROWSER_HEARTBEAT_MS, MDBX_BROWSER_PORT, MDBX_BROWSER_RESPONSE_BYTES, MDBX_BROWSER_START_MS } from './bridge-protocol';
 
 let creating: Promise<void> | undefined;
 let authorizationInstalled = false;
+let firefoxDocument: HTMLIFrameElement | undefined;
+let firefoxDocumentURL: string | undefined;
 export function isBrowserMdbxControlMessage(input: unknown): boolean { const type = bridgeObject(input)?.type; return type === MDBX_BROWSER_DOCUMENT_AUTH || type === MDBX_BROWSER_DOCUMENT_READY; }
 function installDocumentAuthorization(): void {
   if (authorizationInstalled) return;
@@ -12,6 +15,14 @@ function installDocumentAuthorization(): void {
   chrome.runtime.onMessage.addListener((input, sender, respond) => {
     if (bridgeObject(input)?.type !== MDBX_BROWSER_DOCUMENT_AUTH) return false;
     const message = bridgeObject(input)!;
+    if (isFirefoxExtension()) {
+      const authorized = trustedFirefoxEngineDocument(sender, chrome.runtime, firefoxDocumentURL, Boolean(firefoxDocument?.isConnected))
+        && typeof message.nonce === 'string' && /^[a-f0-9-]{36}$/.test(message.nonce) && Object.keys(message).length === 2;
+      if (!authorized) { respond({ authorized: false }); return false; }
+      void chrome.runtime.getContexts({ contextTypes: ['BACKGROUND'], documentIds: [sender.documentId!], documentUrls: [sender.url!] })
+        .then(contexts => respond({ authorized: contexts.length === 1, nonce: message.nonce }), () => respond({ authorized: false }));
+      return true;
+    }
     if (sender.id !== chrome.runtime.id || sender.url !== chrome.runtime.getURL(MDBX_BROWSER_DOCUMENT)
       || sender.tab !== undefined || (sender.frameId !== undefined && sender.frameId !== 0) || typeof message.nonce !== 'string'
       || !/^[a-f0-9-]{36}$/.test(message.nonce) || Object.keys(message).length !== 2) { respond({ authorized: false }); return false; }
@@ -23,14 +34,26 @@ function installDocumentAuthorization(): void {
     return true;
   });
 }
-async function ensureDocument(): Promise<void> {
+export async function ensureBrowserDocument(): Promise<void> {
   if (creating) return creating;
   creating = (async () => {
     const url = chrome.runtime.getURL(MDBX_BROWSER_DOCUMENT);
+    if (isFirefoxExtension()) {
+      if (!firefoxDocument?.isConnected) {
+        firefoxDocumentURL = `${url}#${crypto.randomUUID()}`;
+        firefoxDocument = document.createElement('iframe');
+        // The event page itself has no browser UI. Keep its private frame
+        // focusable so permission-granted paste/copy can expire the clipboard.
+        firefoxDocument.setAttribute('aria-hidden', 'true');
+        firefoxDocument.src = firefoxDocumentURL;
+        document.body.append(firefoxDocument);
+      }
+    } else {
     const contexts = await chrome.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] });
     if (!contexts.some(context => context.documentUrl === url)) {
       if (contexts.length) throw Error('browser-offscreen-in-use');
-      await chrome.offscreen.createDocument({ url: MDBX_BROWSER_DOCUMENT, reasons: [chrome.offscreen.Reason.WORKERS], justification: 'Run the encrypted MDBX engine in a dedicated worker.' });
+      await chrome.offscreen.createDocument({ url: MDBX_BROWSER_DOCUMENT, reasons: [chrome.offscreen.Reason.WORKERS, chrome.offscreen.Reason.CLIPBOARD], justification: 'Run the encrypted MDBX engine and perform user-enabled clipboard expiry without a visible tab.' });
+    }
     }
     // Only replay this secret-free readiness probe. Never enqueue credentials
     // until the authenticated offscreen page has installed its port listener.
@@ -85,7 +108,7 @@ export function createBrowserMdbx2Runtime(): Mdbx2NativeRuntime {
         }
         stop('browser-engine-failed');
       };
-      void ensureDocument().then(() => {
+      void ensureBrowserDocument().then(() => {
         if (stopped) return;
         port = chrome.runtime.connect({ name: MDBX_BROWSER_PORT });
         port.onMessage.addListener(receive); port.onDisconnect.addListener(disconnected);

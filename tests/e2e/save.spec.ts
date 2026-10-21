@@ -1,4 +1,5 @@
-import { chromium, expect, test, type BrowserContext, type Page, type TestInfo } from "@playwright/test";
+import { expect, test, type BrowserContext, type Page, type TestInfo } from "@playwright/test";
+import { launchTestContext } from './fixtures/edge';
 import path from "node:path";
 
 interface ListedLogin {
@@ -10,7 +11,7 @@ interface ListedLogin {
 
 async function launchExtension(testInfo: TestInfo, profileName: string, viewport = { width: 1280, height: 720 }): Promise<{ context: BrowserContext; manager: Page }> {
   const extensionPath = path.resolve("dist");
-  const context = await chromium.launchPersistentContext(testInfo.outputPath(profileName), {
+  const context = await launchTestContext(testInfo.outputPath(profileName), {
     channel: "chromium",
     headless: true, locale: "zh-CN",
     viewport,

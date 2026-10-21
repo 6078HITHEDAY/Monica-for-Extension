@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest';
 import { createLoginItem, type LoginItem } from './model';
-import { PROJECT_CREDENTIAL_FIELD } from './project-credentials';
+import { PROJECT_CREDENTIAL_FIELD, readProjectCredential } from './project-credentials';
+import { ANDROID_URL_RULE_FIELD, effectiveLoginUriRules, writeAndroidUrlRules } from './url-rules';
 import { reconcileProjectCredentialEdits } from './project-credential-edits';
 const uuid = (n: number) => `00000000-0000-0000-0000-${String(n).padStart(12, '0')}`;
 export const credentialRows = (): LoginItem[] => [0, 1, 2].map(index => ({
@@ -10,6 +11,37 @@ export const credentialRows = (): LoginItem[] => [0, 1, 2].map(index => ({
     groupId: uuid(index === 2 ? 2 : 1), passwordId: uuid(index + 10), label: 'Account', primary: index !== 2,
     groupOrder: index === 2 ? 1 : 0, passwordOrder: index === 2 ? 0 : index, future: 'keep' }) }]
 }));
+it('propagates and clears a per-credential note while retaining literal unknown metadata and project notes', () => {
+  const original = credentialRows().map(row => ({ ...row, notes: 'Project note', customFields: row.customFields.map(field => ({ ...field,
+    value: field.value.replace('"future":"keep"', '"future":9007199254740993,"note":"old"') })) }));
+  for (const note of ['  Account note\r\n备注  ', '']) {
+    const draft = original.map((row, index) => index === 1 ? { ...row, customFields: row.customFields.map(field => ({ ...field,
+      value: field.value.replace('"note":"old"', `"note":${JSON.stringify(note)}`) })) } : row);
+    const saved = reconcileProjectCredentialEdits(draft, original);
+    expect(saved.map(row => readProjectCredential(row.customFields)?.note)).toEqual([note, note, 'old']);
+    expect(saved.every(row => row.customFields[0].value.includes('9007199254740993'))).toBe(true);
+    expect(saved.map(row => row.notes)).toEqual(['Project note', 'Project note', 'Project note']);
+  }
+  const conflicted = original.map((row, i) => ({ ...row, customFields: row.customFields.map(field => ({ ...field,
+    value: field.value.replace('"note":"old"', `"note":"different-${i}"`) })) }));
+  expect(() => reconcileProjectCredentialEdits(conflicted, original)).toThrow('冲突');
+  expect(() => reconcileProjectCredentialEdits(conflicted, [])).toThrow('冲突');
+});
+it('propagates URL edits into each group carrier without replacing their private metadata', () => {
+  const original = credentialRows().map((row, i) => ({ ...row,
+    customFields: [...row.customFields, { name: ANDROID_URL_RULE_FIELD, protected: true,
+      value: JSON.stringify({ version: 1, owner: i, urls: [{ url: 'example.test', mode: 'HOST', extra: i }] }) }],
+    uris: ['example.test'], uriRules: [{ uri: 'example.test', matchType: 'host' as const }] }));
+  const rules = [{ uri: 'www.example.test', matchType: 'exact' as const }];
+  const draft = original.map((row, i) => i === 1 ? { ...row, uriRules: rules, uris: rules.map(rule => rule.uri),
+    customFields: writeAndroidUrlRules(row.customFields, rules) } : row);
+  const saved = reconcileProjectCredentialEdits(draft, original);
+  for (const [i, row] of saved.entries()) {
+    expect(effectiveLoginUriRules(row)).toEqual(rules);
+    expect(JSON.parse(row.customFields[1].value)).toMatchObject({ owner: i, urls: [{ extra: i }] });
+    expect(row.customFields[0]).toEqual(original[i].customFields[0]);
+  }
+});
 it('propagates shared username and cleared OTP without replacing passwords or another credential group', () => {
   const original = credentialRows(); const before = JSON.stringify(original);
   const edited = original.map((item, i) => i === 0 ? { ...item, username: 'renamed', totpSecret: '', password: 'new password' } : item);

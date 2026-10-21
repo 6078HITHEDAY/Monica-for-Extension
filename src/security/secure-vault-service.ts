@@ -4,6 +4,7 @@ import { matchesBinding, oneDriveConnectionBinding, parseOneDriveConnection, val
 import type { OneDriveTokens } from "../providers/onedrive/onedrive-auth";
 import { capturePasswordHistory } from '../core/password-history';
 import { walletContentOrderOnlyChanged } from '../core/wallet-content-order';
+import { validateVaultBatch, type VaultBatchRequest } from '../core/vault-batch';
 import { planKeePassProjectRemoval, type KeePassProjectRemovalDraft } from '../core/keepass-project-removal';
 import { keePassRemovalRequestKey, keePassRemovalFileRequestHash, readKeePassProjectRemovalIntents, type KeePassProjectRemovalIntent } from '../core/keepass-project-removal-journal';
 import { assertKeePassResolutionUnchanged, readKeePassProjectResolutionIntents, resolutionSnapshotKey, type KeePassProjectResolutionIntent } from '../core/keepass-project-resolution-journal';
@@ -35,6 +36,8 @@ import { bitwardenRemovalSnapshotSha256 } from '../providers/bitwarden/bitwarden
 import { parseLosslessJson } from '../core/lossless-json';
 import { adoptBitwardenPasskeyCopies } from '../providers/bitwarden/bitwarden-passkey-preservation-adoption';
 import { redactProviderDiagnostic, redactProviderMessage } from "../providers/provider-diagnostics";
+import { validateExportInput, type VaultExportInput, type VaultExportResult } from './authenticated-export';
+import { recoveryOverview, type VaultStorageOverview } from './vault-recovery';
 import { createDeviceVaultKey, decryptVaultState, deriveVaultKey, encryptVaultState, exportVaultKey, importVaultKey, vaultKdfNeedsUpgrade, type DeviceVaultKdfParameters, type VaultEnvelope, type VaultKdfParameters } from "./vault-crypto";
 import { validateMasterPassword } from "./master-password-policy";
 import { bytesToBase64, randomBytes } from "./encoding";
@@ -90,7 +93,7 @@ export interface AutofillContext {
   blockedHosts: string[];
   blockedFieldSignatures: string[];
   /** Internal revision check; never returned through extension messages. */
-  envelopeVersion: string;
+  envelopeVersion: Readonly<VaultEnvelope>;
 }
 
 export interface EncryptedVaultBackup {
@@ -452,6 +455,48 @@ export class SecureVaultService {
     });
   }
 
+  /** Authentication runs outside the mutation queue so locking can cancel it. */
+  async authenticatedExport(input: VaultExportInput, verifyHello?: (bindingId: string, challenge: string) => Promise<void>): Promise<VaultExportResult> {
+    validateExportInput(input);
+    if (input.format === 'encrypted') validateMasterPassword(input.backupPassword!);
+    const captured = await this.runExclusive(async () => {
+      const { envelope, session, key } = await this.unlockedContext();
+      const state = await this.readDecodedSnapshot(envelope, key, session);
+      const recovery = input.recoveryId ? (await this.storage.recoveryCopies?.())?.find(copy => copy.id === input.recoveryId)?.envelope : undefined;
+      if (input.recoveryId && (!recovery || JSON.stringify(recovery.kdf) !== JSON.stringify(envelope.kdf))) throw new Error('此恢复副本已不再可用，请刷新列表。');
+      return { envelope, recovery, sessionId: session.id, rawKey: session.rawKey, bindingId: state.settings.windowsHello?.bindingId };
+    });
+    if (captured.envelope.kdf.name === 'DEVICE-KEY') {
+      if (!captured.bindingId || !verifyHello) throw new Error('请先设置主密码或注册 Windows Hello，再验证导出。');
+      const challenge = bytesToBase64(crypto.getRandomValues(new Uint8Array(32))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      await verifyHello(captured.bindingId, challenge);
+    } else {
+      if (!input.masterPassword) throw new VaultUnlockError();
+      try {
+        const { key } = await deriveVaultKey(input.masterPassword, captured.envelope.kdf);
+        await decryptVaultState(captured.envelope, key);
+      } catch { throw new VaultUnlockError(); }
+    }
+    const backupKey = input.format === 'encrypted' ? await deriveVaultKey(input.backupPassword!) : undefined;
+    return this.runExclusive(async () => {
+      const { envelope, session, key } = await this.unlockedContext();
+      if (session.id !== captured.sessionId || session.rawKey !== captured.rawKey || !sameVaultEnvelope(envelope, captured.envelope)) {
+        throw new Error('验证期间密码库或会话已变化，请重新验证导出。');
+      }
+      const currentState = await decryptVaultState(envelope, key);
+      if (currentState.settings.windowsHello?.bindingId !== captured.bindingId) throw new Error('验证方式已变化，请重新验证。');
+      if (input.recoveryId && !(await this.storage.recoveryCopies?.())?.some(copy => copy.id === input.recoveryId)) throw new Error('此恢复副本已不再可用，请刷新列表。');
+      const state = captured.recovery ? await decryptVaultState(captured.recovery, key) : currentState;
+      if (input.format === 'plaintext') return { format: 'plaintext', version: 1, items: state.items.filter(item => !item.deletedAt && !item.archivedAt) };
+      validateMasterPassword(input.backupPassword!);
+      const backupEnvelope = await encryptVaultState(state, backupKey!.key, backupKey!.kdf);
+      // Lock/session cancellation may occur while the KDF yields to WebCrypto.
+      const current = await this.unlockedContext();
+      if (current.session.id !== captured.sessionId || !sameVaultEnvelope(current.envelope, envelope)) throw new VaultLockedError();
+      return { format: 'encrypted', backup: { magic: 'MONICA_EXTENSION_BACKUP', version: 1, exportedAt: new Date(this.now()).toISOString(), envelope: backupEnvelope } };
+    });
+  }
+
   async exportEncryptedBackup(backupPassword: string): Promise<EncryptedVaultBackup> {
     return this.runExclusive(async () => {
       const { envelope, key } = await this.unlockedContext();
@@ -501,7 +546,13 @@ export class SecureVaultService {
       // but require a new nearby identity and explicit pairing on this device.
       delete restoredState.nearbyPreferences;
       delete restoredState.nearbyNativeJournal;
-      const { invalidateNearbyReplayForRestore } = await import('../nearby/local-adoption');
+      const { invalidateNearbyReplayForRestore, readNearbyRetainedLocals } = await import('../nearby/local-adoption');
+      const unreplicated = new Set(readNearbyRetainedLocals(restoredState.nearbyRetainedLocals).map(id => id.slice('local:'.length)));
+      delete restoredState.nearbyRetainedLocals;
+      if (unreplicated.size) {
+        const live = new Set(restoredState.items.map(item => item.id));
+        restoredState.localItemAttachments = (restoredState.localItemAttachments ?? []).filter(file => !unreplicated.has(file.itemId) || live.has(file.itemId));
+      }
       invalidateNearbyReplayForRestore(restoredState);
       // A portable backup cannot grant device-local access on another installation.
       restoredState.settings.lockedAutofillItemIds = [];
@@ -544,6 +595,17 @@ export class SecureVaultService {
 
   async readState(activity = false): Promise<VaultState> {
     return this.readProjection(state => state, activity);
+  }
+
+  async storageOverview(): Promise<VaultStorageOverview> {
+    return this.runExclusive(async () => {
+      const { envelope } = await this.unlockedContext();
+      return recoveryOverview(envelope, await this.storage.recoveryCopies?.() || []);
+    });
+  }
+
+  async clearRecoveryCopies(): Promise<void> {
+    return this.runExclusive(async () => { await this.unlockedContext(); await this.storage.clearRecoveryCopies?.(); });
   }
 
   /** Internal only: a coordinator must retain its session and current epoch. */
@@ -596,7 +658,11 @@ export class SecureVaultService {
       const preferences = changeNearbyPreferences(previous, input, expectedEpoch);
       if (preferences.replicaStorageId !== previous.replicaStorageId) {
         delete state.nearbyNativeJournal;
-        const { invalidateNearbyReplayForRestore } = await import('../nearby/local-adoption');
+        const { invalidateNearbyReplayForRestore, readNearbyRetainedLocals } = await import('../nearby/local-adoption');
+        // A new replica has no bindings for the old retained local ids.
+        const orphans = new Set(readNearbyRetainedLocals(state.nearbyRetainedLocals).map(id => id.slice('local:'.length)));
+        delete state.nearbyRetainedLocals;
+        if (orphans.size) state.localItemAttachments = (state.localItemAttachments ?? []).filter(file => !orphans.has(file.itemId));
         invalidateNearbyReplayForRestore(state);
       }
       state.nearbyPreferences = preferences;
@@ -964,23 +1030,25 @@ export class SecureVaultService {
   }
 
   /** Background-only projection; the runtime exposes summaries and explicit fills. */
-  async readAutofillContext(): Promise<AutofillContext> {
+  async readAutofillContext(selectedItemId?: string): Promise<AutofillContext> {
     return this.runExclusive(async () => {
       const envelope = await this.requireEnvelope();
-      const envelopeVersion = JSON.stringify(envelope);
+      // Strings are immutable. Retain encrypted bytes without serializing the
+      // entire vault twice per fill; copy mutable metadata for the final recheck.
+      const envelopeVersion = { ...envelope, kdf: { ...envelope.kdf } };
       const session = await this.sessions.read();
       if (session && session.expiresAt > this.now()) {
         const state = await this.readDecodedSnapshot(envelope, await importVaultKey(session.rawKey), session);
         return {
-          locked: false, envelopeVersion, items: structuredClone(state.items.filter((item) => !item.deletedAt && !item.archivedAt)),
-          credentialIdentities: autofillCredentialIdentities(state.items),
+          locked: false, envelopeVersion, items: structuredClone(autofillContextItems(state.items, selectedItemId)),
+          credentialIdentities: selectedItemId === undefined ? autofillCredentialIdentities(state.items) : {},
           allowedIds: [...(state.settings.lockedAutofillItemIds || [])], blockedHosts: [...state.settings.autofillBlockedHosts],
           blockedFieldSignatures: state.settings.autofillBlockedFieldSignatures.map((record) => record.signature)
         };
       }
       this.clearDecryptedState();
       const cached = await this.lockedAutofill.read(envelope);
-      return { locked: true, envelopeVersion, items: cached?.logins || [], credentialIdentities: cached?.credentialIdentities || {}, allowedIds: cached?.logins.map((item) => item.id) || [], blockedHosts: cached?.blockedHosts || [], blockedFieldSignatures: cached?.blockedFieldSignatures || [] };
+      return { locked: true, envelopeVersion, items: autofillContextItems(cached?.logins || [], selectedItemId), credentialIdentities: selectedItemId === undefined ? cached?.credentialIdentities || {} : {}, allowedIds: cached?.logins.map((item) => item.id) || [], blockedHosts: cached?.blockedHosts || [], blockedFieldSignatures: cached?.blockedFieldSignatures || [] };
     });
   }
 
@@ -990,7 +1058,7 @@ export class SecureVaultService {
       const envelope = await this.requireEnvelope();
       const session = await this.sessions.read();
       const locked = !session || session.expiresAt <= this.now();
-      if (locked !== context.locked || JSON.stringify(envelope) !== context.envelopeVersion) {
+      if (locked !== context.locked || !sameVaultEnvelope(envelope, context.envelopeVersion)) {
         throw new Error("填写权限或密码库已变化，请重新打开 Monica 后再填充。");
       }
       // Start delivery while authorized, but never hold the vault lock while awaiting a page.
@@ -3551,6 +3619,25 @@ export class SecureVaultService {
     });
   }
 
+  /** Validate the entire selection before a single encrypted commit or sync enqueue. */
+  async batchMutateItems(input: VaultBatchRequest): Promise<{ affected: number }> {
+    const request = structuredClone(input);
+    return this.runExclusive(async () => {
+      const { state, envelope, key } = await this.mutableContext();
+      const members = validateVaultBatch(request, state.items);
+      const now = new Date(members.reduce((latest, item) => Math.max(latest, (Date.parse(item.updatedAt) || 0) + 1), this.now())).toISOString();
+      const updates = members.filter(item => request.action === 'trash' || item.favorite !== (request.action === 'favorite'))
+        .map(item => request.action === 'trash' ? { ...item, deletedAt: now, updatedAt: now } : { ...item, favorite: request.action === 'favorite', updatedAt: now });
+      if (!updates.length) return { affected: 0 };
+      const byId = new Map(updates.map(item => [item.id, item]));
+      for (const item of updates) queueProviderMutations(state, item, request.action === 'trash' ? 'delete' : 'update', now);
+      state.items = state.items.map(item => byId.get(item.id) || item);
+      state.updatedAt = now;
+      await this.persist(state, key, envelope.kdf);
+      return { affected: updates.length };
+    });
+  }
+
   async deleteItem(itemId: string): Promise<void> {
     return this.runExclusive(async () => {
     const { state, envelope, key } = await this.mutableContext();
@@ -3577,10 +3664,23 @@ export class SecureVaultService {
       if (removable.some(item => hasPendingLocalTrashOperation(state, item.id)))
         throw new Error('回收站项目还有待处理的同步或恢复操作，请先处理后再清空。');
       const ids = new Set(removable.map(item => item.id));
+      const { readNearbyRetainedLocals, NEARBY_RETAINED_LOCAL_LIMIT } = await import('../nearby/local-adoption');
+      // The switch is on unless it was explicitly turned off. Without nearby
+      // settings there is no replica that could hold a record for these items.
+      const preserve = Boolean(state.nearbyPreferences) && state.nearbyPreferences!.incrementalOnly !== false;
+      if (preserve) {
+        const known = readNearbyRetainedLocals(state.nearbyRetainedLocals);
+        const added = removable.map(item => `local:${item.id}`).filter(id => !known.includes(id));
+        if (known.length + added.length > NEARBY_RETAINED_LOCAL_LIMIT)
+          throw new Error('同步保留的已删除项目过多，请先关闭「只同步新增和修改」并完成一次同步，再清空回收站。');
+        state.nearbyRetainedLocals = [...known, ...added];
+      }
       const now = new Date(this.now()).toISOString();
       state.items = state.items.filter(item => !ids.has(item.id)).map(item => withoutRemovedLocalLinks(item, ids));
       state.nearbyLocalReceipts = (state.nearbyLocalReceipts ?? []).filter(receipt => !ids.has(receipt.itemId));
-      state.localItemAttachments = (state.localItemAttachments ?? []).filter(file => !ids.has(file.itemId));
+      // Exported records keep referencing these bytes until the remote record is
+      // gone, so the encrypted copies must outlive the local item.
+      state.localItemAttachments = (state.localItemAttachments ?? []).filter(file => preserve || !ids.has(file.itemId));
       state.localItemOrigins = (state.localItemOrigins ?? []).filter(row => !ids.has(row.itemId));
       state.updatedAt = now;
       await this.persist(state, key, envelope.kdf);
@@ -3749,9 +3849,7 @@ export class SecureVaultService {
   private async readDecodedSnapshot(envelope: VaultEnvelope, key: CryptoKey, session: VaultSessionRecord): Promise<VaultState> {
     const cached = this.decodedSnapshot;
     const same = cached && cached.sessionId === session.id && cached.rawKey === session.rawKey
-      && cached.envelope.version === envelope.version && cached.envelope.cipher === envelope.cipher
-      && cached.envelope.iv === envelope.iv && cached.envelope.ciphertext === envelope.ciphertext
-      && cached.envelope.updatedAt === envelope.updatedAt && JSON.stringify(cached.envelope.kdf) === JSON.stringify(envelope.kdf);
+      && sameVaultEnvelope(cached.envelope, envelope);
     if (!same) this.clearDecryptedState();
     const epoch = this.snapshotEpoch;
     const state = same ? cached.state : await decryptVaultState(envelope, key);
@@ -3854,6 +3952,21 @@ export class SecureVaultService {
     const now = this.now();
     await this.sessions.write({ ...session, lastActivityAt: now, expiresAt: now + autoLockMinutes * 60_000 });
   }
+}
+
+function sameVaultEnvelope(left: Readonly<VaultEnvelope>, right: Readonly<VaultEnvelope>): boolean {
+  return left.version === right.version && left.cipher === right.cipher && left.iv === right.iv
+    && left.ciphertext === right.ciphertext && left.updatedAt === right.updatedAt
+    && JSON.stringify(left.kdf) === JSON.stringify(right.kdf);
+}
+
+/** A selected fill needs only its login and the same OTP source as the full read. */
+function autofillContextItems(items: VaultItem[], selectedItemId?: string): VaultItem[] {
+  if (selectedItemId === undefined) return items.filter(item => !item.deletedAt && !item.archivedAt);
+  const selected = items.find(item => item.id === selectedItemId && !item.deletedAt && !item.archivedAt);
+  if (!selected) return [];
+  const otp = selected.kind === 'login' ? findBoundTotpItem(selected, items) : undefined;
+  return otp ? [selected, otp] : [selected];
 }
 
 function safeProviderAccount(provider: ProviderAccount): ProviderAccount {

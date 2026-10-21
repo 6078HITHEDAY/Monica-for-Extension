@@ -10,7 +10,7 @@ const nativeJson = JSON as typeof JSON & {
 };
 
 export function parseLosslessJson(text: string): unknown {
-  if (!nativeJson.rawJSON || !nativeJson.isRawJSON) throw new Error("此浏览器不支持无损 JSON 读取，请升级 Microsoft Edge。");
+  if (!nativeJson.rawJSON || !nativeJson.isRawJSON) throw new Error("此浏览器不支持无损 JSON 读取，请升级浏览器。");
   try { return JSON.parse(text, (key: string, value: unknown, context?: { source?: string }) => {
     if (typeof value !== "number") return value;
     const source = context?.source;

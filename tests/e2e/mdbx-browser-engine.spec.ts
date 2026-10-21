@@ -2,10 +2,11 @@ import { test, expect, type BrowserContext, type Page } from '@playwright/test';
 import { build } from 'esbuild';
 import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
-import { unzipSync, zipSync } from 'fflate';
+import { unzipSync } from 'fflate';
 import path from 'node:path';
 import { launchEdgeContext } from './fixtures/edge';
+import { ProcessNativeRuntime } from '../interop/mdbx2-interop-support';
+import { Mdbx2NativeClient } from '../../src/providers/mdbx2/native-client';
 
 const sha = (bytes: Uint8Array | string) => createHash('sha256').update(bytes).digest('hex');
 const PASSWORD = 'synthetic-browser-mdbx-probe-password';
@@ -152,12 +153,40 @@ test('production browser MDBX engine durably commits blocks, keys and attachment
       expect(name === 'vault.mdbx' || /^vault\.mdbx\.blobs\/[a-f0-9]{2}\/[a-f0-9]{2}\/[a-f0-9]{64}$/.test(name)).toBe(true);
       const destination = path.join(nativeDir, name); await mkdir(path.dirname(destination), { recursive: true }); await writeFile(destination, bytes);
     }
-    const reference = path.join(nativeDir, 'reference.json'); await writeFile(reference, JSON.stringify({ ...ref, passkeyObjectId: ref.keyId }));
-    const nativeExe = path.resolve('native/mdbx2-host/target/debug/monica-browser-mdbx-probe.exe');
-    const updated = path.join(nativeDir, 'updated.mdbx');
-    const nativeResult = execFileSync(nativeExe, ['native-readback', path.join(nativeDir, 'vault.mdbx'), reference, updated], { encoding: 'utf8', windowsHide: true, timeout: 60_000 });
-    expect(nativeResult).toContain('MDBX_NATIVE_READBACK_UPDATE_OK');
-    archive['vault.mdbx'] = await readFile(updated); const roundtrip = Buffer.from(zipSync(archive, { level: 0 }));
+    // Use the reproducible production helper instead of an untracked probe EXE.
+    // Its isolated process opens the actual browser backup and returns a native
+    // edit with the original object IDs, precise JSON numbers and key intact.
+    const nativeExe = path.resolve('native/mdbx2-host/target/debug/monica-mdbx2-host.exe');
+    const native = new Mdbx2NativeClient(new ProcessNativeRuntime(nativeExe, path.join(nativeDir, 'host-data')));
+    let roundtrip: Buffer;
+    try {
+      const bytes = Buffer.concat(output);
+      const transfer = await native.beginInboundTransfer(bytes.length, sha(bytes));
+      for (let offset = 0; offset < bytes.length;) {
+        const sent = await native.sendInboundChunk(transfer.transferId, offset, bytes.subarray(offset, offset + transfer.maxChunkBytes));
+        offset = sent.nextOffset;
+      }
+      const file = await native.finishInboundTransfer(transfer.transferId);
+      const opened = await native.openVault({ kind: 'file', handle: file.fileHandle }, { method: 'password', password: PASSWORD });
+      const password = await native.revealObject(opened.vaultHandle, ref.objectId);
+      expect(password.payloadJson).toContain('9007199254740993');
+      expect(password.payloadJson).toContain('1.00000000000000001');
+      expect(JSON.parse(password.payloadJson).password_plain).toBe(SECRET);
+      const key = await native.revealObject(opened.vaultHandle, ref.keyId);
+      expect(sha(Buffer.from(JSON.parse(key.payloadJson).private_key_alias, 'base64'))).toBe(expected.hash);
+      const updated = await native.upsertObject(opened.vaultHandle, randomUUID(), { logicalObjectId: 'password:sky', collectionId: ref.collectionId, objectTypeId: 'login', title: password.title, payloadJson: password.payloadJson.replace(/}\s*$/, ',"native_roundtrip":true}') });
+      expect(updated.objectId).toBe(ref.objectId);
+      const prepared = await native.prepareCompleteBackup(opened.vaultHandle);
+      const chunks: Buffer[] = [];
+      try {
+        for (let offset = 0; offset < prepared.sizeBytes;) {
+          const part = await native.readCompleteBackup(opened.vaultHandle, prepared.fileHandle, offset, 256 * 1024);
+          chunks.push(Buffer.from(part.dataBase64, 'base64')); offset = part.nextOffset;
+        }
+        roundtrip = Buffer.concat(chunks);
+        expect(sha(roundtrip)).toBe(prepared.sha256);
+      } finally { await native.releaseCompleteBackup(prepared.fileHandle); }
+    } finally { native.close(); }
     await page.evaluate(() => (window as unknown as { probe: Harness }).probe.start('c'));
     await call(page, 'c', 'open', { name: `synthetic-native-${randomUUID()}` });
     const uploaded = await rpc(page, 'transfer.begin', { direction: 'extension-to-host', purpose: 'vault-bootstrap', sizeBytes: roundtrip.length, sha256: sha(roundtrip) }, 'c');
@@ -175,5 +204,8 @@ test('production browser MDBX engine durably commits blocks, keys and attachment
     evidence.stats = await call(page, 'a', 'stats');
     evidence.engineBuild = JSON.parse(await readFile('native/mdbx2-browser/pkg/BROWSER-BUILD.json', 'utf8'));
     evidence.status = 'passed'; await call(page, 'a', 'close');
-  } finally { await context?.close(); await writeFile(path.join(run, 'evidence.json'), JSON.stringify(evidence, null, 2)); }
+  } finally {
+    try { await context?.close(); }
+    finally { await writeFile(path.join(run, 'evidence.json'), JSON.stringify(evidence, null, 2)); }
+  }
 });

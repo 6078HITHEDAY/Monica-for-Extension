@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue';
 import type { LoginForm } from '../manager/login-form';
-import { addProjectCredentialGroup, setProjectCredentialGroupLabel, addProjectCredentialPassword, projectCredentialFormGroups, setProjectCredentialFormValue, moveProjectCredentialPassword } from '../manager/project-credential-form';
+import { addProjectCredentialGroup, setProjectCredentialGroupLabel, setProjectCredentialGroupNote, addProjectCredentialPassword, projectCredentialFormGroups, setProjectCredentialFormValue, moveProjectCredentialPassword } from '../manager/project-credential-form';
 import ContentOrderList from './ContentOrderList.vue';
 import { projectRemovalRows, selectProjectPasswordRemoval } from '../manager/project-removal-form';
 import { tr } from '../i18n';
@@ -27,6 +27,7 @@ const error = ref('');
 function add(groupId: string) { try { addProjectCredentialPassword(props.form, groupId); error.value = ''; } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause); } }
 function addGroup() { try { addProjectCredentialGroup(props.form); error.value = ''; } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause); } }
 function label(groupId: string, text: string) { try { setProjectCredentialGroupLabel(props.form, groupId, text); error.value = ''; } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause); } }
+function note(groupId: string, text: string) { try { setProjectCredentialGroupNote(props.form, groupId, text); error.value = ''; } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause); } }
 function move(groupId: string, token: string, target: string, after: boolean) { try { moveProjectCredentialPassword(props.form, groupId, token, target, after); error.value = ''; } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause); } }
 const revealed = ref(new Set<number>());
 function toggle(index: number) { const next = new Set(revealed.value); if (!next.delete(index)) next.add(index); revealed.value = next; }
@@ -48,7 +49,8 @@ const value = (event: Event) => (event.target as HTMLInputElement).value;
           </div>
           <m3e-form-field v-else v-field-label variant="filled" hide-subscript="always"><label slot="label">{{ tr('密码 {0}', {0: index + 1}) }}</label><input :value="row.password" :type="revealed.has(row.index) ? 'text' : 'password'" autocomplete="new-password" @input="setProjectCredentialFormValue(props.form, [row.index], 'password', value($event))" /><span slot="suffix" class="password-row-actions"><m3e-button variant="text" type="button" toggle :selected.prop="revealed.has(row.index)" @beforeinput.prevent @click="toggle(row.index)">{{ revealed.has(row.index) ? tr('隐藏') : tr('显示') }}</m3e-button><m3e-icon-button v-if="removable(row.index)" type="button" data-remove-password :disabled="activeCount <= 1" :aria-label="tr('移除密码 {0}', {0: index + 1})" @click="mark([row.metadata!.passwordId], true, $event)"><m3e-icon name="remove_circle" /></m3e-icon-button></span></m3e-form-field>
         </div>
-        <m3e-form-field v-field-label variant="filled" hide-subscript="always" class="credential-last"><label slot="label">{{ tr('内嵌验证码密钥') }}</label><input :value="group.rows[0].otp" type="password" autocomplete="new-password" :placeholder="tr('Base32 或 otpauth URI')" @input="setProjectCredentialFormValue(props.form, group.rows.map(row => row.index), 'totpSecret', value($event))" /></m3e-form-field>
+        <m3e-form-field v-field-label variant="filled" hide-subscript="always"><label slot="label">{{ tr('内嵌验证码密钥') }}</label><input :value="group.rows[0].otp" type="password" autocomplete="new-password" :placeholder="tr('Base32 或 otpauth URI')" @input="setProjectCredentialFormValue(props.form, group.rows.map(row => row.index), 'totpSecret', value($event))" /></m3e-form-field>
+        <m3e-form-field v-field-label variant="filled" hide-subscript="always" class="credential-last"><label slot="label">{{ tr('凭据备注') }}</label><textarea :value="group.note" rows="3" @input="note(group.id, value($event))" /></m3e-form-field>
       </div>
       <m3e-button v-if="canAdd" class="add-password" type="button" variant="tonal" shape="rounded" :disabled="form.groupMembers.length >= 99" @click="add(group.id)"><m3e-icon slot="icon" name="add" />{{ tr('添加密码') }}</m3e-button>
       </template>

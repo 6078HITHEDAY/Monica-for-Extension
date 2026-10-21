@@ -6,6 +6,38 @@ beforeEach(() => vi.stubGlobal("chrome", { runtime: { getURL: (path: string) => 
 afterEach(() => vi.unstubAllGlobals());
 
 describe("Passkey confirmation prompt", () => {
+  it.each([false, true])("offers a separate native action with locked=%s and prevents duplicate submissions", async (unlockRequired) => {
+    const dom = new JSDOM("<html><body></body></html>", { url: "https://passkey.example.test", pretendToBeVisual: true });
+    let complete!: () => void;
+    const accept = vi.fn(() => new Promise<void>(resolve => { complete = resolve; }));
+    const dismiss = vi.fn();
+    const host = renderPasskeyPrompt({ candidateId: "native", operation: "get", rpId: "passkey.example.test", rpName: "Example", origin: "https://passkey.example.test", userName: "", saveTargets: [], credentials: [], expiresAt: Date.now() + 10_000, unlockRequired }, accept, dismiss, dom.window.document, { allowUntrustedEvents: true });
+    const shadow = passkeyPromptRootForTest(host)!;
+    const native = shadow.querySelector<HTMLButtonElement>('.native-authenticator button')!;
+    expect(native.textContent).toBe('使用 Windows/浏览器验证器');
+    expect(shadow.querySelector('#monica-passkey-native-description')?.textContent).toContain('手机扫码');
+    native.click(); native.click();
+    shadow.querySelector<HTMLButtonElement>('.primary')!.click();
+    expect(accept).toHaveBeenCalledExactlyOnceWith(undefined, undefined, true);
+    expect(dismiss).not.toHaveBeenCalled();
+    complete();
+    await vi.waitFor(() => expect(host.isConnected).toBe(false));
+    dom.window.close();
+  });
+
+  it("rejects synthetic native clicks and keeps cancellation separate", async () => {
+    const dom = new JSDOM("<html><body></body></html>", { url: "https://passkey.example.test" });
+    const accept = vi.fn(); const dismiss = vi.fn().mockResolvedValue(undefined);
+    const context = { candidateId: "native", operation: "get" as const, rpId: "passkey.example.test", rpName: "Example", origin: "https://passkey.example.test", userName: "", saveTargets: [], credentials: [], expiresAt: Date.now() + 10_000 };
+    const protectedHost = renderPasskeyPrompt(context, accept, dismiss, dom.window.document);
+    passkeyPromptRootForTest(protectedHost)!.querySelector<HTMLButtonElement>('.native-authenticator button')!.click();
+    expect(accept).not.toHaveBeenCalled();
+    const host = renderPasskeyPrompt(context, accept, dismiss, dom.window.document, { allowUntrustedEvents: true });
+    passkeyPromptRootForTest(host)!.querySelector<HTMLButtonElement>('.actions .secondary')!.click();
+    await vi.waitFor(() => expect(dismiss).toHaveBeenCalledOnce());
+    expect(accept).not.toHaveBeenCalled();
+    dom.window.close();
+  });
   it("transitions from unlock to account selection without accepting a credential or cancelling the request", async () => {
     const dom = new JSDOM("<html><body><button id='login'>Login</button></body></html>", { url: "https://passkey.example.test", pretendToBeVisual: true });
     const context = { candidateId: "locked", operation: "get" as const, rpId: "passkey.example.test", rpName: "Example", origin: "https://passkey.example.test", userName: "", saveTargets: [], credentials: [], expiresAt: Date.now() + 10_000, unlockRequired: true };
@@ -59,6 +91,7 @@ describe("Passkey confirmation prompt", () => {
     const host = dom.window.document.getElementById("monica-passkey-prompt-host")!;
     expect(host.shadowRoot).toBeNull();
     const shadow = passkeyPromptRootForTest(host)!;
+    expect(shadow.querySelector('.native-authenticator')).toBeNull();
     expect(shadow.querySelector<HTMLImageElement>(".header .brand-logo")?.src).toBe("chrome-extension://test/icons/logo-256.png");
     expect(shadow.textContent).not.toContain("🔑");
     (shadow.querySelector("button.primary") as HTMLButtonElement).click();

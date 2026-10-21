@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { writeSecretClipboard } from '../lib/secret-clipboard';
 import { computed, ref, watch } from 'vue';
 import type { LoginItem } from '../core/model';
 import { tr, locale } from '../i18n';
@@ -15,7 +16,7 @@ watch(() => [props.item.id, props.item.updatedAt, JSON.stringify(props.item.pass
 function toggleOpen() { open.value = !open.value; revealed.value = []; confirmIndex.value = undefined; }
 function date(value: string) { return Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString(locale.value) : value; }
 async function copy(value: string) {
-  try { await navigator.clipboard.writeText(value); status.value = tr('已复制历史密码。'); }
+  try { await writeSecretClipboard(value); status.value = tr('已复制历史密码。'); }
   catch { status.value = tr('复制失败，请手动选择内容。'); }
 }
 async function deleteEntry(index: number) {

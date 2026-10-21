@@ -16,17 +16,19 @@ export interface NearbyPreferences {
   deviceId: string; name: string; replicaStorageId: string; replicaKey: string;
   /** Automatic networking is opt-in; construction never starts a listener. */
   enabled: boolean; mode: NearbySyncMode; intervalSeconds: number;
+  /** Local deletions are never sent while this is on (the default). */
+  incrementalOnly: boolean;
   settingsVersion: string; settingsWriter: string; syncRequest: string;
   /** Selected sync source. Field name retained for existing encrypted settings. */
   localProviderId: string;
   peers: NearbySavedPeer[];
 }
 export interface NearbyPreferencesView {
-  epoch: string; name: string; enabled: boolean; mode: NearbySyncMode; intervalSeconds: number; localProviderId: string;
+  epoch: string; name: string; enabled: boolean; mode: NearbySyncMode; intervalSeconds: number; incrementalOnly: boolean; localProviderId: string;
   peers: Array<Pick<NearbySavedPeer, 'deviceId' | 'name' | 'lastSyncedAt'>>;
 }
 export type NearbyPreferencesChange =
-  | { kind: 'preferences'; name?: string; enabled?: boolean; mode?: NearbySyncMode; intervalSeconds?: number }
+  | { kind: 'preferences'; name?: string; enabled?: boolean; mode?: NearbySyncMode; intervalSeconds?: number; incrementalOnly?: boolean }
   | { kind: 'source'; providerId: string }
   | { kind: 'forget'; deviceId: string }
   | { kind: 'request-sync' }
@@ -89,19 +91,21 @@ function peer(value: unknown): NearbySavedPeer {
 export function readNearbyPreferences(value: unknown): NearbyPreferences | undefined {
   if (value === undefined) return undefined;
   const p = object(value);
-  fields(p, ['version', 'epoch', 'deviceId', 'name', 'replicaStorageId', 'replicaKey', 'enabled', 'mode', 'intervalSeconds',
+  fields(p, ['version', 'epoch', 'deviceId', 'name', 'replicaStorageId', 'replicaKey', 'enabled', 'mode', 'intervalSeconds', 'incrementalOnly',
     'settingsVersion', 'settingsWriter', 'syncRequest', 'localProviderId', 'peers']);
   if (p.version !== 1 || typeof p.epoch !== 'string' || !uuid.test(p.epoch) || typeof p.replicaStorageId !== 'string' || !uuid.test(p.replicaStorageId)) fail('unsupported-state');
   id(p.deviceId); name(p.name); secret(p.replicaKey); id(p.settingsWriter, true); interval(p.intervalSeconds);
   long(p.settingsVersion); long(p.syncRequest);
-  if (typeof p.enabled !== 'boolean' || !['bidirectional', 'send_only', 'receive_only'].includes(p.mode as string)
+  // Encrypted settings written before this switch existed keep local deletions local.
+  const incrementalOnly = p.incrementalOnly === undefined ? true : p.incrementalOnly;
+  if (typeof p.enabled !== 'boolean' || typeof incrementalOnly !== 'boolean' || !['bidirectional', 'send_only', 'receive_only'].includes(p.mode as string)
     || typeof p.localProviderId !== 'string' || !p.localProviderId || p.localProviderId.length > 256 || !Array.isArray(p.peers) || p.peers.length > 8) fail('invalid-state');
   const peers = p.peers.map(peer), ids = new Set<string>(), pairs = new Set<string>();
   for (const entry of peers) {
     if (entry.deviceId === p.deviceId || ids.has(entry.deviceId) || pairs.has(entry.pairId)) fail('duplicate-peer');
     ids.add(entry.deviceId); pairs.add(entry.pairId);
   }
-  return { ...structuredClone(p), peers } as unknown as NearbyPreferences;
+  return { ...structuredClone(p), incrementalOnly, peers } as unknown as NearbyPreferences;
 }
 
 export function createNearbyPreferences(provider: ProviderAccount): NearbyPreferences {
@@ -114,7 +118,7 @@ export function createNearbyPreferences(provider: ProviderAccount): NearbyPrefer
     // Existing IDs are kept: pairings are bound to them and both roles still work.
     const deviceId = `00${crypto.randomUUID().replace(/-/g, '').slice(2)}`;
     return readNearbyPreferences({ version: 1, epoch: crypto.randomUUID(), deviceId, name: 'Monica Browser',
-      replicaStorageId: crypto.randomUUID(), replicaKey: base64url(bytes), enabled: false, mode: 'bidirectional', intervalSeconds: 0,
+      replicaStorageId: crypto.randomUUID(), replicaKey: base64url(bytes), enabled: false, mode: 'bidirectional', intervalSeconds: 0, incrementalOnly: true,
       settingsVersion: '0', settingsWriter: '', syncRequest: '0', localProviderId: provider.id, peers: [] })!;
   } finally { bytes.fill(0); }
 }
@@ -123,7 +127,8 @@ export function createNearbyPreferences(provider: ProviderAccount): NearbyPrefer
 export function nearbyPreferencesView(p: NearbyPreferences): NearbyPreferencesView {
   const value = readNearbyPreferences(p)!;
   return { epoch: value.epoch, name: value.name, enabled: value.enabled, mode: value.mode, intervalSeconds: value.intervalSeconds,
-    localProviderId: value.localProviderId, peers: value.peers.map(({ deviceId, name, lastSyncedAt }) => ({ deviceId, name, lastSyncedAt })) };
+    incrementalOnly: value.incrementalOnly, localProviderId: value.localProviderId,
+    peers: value.peers.map(({ deviceId, name, lastSyncedAt }) => ({ deviceId, name, lastSyncedAt })) };
 }
 
 export function changeNearbyPreferences(saved: NearbyPreferences, change: NearbyPreferencesChange, expectedEpoch: string): NearbyPreferences {
@@ -132,9 +137,10 @@ export function changeNearbyPreferences(saved: NearbyPreferences, change: Nearby
   const input = object(change);
   switch (change.kind) {
     case 'preferences':
-      fields(input, ['kind', 'name', 'enabled', 'mode', 'intervalSeconds']);
+      fields(input, ['kind', 'name', 'enabled', 'mode', 'intervalSeconds', 'incrementalOnly']);
       if (change.name !== undefined) p.name = change.name;
       if (change.enabled !== undefined) p.enabled = change.enabled;
+      if (change.incrementalOnly !== undefined) p.incrementalOnly = change.incrementalOnly;
       if (change.mode !== undefined && change.mode !== p.mode) { p.mode = change.mode; p.syncRequest = increment(p.syncRequest); }
       if (change.intervalSeconds !== undefined && change.intervalSeconds !== p.intervalSeconds) {
         p.intervalSeconds = change.intervalSeconds; p.settingsVersion = increment(p.settingsVersion); p.settingsWriter = p.deviceId;

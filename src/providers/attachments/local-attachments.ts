@@ -4,7 +4,7 @@ import { localAttachmentSummary } from '../../core/local-attachments';
 import type { SecureVaultService } from '../../security/secure-vault-service';
 import { base64ToBytes, bytesToBase64 } from '../../security/encoding';
 import { mdbx2TransferOperationScope as hash } from '../mdbx2/mdbx2-transfer-identity';
-import { PROVIDER_ATTACHMENT_CHUNK_BYTES, PROVIDER_ATTACHMENT_UPLOAD_TTL_MS, type ProviderAttachmentSummary } from './attachment-contract';
+import { ProviderAttachmentError, PROVIDER_ATTACHMENT_CHUNK_BYTES, PROVIDER_ATTACHMENT_UPLOAD_TTL_MS, type ProviderAttachmentSummary } from './attachment-contract';
 import type { TransferAttachmentSource } from './transfer-attachment-source';
 
 export class LocalAttachmentService implements TransferAttachmentSource {
@@ -27,14 +27,14 @@ export class LocalAttachmentService implements TransferAttachmentSource {
   }
   async begin(providerId: string, itemId: string, attachmentId: string) {
     const generation = this.generation;
-    if (this.reads.size >= 4) throw new Error('同时进行的附件下载过多，请稍后重试。');
+    if (this.reads.size >= 4) throw new ProviderAttachmentError('attachment-read-limit', '同时进行的附件下载过多，请稍后重试。');
     const current = await this.vault.readLocalAttachmentSnapshot(providerId, itemId);
     const file = current.files.find(row => row.attachmentId === attachmentId);
     if (!file || !current.sessionId) throw new Error('本地附件不存在或密码库已锁定。');
     await validateLocalAttachments([file], itemId);
     const attachment = await localAttachmentSummary(file), readHandle = crypto.randomUUID();
     if (generation !== this.generation) throw new Error('附件读取已取消。');
-    if (this.reads.size >= 4) throw new Error('同时进行的附件下载过多，请稍后重试。');
+    if (this.reads.size >= 4) throw new ProviderAttachmentError('attachment-read-limit', '同时进行的附件下载过多，请稍后重试。');
     this.reads.set(readHandle, { providerId, itemId, sessionId: current.sessionId, attachment, bytes: base64ToBytes(file.dataBase64),
       timer: setTimeout(() => this.release(providerId, readHandle), PROVIDER_ATTACHMENT_UPLOAD_TTL_MS) });
     return { ...attachment, readHandle, maxChunkBytes: PROVIDER_ATTACHMENT_CHUNK_BYTES };

@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { version } from "../../package.json";
+import { runtimeInfo } from './version';
 import type { Mdbx2HealthRepairDecision } from "./messages";
 
 let vaultClient: typeof import("./client").vaultClient;
 
 function stubRuntime(sendMessage: (message: unknown) => Promise<unknown>) {
   vi.stubGlobal("chrome", { runtime: { sendMessage: (message: { type: string }) => message.type === "RUNTIME_INFO"
-    ? Promise.resolve({ ok: true, data: { version, protocolVersion: 1 } })
+    ? Promise.resolve({ ok: true, data: runtimeInfo })
     : sendMessage(message) } });
 }
 describe("extension runtime client commands", () => {
@@ -15,6 +15,14 @@ describe("extension runtime client commands", () => {
     ({ vaultClient } = await import("./client"));
   });
   afterEach(() => vi.unstubAllGlobals());
+
+  it('sends a batch action with complete expected revisions and explicit trash confirmation', async () => {
+    const sendMessage = vi.fn().mockResolvedValue({ ok: true, data: { affected: 2 } });
+    stubRuntime(sendMessage);
+    const input = { action: 'trash' as const, anchorIds: ['project'], expected: { project: 'v1', member: 'v2' }, confirmed: true as const };
+    expect(await vaultClient.batchMutateItems(input)).toEqual({ affected: 2 });
+    expect(sendMessage).toHaveBeenCalledWith({ type: 'VAULT_BATCH_MUTATE', input });
+  });
 
   it('preserves the confirmed project restore identity and distinguishes an unstaged operation', async () => {
     const sendMessage = vi.fn().mockResolvedValue({ok:true,data:[]});

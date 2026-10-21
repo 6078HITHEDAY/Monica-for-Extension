@@ -1,6 +1,6 @@
 {
   "sourceSha256": "a0b648e4531fd6cb23b0473e47ce39461d8e49c33d4a5fc64023c424ab37fb5d",
-  "fontSha256": "fc19dd699578ed017bbf7ec7f51d31396a3225d413e02b76bc274a60a0144e0a",
+  "fontSha256": "0a6b823fef45cfb711bc2ba110b43655aa36e814edbdd9d49dc2c3a1cd5280e6",
   "fontTools": "4.60.1",
   "axes": {
     "FILL": [
@@ -45,6 +45,8 @@
     "cards",
     "category",
     "check",
+    "check_box",
+    "check_box_outline_blank",
     "check_circle",
     "checklist",
     "chevron_right",
@@ -163,6 +165,7 @@
     "note_stack",
     "notes",
     "offline_pin",
+    "open_in_new",
     "outbox",
     "palette",
     "passkey",
@@ -176,7 +179,6 @@
     "power",
     "progress_activity",
     "publish",
-    "push_pin",
     "qr_code",
     "qr_code_2",
     "qr_code_scanner",
@@ -211,7 +213,6 @@
     "shield",
     "shield_lock",
     "signature",
-    "smartphone",
     "source",
     "sports_esports",
     "stack",
@@ -229,7 +230,6 @@
     "terminal",
     "text_fields",
     "text_snippet",
-    "timeline",
     "timer",
     "title",
     "token",

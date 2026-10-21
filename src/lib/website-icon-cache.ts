@@ -118,6 +118,7 @@ function browserFaviconUrl(pageUrl: string): string {
   try {
     if (!globalThis.chrome?.runtime?.id) return "";
     const url = new URL(chrome.runtime.getURL("/_favicon/"));
+    if (url.protocol !== 'chrome-extension:') return '';
     url.searchParams.set("pageUrl", pageUrl);
     url.searchParams.set("size", "32");
     url.searchParams.set("fallbackToHost", "1");

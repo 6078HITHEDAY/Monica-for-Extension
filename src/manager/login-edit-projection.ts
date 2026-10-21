@@ -9,7 +9,7 @@ const inputs: Record<string, string[]> = {
   ssoRefLogicalId: ["loginType", "ssoRefEntryId", "ssoRefLogicalId"],
   totpSecret: ["totpSecret"], boundTotpItemId: ["boundTotpItemId"], passkeyBindings: ["passkeyBindings"],
   passwordGroupId: ["passwordGroupId"], archivedAt: ["archived"],
-  customFields: ["customFields", "loginType", "gpgPublicKey", "gpgFingerprint", "gpgUserId", "apiKeyUrl"],
+  customFields: ["customFields", "uriRules", "loginType", "gpgPublicKey", "gpgFingerprint", "gpgUserId", "apiKeyUrl"],
   wifiMetadata: ["loginType", "wifiMetadataRaw", "wifi"], sshKeyData: ["loginType", "sshKeyDataRaw", "sshKey"]
 };
 for (const key of ["email", "phone", "addressLine", "city", "state", "zipCode", "country", "creditCardNumber", "creditCardHolder", "creditCardExpiry", "creditCardCVV"]) inputs[key] = [key];

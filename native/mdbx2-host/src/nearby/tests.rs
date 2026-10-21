@@ -90,6 +90,34 @@ fn device(node: &str, mode: &str) -> Value {
 }
 
 #[test]
+fn export_policy_omits_historical_deletions_without_rewriting_replica() {
+    let _serial = SERIAL.lock().unwrap();
+    let mut host = Host::new();
+    let replica = host.open("deletion-review");
+    host.scan(&replica, json!([local("removed", json!({"entry_type":"totp","payload":{"secret":"synthetic"}})), local("kept", json!({"entry_type":"note","title":"kept"}))]));
+    host.scan(&replica, json!([local("kept", json!({"entry_type":"note","title":"kept"}))]));
+    let before = host.call("replica_local", json!({"handle":replica,"local_ids":["removed"],"include_data":true}));
+    assert_eq!(before["items"][0]["deleted"], true);
+    let revision = host.call("replica_revision", json!({"handle":replica}));
+    let omitted = host.call("replica_export", json!({"handle":replica,"deletion_policy":"omit"}));
+    assert_eq!(omitted["deletion_count"], 1);
+    assert_eq!(omitted["deletion_policy"], "omit");
+    let target = host.open("target");
+    let snapshot = &host.nearby.snapshots[omitted["handle"].as_str().unwrap()];
+    let file = snapshot.directory.path().join("changes.mdbxsync");
+    let key = snapshot.key.to_string();
+    engine(json!({"operation":"replica_merge","handle":host.nearby.replica(&target).unwrap(),"path":file,"content_key":key})).unwrap();
+    let pending = host.call("replica_pending", json!({"handle":target}));
+    assert_eq!(pending["items"].as_array().unwrap().len(), 1);
+    assert_eq!(pending["items"][0]["record"]["deleted"], false);
+    let included = host.call("replica_export", json!({"handle":replica,"deletion_policy":"include"}));
+    assert_eq!(included["deletion_count"], 1);
+    assert_eq!(included["revision"], revision["revision"]);
+    assert_ne!(omitted["revision"], included["revision"]);
+    assert_eq!(host.call("replica_local", json!({"handle":replica,"local_ids":["removed"],"include_data":true})), before);
+}
+
+#[test]
 fn pairing_snapshot_never_reads_a_source_and_only_skips_matching_pairing_merge() {
     let _serial = SERIAL.lock().unwrap();
     let mut a = Host::new();

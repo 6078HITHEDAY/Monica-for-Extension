@@ -22,7 +22,9 @@ test('wallet nested editor preserves secrets, ordering, cancel and keyboard boun
     await search.focus();
     expect(await search.evaluate(node => getComputedStyle(node).outlineStyle)).toBe('none');
     await page.screenshot({ path: info.outputPath('search-focus-dark.png') });
-    const source = page.locator('.vault-source-select');
+    await page.getByRole('button', { name: '筛选', exact: true }).click();
+    const filter = page.getByRole('dialog', { name: '筛选密码库', exact: true });
+    const source = filter.locator('.filter-source-field');
     const shape = await source.evaluate(node => {
       const style = getComputedStyle(node.shadowRoot!.querySelector('.base')!, '::before');
       return { top: style.borderTopLeftRadius, bottom: style.borderBottomLeftRadius, border: style.borderBottomColor };
@@ -31,6 +33,7 @@ test('wallet nested editor preserves secrets, ordering, cancel and keyboard boun
     await source.getByRole('combobox').click();
     await page.screenshot({ path: info.outputPath('database-open-dark.png') });
     await page.keyboard.press('Escape');
+    await filter.getByRole('button', { name: '完成', exact: true }).click();
     await page.getByRole('button', { name: '选择新建类型', exact: true }).click();
     await page.locator('[data-create-type="card"]').click();
     const main = page.locator('m3e-dialog').filter({ has: page.locator('#vault-item-form') });

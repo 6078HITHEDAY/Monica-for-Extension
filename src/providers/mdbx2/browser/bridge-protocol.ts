@@ -1,5 +1,6 @@
 import { parseLosslessJson } from '../../../core/lossless-json';
 import type { MdbxBrowserRequest } from './session';
+import { backgroundPageURL } from '../../../runtime/browser-platform';
 
 export const MDBX_BROWSER_PORT = 'monica-mdbx-browser-v1';
 export const MDBX_BROWSER_DOCUMENT_AUTH = 'MDBX_BROWSER_DOCUMENT_AUTH';
@@ -13,11 +14,17 @@ export const MDBX_BROWSER_CLOSE_MS = 30_000;
 export const MDBX_BROWSER_START_MS = 30_000;
 
 export function trustedMdbxBackground(sender: chrome.runtime.MessageSender | undefined, runtime: Pick<typeof chrome.runtime, 'id' | 'getURL'>): boolean {
-  return sender?.id === runtime.id && sender.url === runtime.getURL('background.js') && sender.tab === undefined
-    && sender.documentId === undefined && (sender.frameId === undefined || sender.frameId === 0);
+  const firefox = runtime.getURL('').startsWith('moz-extension://');
+  return sender?.id === runtime.id && sender.url === backgroundPageURL(runtime) && sender.tab === undefined
+    && (firefox || sender.documentId === undefined) && (sender.frameId === undefined || sender.frameId === 0);
 }
 export function bridgeObject(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+export function trustedFirefoxEngineDocument(sender: chrome.runtime.MessageSender, runtime: Pick<typeof chrome.runtime, 'id' | 'getURL'>, ownedURL: string | undefined, connected: boolean): boolean {
+  return connected && typeof ownedURL === 'string' && ownedURL.startsWith(`${runtime.getURL(MDBX_BROWSER_DOCUMENT)}#`)
+    && sender.id === runtime.id && sender.tab === undefined && sender.url === ownedURL
+    && typeof sender.documentId === 'string' && /^[0-9a-f-]{16,64}$/i.test(sender.documentId);
 }
 export function boundedBridgeJson(value: unknown, limit: number): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= limit && new TextEncoder().encode(value).length <= limit;

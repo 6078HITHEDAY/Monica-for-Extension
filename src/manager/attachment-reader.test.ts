@@ -14,6 +14,44 @@ function fixture(bytes = new Uint8Array([1, 2, 3])) {
   return { client, bytes };
 }
 describe("bounded verified attachment disclosure", () => {
+  it("loads a visible gallery without exceeding the backend's four active downloads", async () => {
+    const { client } = fixture();
+    const begun = await client.beginProviderAttachmentRead();
+    const chunk = await client.readProviderAttachmentChunk();
+    const handles = new Set<string>(); let peak = 0;
+    client.beginProviderAttachmentRead.mockImplementation(async () => {
+      if (handles.size >= 4) throw new Error('同时进行的附件下载过多，请稍后重试。');
+      const readHandle=crypto.randomUUID();handles.add(readHandle);peak=Math.max(peak,handles.size);
+      return {...begun,readHandle};
+    });
+    client.readProviderAttachmentChunk.mockImplementation(async (_provider?: string, handle?: string) => {
+      await new Promise(resolve=>setTimeout(resolve,10));return {...chunk,readHandle:handle!};
+    });
+    client.releaseProviderAttachmentRead.mockImplementation(async (_provider?: string,handle?: string)=>{handles.delete(handle!);return true;});
+    const results=await Promise.allSettled(Array.from({length:12},()=>readVerifiedAttachment(client,'local','card','wallet-a')));
+    expect(results.filter(result=>result.status==='rejected')).toEqual([]);
+    expect(peak).toBeLessThanOrEqual(4);expect(handles.size).toBe(0);
+  });
+  it('retries only a confirmed capacity rejection from another manager window',async()=>{
+    const {client}=fixture(),start=await client.beginProviderAttachmentRead();
+    client.beginProviderAttachmentRead.mockReset().mockRejectedValueOnce(Object.assign(new Error('Busy'),{code:'attachment-read-limit'})).mockResolvedValue(start);
+    await expect(readVerifiedAttachment(client,'p','i','wallet-a')).resolves.toMatchObject({bytes:new Uint8Array([1,2,3])});
+    expect(client.beginProviderAttachmentRead).toHaveBeenCalledTimes(2);expect(client.releaseProviderAttachmentRead).toHaveBeenCalledTimes(1);
+    client.beginProviderAttachmentRead.mockReset().mockRejectedValue(new Error('Lost response'));
+    await expect(readVerifiedAttachment(client,'p','i','wallet-a')).rejects.toThrow('Lost response');
+    expect(client.beginProviderAttachmentRead).toHaveBeenCalledTimes(1);
+  });
+  it('removes cancelled queued reads before listing or allocating any attachment',async()=>{
+    const {client}=fixture(),chunk=await client.readProviderAttachmentChunk();
+    let finish!:()=>void;const hold=new Promise<void>(resolve=>finish=resolve);
+    client.readProviderAttachmentChunk.mockImplementation(async()=>{await hold;return chunk;});
+    const first=readVerifiedAttachment(client,'p','i','wallet-a'),second=readVerifiedAttachment(client,'p','i','wallet-a');
+    const controller=new AbortController();const queued=readVerifiedAttachment(client,'p','i','wallet-a',undefined,controller.signal);
+    controller.abort();await expect(queued).rejects.toMatchObject({name:'AbortError'});finish();await Promise.all([first,second]);
+    expect(client.listProviderAttachments).toHaveBeenCalledTimes(2);
+    expect(client.beginProviderAttachmentRead).toHaveBeenCalledTimes(2);
+    await expect(readVerifiedAttachment(client,'p','i','wallet-a')).resolves.toBeDefined();
+  });
   it("checks complete bytes and releases handle including empty files", async () => {
     for (const bytes of [new Uint8Array([0, 255, 3]), new Uint8Array()]) {
       const { client } = fixture(bytes);

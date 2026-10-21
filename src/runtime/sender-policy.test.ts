@@ -9,6 +9,12 @@ function sender(value: Partial<chrome.runtime.MessageSender>): chrome.runtime.Me
 }
 
 describe("runtime sender policy", () => {
+  it('compares Firefox extension hosts even when URL.origin is opaque outside the browser',()=>{
+    const root='moz-extension://12345678-1234-1234-1234-123456789abc/';
+    expect(()=>assertTrustedManagerPage(sender({id:runtimeId,url:root+'index.html?surface=sidepanel'}),runtimeId,root)).not.toThrow();
+    for(const url of ['moz-extension://attacker/index.html',root+'popup.html',root+'../popup.html','https://attacker/index.html'])
+      expect(()=>assertTrustedManagerPage(sender({id:runtimeId,url}),runtimeId,root)).toThrow();
+  });
   it("accepts only a same-extension page for privileged commands", () => {
     expect(() => assertTrustedExtensionPage(sender({ id: runtimeId, url: `${extensionRoot}index.html` }), runtimeId, extensionRoot)).not.toThrow();
     expect(() => assertTrustedExtensionPage(sender({ id: "other", url: `${extensionRoot}index.html` }), runtimeId, extensionRoot)).toThrow();

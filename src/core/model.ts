@@ -24,7 +24,7 @@ export interface ProviderReference {
   etag?: string;
 }
 
-export type LoginUriMatchType = "base-domain" | "domain" | "starts-with" | "exact" | "regex" | "never";
+export type LoginUriMatchType = "default" | "base-domain" | "host" | "domain" | "starts-with" | "exact" | "regex" | "never";
 
 export interface LoginUriRule {
   uri: string;
@@ -278,6 +278,10 @@ export interface IdentityItem extends VaultItemBase {
   cardFace?: CardFaceConfig | null;
   /** Android wallet presentation metadata; independent of custom-field ordering. */
   editorSectionOrder?: string[];
+  /** Android wallet pass presentation template; unknown values remain editable as metadata. */
+  walletTemplate?: string;
+  /** Android wallet pass fields, kept as strings so leading zeros and time-zone text survive. */
+  walletFields?: Record<string, string>;
 }
 
 export interface AddressFields {
@@ -506,6 +510,8 @@ export interface VaultState {
   nearbyLocalReceipts?: import('../nearby/local-adoption').NearbyLocalReceipt[];
   /** Lossless nearby folders/root metadata and their encrypted adoption receipts. */
   nearbyLocalMetadata?: import('../nearby/local-metadata').NearbyLocalMetadata[];
+  /** Local ids whose records stay live in the native replica after permanent local deletion. */
+  nearbyRetainedLocals?: string[];
   /** Local encrypted two-phase password removal, never synchronized as item metadata. */
   passwordProjectRemovals?: import("./password-project-removal-journal").PasswordProjectRemovalRecord[];
   mdbx2Restores?: import('./mdbx2-restore-journal').Mdbx2RestoreRecord[];

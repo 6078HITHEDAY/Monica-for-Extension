@@ -11,11 +11,14 @@ import PasswordContentEditor from "./PasswordContentEditor.vue";
 import EditorContentSection from "./EditorContentSection.vue";
 import PasskeyBindings from "./PasskeyBindings.vue";
 import CustomIconPicker from './CustomIconPicker.vue';
+import CredentialTypeSelect from './CredentialTypeSelect.vue';
+import type { CredentialCreateType } from '../manager/editor-types';
 import SsoAccountPicker from './SsoAccountPicker.vue';
 import WifiAdvancedFields from "./WifiAdvancedFields.vue";
 import { boundNoteCandidates, boundNoteLogicalId } from "../core/bound-notes";
 import { contentRank, isContentMetadata } from "../core/password-content";
 import { isCredentialMetadata } from "../core/credential-fields";
+import { hasAndroidUrlRules, readAndroidUrlRules } from '../core/url-rules';
 
 const props = defineProps<{
   form: LoginForm;
@@ -29,7 +32,7 @@ const props = defineProps<{
   qrDataUrl: string;
   qrError: string;
 }>();
-const emit = defineEmits<{ applyRaw: []; copyPayload: []; generateQr: []; clearQr: [] }>();
+const emit = defineEmits<{ applyRaw: []; copyPayload: []; generateQr: []; clearQr: []; switchType: [type: CredentialCreateType] }>();
 const barcodeMode = defineModel<"qr" | "code128">("barcodeMode", { required: true });
 const reveal = ref(false);
 const revealSsh = ref(false);
@@ -59,8 +62,14 @@ function noteOptionLabel(note: SecureNoteItem) {
 function chooseNote(value: string) { form.boundNoteEntryId = value; form.boundNoteEdited = true; }
 const webLogin = computed(() => form.loginType === "PASSWORD" || form.loginType === "SSO");
 const entryType = computed({ get: () => webLogin.value ? "PASSWORD" : form.loginType, set: (value: LoginForm["loginType"]) => { form.loginType = value; reveal.value = false; emit("clearQr"); } });
-const matchTypes: LoginUriMatchType[] = ["base-domain", "domain", "starts-with", "exact", "regex", "never"];
-const matchLabel = (type: LoginUriMatchType) => ({ "base-domain": tr('基础域名'), domain: tr('完整主机名'), "starts-with": tr('以此开头'), exact: tr('完全匹配'), regex: tr('正则表达式'), never: tr('从不匹配') })[type];
+function selectCredentialType(value: CredentialCreateType) {
+  if (props.editing) return;
+  if (value === 'api-token') emit('switchType', value);
+  else entryType.value = value;
+}
+const urlRulesReadOnly = computed(() => hasAndroidUrlRules(form.customFields) && !readAndroidUrlRules(form.customFields));
+const matchTypes = computed<LoginUriMatchType[]>(() => ['default', 'base-domain', 'host', ...(form.uriRules.some(rule => rule.matchType === 'domain') ? ['domain' as const] : []), 'starts-with', 'exact', 'regex', 'never']);
+const matchLabel = (type: LoginUriMatchType) => ({ default: tr('默认'), "base-domain": tr('基础域名'), host: tr('完整主机名'), domain: tr('主机及子域（旧规则）'), "starts-with": tr('以此开头'), exact: tr('完全匹配'), regex: tr('正则表达式'), never: tr('从不匹配') })[type];
 const ssoProviders = ["GOOGLE", "APPLE", "MICROSOFT", "GITHUB", "FACEBOOK", "TWITTER", "WECHAT", "QQ", "WEIBO", "OTHER"];
 const rank = (token: string) => projectTokens.value?.indexOf(token) ?? contentRank(form.customFields, token);
 const groupStartError = ref('');
@@ -79,7 +88,7 @@ const supplemental = [{ token: "PAYMENT", label: "银行卡与支付", fields: [
     <CustomIconPicker :form="form" :keepass="providers.some(provider => provider.id === form.providerId && provider.kind === 'keepass')" />
     <m3e-form-field v-field-label variant="filled" hide-required-marker class="field editor-title-field"><label slot="label">{{ tr('名称 *') }}</label><input v-model="form.name" autofocus autocomplete="off" :placeholder="tr('为这个项目起个名称')" /></m3e-form-field>
     <div class="editor-meta-grid">
-      <m3e-form-field v-field-label variant="filled" hide-required-marker v-if="!editing" class="field"><label slot="label">{{ tr('项目类型') }}</label><component :is="materialSelectTag" @input="entryType = ($event.target as HTMLElement &amp; { value: string }).value" ><component :is="materialOptionTag" :selected.prop="String(entryType ?? '') === String('PASSWORD')" value="PASSWORD">{{ tr('密码') }}</component><component :is="materialOptionTag" :selected.prop="String(entryType ?? '') === String('WIFI')" value="WIFI">Wi-Fi</component><component :is="materialOptionTag" :selected.prop="String(entryType ?? '') === String('SSH_KEY')" value="SSH_KEY">{{ tr('SSH 密钥') }}</component><component :is="materialOptionTag" :selected.prop="entryType === 'GPG_KEY'" value="GPG_KEY">GPG 密钥</component><component :is="materialOptionTag" :selected.prop="entryType === 'API_KEY'" value="API_KEY">API Key</component><component :is="materialOptionTag" :selected.prop="String(entryType ?? '') === String('BARCODE')" value="BARCODE">{{ tr('条码') }}</component></component></m3e-form-field>
+      <CredentialTypeSelect v-if="!editing" :value="entryType" @select="selectCredentialType" />
       <m3e-form-field v-field-label variant="filled" hide-required-marker class="field"><label slot="label">{{ tr('保存到') }}</label><component :is="materialSelectTag" @input="form.providerId = ($event.target as HTMLElement &amp; { value: string }).value"  :disabled="editing"><component :is="materialOptionTag" :selected.prop="String(form.providerId ?? '') === String(provider.id)" v-for="provider in providers" :key="provider.id" :value="provider.id">{{ provider.kind === 'local' ? tr('Monica 本地库') : provider.name }}</component></component></m3e-form-field>
     </div>
   </section>
@@ -92,13 +101,13 @@ const supplemental = [{ token: "PAYMENT", label: "银行卡与支付", fields: [
       <m3e-form-field v-field-label variant="filled" hide-required-marker class="field"><label slot="label">{{ tr('密码') }}</label><input v-model="form.password" :aria-label="tr('密码')" :type="reveal ? 'text' : 'password'" autocomplete="new-password" /><m3e-button slot="suffix" variant="text" type="button" toggle :selected.prop="reveal" @beforeinput.prevent @click="reveal = !reveal">{{ reveal ? tr('隐藏') : tr('显示') }}</m3e-button></m3e-form-field>
     </div>
     <div class="editor-websites">
-      <span class="editor-field-label">{{ tr('匹配网站（可选）') }}</span>
+      <span class="editor-field-label">{{ tr('匹配网站（可选）') }}</span><p v-if="urlRulesReadOnly" role="status">{{ tr('网址匹配规则暂不支持，原始数据已保留且不会自动推荐。') }}</p>
       <div v-for="(rule, index) in form.uriRules" :key="index" class="uri-rule-row">
-        <m3e-form-field v-field-label variant="filled" hide-required-marker><label slot="label">{{ tr('网址 {0}', { 0: index + 1 }) }}</label><input v-model="rule.uri" :aria-label="tr('网址 {0}', { 0: index + 1 })" placeholder="https://example.com" autocomplete="off" /></m3e-form-field>
-        <m3e-form-field v-field-label variant="filled" hide-required-marker><label slot="label">{{ tr('网址 {0} 匹配方式', { 0: index + 1 }) }}</label><component :is="materialSelectTag" @input="rule.matchType = ($event.target as HTMLElement &amp; { value: string }).value"  :aria-label="tr('网址 {0} 匹配方式', { 0: index + 1 })"><component :is="materialOptionTag" :selected.prop="String(rule.matchType ?? '') === String(type)" v-for="type in matchTypes" :key="type" :value="type">{{ matchLabel(type) }}</component></component></m3e-form-field>
-        <m3e-icon-button type="button" :aria-label="tr('删除网址 {0}', { 0: index + 1 })" @click="form.uriRules.splice(index, 1)"><m3e-icon name="close" /></m3e-icon-button>
+        <m3e-form-field v-field-label variant="filled" hide-required-marker><label slot="label">{{ tr('网址 {0}', { 0: index + 1 }) }}</label><input v-model="rule.uri" :disabled="urlRulesReadOnly" :aria-label="tr('网址 {0}', { 0: index + 1 })" placeholder="https://example.com" autocomplete="off" /></m3e-form-field>
+        <m3e-form-field v-field-label variant="filled" hide-required-marker><label slot="label">{{ tr('网址 {0} 匹配方式', { 0: index + 1 }) }}</label><component :is="materialSelectTag" :disabled.prop="urlRulesReadOnly" @input="rule.matchType = ($event.target as HTMLElement &amp; { value: string }).value"  :aria-label="tr('网址 {0} 匹配方式', { 0: index + 1 })"><component :is="materialOptionTag" :selected.prop="String(rule.matchType ?? '') === String(type)" v-for="type in matchTypes" :key="type" :value="type">{{ matchLabel(type) }}</component></component></m3e-form-field>
+        <m3e-icon-button type="button" :aria-label="tr('删除网址 {0}', { 0: index + 1 })" :disabled="urlRulesReadOnly" @click="form.uriRules.splice(index, 1)"><m3e-icon name="close" /></m3e-icon-button>
       </div>
-      <m3e-button variant="text" class="editor-text-action" type="button" @click="form.uriRules.push({ uri: '', matchType: 'base-domain' })"><m3e-icon slot="icon" name="add" />{{ tr('添加网址') }}</m3e-button>
+      <m3e-button variant="text" class="editor-text-action" type="button" :disabled="urlRulesReadOnly" @click="form.uriRules.push({ uri: '', matchType: 'base-domain' })"><m3e-icon slot="icon" name="add" />{{ tr('添加网址') }}</m3e-button>
     </div>
     <p class="editor-hint">{{ tr('用户名、密码和网址均可留空。') }}</p>
     <m3e-expansion-panel class="editor-disclosure"><span slot="header">{{ tr('关联应用') }}</span><div class="editor-disclosure-body editor-field-grid">

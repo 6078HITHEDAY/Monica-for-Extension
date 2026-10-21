@@ -275,6 +275,7 @@ export interface KeePassFileExport {
 
 export type ExtensionRequest =
   | { type: "RUNTIME_INFO" }
+  | { type: "CLIPBOARD_ARM"; digest: string }
   | { type: "VAULT_STATUS" }
   | { type: "VAULT_SETUP"; masterPassword: string }
   | { type: "VAULT_UNLOCK"; masterPassword: string }
@@ -285,6 +286,9 @@ export type ExtensionRequest =
   | { type: "VAULT_HELLO_REVOKE"; confirmed: true }
   | { type: "VAULT_CHANGE_MASTER_PASSWORD"; currentPassword: string; newPassword: string }
   | { type: "VAULT_EXPORT_ENCRYPTED"; backupPassword: string }
+  | { type: "VAULT_AUTHENTICATED_EXPORT"; input: import('../security/authenticated-export').VaultExportInput }
+  | { type: "VAULT_STORAGE_OVERVIEW" }
+  | { type: "VAULT_RECOVERY_CLEAR"; confirmed: true }
   | { type: "VAULT_RESTORE_ENCRYPTED"; backup: EncryptedVaultBackup; backupPassword: string; replaceExisting?: boolean; currentPassword?: string }
   | { type: "VAULT_IMPORT_ITEMS"; items: VaultItem[] }
   | { type: "VAULT_LIST_ITEMS" }
@@ -324,6 +328,7 @@ export type ExtensionRequest =
   | { type: 'VAULT_KEEPASS_PROJECT_RECOVERY_EXPORT_RELEASE'; providerId: string; downloadHandle: string }
   | { type: "VAULT_LOCKED_AUTOFILL_IDS" }
   | { type: "VAULT_SET_LOCKED_AUTOFILL"; itemId: string; enabled: boolean }
+  | { type: 'VAULT_BATCH_MUTATE'; input: import('../core/vault-batch').VaultBatchRequest }
   | { type: "VAULT_DELETE_ITEM"; itemId: string }
   | { type: "VAULT_EMPTY_LOCAL_TRASH" }
   | { type: "VAULT_DELETE_PASSWORD_GROUP"; anchorItemId: string; expected: Record<string, string> }

@@ -23,7 +23,7 @@ export function closePasskeyPrompt(rootDocument: Document = document): void {
 
 export function renderPasskeyPrompt(
   context: PasskeyPromptContext,
-  accept: (itemId?: string, providerId?: string) => Promise<PasskeyPromptContext | void>,
+  accept: (itemId?: string, providerId?: string, useNativeAuthenticator?: boolean) => Promise<PasskeyPromptContext | void>,
   dismiss: () => Promise<void>,
   rootDocument: Document = document,
   options: PasskeyPromptRenderOptions = {}
@@ -57,6 +57,9 @@ export function renderPasskeyPrompt(
     .source { max-width:42%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .field { display:grid; gap:6px; }
     .field-label { color:var(--monica-muted); font-size:0.75rem; }
+    .native-authenticator { display:grid; gap:6px; padding-top:12px; border-top:1px solid var(--monica-outline); }
+    .native-authenticator button { width:100%; border:1px solid var(--monica-outline); }
+    .native-authenticator p { margin:0; color:var(--monica-muted); font-size:0.75rem; }
     select { width:100%; min-height:48px; border:1px solid var(--monica-outline); border-radius:8px; padding:0 12px; color:var(--monica-text); background:var(--monica-surface); }
   </style>`;
 
@@ -190,6 +193,16 @@ export function renderPasskeyPrompt(
   const cancel = rootDocument.createElement("button"); cancel.type = "button"; cancel.className = "secondary"; i18n.text(cancel, () => tr('取消'));
   const confirm = rootDocument.createElement("button"); confirm.type = "button"; confirm.className = "primary"; i18n.text(confirm, () => context.unlockRequired ? tr('解锁并继续') : context.operation === "create" ? tr('创建 Passkey') : tr('继续登录'));
   actions.append(cancel, confirm); card.append(notice, status, actions); shadow.append(card); rootDocument.documentElement.append(host);
+  let nativeButton: HTMLButtonElement | undefined;
+  if (context.operation === "get") {
+    const nativeSection = rootDocument.createElement("div"); nativeSection.className = "native-authenticator";
+    nativeButton = rootDocument.createElement("button"); nativeButton.type = "button"; nativeButton.className = "secondary";
+    i18n.text(nativeButton, () => tr('使用 Windows/浏览器验证器'));
+    nativeButton.setAttribute("aria-describedby", "monica-passkey-native-description");
+    const description = rootDocument.createElement("p"); description.id = "monica-passkey-native-description";
+    i18n.text(description, () => tr('可使用 Windows Hello、手机扫码或安全密钥；具体选项由浏览器、系统与网站决定。'));
+    nativeSection.append(nativeButton, description); card.append(nativeSection);
+  }
 
   let busy = false;
   let removed = false;
@@ -222,7 +235,7 @@ export function renderPasskeyPrompt(
   rootDocument.addEventListener("keydown", onKeyDown, true);
   cancel.onclick = (event) => { if (trustedEvent(event, options)) void cancelPrompt(); };
   (card.querySelector(".icon-button") as HTMLButtonElement).onclick = (event) => { if (trustedEvent(event, options)) void cancelPrompt(); };
-  confirm.onclick = (event) => {
+  const submit = (event: Event, useNativeAuthenticator = false) => {
     if (!trustedEvent(event, options)) return;
     if (busy) return;
     busy = true;
@@ -232,8 +245,9 @@ export function renderPasskeyPrompt(
     if (targetSelect) targetSelect.disabled = true;
     status.className = "status";
     status.removeAttribute("role");
-    i18n.text(status, () => context.unlockRequired ? tr('请在 Monica 安全窗口中确认…') : context.userVerificationRequired && !context.userVerified ? context.userVerificationMethod === "master-password" ? tr('请在 Monica 安全窗口中确认…') : tr('正在等待 Windows Hello…') : context.operation === "create" ? tr('正在创建并加密保存…') : tr('正在完成安全签名…'));
-    void accept(selected, selectedProviderId).then(next => {
+    i18n.text(status, () => useNativeAuthenticator ? tr('正在打开系统 Passkey 选择器…') : context.unlockRequired ? tr('请在 Monica 安全窗口中确认…') : context.userVerificationRequired && !context.userVerified ? context.userVerificationMethod === "master-password" ? tr('请在 Monica 安全窗口中确认…') : tr('正在等待 Windows Hello…') : context.operation === "create" ? tr('正在创建并加密保存…') : tr('正在完成安全签名…'));
+    const request = useNativeAuthenticator ? accept(undefined, undefined, true) : accept(selected, selectedProviderId);
+    void request.then(next => {
       cleanup();
       if (next) renderPasskeyPrompt(next, accept, dismiss, rootDocument, options);
     }).catch((error) => {
@@ -244,9 +258,11 @@ export function renderPasskeyPrompt(
       status.className = "status error";
       status.setAttribute("role", "alert");
       i18n.text(status, () => error instanceof Error ? error.message : tr('Passkey 操作失败，请重试。'));
-      confirm.focus();
+      (useNativeAuthenticator ? nativeButton : confirm)?.focus();
     });
   };
+  confirm.onclick = event => submit(event);
+  if (nativeButton) nativeButton.onclick = event => submit(event, true);
   const MutationObserverCtor = rootDocument.defaultView?.MutationObserver;
   if (MutationObserverCtor) {
     observer = new MutationObserverCtor((records) => {

@@ -1,4 +1,5 @@
 import type { CardItem, IdentityItem, LoginItem, LoginUriMatchType, LoginUriRule, PasskeyItem, ProviderReference, SecureCustomField, SecureNoteItem, TotpItem, VaultItem } from "../../core/model";
+import { hasAndroidUrlRules, readAndroidUrlRules, writeAndroidUrlRules } from '../../core/url-rules';
 import { decryptBitwardenString, decryptBitwardenSymmetricKey, encryptBitwardenString, type BitwardenSymmetricKey } from "./bitwarden-crypto";
 import { parseTotpParameters } from "../../core/totp";
 import { parsePortablePasskeyPrivateKey } from "../../passkey/private-key-portability";
@@ -128,7 +129,7 @@ export async function decodeBitwardenCipher(raw: Record<string, unknown>, provid
       ...(history.rows.length ? { passwordHistory: history.rows.flatMap(row => row.plain ? [row.plain] : []) } : {}),
       ...(history.unreadable ? { passwordHistoryIncomplete: true } : {}),
       uris: [...new Set(uris.filter(Boolean))],
-      uriRules: uriRules.filter((rule) => Boolean(rule.uri)),
+      uriRules: readAndroidUrlRules(customFields) ?? uriRules.filter((rule) => Boolean(rule.uri)),
       totpSecret: totpSecret || undefined,
       customFields,
       // Android CipherSyncProcessor uses this explicit, versioned identity. Titles,
@@ -217,7 +218,7 @@ export async function decodeBitwardenCipher(raw: Record<string, unknown>, provid
         kind: "identity",
         ...wallet,
         documentType: wallet.documentType || documentType,
-        documentNumber: fields.PassportNumber || fields.LicenseNumber || fields.Ssn,
+        documentNumber: wallet.documentNumber ?? (fields.PassportNumber || fields.LicenseNumber || fields.Ssn),
         firstName: fields.FirstName,
         middleName: fields.MiddleName,
         lastName: fields.LastName,
@@ -303,6 +304,8 @@ export async function resolveBitwardenCipherKey(raw: Record<string, unknown>, va
 }
 
 export async function encodeBitwardenCipher(item: VaultItem, encryptionKey: BitwardenSymmetricKey, preservedRaw?: Record<string, unknown>): Promise<Record<string, unknown>> {
+  if (item.kind === 'login' && !hasAndroidUrlRules(item.customFields) && item.uriRules?.some(rule => rule.matchType === 'host'))
+    item = { ...item, customFields: writeAndroidUrlRules(item.customFields, effectiveLoginUriRules(item)) };
   if (item.kind === 'login') assertWritableSshKeyData(item.sshKeyData);
   if (item.kind === "opaque") throw new Error("未知 Bitwarden 类型仅可只读查看，不能编辑或新建。");
   if (preservedRaw) assertKnownBitwardenCipher(preservedRaw);
@@ -347,7 +350,9 @@ export async function encodeBitwardenCipher(item: VaultItem, encryptionKey: Bitw
         const previous = index < 0 ? undefined : previousUris.splice(index, 1)[0];
         const raw = { ...previous?.raw };
         delete raw.Uri; delete raw.Match;
-        return { ...raw, uri: previous ? value(previous.raw, "Uri", "uri") : await encryptBitwardenString(rule.uri, encryptionKey), match: previous && bitwardenMatchType(value(previous.raw, "Match", "match")) === rule.matchType ? value(previous.raw, "Match", "match") : bitwardenMatchCode(rule.matchType) };
+        const match = hasAndroidUrlRules(item.customFields) ? previous ? value(previous.raw, 'Match', 'match') ?? null : null
+          : previous && bitwardenMatchType(value(previous.raw, 'Match', 'match')) === rule.matchType ? value(previous.raw, 'Match', 'match') : bitwardenMatchCode(rule.matchType);
+        return { ...raw, uri: previous ? value(previous.raw, "Uri", "uri") : await encryptBitwardenString(rule.uri, encryptionKey), match };
       }));
       login.fido2Credentials = login.fido2Credentials ?? null;
       base.login = login;
@@ -380,9 +385,9 @@ export async function encodeBitwardenCipher(item: VaultItem, encryptionKey: Bitw
     identity.username = item.username === undefined ? identity.username ?? null : await encryptOptional(item.username, encryptionKey);
     identity.email = await encryptOptional(item.email || "", encryptionKey);
     identity.phone = await encryptOptional(item.phone || "", encryptionKey);
-    identity.ssn = await encryptOptional(item.documentType === "SOCIAL_SECURITY" || item.documentType === "ID_CARD" ? item.documentNumber : item.ssn || "", encryptionKey);
-    identity.passportNumber = await encryptOptional(item.documentType === "PASSPORT" ? item.documentNumber : item.passportNumber || "", encryptionKey);
-    identity.licenseNumber = await encryptOptional(item.documentType === "DRIVER_LICENSE" ? item.documentNumber : item.licenseNumber || "", encryptionKey);
+    identity.ssn = await encryptOptional(!item.walletTemplate?.trim() && (item.documentType === "SOCIAL_SECURITY" || item.documentType === "ID_CARD") ? item.documentNumber : item.ssn || "", encryptionKey);
+    identity.passportNumber = await encryptOptional(!item.walletTemplate?.trim() && item.documentType === "PASSPORT" ? item.documentNumber : item.passportNumber || "", encryptionKey);
+    identity.licenseNumber = await encryptOptional(!item.walletTemplate?.trim() && item.documentType === "DRIVER_LICENSE" ? item.documentNumber : item.licenseNumber || "", encryptionKey);
     base.identity = identity;
     base.fields = await mergeWalletFields(item, arrayValue(preserved, "Fields", "fields"), encryptionKey);
   } else if (item.kind === "secure-note") {
@@ -1217,8 +1222,8 @@ function bitwardenMatchType(value: unknown): LoginUriMatchType {
   return ({ 0: "base-domain", 1: "domain", 2: "starts-with", 3: "exact", 4: "regex", 5: "never" } as Record<number, LoginUriMatchType>)[Number(value)] || "base-domain";
 }
 
-function bitwardenMatchCode(value: LoginUriMatchType): number {
-  return ({ "base-domain": 0, domain: 1, "starts-with": 2, exact: 3, regex: 4, never: 5 } as const)[value];
+function bitwardenMatchCode(value: LoginUriMatchType): number | null {
+  return ({ default: null, "base-domain": 0, host: 1, domain: 1, "starts-with": 2, exact: 3, regex: 4, never: 5 } as const)[value];
 }
 
 function stringValue(raw: Record<string, unknown>, ...names: string[]): string {

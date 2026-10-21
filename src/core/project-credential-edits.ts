@@ -1,6 +1,8 @@
 import type { LoginItem } from './model';
 import { passwordGroupKey } from './password-groups';
-import { readProjectCredential } from './project-credentials';
+import { PROJECT_CREDENTIAL_FIELD, readProjectCredential } from './project-credentials';
+import { parseLosslessJson } from './lossless-json';
+import { ANDROID_URL_RULE_FIELD, effectiveLoginUriRules, hasAndroidUrlRules, writeAndroidUrlRules } from './url-rules';
 
 // Android saveProjectCredentials copies commonEntry to every password row. These
 // fields belong to the project; account/OTP belong to one credential group, while
@@ -33,12 +35,23 @@ function reconcileProjectFields(items: LoginItem[], previous: Map<string, LoginI
       if (new Set(edited.map(encoded)).size !== 1) throw new Error('同一密码项目的公共字段存在冲突，请重新打开项目核对。');
       changed.set(field, edited[0]);
     }
-    if (!changed.size) continue;
+    const carrier = (row: LoginItem) => JSON.stringify(row.customFields.filter(field => field.name === ANDROID_URL_RULE_FIELD));
+    const urlEdits = rows.filter(row => previous.has(row.id) && carrier(row) !== carrier(previous.get(row.id)!));
+    if (new Set(urlEdits.map(row => JSON.stringify(effectiveLoginUriRules(row)))).size > 1)
+      throw new Error('同一密码项目的公共字段存在冲突，请重新打开项目核对。');
+    const urlSource = urlEdits[0] ?? changed.get('uriRules') ?? changed.get('uris');
+    if (!changed.size && !urlSource) continue;
     for (const row of rows) {
       const next = { ...row };
       for (const [field, source] of changed) {
         if (Object.prototype.hasOwnProperty.call(source, field)) Object.assign(next, { [field]: source[field] });
         else Reflect.deleteProperty(next, field);
+      }
+      if (urlSource && (hasAndroidUrlRules(row.customFields) || hasAndroidUrlRules(urlSource.customFields))) {
+        const rules = effectiveLoginUriRules(urlSource);
+        next.customFields = writeAndroidUrlRules(row.customFields, rules);
+        next.uriRules = rules.map(rule => ({ ...rule }));
+        next.uris = rules.map(rule => rule.uri);
       }
       replacements.set(row.id, next);
     }
@@ -72,7 +85,18 @@ export function reconcileProjectCredentialEdits(items: LoginItem[], originals: L
       if (field === 'username') patch.username = edited[0].username;
       else patch.totpSecret = edited[0].totpSecret;
     }
-    if (Object.keys(patch).length) for (const item of group) replacements.set(item.id, { ...item, ...patch });
+    const note = (item: LoginItem) => readProjectCredential(item.customFields)!.note ?? '';
+    const editedNotes = group.filter(item => note(item) !== note(previous.get(item.id)!));
+    if (editedNotes.length && (new Set(group.map(item => note(previous.get(item.id)!))).size !== 1
+      || new Set(editedNotes.map(note)).size !== 1)) throw new Error('同一凭据组的备注存在冲突，请重新打开项目核对。');
+    for (const item of group) {
+      if (!Object.keys(patch).length && !editedNotes.length) continue;
+      const next = { ...item, ...patch };
+      if (editedNotes.length && note(item) !== note(editedNotes[0])) next.customFields = item.customFields.map(field => field.name !== PROJECT_CREDENTIAL_FIELD ? field : {
+        ...field, value: JSON.stringify({ ...(parseLosslessJson(field.value) as Record<string, unknown>), note: note(editedNotes[0]) })
+      });
+      replacements.set(item.id, next);
+    }
   }
   const result = items.map(item => replacements.get(item.id) || item);
   const resultingGroups = new Map<string, { rows: LoginItem[]; extended: boolean }>();
@@ -92,7 +116,8 @@ export function reconcileProjectCredentialEdits(items: LoginItem[], originals: L
   // and OTP. A new row must agree with the final reconciled values before saving.
   for (const group of resultingGroups.values()) {
     if (group.extended && (new Set(group.rows.map(row => row.username)).size !== 1
-      || new Set(group.rows.map(row => row.totpSecret ?? '')).size !== 1)) {
+      || new Set(group.rows.map(row => row.totpSecret ?? '')).size !== 1
+      || new Set(group.rows.map(row => readProjectCredential(row.customFields)!.note ?? '')).size !== 1)) {
       throw new Error('同一凭据组的账号或验证码存在冲突，请重新打开项目核对。');
     }
   }

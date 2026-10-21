@@ -42,11 +42,31 @@ export function setPalette(value: ThemePaletteId) {
 }
 
 export function useThemePreferences() {
+  let dispose: (() => void) | undefined;
   onMounted(() => {
-    applyTheme();
-    media.addEventListener("change", updatePreferredScheme);
+    dispose = initializeThemePreferences();
   });
-  onUnmounted(() => media.removeEventListener("change", updatePreferredScheme));
+  onUnmounted(() => dispose?.());
+}
+
+/** Also used by standalone extension windows, without a Vue component lifecycle. */
+export function initializeThemePreferences(): () => void {
+  schemePreference.value = readScheme();
+  paletteId.value = readPalette();
+  prefersDark.value = media.matches;
+  applyTheme();
+  media.addEventListener("change", updatePreferredScheme);
+  window.addEventListener("storage", synchronizeTheme);
+  return () => {
+    media.removeEventListener("change", updatePreferredScheme);
+    window.removeEventListener("storage", synchronizeTheme);
+  };
+}
+
+function synchronizeTheme(event: StorageEvent) {
+  if (event.storageArea !== localStorage || event.key !== null && event.key !== schemeKey && event.key !== paletteKey) return;
+  schemePreference.value = readScheme();
+  paletteId.value = readPalette();
 }
 
 watch([schemePreference, paletteId, activeScheme], applyTheme);

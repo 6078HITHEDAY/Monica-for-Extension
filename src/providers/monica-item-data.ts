@@ -1,5 +1,6 @@
 import { profileValues, CARD_NAMES, PROFILE_EXTRAS, ADDRESS_EXTRAS } from "../core/profile-fields";
 import { parseLosslessJson, jsonScalarText } from "../core/lossless-json";
+import { readWalletPassData } from '../core/wallet-pass';
 import { normalizeOtpCounter, otpCounterJson, type OtpCounter } from "../core/otp-counter";
 import { parseOtpUris, type TotpParameters } from "../core/totp";
 import type {
@@ -275,6 +276,7 @@ function decodeDocument(data: Record<string, unknown>): Omit<IdentityItem, keyof
   const lastName = firstString(data, "lastName");
   return {
     kind: "identity",
+    ...readWalletPassData(data),
     documentType: normalizeDocumentType(firstString(data, "documentType", "type")),
     documentNumber: firstString(data, "documentNumber", "number", "passportNumber", "licenseNumber", "driverLicense", "ssn"),
     firstName,
@@ -443,6 +445,7 @@ function buildMonicaItemData(item: VaultItem): Record<string, unknown> | undefin
       };
     case "identity":
       return {
+        ...readWalletPassData(item as unknown as Record<string, unknown>),
         documentType: item.documentType,
         ...(item.editorSectionOrder !== undefined ? { editorSectionOrder: readWalletEditorSectionOrder(item.editorSectionOrder) } : {}),
         documentNumber: item.documentNumber,
@@ -556,7 +559,7 @@ export function mergeMonicaItemData(original: unknown, updates: Record<string, u
     if (key === "customFields" && Array.isArray(value) && Array.isArray(source[key])) {
       return [key, mergeProjectedCustomFields(source[key] as unknown[], value)];
     }
-    if (value && typeof value === "object" && !Array.isArray(value) && source[key] && typeof source[key] === "object" && !Array.isArray(source[key])) {
+    if (key !== 'walletFields' && value && typeof value === "object" && !Array.isArray(value) && source[key] && typeof source[key] === "object" && !Array.isArray(source[key])) {
       // Raw numeric nodes are scalar, despite being represented by native objects.
       if ("rawJSON" in value && Object.getPrototypeOf(value) === null) return [key, value];
       return [key, mergeMonicaItemData(source[key], value as Record<string, unknown>)];

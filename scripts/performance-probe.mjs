@@ -9,11 +9,14 @@ const output = path.resolve(argument('--output', '.artifacts/performance/current
 const count = Number(argument('--items', '2000'));
 if (!Number.isInteger(count) || count < 100 || count > 10000) throw new Error('Use between 100 and 10000 synthetic items.');
 const profile = await mkdtemp(path.join(tmpdir(), 'monica-performance-'));
+const executablePath = argument('--browser', process.env.MONICA_E2E_EDGE_EXECUTABLE || (process.platform === 'win32' ? 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe' : undefined));
 const context = await chromium.launchPersistentContext(profile, {
-  channel: 'chromium', headless: true, locale: 'de-DE', colorScheme: 'dark', reducedMotion: 'reduce',
+  ...(executablePath ? {executablePath} : {channel:'chromium'}), headless: true, locale: 'de-DE', colorScheme: 'dark', reducedMotion: 'reduce',
   viewport: { width: 1366, height: 900 }, args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`]
 });
 const result = { version: JSON.parse(await readFile(path.join(extension, 'manifest.json'), 'utf8')).version, browser: context.browser()?.version(), loginItems: count, otpItems: 100, units: { heap: 'bytes of retained V8 heap after requested GC; not total browser RAM', nodes: 'CDP DOM nodes including detached nodes', script: 'seconds of renderer script execution' }, samples: {} };
+result.executablePath = executablePath || 'bundled chromium';
+result.latency = {};
 const resourceRequests = new WeakMap();
 function observeResources(page) {
   const urls = new Set();
@@ -36,8 +39,9 @@ async function resources(page) {
   const entries = [...(resourceRequests.get(page) || [])];
   const own = [...new Set(entries.filter(url => url.startsWith('chrome-extension://')).map(url => new URL(url).pathname.slice(1)))];
   const files = [];
-  for (const name of own) files.push({ name, bytes: (await stat(path.join(extension, name))).size });
-  return { bytes: files.reduce((total, file) => total + file.bytes, 0), files };
+  const browserProvided = own.filter(name => name === '_favicon' || name.startsWith('_favicon/'));
+  for (const name of own.filter(name => !browserProvided.includes(name))) files.push({ name, bytes: (await stat(path.join(extension, name))).size });
+  return { bytes: files.reduce((total, file) => total + file.bytes, 0), files, browserProvidedRequests: browserProvided.length };
 }
 try {
   const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
@@ -72,11 +76,15 @@ try {
     return { ok: response.ok, error: response.error };
   }, count);
   if (!imported.ok) throw new Error(imported.error);
+  const vaultStart = performance.now();
   await manager.reload();
   await expect(manager.locator('.page-heading h1')).toBeVisible();
+  result.latency.openVaultMs = performance.now() - vaultStart;
   await sample(manager, 'managerVault');
+  const listStart = performance.now();
   await manager.locator('.sidebar .nav-item').nth(1).click();
   await expect(manager.locator('.vault-list-card .item-card').first()).toBeVisible();
+  result.latency.openLoginListMs = performance.now() - listStart;
   await sample(manager, 'managerLogins');
   result.renderedLoginRows = await manager.locator('.vault-list-card .item-card').count();
   await manager.getByRole('navigation').getByRole('button', { name: /^Bestätigungscodes/ }).click();
@@ -120,10 +128,13 @@ try {
   await popup.setViewportSize({ width: 390, height: 600 });
   await site.bringToFront();
   await popup.goto(`chrome-extension://${id}/popup.html`);
-  await expect(popup.locator('.popup-search')).toBeVisible();
+  await expect(popup.getByRole('searchbox')).toBeVisible();
   await popup.evaluate(() => document.fonts.ready);
   await sample(popup, 'popup');
   result.popupResources = await resources(popup);
+  // Structural gates are reproducible; timing remains a measured trend on this machine.
+  expect(result.renderedLoginRows).toBeLessThanOrEqual(100);
+  expect(result.otp.signaturesInSamePeriodOverFourSeconds).toBe(0);
   await mkdir(path.dirname(output), { recursive: true });
   await writeFile(output, JSON.stringify(result, null, 2) + '\n');
   console.log('Saved synthetic performance measurements: ' + output);

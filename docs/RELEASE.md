@@ -1,6 +1,10 @@
 # 可复现发布流程
 
+Firefox 桌面版使用独立的 `build:firefox` / `package:firefox`，输出 `dist-firefox/` 和本地未签名 XPI；不纳入下述 Chromium ZIP 直接分发流程。最低版本、临时加载、Mozilla 签名与 OneDrive 应用回调配置见 [Firefox 说明](FIREFOX.md)。
+
 ## 环境
+
+扩展从 `1.0.101` 起采用 `1.0.<递增修订号>`，常规下一版为 `1.0.102`。浏览器清单、`package.json`、`package-lock.json` 根版本必须相同，GitHub 正式发布标签使用 `v1.0.101` 形式。更新检测按三段数字比较，查询该仓库的最新正式 Release；不把预发布标签、草稿或旧版本视为可更新版本。`0.1.x` 已发布记录保持原样。此处记录命名规则，不代表已创建标签或发布。
 
 - Node.js 22
 - 使用仓库中的 `package-lock.json` 执行 `npm ci`

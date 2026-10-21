@@ -19,10 +19,10 @@ export function projectCredentialFormGroups(form: LoginForm) {
   }
   if ([...groups.values()].some(rows => new Set(rows.map(row => row.username)).size !== 1
     || new Set(rows.map(row => row.otp)).size !== 1
-    || new Set(rows.map(row => JSON.stringify([row.metadata!.label, row.metadata!.primary, row.metadata!.groupOrder]))).size !== 1)) return undefined;
+    || new Set(rows.map(row => JSON.stringify([row.metadata!.label, row.metadata!.primary, row.metadata!.groupOrder, row.metadata!.note ?? '']))).size !== 1)) return undefined;
   return [...groups.entries()].map(([id, rows]) => {
     rows.sort((a, b) => a.metadata!.passwordOrder - b.metadata!.passwordOrder);
-    return { id, label: rows[0].metadata!.label, primary: rows[0].metadata!.primary, order: rows[0].metadata!.groupOrder, rows };
+    return { id, label: rows[0].metadata!.label, note: rows[0].metadata!.note ?? '', primary: rows[0].metadata!.primary, order: rows[0].metadata!.groupOrder, rows };
   }).sort((a, b) => Number(b.primary) - Number(a.primary) || a.order - b.order);
 }
 
@@ -136,16 +136,20 @@ export function startProjectCredentialGroups(form: LoginForm) {
 }
 
 export function setProjectCredentialGroupLabel(form: LoginForm, groupId: string, label: string) {
+  setProjectCredentialGroupMetadata(form, groupId, { label });
+}
+
+export function setProjectCredentialGroupNote(form: LoginForm, groupId: string, note: string) {
+  setProjectCredentialGroupMetadata(form, groupId, { note });
+}
+
+function setProjectCredentialGroupMetadata(form: LoginForm, groupId: string, patch: Record<string, string>) {
   const group = projectCredentialFormGroups(form)?.find(group => group.id === groupId);
   if (!group) throw new Error('无法编辑凭据组，请重新打开项目。');
   const updates = group.rows.map(row => {
     const member = row.index === -1 ? undefined : form.groupMembers[row.index];
     const fields = row.index === -1 ? form.customFields : member!.customFields ?? member!.original!.customFields;
-    return { index: row.index, fields: fields.map(field => {
-      if (field.name !== PROJECT_CREDENTIAL_FIELD || row.metadata!.label === label) return field;
-      const raw = parseLosslessJson(field.value) as Record<string, unknown>;
-      return { ...field, value: JSON.stringify({ ...raw, label }) };
-    }) };
+    return { index: row.index, fields: patchMetadata(fields, patch) };
   });
   for (const update of updates) {
     if (update.index === -1) form.customFields = update.fields;

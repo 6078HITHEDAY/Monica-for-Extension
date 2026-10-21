@@ -69,7 +69,7 @@ installCredentialCapture({ onCandidate: submitCandidate, onUsernameContext: reme
 
 if (window.top === window) void restorePendingPrompt();
 
-interface PasskeyCancellationReason { message: string; name: "AbortError" | "NotAllowedError"; }
+interface PasskeyCancellationReason { message: string; name: "AbortError" | "NotAllowedError" | "NotSupportedError"; }
 const activePasskeyRequests = new Map<string, { candidateId: string; dismiss: (reason?: PasskeyCancellationReason) => Promise<boolean>; cancelFromBackground: () => void }>();
 const pendingPasskeyCancellations = new Map<string, PasskeyCancellationReason>();
 const pendingBackgroundPasskeyCancellations = new Set<string>();
@@ -142,20 +142,20 @@ async function handlePasskeyRequest(requestId: string, request: PasskeyRequest):
             return false;
           }
           if (result.cancelled !== false) {
-            rejectPage(reason);
+            rejectPage(requestedCancellation || reason);
             return true;
           }
           if (!result.pending) return false;
         } catch {
           if (!accepting) {
-            rejectPage(reason);
+            rejectPage(requestedCancellation || reason);
             return true;
           }
         }
         await new Promise((resolve) => window.setTimeout(resolve, 100));
       }
       if (!settled) {
-        rejectPage(reason);
+        rejectPage(requestedCancellation || reason);
         return true;
       }
       return false;
@@ -176,8 +176,14 @@ async function handlePasskeyRequest(requestId: string, request: PasskeyRequest):
     if (pendingBackgroundPasskeyCancellations.delete(context.candidateId)) return void cancelFromBackground();
     const pendingCancellation = pendingPasskeyCancellations.get(requestId);
     if (pendingCancellation) return void await dismiss(pendingCancellation);
-    renderPasskeyPrompt(context, async (itemId, providerId) => {
+    renderPasskeyPrompt(context, async (itemId, providerId, useNativeAuthenticator) => {
       if (settled) return;
+      if (useNativeAuthenticator && context.operation === "get") {
+        // Release Monica's pending request before MAIN resumes the original native get.
+        const cancelled = await dismiss({ message: "已选择系统 Passkey 验证器。", name: "NotSupportedError" });
+        if (cancelled) closePasskeyPrompt();
+        return;
+      }
       accepting = true;
       let result: PasskeyResult;
       try {

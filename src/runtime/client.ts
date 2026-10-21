@@ -71,7 +71,7 @@ async function checkRuntime(force: boolean): Promise<void> {
     runtimeCheck = (async () => {
       const response = await probeRuntime();
       const info = checkResponse(response);
-      if (!info || info.version !== runtimeInfo.version || info.protocolVersion !== runtimeInfo.protocolVersion) throw reloadRequired();
+      if (!info || info.version !== runtimeInfo.version || info.protocolVersion !== runtimeInfo.protocolVersion || info.buildId !== runtimeInfo.buildId) throw reloadRequired();
       runtimeChecked = true;
     })().finally(() => { runtimeCheck = undefined; });
   }
@@ -81,7 +81,7 @@ async function checkRuntime(force: boolean): Promise<void> {
 async function send<T>(request: ExtensionRequest): Promise<T> {
   if (typeof chrome === "undefined" || !chrome.runtime?.sendMessage) throw new Error("请在已安装的 Monica 浏览器插件中打开此页面。");
   // Share one initial check across UI reads; recheck before sending a password.
-  await checkRuntime(request.type === "VAULT_SETUP" || request.type === "VAULT_UNLOCK" || request.type === "VAULT_UNLOCK_HELLO");
+  await checkRuntime(request.type === "VAULT_SETUP" || request.type === "VAULT_UNLOCK" || request.type === "VAULT_UNLOCK_HELLO" || request.type === 'VAULT_AUTHENTICATED_EXPORT');
   let response: ExtensionResponse<T>;
   try { response = await chrome.runtime.sendMessage(request); }
   catch (error) {
@@ -110,7 +110,14 @@ export const vaultClient = {
   enrollWindowsHello: () => send<{ version: 1; bindingId: string; rpId: "monica-extension.local"; enrolledAt: string }>({ type: "VAULT_HELLO_ENROLL" }),
   revokeWindowsHello: () => send<void>({ type: "VAULT_HELLO_REVOKE", confirmed: true }),
   changeMasterPassword: (currentPassword: string, newPassword: string) => send<void>({ type: "VAULT_CHANGE_MASTER_PASSWORD", currentPassword, newPassword }),
-  exportEncryptedBackup: (backupPassword: string) => send<EncryptedVaultBackup>({ type: "VAULT_EXPORT_ENCRYPTED", backupPassword }),
+  exportEncryptedBackup: async (backupPassword: string, masterPassword?: string) => {
+    const result = await send<import('../security/authenticated-export').VaultExportResult>({ type: 'VAULT_AUTHENTICATED_EXPORT', input: { format: 'encrypted', backupPassword, masterPassword, confirmed: true } });
+    if (result.format !== 'encrypted') throw new Error('Invalid export result');
+    return result.backup;
+  },
+  authenticatedExport: (input: import('../security/authenticated-export').VaultExportInput) => send<import('../security/authenticated-export').VaultExportResult>({ type: 'VAULT_AUTHENTICATED_EXPORT', input }),
+  storageOverview: () => send<import('../security/vault-recovery').VaultStorageOverview>({ type: 'VAULT_STORAGE_OVERVIEW' }),
+  clearRecoveryCopies: () => send<void>({ type: 'VAULT_RECOVERY_CLEAR', confirmed: true }),
   restoreEncryptedBackup: (backup: EncryptedVaultBackup, backupPassword: string, replaceExisting = false, currentPassword?: string) =>
     send<VaultItem[]>({ type: "VAULT_RESTORE_ENCRYPTED", backup, backupPassword, replaceExisting, currentPassword }),
   importItems: (items: VaultItem[]) => send<VaultItem[]>({ type: "VAULT_IMPORT_ITEMS", items }),
@@ -159,6 +166,7 @@ export const vaultClient = {
     send<boolean>({ type: 'VAULT_KEEPASS_PROJECT_RECOVERY_EXPORT_RELEASE', providerId, downloadHandle }),
   lockedAutofillIds: () => send<string[]>({ type: "VAULT_LOCKED_AUTOFILL_IDS" }),
   setLockedAutofill: (itemId: string, enabled: boolean) => send<void>({ type: "VAULT_SET_LOCKED_AUTOFILL", itemId, enabled }),
+  batchMutateItems: (input: import('../core/vault-batch').VaultBatchRequest) => send<{ affected: number }>({ type: 'VAULT_BATCH_MUTATE', input }),
   deleteItem: (itemId: string) => send<void>({ type: "VAULT_DELETE_ITEM", itemId }),
   emptyLocalTrash: () => send<{ removed: number; retained: number }>({ type: "VAULT_EMPTY_LOCAL_TRASH" }),
   deletePasswordGroup: (anchorItemId: string, expected: Record<string, string>) => send<void>({ type: "VAULT_DELETE_PASSWORD_GROUP", anchorItemId, expected }),

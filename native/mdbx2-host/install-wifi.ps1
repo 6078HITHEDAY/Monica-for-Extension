@@ -2,13 +2,15 @@
 param(
     [string]$ChromeExtensionId = '',
     [string]$EdgeExtensionId = '',
+    [string]$FirefoxExtensionId = '',
     [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA 'Monica\Extension\WiFi')
 )
 $ErrorActionPreference = 'Stop'
 foreach ($WifiId in @($ChromeExtensionId, $EdgeExtensionId)) {
     if ($WifiId -and $WifiId -notmatch '^[a-p]{32}$') { throw 'Invalid extension ID.' }
 }
-if (-not $ChromeExtensionId -and -not $EdgeExtensionId) { throw 'Provide a Chrome or Edge extension ID.' }
+if ($FirefoxExtensionId -and $FirefoxExtensionId -cne 'monica@monica-pass.github.io') { throw 'Invalid Monica Firefox add-on ID.' }
+if (-not $ChromeExtensionId -and -not $EdgeExtensionId -and -not $FirefoxExtensionId) { throw 'Provide a Chrome, Edge or Firefox extension ID.' }
 $WifiSource = Join-Path $PSScriptRoot 'monica-mdbx2-host.exe'
 $WifiMetadata = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'WIFI-HELPER.json') -Raw | ConvertFrom-Json
 if ($WifiMetadata.sha256 -notmatch '^[a-f0-9]{64}$' -or (Get-FileHash -LiteralPath $WifiSource -Algorithm SHA256).Hash.ToLowerInvariant() -ne $WifiMetadata.sha256) { throw 'Component checksum mismatch.' }
@@ -37,5 +39,13 @@ foreach ($WifiBrowser in @(@('Google\Chrome', $ChromeExtensionId, 'chrome'), @('
     [IO.File]::WriteAllText($WifiManifest, $WifiJson, $WifiUtf8)
     New-Item -Path $WifiKey -Force | Out-Null
     Set-Item -LiteralPath $WifiKey -Value $WifiManifest
+}
+if ($FirefoxExtensionId) {
+    $WifiManifest = Join-Path $InstallRoot 'firefox-com.monica_pass.mdbx2.json'
+    $WifiJson = @{ name='com.monica_pass.mdbx2'; description='Monica Wi-Fi communication'; path=$WifiExecutable; type='stdio'; allowed_extensions=@($FirefoxExtensionId) } | ConvertTo-Json -Depth 4
+    [IO.File]::WriteAllText($WifiManifest, $WifiJson, $WifiUtf8)
+    $WifiFirefoxKey = 'HKCU:\Software\Mozilla\NativeMessagingHosts\com.monica_pass.mdbx2'
+    New-Item -Path $WifiFirefoxKey -Force | Out-Null
+    Set-Item -LiteralPath $WifiFirefoxKey -Value $WifiManifest
 }
 Write-Output 'Monica Wi-Fi component configured. Return to the extension and retry pairing. No administrator access is required.'

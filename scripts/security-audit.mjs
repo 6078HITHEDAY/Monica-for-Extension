@@ -9,7 +9,7 @@ const scripts = ["background.js", "content.js", "main-world.js"];
 const missing = scripts.filter((name) => !manifest.content_scripts?.some((entry) => entry.js?.includes(name)) && name !== "background.js");
 if (missing.length || manifest.background?.service_worker !== "background.js") throw new Error(`Missing trusted extension scripts: ${missing.join(", ")}`);
 if (!manifest.content_scripts.some((entry) => entry.world === "MAIN" && entry.js?.includes("main-world.js") && entry.run_at === "document_start")) throw new Error("MAIN-world Passkey bridge is not document_start.");
-if (manifest.externally_connectable || manifest.optional_permissions || manifest.optional_host_permissions) throw new Error("Release manifest exposes an unexpected external or optional privilege surface.");
+if (manifest.externally_connectable || manifest.optional_host_permissions || JSON.stringify(manifest.optional_permissions) !== JSON.stringify(['clipboardRead', 'clipboardWrite'])) throw new Error("Release manifest exposes an unexpected external or optional privilege surface.");
 // favicon reads the browser's local icon cache in extension pages only; the
 // _favicon endpoint remains absent from web-accessible resources below.
 // sidePanel reuses the same trusted manager path and locked session; opening is an
@@ -109,6 +109,10 @@ for (const clause of dispatch?.caseBlock.clauses || []) {
 }
 if (!declaredTypes.size || !handlers.size) throw new Error('Runtime command declaration/dispatch audit could not be parsed.');
 for (const type of declaredTypes) if (!handlers.has(type)) throw new Error(`Runtime request ${type} has no explicit background handler.`);
+for (const type of ['VAULT_BATCH_MUTATE', 'VAULT_AUTHENTICATED_EXPORT', 'VAULT_STORAGE_OVERVIEW', 'VAULT_RECOVERY_CLEAR']) {
+  if (allowlistBlock.includes(type) || !handlers.get(type)?.includes('assertManagerPage(sender)')) throw new Error(`Export/recovery command ${type} is not manager-only.`);
+}
+if (!handlers.get('VAULT_RECOVERY_CLEAR')?.includes('request.confirmed !== true') || !handlers.get('VAULT_EXPORT_ENCRYPTED')?.includes('throw')) throw new Error('Recovery confirmation or legacy export denial is missing.');
 const projectCommands = [...declaredTypes].filter(type=>type.startsWith('VAULT_PASSWORD_PROJECT_') || type.startsWith('VAULT_KEEPASS_PROJECT_'));
 for (const type of projectCommands) {
   if (new RegExp(`["']${type}["']`).test(allowlistBlock) || !handlers.get(type).includes('assertManagerPage(sender)'))

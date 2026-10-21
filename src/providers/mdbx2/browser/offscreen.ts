@@ -1,4 +1,6 @@
 import { boundedBridgeJson, bridgeObject, MDBX_BROWSER_CLOSE_MS, MDBX_BROWSER_DOCUMENT_AUTH, MDBX_BROWSER_DOCUMENT_READY, MDBX_BROWSER_LEASE_MS, MDBX_BROWSER_PORT, MDBX_BROWSER_REQUEST_BYTES, MDBX_BROWSER_RESPONSE_BYTES, trustedMdbxBackground } from './bridge-protocol';
+import { CLIPBOARD_CLEAR_MESSAGE } from '../../../security/clipboard-lifecycle';
+import { clearMatchingClipboard } from '../../../security/offscreen-clipboard';
 
 let owner: chrome.runtime.Port | undefined;
 let retirement: Promise<void> = Promise.resolve();
@@ -12,6 +14,9 @@ void authorized.then(allowed => {
   if (!allowed) return;
   chrome.runtime.onMessage.addListener((input, sender, respond) => {
     const message = bridgeObject(input);
+    if (message?.type === CLIPBOARD_CLEAR_MESSAGE && trustedMdbxBackground(sender, chrome.runtime) && Object.keys(message).length === 2 && typeof message.digest === 'string') {
+      void clearMatchingClipboard(message.digest).then(cleared => respond({ cleared }), () => respond({ cleared: false })); return true;
+    }
     if (message?.type !== MDBX_BROWSER_DOCUMENT_READY || !trustedMdbxBackground(sender, chrome.runtime)) return false;
     respond({ ready: true, nonce: message.nonce }); return false;
   });

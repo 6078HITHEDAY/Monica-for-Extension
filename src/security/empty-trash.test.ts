@@ -6,6 +6,20 @@ import { MemoryVaultStorage } from "./vault-storage";
 
 const bitwarden: ProviderAccount = { id: "bw", kind: "bitwarden", name: "Synthetic Bitwarden", enabled: true, isDefaultSaveTarget: false, config: { apiUrl: "https://example.test/api" } };
 
+async function attachment(itemId: string) {
+  const bytes = Buffer.from("synthetic attachment");
+  const sha256 = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map(byte => byte.toString(16).padStart(2, "0")).join("");
+  return { itemId, attachmentId: "synthetic-file", fileName: "secret.txt", mediaType: "text/plain", sizeBytes: bytes.length,
+    sha256, dataBase64: bytes.toString("base64"), protected: true };
+}
+async function attach(service: SecureVaultService, itemId: string) {
+  const sessionId = (await service.passkeySessionId())!, state = await service.readState(false);
+  const file = await attachment(itemId);
+  await service.mutateLocalAttachment({ operationId: crypto.randomUUID(), providerId: state.providers.find(provider => provider.kind === "local")!.id,
+    itemId, attachmentId: file.attachmentId, mode: "create", attachment: file }, sessionId);
+  return { file, sessionId };
+}
+
 async function fixture() {
   const service = new SecureVaultService(new MemoryVaultStorage(), new MemoryVaultSessionStore(), () => Date.now());
   await service.setup("empty trash master password");
@@ -59,5 +73,31 @@ describe("empty local trash", () => {
     await service.restoreItem(remote.id);
     expect(await service.emptyLocalTrash()).toEqual({ removed: 1, retained: 0 });
     expect((await service.readState(false)).items.find(item => item.id === remote.id)?.deletedAt).toBeUndefined();
+  });
+
+  it("retains purged ids and attachment bytes for incremental-only sync by default", async () => {
+    const { service, totp } = await fixture();
+    const item = await service.upsertItem(createLoginItem({ title: "Attached local", password: "attached-secret" }));
+    const { file, sessionId } = await attach(service, item.id);
+    expect((await service.nearbySessionPreferences(sessionId)).incrementalOnly).toBe(true);
+    await service.deleteItem(item.id);
+    expect(await service.emptyLocalTrash()).toEqual({ removed: 2, retained: 1 });
+    const state = await service.readState(false);
+    expect(state.nearbyRetainedLocals?.sort()).toEqual([`local:${totp.id}`, `local:${item.id}`].sort());
+    expect(state.localItemAttachments).toEqual([file]);
+    expect(state.nearbyLocalReceipts?.some(receipt => receipt.itemId === item.id)).toBe(false);
+  });
+
+  it("removes attachment bytes with the item when incremental-only sync is turned off", async () => {
+    const { service, totp } = await fixture();
+    const item = await service.upsertItem(createLoginItem({ title: "Attached local", password: "attached-secret" }));
+    const { sessionId } = await attach(service, item.id);
+    await service.deleteItem(item.id);
+    const preferences = await service.nearbySessionPreferences(sessionId);
+    await service.updateNearbyPreferences({ kind: "preferences", incrementalOnly: false }, preferences.epoch, sessionId);
+    expect(await service.emptyLocalTrash()).toEqual({ removed: 2, retained: 1 });
+    const state = await service.readState(false);
+    expect(state.nearbyRetainedLocals).toBeUndefined();
+    expect(state.localItemAttachments ?? []).toEqual([]);
   });
 });

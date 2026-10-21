@@ -1,4 +1,5 @@
 import type { LoginItem, VaultItem, VaultState } from "../core/model";
+import { effectiveLoginUriRules, hasAndroidUrlRules, writeAndroidUrlRules } from '../core/url-rules';
 import { autofillCredentialIdentities, type AutofillCredentialIdentity } from "../autofill/credential-identity";
 import { base64ToBytes, bytesToBase64, randomBytes } from "./encoding";
 import type { VaultEnvelope } from "./vault-crypto";
@@ -27,7 +28,7 @@ export interface LockedAutofillStorage {
 export function supportsLockedAutofill(item: VaultItem): item is LoginItem {
   return item.kind === "login" && (!item.loginType || item.loginType === "PASSWORD")
     && !item.deletedAt && !item.archivedAt && Boolean(item.password)
-    && (item.uriRules?.length ? item.uriRules.some((rule) => rule.uri.trim() && rule.matchType !== "never") : item.uris.some((uri) => uri.trim()));
+    && effectiveLoginUriRules(item).some(rule => rule.uri.trim() && rule.matchType !== 'never');
 }
 
 export function lockedAutofillSnapshot(state: VaultState): LockedAutofillSnapshot {
@@ -44,8 +45,10 @@ export function lockedAutofillSnapshot(state: VaultState): LockedAutofillSnapsho
         // Deliberately project only the explicitly granted username/password.
         // OTPs, custom fields, notes, provider credentials and private keys stay in the vault.
         id: item.id, kind: "login", title: item.title, username: item.username, password: item.password,
-        uris: [...item.uris], uriRules: item.uriRules?.map((rule) => ({ ...rule })), favorite: item.favorite,
-        createdAt: item.createdAt, updatedAt: item.updatedAt, notes: "", customFields: [], providerRefs: []
+        uris: [...item.uris], uriRules: effectiveLoginUriRules(item).map((rule) => ({ ...rule })), favorite: item.favorite,
+        createdAt: item.createdAt, updatedAt: item.updatedAt, notes: "",
+        // Retain only canonical matching semantics, never future carrier data or other custom fields.
+        customFields: hasAndroidUrlRules(item.customFields) ? writeAndroidUrlRules([], effectiveLoginUriRules(item)) : [], providerRefs: []
       })),
     blockedHosts: [...state.settings.autofillBlockedHosts],
     blockedFieldSignatures: state.settings.autofillBlockedFieldSignatures.map((record) => record.signature)

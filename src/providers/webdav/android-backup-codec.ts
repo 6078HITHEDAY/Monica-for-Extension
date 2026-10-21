@@ -1,4 +1,6 @@
 import { profileValues, CARD_NAMES, PROFILE_EXTRAS, ADDRESS_EXTRAS } from "../../core/profile-fields";
+import { androidTransportFields, readAndroidUrlRules } from '../../core/url-rules';
+import { readWalletPassData } from '../../core/wallet-pass';
 import { passkeyKeyMaterialHint } from '../../passkey/private-key-portability';
 import { parseLosslessJson, jsonScalarText } from "../../core/lossless-json";
 import { capturePasswordHistory, assertPortablePasswordHistory } from '../../core/password-history';
@@ -472,6 +474,11 @@ export function androidRecordToItem(path: string, raw: Record<string, unknown>, 
   const base = baseFields(path, raw, providerId);
 
   if (kindFolder === "passwords") {
+    const customFields = Array.isArray(raw.customFields)
+      ? raw.customFields.filter(field => field && typeof field === 'object' && !Array.isArray(field) && typeof field.title === 'string' && typeof field.value === 'string').map(field => {
+        const value = field as Record<string, unknown>;
+        return { name: stringValue(value.title), value: stringValue(value.value), protected: Boolean(value.isProtected) };
+      }) : [];
     const rawLoginType = stringValue(raw.loginType).trim().toUpperCase();
     if (rawLoginType && !["PASSWORD", "SSO", "WIFI", "SSH", "SSH_KEY", "GPG_KEY", "API_KEY", "BARCODE"].includes(rawLoginType)) return opaqueAndroidRecord(path, raw, providerId, "未知登录类型，仅可读取原始数据。");
     return {
@@ -480,14 +487,9 @@ export function androidRecordToItem(path: string, raw: Record<string, unknown>, 
       username: stringValue(raw.username),
       password: stringValue(raw.password),
       uris: splitUris(stringValue(raw.website)),
-      uriRules: splitUris(stringValue(raw.website)).map((uri) => ({ uri, matchType: "base-domain" })),
+      uriRules: readAndroidUrlRules(customFields) ?? splitUris(stringValue(raw.website)).map((uri) => ({ uri, matchType: "base-domain" })),
       totpSecret: stringValue(raw.authenticatorKey) || undefined,
-      customFields: Array.isArray(raw.customFields)
-        ? raw.customFields.filter((field) => field && typeof field === "object" && !Array.isArray(field) && typeof field.title === "string" && typeof field.value === "string").map((field) => {
-            const value = field as Record<string, unknown>;
-            return { name: stringValue(value.title), value: stringValue(value.value), protected: Boolean(value.isProtected) };
-          })
-        : [],
+      customFields,
       loginType: normalizeLoginType(raw.loginType),
       passwordGroupId: optionalString(raw.passwordGroupId),
       isGroupCover: typeof raw.isGroupCover === "boolean" ? raw.isGroupCover : undefined,
@@ -644,6 +646,7 @@ export function androidRecordToItem(path: string, raw: Record<string, unknown>, 
     return {
       ...base,
       kind: "identity",
+      ...readWalletPassData(data),
       editorSectionOrder: readWalletEditorSectionOrder(data.editorSectionOrder),
       documentType: normalizeDocumentType(firstString(data, "documentType", "type")),
       documentNumber: firstString(data, "documentNumber", "number", "passportNumber", "licenseNumber", "driverLicense", "ssn"),
@@ -1177,8 +1180,9 @@ function serializeAndroidItem(item: VaultItem, original?: Record<string, unknown
         setChanged(key, item[key] || "", item[key] || "", previous?.[key] || "");
       }
       setChanged("customIconUpdatedAt", item.customIconUpdatedAt || 0, item.customIconUpdatedAt, previous?.customIconUpdatedAt);
-      const customFields = item.customFields.map((field) => ({ title: field.name, value: field.value, isProtected: field.protected }));
-      if (isNew || !sameValue(item.customFields, previous?.customFields)) raw.customFields = mergePasswordCustomFields(original?.customFields, customFields);
+      const outgoingFields = androidTransportFields(item);
+      const customFields = outgoingFields.map((field) => ({ title: field.name, value: field.value, isProtected: field.protected }));
+      if (isNew || !sameValue(outgoingFields, previous ? androidTransportFields(previous) : undefined)) raw.customFields = mergePasswordCustomFields(original?.customFields, customFields);
       return { id, raw };
     }
     case "secure-note": {
@@ -1246,6 +1250,9 @@ function serializeAndroidItem(item: VaultItem, original?: Record<string, unknown
     case "identity": {
       const previous = applyCommon("identity", "DOCUMENT") as IdentityItem | undefined;
       const updates: Record<string, unknown> = {};
+      const pass = readWalletPassData(item as unknown as Record<string, unknown>);
+      if (pass.walletTemplate !== undefined || previous?.walletTemplate !== undefined) setNested(updates, 'walletTemplate', pass.walletTemplate ?? '', pass.walletTemplate, previous?.walletTemplate);
+      if (pass.walletFields !== undefined || previous?.walletFields !== undefined) setNested(updates, 'walletFields', pass.walletFields ?? {}, pass.walletFields, previous?.walletFields);
       setNested(updates, "documentType", item.documentType, item.documentType, previous?.documentType);
       setNested(updates, "documentNumber", item.documentNumber, item.documentNumber, previous?.documentNumber);
       setNested(updates, "firstName", item.firstName, item.firstName, previous?.firstName);

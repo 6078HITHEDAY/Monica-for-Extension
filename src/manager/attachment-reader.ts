@@ -9,12 +9,44 @@ export interface AttachmentReader {
   releaseProviderAttachmentRead(providerId: string, handle: string): Promise<unknown>;
 }
 export const PREVIEW_MAX_BYTES = 64 * 1024 * 1024;
+// A gallery can intersect dozens of cards at once. Reserve fewer than the
+// backend's four handles, including release time, so previews cannot starve
+// one another or a manual attachment download. No attachment bytes are cached.
+let activeReads = 0;
+const waitingReads: Array<() => void> = [];
+async function acquireRead(signal?: AbortSignal): Promise<() => void> {
+  if (signal?.aborted) throw new DOMException('附件读取已取消。', 'AbortError');
+  await new Promise<void>((resolve, reject) => {
+    const cancel = () => {
+      const index = waitingReads.indexOf(grant);
+      if (index >= 0) waitingReads.splice(index, 1);
+      signal?.removeEventListener('abort', cancel);
+      reject(new DOMException('附件读取已取消。', 'AbortError'));
+    };
+    const grant = () => { signal?.removeEventListener('abort', cancel); activeReads++; resolve(); };
+    if (activeReads < 2) grant();
+    else { waitingReads.push(grant); signal?.addEventListener('abort', cancel, { once: true }); }
+  });
+  return () => { activeReads--; waitingReads.shift()?.(); };
+}
+function waitForReadSlot(signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const cancel = () => { clearTimeout(timer); signal?.removeEventListener('abort', cancel); reject(new DOMException('附件读取已取消。', 'AbortError')); };
+    const timer = setTimeout(() => { signal?.removeEventListener('abort', cancel); resolve(); }, 150);
+    if (signal?.aborted) cancel(); else signal?.addEventListener('abort', cancel, { once: true });
+  });
+}
 export async function attachmentSha256(bytes: Uint8Array): Promise<string> {
   return [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes.slice()))].map(byte => byte.toString(16).padStart(2, "0")).join("");
 }
 
 /** Explicit, bounded, cancellable reads. No bytes are exposed until the complete read is verified. */
 export async function readVerifiedAttachment(client: AttachmentReader, providerId: string, itemId: string, name: string, expected?: WalletAsset, signal?: AbortSignal) {
+  const release = await acquireRead(signal);
+  try { return await readAttachment(client, providerId, itemId, name, expected, signal); }
+  finally { release(); }
+}
+async function readAttachment(client: AttachmentReader, providerId: string, itemId: string, name: string, expected?: WalletAsset, signal?: AbortSignal) {
   const check = () => { if (signal?.aborted) throw new DOMException("附件读取已取消。", "AbortError"); };
   check();
   const cursors = new Set<string>(); let cursor: string | undefined;
@@ -30,7 +62,19 @@ export async function readVerifiedAttachment(client: AttachmentReader, providerI
   if (matches.length !== 1) throw new Error(matches.length ? "附件名称重复，未打开。" : "附件或 Blob 缺失，原内容未修改。");
   let handle: string | undefined;
   try {
-    const start = await client.beginProviderAttachmentRead(providerId, itemId, matches[0].attachmentId);
+    // Other manager windows can temporarily use the remaining backend slots.
+    // Retry only an explicit pre-allocation capacity rejection, never a lost
+    // reply, expired session, corrupt chunk or missing attachment.
+    let start: ProviderAttachmentReadBeginResult;
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      check();
+      try { start = await client.beginProviderAttachmentRead(providerId, itemId, matches[0].attachmentId); break; }
+      catch (error) {
+        if (!(error instanceof Error) || (error as Error & { code?: string }).code !== 'attachment-read-limit' || Date.now() >= deadline) throw error;
+        await waitForReadSlot(signal);
+      }
+    }
     handle = start.readHandle; check();
     if (!handle || !Number.isSafeInteger(start.sizeBytes) || start.sizeBytes < 0 || start.sizeBytes > PREVIEW_MAX_BYTES) throw new Error("预览上限为 64 MiB，请使用附件管理下载。");
     if (expected && start.sizeBytes !== expected.size) throw new Error("附件大小不匹配，未打开。");

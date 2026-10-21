@@ -6,7 +6,7 @@ const GPG_ENCODING = "monica_gpg_encoding";
 const GPG_MAX_BYTES = 1024 * 1024;
 export interface GpgPublicFields { publicKey: string; fingerprint: string; userId: string }
 export function isCredentialMetadata(name: string): boolean {
-  return name.startsWith("monica_gpg_") || name === "monica_api_key_type" || name === "monica_api_key_url" || isPasswordStackMetadata(name);
+  return name.startsWith("monica_gpg_") || name === "monica_api_key_type" || name === "monica_api_key_url" || name === "monica.autofill.url_rules" || isPasswordStackMetadata(name);
 }
 function single(fields: SecureCustomField[], name: string): string | undefined {
   const matches = fields.filter(field => field.name === name);

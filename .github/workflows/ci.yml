@@ -37,6 +37,13 @@ jobs:
           npm run build:mdbx2-browser
       - run: npm run release:check
       - run: npm run package:verify
+      - name: Build and verify unsigned Firefox package
+        run: node scripts/build-firefox.mjs && node scripts/verify-firefox.mjs && node scripts/package-firefox.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: monica-extension-firefox-unsigned
+          path: .artifacts/firefox/*
+          if-no-files-found: error
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: monica-extension
@@ -83,9 +90,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run build:mdbx2-browser
       - run: npm run build
+      - name: Required Edge core acceptance (not Android, CLI or hardware acceptance)
+        run: node scripts/e2e-edge.mjs tests/e2e/export-clipboard.spec.ts tests/e2e/vault-storage.spec.ts tests/e2e/runtime-startup.spec.ts tests/e2e/settings-pages.spec.ts tests/e2e/card-artwork.spec.ts tests/e2e/editor-groups.spec.ts tests/e2e/wallet-create.spec.ts tests/e2e/navigation-drawer.spec.ts --workers=1
       - run: npx playwright test tests/e2e/passkey-windows-hello.spec.ts
       - run: npm run package:mdbx2-host
       - run: npm run package:verify:mdbx2-host
+      - name: Verify Firefox and Chromium native installer isolation
+        run: node scripts/test-firefox-installers.mjs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: monica-mdbx2-host-windows-x64

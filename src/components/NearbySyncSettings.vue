@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import QRCode from 'qrcode';
+import { nativeInstallerBrowser } from '../runtime/browser-platform';
 import { nearbyErrorMessage, nearbyStageLabel } from '../nearby/manager-messages';
 import { tr } from '../i18n';
 import { materialOptionTag, materialSelectTag } from '../lib/material-controls';
@@ -10,6 +11,7 @@ import type { NearbyPreferencesView, NearbySyncMode } from '../nearby/preference
 import type { NearbyManagerChange } from '../nearby/manager-contract';
 import type { NearbyNativeRecoveryView } from '../nearby/native-journal';
 import type { NearbyRecoveryReviewView } from '../nearby/native-recovery-review';
+import NearbyDeletionReviewDialog from './NearbyDeletionReviewDialog.vue';
 import NearbySyncResultDialog from './NearbySyncResultDialog.vue';
 import type { NearbySyncResult } from '../nearby/local-coordinator';
 
@@ -24,7 +26,7 @@ const setupOpen = ref(false), helperAvailable = ref(false), setupCopied = ref(fa
 const invitationInput = ref<HTMLTextAreaElement>();
 const extensionId = chrome.runtime.id;
 const helperDownload = chrome.runtime.getURL('nearby-helper/monica-wifi-windows-x64.zip');
-const setupCommand = `powershell -NoProfile -ExecutionPolicy Bypass -File .\\install-wifi.ps1 -${/Edg\//.test(navigator.userAgent) ? 'Edge' : 'Chrome'}ExtensionId ${extensionId}`;
+const setupCommand = `powershell -NoProfile -ExecutionPolicy Bypass -File .\\install-wifi.ps1 -${nativeInstallerBrowser()}ExtensionId ${extensionId}`;
 async function showSetup() {
   setupOpen.value = !setupOpen.value;
   if (setupOpen.value) {
@@ -42,7 +44,7 @@ let client: NearbyManagerClient | undefined, disposed = false, generation = 0, t
 let nextAutomatic = 0, automaticCursor = 0, searchStarted = 0, waitingStarted = 0, pendingEndpoint: NearbyEndpoint | undefined;
 const active = computed(() => ['pairing', 'preparing', 'review', 'ready', 'transferring', 'saving', 'confirming'].includes(view.value.phase));
 const editable = computed(() => connected.value && !busy.value && !active.value && !searching.value);
-const phaseText = computed(() => view.value.phase === 'transferring' && view.value.transport ? nearbyStageLabel(view.value.transport.stage) : tr(view.value.phase==='completed' && view.value.kind==='pairing' ? '配对成功，尚未同步数据' : ({ idle: '准备同步', pairing: '等待配对设备', preparing: '正在准备同步', review: '请检查 Passkey 兼容性', ready: '准备完成', transferring: '正在连接或传输', saving: '正在安全保存', confirming:'等待对方确认保存', completed: '同步完成', failed: '同步未完成', cancelled: '同步已取消' })[view.value.phase]));
+const phaseText = computed(() => view.value.phase === 'transferring' && view.value.transport ? nearbyStageLabel(view.value.transport.stage) : tr(view.value.deletionReview && !view.value.review ? '请确认历史删除的处理方式' : view.value.phase==='completed' && view.value.kind==='pairing' ? '配对成功，尚未同步数据' : ({ idle: '准备同步', pairing: '等待配对设备', preparing: '正在准备同步', review: '请检查 Passkey 兼容性', ready: '准备完成', transferring: '正在连接或传输', saving: '正在安全保存', confirming:'等待对方确认保存', completed: '同步完成', failed: '同步未完成', cancelled: '同步已取消' })[view.value.phase]));
 function errorText(code: string): string {
   const messages: Record<string, string> = {
     'host-update-required': '请更新 Monica 本机通信组件后重试。',
@@ -147,7 +149,7 @@ async function discover() {
   await run(async () => { const result = await request<NearbyDiscoveryView>({ type: 'discover' }); searching.value = result.searching; discovered.value = []; searchStarted = Date.now(); });
 }
 async function startPrepared() {
-  view.value = { ...view.value, phase: 'transferring', transport: { stage: 'connecting', transferred: 0, total: 0 } }; waitingStarted = Date.now();
+  view.value = { ...view.value, phase: 'transferring', transport: { stage: 'waiting', transferred: 0, total: 0 } }; waitingStarted = Date.now();
   view.value = await request({ type: 'start', ...(pendingEndpoint ? { endpoint: pendingEndpoint } : {}) }); waitingStarted = Date.now();
 }
 async function synchronize(peerId: string, address?: NearbyEndpoint) {
@@ -161,7 +163,14 @@ async function sync(peerId: string) {
 }
 async function confirm() {
   const review = view.value.review; if (!review) return;
-  await run(async () => { view.value = await request({ type: 'confirm', reviewId: review.id }); await startPrepared(); });
+  await run(async () => { view.value = await request({ type: 'confirm', reviewId: review.id }); if (view.value.phase === 'ready') await startPrepared(); });
+}
+async function confirmDeletions(choice: 'omit' | 'include') {
+  const review = view.value.deletionReview; if (!review) return;
+  await run(async () => {
+    view.value = await request({ type: 'confirm-deletions', reviewId: review.id, choice });
+    if (view.value.phase === 'ready') await startPrepared();
+  });
 }
 function cancel() {
   generation++;
@@ -202,6 +211,7 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); client?.close(); clien
 
 <template>
   <section class="nearby-settings" aria-label="Wi-Fi 同步" data-nearby-settings>
+    <p class="supporting">{{ tr('附近设备自动同步需要保持本页打开并连接本机通信组件。离开页面、锁库或断开组件后暂停；再次打开后恢复检查。') }}</p>
     <p class="supporting">{{ tr('通过同一 Wi-Fi 或局域网加密同步选定密码库。云端密码源仍使用各自的同步设置。') }}</p>
     <p v-if="error" class="form-error" role="alert">{{ error }}</p>
     <m3e-button variant="text" @click="showSetup">{{ tr('配置本机通信组件') }}</m3e-button>
@@ -220,6 +230,7 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); client?.close(); clien
       <div class="nearby-rows">
         <p class="nearby-row">{{ tr('已保存 {0} 步，剩余 {1} 步',{0:recovery.completedSteps,1:recovery.remainingSteps}) }}</p>
         <p v-if="recovery.conflict" class="nearby-row">{{ tr('密码库有新的修改，继续接收需要先处理冲突。本机数据和待接收内容都没有被丢弃。') }}</p>
+        <p v-if="recovery.conflict" class="nearby-row supporting">{{ tr('若检查后仍无法继续，请暂停两端编辑，先在两端分别导出独立加密备份，再到密码源处理冲突。保留原设备和当前浏览器配置，不要反复清库或覆盖恢复。') }}</p>
         <p class="nearby-row supporting">{{ tr(recovery.completeInputsRetained ? '本次接收的保存内容和附件副本仍加密保留，直到全部保存完成。' : '这是旧版创建的接收日志，仅保留剩余步骤；已完成部分以当前数据库和原设备为准。') }}</p>
       </div>
       <template v-if="recoveryReview">
@@ -244,6 +255,7 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); client?.close(); clien
             <component v-for="mode in ([['bidirectional','双向同步'],['send_only','仅发送'],['receive_only','仅接收']] as const)" :key="mode[0]" :is="materialOptionTag" :value="mode[0]" :selected.prop="preferences.mode === mode[0]">{{ tr(mode[1]) }}</component>
           </component>
         </m3e-form-field>
+        <div class="nearby-row toggle-row"><div><strong id="nearby-incremental-label">{{ tr('只同步新增和修改') }}</strong><small>{{ tr('开启后，本机的删除和清空回收站只保留在本机，不会发送到另一端；另一端删除的内容仍会正常应用。') }}</small></div><m3e-switch :checked.prop="preferences.incrementalOnly" :disabled="!editable" aria-labelledby="nearby-incremental-label" @beforeinput.prevent="change({kind:'preferences',incrementalOnly:!preferences.incrementalOnly})" /></div>
         <div class="nearby-row toggle-row"><div><strong id="nearby-auto-label">{{ tr('页面打开时自动同步') }}</strong><small>{{ tr('锁定密码库或离开此页面后停止。') }}</small></div><m3e-switch :checked.prop="preferences.enabled" :disabled="!editable" aria-labelledby="nearby-auto-label" @beforeinput.prevent="change({kind:'preferences',enabled:!preferences.enabled,intervalSeconds:preferences.intervalSeconds || 300})" /></div>
         <m3e-form-field v-if="preferences.enabled" v-field-label variant="filled" hide-subscript="always" class="nearby-row"><label slot="label">{{ tr('同步间隔') }}</label><component :is="materialSelectTag" :disabled="!editable" :aria-label="tr('同步间隔')" @change="change({kind:'preferences',intervalSeconds:Number(value($event))})"><component v-for="seconds in [0,60,300,900,3600]" :key="seconds" :is="materialOptionTag" :value="String(seconds)" :selected.prop="preferences.intervalSeconds === seconds">{{ seconds ? tr('{0} 分钟',{0:seconds/60}) : tr('手动') }}</component><component v-if="![0,60,300,900,3600].includes(preferences.intervalSeconds)" :is="materialOptionTag" :value="String(preferences.intervalSeconds)" :selected.prop="true">{{ tr('{0} 秒',{0:preferences.intervalSeconds}) }}</component></component></m3e-form-field>
       </div>
@@ -256,12 +268,13 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); client?.close(); clien
     </template>
     <section class="nearby-section nearby-progress" aria-labelledby="nearby-status"><h2 id="nearby-status">{{ tr('同步状态') }}</h2><p role="status" aria-live="polite" data-nearby-phase>{{ phaseText }}<span v-if="view.peerName"> · {{ view.peerName }}</span><span v-if="view.applied"> · {{ tr('已保存 {0} 条记录',{0:view.applied}) }}</span></p>
       <template v-if="view.pairing?.invitations.length"><img v-if="qr" :src="qr" width="240" height="240" :alt="tr('本次配对邀请二维码')" /><label>{{ tr('本次配对邀请') }}<textarea readonly :value="view.pairing.invitations[0]" rows="3" :aria-label="tr('本次配对邀请')" spellcheck="false" /></label><m3e-button @click="copyInvitation">{{ copied ? tr('已复制') : tr('复制邀请') }}</m3e-button><small>{{ tr('邀请仅供可信设备使用。取消或离开页面后失效。') }}</small></template>
-      <p v-if="view.endpoint" class="supporting">{{ tr('请在 Android 端也点击同步，保持两端同步页面打开。') }}</p>
+      <p v-if="view.phase==='transferring' && (!view.transport || ['waiting','connecting','authenticating'].includes(view.transport.stage))" class="supporting">{{ tr('两端各点一次同步即可，可先后操作；最多等待两分钟，请保持两端解锁。') }}</p>
       <p v-if="view.recoveryOnly" class="supporting">{{ tr('正在恢复上次未完成的接收，完成后再次同步即可发送本机修改。') }}</p>
       <template v-if="view.review"><p>{{ tr('以下 Passkey 存在跨设备限制。原始密钥、凭据 ID 和计数历史会保留。') }}</p><ul><li v-for="issue in view.review.issues" :key="issue.id"><strong>{{ issue.account }}</strong> · {{ issue.relyingParty }}<p>{{ tr(issue.skipForCounter ? '已有正计数历史，本次跳过发送，保留本机凭据。' : issue.restriction==='device-only' ? '仅本机可用，另一端只能收到凭据引用。' : issue.restriction==='backup-restricted' ? '此凭据限制备份，另一端的可用性取决于网站策略。' : '另一端可能不支持此密钥算法。') }}</p></li></ul><m3e-button variant="filled" :disabled="busy" @click="confirm">{{ tr('了解限制并继续同步') }}</m3e-button></template>
       <m3e-button v-if="active || searching || busy" variant="tonal" @click="cancel">{{ tr('取消同步') }}</m3e-button>
     </section>
-    <NearbySyncResultDialog v-if="syncResult" :result="syncResult.result" :peer-name="syncResult.peerName" :mode="preferences?.mode" @close="syncResult=null" />
+    <NearbySyncResultDialog v-if="syncResult" :result="syncResult.result" :peer-name="syncResult.peerName" :mode="preferences?.mode" :incremental-only="preferences?.incrementalOnly" @close="syncResult=null" />
+    <NearbyDeletionReviewDialog v-if="view.deletionReview && !view.review" :count="view.deletionReview.count" :peer-name="view.peerName" :busy="busy" @choose="confirmDeletions" @cancel="cancel" />
   </section>
 </template>
 

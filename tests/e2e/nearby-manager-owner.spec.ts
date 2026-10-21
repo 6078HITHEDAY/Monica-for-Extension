@@ -81,18 +81,25 @@ test('production nearby manager owns cancellation, trust and recovery across rea
     await runtime(a, { type: 'VAULT_IMPORT_ITEMS', items: [login, passkey, positive] });
     await connect(a); await connect(b);
     const popup = await contexts.get('a')!.newPage(); await popup.goto(`chrome-extension://${extensionId}/popup.html`);
-    const denied = await popup.evaluate(() => new Promise<boolean>(resolve => {
-      const port = chrome.runtime.connect({ name: 'monica-nearby-manager-v1' }); let responded = false;
-      port.onMessage.addListener(() => { responded = true; }); port.onDisconnect.addListener(() => { void chrome.runtime.lastError; resolve(!responded); });
-    })); expect(denied).toBe(true); await popup.close();
+    const denied = await popup.evaluate(() => new Promise<any[]>(resolve => {
+      const port = chrome.runtime.connect({ name: 'monica-nearby-manager-v1' }); const messages:any[] = [];
+      port.onMessage.addListener(message => messages.push(message)); port.onDisconnect.addListener(() => { void chrome.runtime.lastError; resolve(messages); });
+    })); expect(denied).toEqual([{type:'closed',reason:'manager-context-invalid'}]); await popup.close();
     const pair = await command(a, { type: 'pair' });
     await command(b, { type: 'pair', invitation: pair.pairing.invitations[0] }); await complete(a, b);
     const peerA = (await command(a, { type: 'status' })).peerId, peerB = (await command(b, { type: 'status' })).peerId;
+    // Each side names its peer; the local device ID is the other side's peer ID.
+    const startTransfer=async()=>{
+      const aListens=peerB>peerA;
+      const listener=await command(aListens?a:b,{type:'start'});
+      await command(aListens?b:a,{type:'start',endpoint:listener.endpoint});
+      return listener;
+    };
     expect(await runtime(b, { type: 'VAULT_LIST_ITEMS' })).toEqual([]);
     evidence.phases.push('production-port-rejects-popup-and-pairs-without-content');
 
     await prepare(a, peerA); await prepare(b, peerB);
-    const interrupted = await command(a, { type: 'start' }); await command(b, { type: 'start', endpoint: interrupted.endpoint });
+    const interrupted = await startTransfer();
     await runtime(a, { type: 'VAULT_LOCK' }); await closed(a, 'vault-locked'); await cancel(b);
     await expect.poll(() => listening(interrupted.endpoint.port)).toBe(false);
     expect(await runtime(b, { type: 'VAULT_LIST_ITEMS' })).toEqual([]);
@@ -101,7 +108,7 @@ test('production nearby manager owns cancellation, trust and recovery across rea
     a = await launch('a'); b = await launch('b');
     await runtime(a, { type: 'VAULT_UNLOCK', masterPassword: password }); await runtime(b, { type: 'VAULT_UNLOCK', masterPassword: password });
     await connect(a); await connect(b); await prepare(a, peerA); await prepare(b, peerB);
-    const transfer = await command(a, { type: 'start' }); await command(b, { type: 'start', endpoint: transfer.endpoint }); await complete(a, b);
+    await startTransfer(); await complete(a, b);
     const received: any[] = await runtime(b, { type: 'VAULT_LIST_ITEMS' }); expect(received).toHaveLength(2);
     const original = received.find(row => row.kind === 'passkey'); expect(original.credentialId).toBe(passkey.credentialId);
     expect(original.privateKeyPkcs8).toBe(passkey.privateKeyPkcs8); expect(original.signCount).toBe(0);
@@ -113,23 +120,25 @@ test('production nearby manager owns cancellation, trust and recovery across rea
     expect(source.find(item => item.id === positive.id)?.signCount).toBe(19);
     evidence.phases.push('browser-and-native-restart-reuses-trust-preserves-original-keys-zero-and-positive-history');
 
-    await prepare(a, peerA); const prefListener = await command(a, { type: 'start' });
-    const p = await command(a, { type: 'preferences' });
-    expect(Object.keys(p).sort()).toEqual(['enabled', 'epoch', 'intervalSeconds', 'localProviderId', 'mode', 'name', 'peers']);
-    await command(a, { type: 'update', epoch: p.epoch, change: { kind: 'preferences', mode: 'receive_only' } });
+    const ownerName=peerB>peerA?'a':'b',ownerPeer=peerB>peerA?peerA:peerB;
+    let owner=peerB>peerA?a:b;
+    await prepare(owner, ownerPeer); const prefListener = await command(owner, { type: 'start' });
+    const p = await command(owner, { type: 'preferences' });
+    expect(Object.keys(p).sort()).toEqual(['enabled', 'epoch', 'incrementalOnly', 'intervalSeconds', 'localProviderId', 'mode', 'name', 'peers']);
+    await command(owner, { type: 'update', epoch: p.epoch, change: { kind: 'preferences', mode: 'receive_only' } });
     await expect.poll(() => listening(prefListener.endpoint.port)).toBe(false);
-    expect(await command(a, { type: 'status' })).toEqual({ phase: 'idle' });
+    expect(await command(owner, { type: 'status' })).toEqual({ phase: 'idle' });
     evidence.phases.push('preference-change-closes-native-ownership-without-exposing-trust');
 
-    await prepare(a, peerA); const disposeListener = await command(a, { type: 'start' }); await a.close();
+    await prepare(owner, ownerPeer); const disposeListener = await command(owner, { type: 'start' }); await owner.close();
     await expect.poll(() => listening(disposeListener.endpoint.port)).toBe(false);
-    a = await contexts.get('a')!.newPage(); await a.goto(`chrome-extension://${extensionId}/index.html`); await connect(a);
-    await prepare(a, peerA); const expiryListener = await command(a, { type: 'start' });
-    await a.evaluate(async () => {
+    owner = await contexts.get(ownerName)!.newPage(); await owner.goto(`chrome-extension://${extensionId}/index.html`); await connect(owner);
+    await prepare(owner, ownerPeer); const expiryListener = await command(owner, { type: 'start' });
+    await owner.evaluate(async () => {
       const key = 'monica.secureVault.session.v1', data = await chrome.storage.session.get(key);
       await chrome.storage.session.set({ [key]: { ...(data[key] as Record<string, unknown>), expiresAt: Date.now() + 300 } });
     });
-    await closed(a, 'session-expired'); await expect.poll(() => listening(expiryListener.endpoint.port)).toBe(false);
+    await closed(owner, 'session-expired'); await expect.poll(() => listening(expiryListener.endpoint.port)).toBe(false);
     evidence.phases.push('manager-document-close-and-session-deadline-stop-real-native-listeners');
     evidence.status = 'passed';
   } finally {

@@ -23,9 +23,24 @@ const preferences = async () => { await ready(); return service.nearbySessionPre
 const coordinator = new NearbyLocalCoordinator(service, () => new NearbyNativeTransport(new Mdbx2NativeClient(createChromeMdbx2NativeRuntime())), '127.0.0.1');
 
 const app = {
+  async setIncremental(incrementalOnly: boolean) {
+    const p = await preferences();
+    return service.updateNearbyPreferences({ kind: 'preferences', incrementalOnly }, p.epoch, (await service.passkeySessionId())!);
+  },
+  async standaloneOtp(action: 'create' | 'purge' | 'inspect') {
+    await ready();
+    if (action === 'create') await service.importItems([{ ...createLoginItem({ title: 'Standalone correct OTP' }), kind: 'totp', secret: 'JBSWY3DPEHPK3PXP', digits: 6, period: 30, algorithm: 'SHA1' }]);
+    const item = (await service.readState()).items.find(row => row.title === 'Standalone correct OTP');
+    if (action === 'purge' && item?.kind === 'totp') {
+      await service.upsertItem({ ...item, secret: 'GEZDGNBVGY3TQOJQ' });
+      await service.deleteItem(item.id); await service.emptyLocalTrash();
+    }
+    if (action === 'inspect') return item?.kind === 'totp' ? { secret: item.secret, deleted: Boolean(item.deletedAt) } : null;
+  },
   async coordinatorPair(link?: string) { await ready(); return coordinator.pair(link); },
   async coordinatorPrepare(id: string) { await ready(); return coordinator.prepare(id); },
   coordinatorConfirm: (id: string) => coordinator.confirm(id),
+  coordinatorConfirmDeletions: (id: string, choice: 'omit' | 'include') => coordinator.confirmDeletions(id, choice),
   coordinatorStart: (endpoint?: NearbyEndpoint) => coordinator.start(endpoint),
   coordinatorClose: () => coordinator.close(),
   coordinatorStatus: () => coordinator.status(),

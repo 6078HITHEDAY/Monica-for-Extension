@@ -27,7 +27,7 @@ const owners: NearbyManagerOwner[] = [];
 function fixture() {
   const session = { id: 'session', expiresAt: Date.now() + 60_000 };
   const coordinator = { close: vi.fn(), status: vi.fn(() => ({ phase: 'idle' as const })), pair: vi.fn(async () => ({ phase: 'pairing' as const })),
-    discover: vi.fn(), discoveryProgress: vi.fn(), prepare: vi.fn(), confirm: vi.fn(), start: vi.fn(), poll: vi.fn(), recover: vi.fn(), reviewRecovery: vi.fn(), confirmRecovery: vi.fn() };
+    discover: vi.fn(), discoveryProgress: vi.fn(), prepare: vi.fn(), confirm: vi.fn(), confirmDeletions: vi.fn(), start: vi.fn(), poll: vi.fn(), recover: vi.fn(), reviewRecovery: vi.fn(), confirmRecovery: vi.fn() };
   const options = { runtimeId: sender.id, extensionRoot: root, readSession: vi.fn(async () => session),
     createCoordinator: vi.fn(() => coordinator), changed: vi.fn(),
     store: { readState: vi.fn(), nearbySessionPreferences: vi.fn(), updateNearbyPreferences: vi.fn(), readNearbyNativeJournal: vi.fn() } };
@@ -44,6 +44,15 @@ async function response(p: ReturnType<typeof port>, id: number) {
 afterEach(() => { owners.splice(0).forEach(owner => owner.close()); vi.useRealTimers(); });
 
 describe('nearby manager boundary and lifecycle', () => {
+  it('routes only bounded explicit deletion decisions to the owning coordinator', async () => {
+    const f = fixture(), p = await ready(f);
+    f.coordinator.confirmDeletions.mockResolvedValue({ phase: 'ready' });
+    p.onMessage.emit({ id: 1, type: 'confirm-deletions', reviewId: sender.documentId, choice: 'omit' });
+    expect((await response(p, 1)).data).toEqual({ phase: 'ready' });
+    expect(f.coordinator.confirmDeletions).toHaveBeenCalledWith(sender.documentId, 'omit');
+    expect(() => readNearbyManagerRequest({ id: 2, type: 'confirm-deletions', reviewId: sender.documentId, choice: 'always-include' })).toThrow();
+    expect(() => readNearbyManagerRequest({ id: 2, type: 'confirm-deletions', reviewId: sender.documentId, choice: 'include', deletion_count: 0 })).toThrow();
+  });
   it('routes review and one-use confirmation through the owning coordinator only', async () => {
     const f = fixture(), p = await ready(f), reviewId = '22222222-2222-4222-8222-222222222222';
     f.coordinator.reviewRecovery.mockResolvedValue({ reviewId, editedEntries: 1, interveningCommits: 2, remainingSteps: 3 });

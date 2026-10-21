@@ -1,4 +1,5 @@
 import { bytesToBase64 } from "../../security/encoding";
+import { FIREFOX_IDENTITY_HOST } from "../../runtime/browser-platform";
 import { readBoundedJsonObject } from "../bounded-body";
 import { ProviderTransportError, providerHttpError, resilientFetch } from "../provider-transport";
 
@@ -91,7 +92,7 @@ export class OneDriveAuthClient {
 
 function extensionRedirect(value: string): URL {
   const url = new URL(value);
-  if (url.protocol !== "https:" || !/^[a-p]{32}\.chromiumapp\.org$/.test(url.hostname) || url.port || url.username || url.password || url.search || url.hash || url.pathname !== "/onedrive") {
+  if (url.protocol !== "https:" || !(/^[a-p]{32}\.chromiumapp\.org$/.test(url.hostname) || url.hostname === FIREFOX_IDENTITY_HOST) || url.port || url.username || url.password || url.search || url.hash || url.pathname !== "/onedrive") {
     throw new OneDriveAuthorizationError("OneDrive 扩展回调地址无效。");
   }
   return url;

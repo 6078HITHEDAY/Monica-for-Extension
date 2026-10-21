@@ -8,11 +8,13 @@ import type { NearbyRecoveryReviewView } from './native-recovery-review';
 export interface NearbySourceSnapshot {
   sourceHash: string;
   records: { local_id: string; global_id: string; scope: string; guard: string; deleted: boolean; data: NearbyWireData | Record<string, never> }[];
+  /** Local ids that must stay live in the replica even though no record is captured. */
+  retained?: string[];
   readAsset: (id: string) => Promise<Uint8Array>;
 }
 export interface NearbySourceAdapter {
   scope: string;
-  /** Native recovery must refresh guards through a complete scan before adoption. */
+  /** Native adoption refreshes write guards from a complete, verified inventory. */
   native: boolean;
   capture(): Promise<NearbySourceSnapshot>;
   snapshotHash(): Promise<string>;
@@ -29,7 +31,7 @@ export function localNearbySource(store: Pick<SecureVaultService, 'captureNearby
     scope: 'local', native: false,
     async capture() {
       const source = await store.captureNearbyLocalRecords();
-      return { sourceHash: source.sourceHash, records: source.records, async readAsset(id) {
+      return { sourceHash: source.sourceHash, records: source.records, retained: source.retained, async readAsset(id) {
         const asset = source.assets.find(a => a.id === id); if (!asset) throw new Error('Nearby source asset missing');
         return base64ToBytes(asset.dataBase64);
       } };

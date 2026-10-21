@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { OneDriveAuthClient } from "./onedrive-auth";
+import { FIREFOX_IDENTITY_HOST } from "../../runtime/browser-platform";
 
 const redirectUri = `https://${"a".repeat(32)}.chromiumapp.org/onedrive`;
 const tokens = { token_type: "Bearer", access_token: "synthetic-access", refresh_token: "synthetic-refresh", expires_in: 3600, scope: "User.Read Files.ReadWrite" };
 const response = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
 
 describe("OneDrive authorization code with PKCE", () => {
-  it("binds callback, state and S256 verifier, without a client secret", async () => {
+  it.each([redirectUri, `https://${FIREFOX_IDENTITY_HOST}/onedrive`])("binds callback, state and S256 verifier, without a client secret: %s", async redirectUri => {
     let authorization!: URL;
     const fetcher = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
       expect(String(url)).toBe("https://login.microsoftonline.com/common/oauth2/v2.0/token");
@@ -32,7 +33,9 @@ describe("OneDrive authorization code with PKCE", () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["state", "origin", "path", "fragment", "duplicate-code", "duplicate-state", "error"])("rejects %s callback tampering before token exchange", async variant => {
+  it.each([redirectUri, `https://${FIREFOX_IDENTITY_HOST}/onedrive`].flatMap(redirectUri =>
+    ["state", "origin", "path", "fragment", "duplicate-code", "duplicate-state", "error"].map(variant => ({ redirectUri, variant }))
+  ))("rejects $variant callback tampering before token exchange: $redirectUri", async ({ redirectUri, variant }) => {
     const fetcher = vi.fn();
     await expect(new OneDriveAuthClient(undefined, fetcher).authorize({ redirectUri, launch: async url => {
       const state = new URL(url).searchParams.get("state");
@@ -75,7 +78,11 @@ describe("OneDrive authorization code with PKCE", () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["https://attacker.example/onedrive", `${redirectUri}?override=true`, `http://${"a".repeat(32)}.chromiumapp.org/onedrive`])("only accepts the extension redirect: %s", async value => {
+  it.each(["https://attacker.example/onedrive", `${redirectUri}?override=true`, `http://${"a".repeat(32)}.chromiumapp.org/onedrive`,
+    "https://other.extensions.allizom.org/onedrive", `https://sub.${FIREFOX_IDENTITY_HOST}/onedrive`,
+    `https://${FIREFOX_IDENTITY_HOST}.attacker.example/onedrive`, `https://${FIREFOX_IDENTITY_HOST}/other`,
+    `https://${FIREFOX_IDENTITY_HOST}/onedrive?override=true`, `https://${FIREFOX_IDENTITY_HOST}/onedrive#fragment`
+  ])("only accepts the extension redirect: %s", async value => {
     const launch = vi.fn();
     await expect(new OneDriveAuthClient().authorize({ redirectUri: value, launch })).rejects.toThrow();
     expect(launch).not.toHaveBeenCalled();

@@ -161,6 +161,60 @@ describe('encrypted nearby application adoption', () => {
     expect(await f.storage.read()).toEqual(before);
   });
 
+  async function retainedFixture() {
+    const item = createLoginItem({ title: 'Purging item', username: 'alice', password: 'synthetic purge password' });
+    const f = await fixture([item]);
+    await f.service.nearbySessionPreferences(f.sessionId);
+    const bytes = new Uint8Array([7, 8, 9]), sha256 = await nearbySha256(bytes);
+    await f.service.mutateLocalAttachment({ operationId: crypto.randomUUID(), providerId: f.providerId, itemId: item.id, attachmentId: 'retained-file',
+      mode: 'create', attachment: { itemId: item.id, attachmentId: 'retained-file', fileName: 'retained.bin', mediaType: 'application/octet-stream',
+        sizeBytes: bytes.length, sha256, dataBase64: bytesToBase64(bytes), protected: true } }, f.sessionId);
+    const original = (await f.service.captureNearbyLocalRecords()).records.find(row => row.local_id === `local:${item.id}`)!;
+    await f.service.deleteItem(item.id);
+    expect(await f.service.emptyLocalTrash()).toMatchObject({ removed: 1, retained: 0 });
+    expect((await f.service.readState()).nearbyRetainedLocals).toEqual([`local:${item.id}`]);
+    return { f, item, original };
+  }
+
+  it('revives a purged item under a new local identity when the peer sends live content for its retired binding', async () => {
+    const { f, item, original } = await retainedFixture();
+    const data = await nearbyLocalItemToWire({ ...item, notes: 'revived remotely' }, {});
+    const record = { id: original.global_id, deleted: false, clockJson: '{"remote":1}', dataJson: JSON.stringify(data),
+      localId: original.local_id, scope: original.scope, expectedGuard: original.guard };
+    const result = await f.service.adoptNearbyLocalTransaction({ providerId: f.providerId, sourceHash: await f.service.nearbyLocalSnapshotHash(), records: [record], assets: [] }, f.sessionId);
+    const revivedId = `nearby-${original.global_id}`;
+    expect(result.acknowledgements).toMatchObject([{ recordId: original.global_id, localId: `local:${revivedId}` }]);
+    const state = await f.service.readState();
+    expect(state.items.map(row => row.id)).toEqual([revivedId]);
+    expect(state.items[0]).toMatchObject({ title: item.title, notes: 'revived remotely', password: item.password });
+    expect(state.nearbyRetainedLocals).toEqual([]);
+    expect(state.localItemAttachments).toEqual([]);
+    const saved = await new SecureVaultService(f.storage, f.sessions, Date.now, f.keys).readState();
+    expect(saved.items.map(row => row.id)).toEqual([revivedId]);
+    expect(saved.nearbyRetainedLocals).toEqual([]);
+    const captured = await f.service.captureNearbyLocalRecords();
+    expect(captured.retained).toEqual([]);
+    expect(captured.records.map(row => row.local_id)).toEqual([`local:${revivedId}`]);
+  });
+
+  it('acknowledges a peer deletion of a purged item without reviving it or rewriting local state', async () => {
+    const { f, original } = await retainedFixture();
+    const before = await f.storage.read(), write = vi.spyOn(f.storage, 'write');
+    const dataJson = JSON.stringify({ ...original.data, trashed: true }), sourceHash = await f.service.nearbyLocalSnapshotHash();
+    const record = { id: original.global_id, deleted: true, clockJson: '{"remote":2}', dataJson,
+      localId: original.local_id, scope: original.scope, expectedGuard: original.guard };
+    const result = await f.service.adoptNearbyLocalTransaction({ providerId: f.providerId, sourceHash, records: [record], assets: [] }, f.sessionId);
+    expect(write).not.toHaveBeenCalled();
+    expect(result.sourceHash).toBe(sourceHash);
+    expect(result.acknowledgements).toEqual([{ recordId: original.global_id, clockJson: '{"remote":2}', localId: original.local_id,
+      scope: 'local', guard: '0'.repeat(64), dataJson }]);
+    expect(await f.storage.read()).toEqual(before);
+    const state = await f.service.readState();
+    expect(state.items).toEqual([]);
+    expect(state.nearbyRetainedLocals).toEqual([original.local_id]);
+    expect(state.localItemAttachments).toHaveLength(1);
+  });
+
   it('merges metadata into the existing local Passkey without changing its identity, private bytes or positive counter', async () => {
     const f = await fixture([key]), data = await nearbyLocalItemToWire({ ...key, signCount: 0 }, {});
     const payload = wireObject(data.payload); payload.private_key_alias = ''; payload.key_status = 'reference'; payload.notes = 'incoming metadata';

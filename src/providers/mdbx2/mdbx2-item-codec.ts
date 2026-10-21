@@ -1,5 +1,6 @@
 import { passkeyKeyMaterialHint } from '../../passkey/private-key-portability';
 import { parseLosslessJson, jsonScalarText } from "../../core/lossless-json";
+import { androidTransportFields } from '../../core/url-rules';
 import { assertPortablePasswordHistory } from '../../core/password-history';
 import type { ProviderReference, TotpItem, VaultItem } from "../../core/model";
 import { exportSteamMaFile, parseSteamMaFile } from "../../core/steam-mafile";
@@ -223,7 +224,7 @@ export function encodeMdbx2Object(
     for (const [wire, model] of LOGIN_CONTENT_FIELDS) payload[wire] = item[model] ?? "";
     payload.authenticator_key = item.totpSecret || "";
     payload.passkey_bindings = item.passkeyBindings || "";
-    payload.custom_fields = mergeCustomFields(originalPayload.custom_fields, item.customFields.map((field, sortOrder) => ({
+    payload.custom_fields = mergeCustomFields(originalPayload.custom_fields, androidTransportFields(item).map((field, sortOrder) => ({
       title: field.name,
       value: field.value,
       is_protected: field.protected,

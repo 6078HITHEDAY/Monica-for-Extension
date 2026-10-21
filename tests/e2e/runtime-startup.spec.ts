@@ -7,6 +7,7 @@ import { launchEdgeContext } from './fixtures/edge';
 test('UI runtime client recovers an actual missing Edge message receiver', async ({}, testInfo) => {
   const root = testInfo.outputPath('extension');
   const { version } = JSON.parse(await readFile('package.json', 'utf8'));
+  const { buildId } = JSON.parse(await readFile('src/runtime/build-id.json', 'utf8'));
   await mkdir(root, { recursive: true });
   await writeFile(path.join(root, 'manifest.json'), JSON.stringify({ manifest_version: 3, version: '1.0.0', name: 'Monica runtime recovery fixture', background: { service_worker: 'background.js' } }));
   await writeFile(path.join(root, 'index.html'), '<!doctype html><title>Runtime recovery</title><script src="client.js"></script>');
@@ -14,7 +15,7 @@ test('UI runtime client recovers an actual missing Edge message receiver', async
   await writeFile(path.join(root, 'background.js'), `
     globalThis.counts = { info: 0, status: 0, unlock: 0 };
     function receive(message, sender, respond) {
-      if (message.type === 'RUNTIME_INFO') { counts.info++; respond({ok:true,data:{version:${JSON.stringify(version)},protocolVersion:1}}); }
+      if (message.type === 'RUNTIME_INFO') { counts.info++; respond({ok:true,data:{version:${JSON.stringify(version)},protocolVersion:1,buildId:${JSON.stringify(buildId)}}}); }
       if (message.type === 'VAULT_STATUS') { counts.status++; respond({ok:true,data:'locked'}); }
       if (message.type === 'VAULT_UNLOCK') { counts.unlock++; respond({ok:true,data:[]}); }
     }

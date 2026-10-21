@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { writeSecretClipboard } from '../lib/secret-clipboard';
 import { materialSelectTag, materialOptionTag } from "../lib/material-controls";
 import { tr } from '../i18n';
 import { formatAutofillCredential } from '../autofill/credential-identity';
@@ -10,6 +11,7 @@ import "@m3e/web/icon-button";
 import ListPagination from "../components/ListPagination.vue";
 import PopupLoginRow from "./PopupLoginRow.vue";
 import { openVaultSidePanel } from "./side-panel";
+import { firefoxSidebar } from '../runtime/browser-platform';
 import WebsiteIcon from "../components/WebsiteIcon.vue";
 import { websiteIconCache } from "../lib/website-icon-cache";
 import { useListPagination } from "../lib/list-pagination";
@@ -48,7 +50,7 @@ const masterPassword = ref("");
 const lifecycle = ref<VaultLifecycleStatus>("locked");
 const tabId = ref<number | null>(null);
 const windowId = ref<number | null>(null);
-const sidePanelAvailable = typeof chrome.sidePanel?.open === "function";
+const sidePanelAvailable = typeof chrome.sidePanel?.open === "function" || Boolean(firefoxSidebar());
 const tabUrl = ref("");
 const tabTitle = ref("");
 const scans = shallowRef<PageScan[]>([]);
@@ -223,7 +225,7 @@ async function copyLoginSecret(item: LoginMatchSummary, field: "username" | "pas
       status.value = field === "password" ? tr('此登录项没有保存密码。') : tr('此登录项没有用户名。');
       return;
     }
-    await navigator.clipboard.writeText(value);
+    await writeSecretClipboard(value);
     status.value = tr('已复制{0}（{1}），剪贴板请妥善保管。', { 0: field === "password" ? tr('密码') : tr('用户名'), 1: item.title });
   } catch (cause) {
     status.value = errorMessage(cause, tr('复制失败。'));
@@ -311,7 +313,7 @@ async function openManager() {
 }
 
 function openSidePanel() {
-  void openVaultSidePanel(chrome.sidePanel, windowId.value).then(() => window.close()).catch((cause) => {
+  void (firefoxSidebar()?.open() ?? openVaultSidePanel(chrome.sidePanel, windowId.value)).then(() => window.close()).catch((cause) => {
     status.value = errorMessage(cause, tr('无法打开侧栏，请重试。'));
   });
 }

@@ -33,13 +33,24 @@ describe('nearby identity and peer preferences', () => {
   });
 
   it.each([
-    { version: 2 }, { extra: true }, { enabled: 'yes' }, { intervalSeconds: 1 }, { syncRequest: '9223372036854775808' },
+    { version: 2 }, { extra: true }, { enabled: 'yes' }, { incrementalOnly: 'yes' }, { intervalSeconds: 1 }, { syncRequest: '9223372036854775808' },
     { settingsVersion: 9007199254740993 }, { replicaKey: 'a'.repeat(43) }, { mode: 'both' }, { peers: [peer, peer] },
     { peers: [{ ...peer, trustedKey: 'invalid' }] }, { name: 'Name\nspoofed' }
   ])('rejects invalid encrypted preference state without resetting it: %j', patch => {
     const state = createEmptyVaultState(); state.nearbyPreferences = { ...preferences(), ...patch } as any;
     const before = structuredClone(state);
     expect(() => migrateVaultState(state)).toThrow(); expect(state).toEqual(before);
+  });
+
+  it('keeps local deletions local by default and for settings saved before the switch existed', () => {
+    const created = preferences();
+    expect(created.incrementalOnly).toBe(true);
+    expect(nearbyPreferencesView(created).incrementalOnly).toBe(true);
+    const legacy = { ...created } as Record<string, unknown>; delete legacy.incrementalOnly;
+    expect(readNearbyPreferences(legacy)!.incrementalOnly).toBe(true);
+    const off = changeNearbyPreferences(created, { kind: 'preferences', incrementalOnly: false }, created.epoch);
+    expect(off.incrementalOnly).toBe(false);
+    expect(nearbyPreferencesView(off).incrementalOnly).toBe(false);
   });
 
   it('retains exact Android Long settings and applies the Android version/writer order', () => {

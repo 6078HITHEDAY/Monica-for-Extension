@@ -151,6 +151,7 @@ export class NearbyManagerOwner {
       case 'pair': return coordinator.pair(request.invitation);
       case 'prepare': return coordinator.prepare(request.peerId);
       case 'confirm': return coordinator.confirm(request.reviewId);
+      case 'confirm-deletions': return coordinator.confirmDeletions(request.reviewId, request.choice);
       case 'start': return coordinator.start(request.endpoint);
       case 'progress': {
         const view = await coordinator.poll(); assertActive();

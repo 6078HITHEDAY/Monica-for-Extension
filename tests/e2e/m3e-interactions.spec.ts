@@ -49,10 +49,10 @@ test("split primary action follows each page and the menu can create another typ
     await navigate(page, /^登录项/);
     await page.getByRole("button", { name: "选择新建类型", exact: true }).click();
     const menu = page.getByRole("menu", { name: "选择新建类型" });
-    await expect(menu.getByRole("menuitem")).toHaveCount(13);
+    await expect(menu.getByRole("menuitem")).toHaveCount(16);
     await expect(menu.getByRole("menuitem", { name: /Passkey/ })).toHaveCount(0);
     await menu.getByRole("menuitem", { name: "API Token", exact: true }).click();
-    const editor = dialogContent(page, { name: "添加 API 密钥" });
+    const editor = dialogContent(page, { name: "添加 API 令牌" });
     await expect(editor.getByLabel("名称 *", { exact: true })).toBeFocused();
     await editor.getByLabel("名称 *", { exact: true }).fill("Split-menu API");
     await editor.getByLabel("服务商 *", { exact: true }).fill("github");
@@ -95,7 +95,7 @@ test("split menu supports keyboard, Escape, outside dismissal and navigation", a
     const menu = page.getByRole("menu", { name: "选择新建类型" });
     await expect(menu.getByRole("menuitem", { name: "密码", exact: true })).toBeFocused();
     await page.keyboard.press("End");
-    await expect(menu.getByRole("menuitem", { name: "条码", exact: true })).toBeFocused();
+    await expect(menu.getByRole("menuitem", { name: "账单地址", exact: true })).toBeFocused();
     await page.keyboard.press("Home");
     await page.keyboard.press("ArrowDown");
     await expect(menu.getByRole("menuitem", { name: "API Key", exact: true })).toBeFocused();
@@ -103,7 +103,7 @@ test("split menu supports keyboard, Escape, outside dismissal and navigation", a
     await expect(menu).toBeHidden();
     await expect(trigger).toBeFocused();
     await trigger.press("ArrowUp");
-    await expect(menu.getByRole("menuitem", { name: "条码", exact: true })).toBeFocused();
+    await expect(menu.getByRole("menuitem", { name: "账单地址", exact: true })).toBeFocused();
     await page.getByRole("heading", { name: "全部项目", exact: true }).click();
     await expect(menu).toBeHidden();
     await trigger.click();
@@ -181,7 +181,7 @@ test("browsers without popovers can choose another type from the full picker", a
     await expect(picker).toHaveCount(0);
     await trigger.click();
     await picker.getByRole("button", { name: /API Token/ }).click();
-    const editor = dialogContent(page, { name: "添加 API 密钥", exact: true });
+    const editor = dialogContent(page, { name: "添加 API 令牌", exact: true });
     await expect(editor.getByLabel("名称 *", { exact: true })).toBeFocused();
   } finally { await context.close(); }
 });
@@ -204,6 +204,8 @@ test(`dismissing an open form picker retains the editor draft (${reducedMotion})
     await expect(editor.getByLabel("名称 *", { exact: true })).toHaveValue("Keep this draft");
     await picker.click();
     await expect(page.getByRole("listbox")).toBeVisible();
+    // Android order: Password, API Key, then Wi-Fi.
+    await page.keyboard.press("ArrowDown");
     await page.keyboard.press("ArrowDown");
     await page.keyboard.press("Enter");
     const wifiEditor = dialogContent(page, { name: "添加Wi-Fi" });

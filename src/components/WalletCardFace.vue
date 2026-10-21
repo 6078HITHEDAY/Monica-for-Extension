@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { VaultItem } from "../core/model";
 import { maskedSuffix, itemIcon } from "../manager/item-metadata";
 import { readVerifiedAttachment } from "../manager/attachment-reader";
+import { cardFaceImageType } from "../manager/card-face-images";
 import { vaultClient } from "../runtime/client";
 import { tr } from "../i18n";
 
@@ -21,7 +22,7 @@ const visible = ref(false), imageUrl = ref(""), failed = ref(false), busy = ref(
 let observer: IntersectionObserver | undefined;
 let request: AbortController | undefined;
 function clear() { request?.abort(); if (imageUrl.value) URL.revokeObjectURL(imageUrl.value); imageUrl.value = ""; }
-watch(() => [visible.value, props.owner || props.item, face.value?.imageAttachmentName] as const, async () => {
+watch(() => [visible.value, (props.owner || props.item).id, (props.owner || props.item).updatedAt, (props.owner || props.item).providerRefs[0]?.providerId, face.value?.imageAttachmentName] as const, async () => {
   clear(); failed.value = false; busy.value = false;
   const owner = props.owner || props.item, name = face.value?.imageAttachmentName;
   if (!visible.value || !name) return;
@@ -30,8 +31,9 @@ watch(() => [visible.value, props.owner || props.item, face.value?.imageAttachme
   try {
     const result = await readVerifiedAttachment(vaultClient, providerId, owner.id, name, undefined, current.signal);
     if (current.signal.aborted) return;
-    if (!/^image\/(png|jpeg|webp|gif)$/.test(result.mediaType)) throw new Error("Unsupported image");
-    imageUrl.value = URL.createObjectURL(new Blob([result.bytes], { type: result.mediaType }));
+    const mediaType = cardFaceImageType(result.bytes);
+    if (!mediaType) throw new Error("Unsupported image");
+    imageUrl.value = URL.createObjectURL(new Blob([result.bytes], { type: mediaType }));
   } catch { if (!current.signal.aborted) failed.value = true; }
   finally { if (!current.signal.aborted) busy.value = false; }
 }, { immediate: true });

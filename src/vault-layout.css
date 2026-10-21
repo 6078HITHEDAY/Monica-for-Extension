@@ -2,26 +2,8 @@
    layout patterns. All palettes share the Material 3 Expressive hierarchy. */
 #root .page-view:has(> .vault-browse-bar) > .page-heading { padding-block: 20px; }
 #root .page-view:has(> .vault-browse-bar) > .page-heading h1 { font-size: clamp(1.75rem, 3vw, 2.25rem); }
-#root .vault-browse-bar {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px 12px;
-  min-width: 0;
-  margin: 0 0 16px;
-}
-#root .vault-source-select {
-  flex: 0 1 18rem;
-  min-width: 0;
-  max-width: 100%;
-}
-#root .vault-source-select > m3e-icon { flex: none; --m3e-icon-size: 20px; color: var(--app-muted); }
-#root :is(.vault-quick-filter, .vault-filter-summary, .vault-clear-filters) {
-  max-width: 100%;
-}
-#root :is(.vault-quick-filter, .vault-filter-summary) > m3e-icon { flex: none; --m3e-icon-size: 20px; }
-#root .vault-filter-summary > span { overflow-wrap: anywhere; }
-#root .vault-result-count { flex: 1 0 auto; margin: 0; text-align: end; color: var(--app-muted); font: 400 .75rem/1.5 var(--font-data); }
+#root .vault-browse-bar { display: flex; align-items: center; gap: 12px; min-width: 0; margin: 0 0 12px; }
+#root .vault-result-count { flex: 1; margin: 0; text-align: end; color: var(--app-muted); font: 400 .75rem/1.5 var(--font-data); }
 
 #root .vault-list-card {
   --m3e-card-padding: 0;
@@ -128,4 +110,30 @@
 
 @media (prefers-reduced-motion: reduce) {
   #root .vault-list-card .row-clickable { transition: none; }
+}
+
+/* The bottom surface stays in the viewport; its measured clearance follows the
+   list and pagination, including when actions wrap or text size changes. */
+#root #main-content.item-selection-page { padding-bottom: env(safe-area-inset-bottom, 0px); }
+#root .item-selection-clearance { flex: 0 0 auto; pointer-events: none; }
+#root .item-selection-toolbar { position: fixed; bottom: max(12px, env(safe-area-inset-bottom, 0px)); z-index: 10; transform: translateX(-50%); box-sizing: border-box; max-width: 64rem; max-height: calc(100dvh - 112px); min-width: 0; padding: clamp(8px, 2vw, 16px); margin: 0; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--app-outline); border-radius: 24px; box-shadow: 0 4px 24px rgb(0 0 0 / 18%); background: var(--md-sys-color-secondary-container, var(--app-surface-high)); color: var(--md-sys-color-on-secondary-container, var(--app-text)); }
+#root .item-selection-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+#root .item-selection-heading strong { flex: 1 1 12rem; overflow-wrap: anywhere; }
+#root .item-selection-heading > m3e-button { flex: 0 0 auto; margin-inline-start: auto; }
+#root .item-selection-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+#root .item-selection-actions m3e-button { max-width: 100%; }
+#root .item-selection-check { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 44px; width: 44px; height: 44px; border: 0; border-radius: 50%; background: transparent; color: var(--app-primary); cursor: pointer; }
+#root .item-selection-check:disabled { opacity: .38; cursor: default; }
+#root .item-selection-check:focus-visible { outline: 2px solid var(--app-primary); outline-offset: -2px; }
+#root .vault-list-card .item-card.item-selection-active { grid-template-columns: minmax(0, 1fr) minmax(0, .7fr) minmax(7rem, .5fr) 44px; }
+#root .vault-list-card .item-card.item-selected { background: var(--md-sys-color-secondary-container, var(--app-surface-high)); }
+#root .vault-tile.item-selection-active { position: relative; }
+#root .vault-tile.item-selected { outline: 2px solid var(--app-primary); outline-offset: -2px; --m3e-filled-card-container-color: var(--md-sys-color-secondary-container); }
+#root .item-selection-active { -webkit-user-select: none; user-select: none; }
+@container manager-content (max-width: 58rem) {
+  #root .vault-list-card .item-card.item-selection-active { grid-template-columns: minmax(0, 1fr) minmax(7rem, .45fr) 44px; }
+  #root .vault-list-card .item-selection-check { grid-area: actions; }
+}
+@container manager-content (max-width: 38rem) {
+  #root .vault-list-card .item-card.item-selection-active { grid-template-columns: minmax(0, 1fr) 44px; grid-template-areas: 'main actions' 'summary actions' 'meta actions'; }
 }

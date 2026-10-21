@@ -1,5 +1,6 @@
 import { parse } from "tldts";
-import type { LoginItem, LoginUriRule, VaultItemKind } from "./model";
+import type { LoginItem, LoginUriRule, SecureCustomField, VaultItemKind } from "./model";
+import { effectiveLoginUriRules, hasAndroidUrlRules } from './url-rules';
 
 /** Only display metadata is needed; passwords and provider records stay out of icon requests. */
 export interface WebsiteIconItem {
@@ -8,6 +9,7 @@ export interface WebsiteIconItem {
   kind?: VaultItemKind;
   uris?: readonly string[];
   uriRules?: readonly LoginUriRule[];
+  customFields?: readonly SecureCustomField[];
   loginType?: LoginItem["loginType"];
   favorite?: boolean;
   /** Sanitized projection used by the popup; empty explicitly means no website icon. */
@@ -44,6 +46,15 @@ export function loginWebsiteOrigin(item: WebsiteIconItem): string {
   if (item.kind && item.kind !== "login") return "";
   if (item.loginType && !["PASSWORD", "SSO", "STEAM_MAFILE"].includes(item.loginType)) return "";
   if (item.iconOrigin !== undefined) return websiteOrigin(item.iconOrigin);
+  if (hasAndroidUrlRules([...(item.customFields ?? [])])) {
+    const rules = effectiveLoginUriRules({ customFields: [...item.customFields!], uriRules: [], uris: [] });
+    for (const rule of rules) {
+      if (rule.matchType === 'regex' || rule.matchType === 'never') continue;
+      const origin = websiteOrigin(rule.uri);
+      if (origin) return origin;
+    }
+    return '';
+  }
   const regexUris = new Set(item.uriRules?.filter(rule => rule.matchType === "regex").map(rule => rule.uri.trim()));
   const candidates = [
     ...(item.uris || []).filter(uri => !regexUris.has(uri.trim())),

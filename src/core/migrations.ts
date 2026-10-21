@@ -7,9 +7,10 @@ import { readBitwardenBatches } from './bitwarden-batch-transfer';
 import { readNearbyPreferences } from '../nearby/preferences';
 import { readNearbyNativeJournal } from '../nearby/native-journal';
 import { readNearbyLocalMetadata } from '../nearby/local-metadata';
+import { readNearbyRetainedLocals } from '../nearby/local-adoption';
 import { repairPersistedTotpParameters } from '../nearby/local-totp-repair';
 
-const URI_MATCH_TYPES = new Set<LoginUriMatchType>(["base-domain", "domain", "starts-with", "exact", "regex", "never"]);
+const URI_MATCH_TYPES = new Set<LoginUriMatchType>(["default", "base-domain", "host", "domain", "starts-with", "exact", "regex", "never"]);
 const LEGACY_MDBX_MESSAGE = "此密码源使用 Monica Extension 已停用的 MDBX1 实现。请使用 Monica Android 或桌面端升级为 MDBX2 后重新连接。";
 export const MAX_SOURCE_RECORD_TAG_LENGTH = 64;
 
@@ -37,6 +38,7 @@ export function migrateVaultState(input: unknown): VaultState {
     ...(raw.nearbyNativeJournal === undefined ? {} : { nearbyNativeJournal: readNearbyNativeJournal(raw.nearbyNativeJournal) }),
     ...(raw.nearbyPreferences === undefined ? {} : { nearbyPreferences: readNearbyPreferences(raw.nearbyPreferences) }),
     ...(raw.nearbyLocalMetadata === undefined ? {} : { nearbyLocalMetadata: readNearbyLocalMetadata(raw.nearbyLocalMetadata) }),
+    ...(raw.nearbyRetainedLocals === undefined ? {} : { nearbyRetainedLocals: readNearbyRetainedLocals(raw.nearbyRetainedLocals) }),
     ...(raw.bitwardenCipherCopies === undefined ? {} : { bitwardenCipherCopies: readBitwardenCipherCopies(raw.bitwardenCipherCopies) }),
     ...(raw.bitwardenBatchTransfers === undefined ? {} : { bitwardenBatchTransfers: readBitwardenBatches(raw.bitwardenBatchTransfers) }),
     schemaVersion: 2,
@@ -133,7 +135,7 @@ function migrateItem(value: unknown): unknown {
     const rule = candidate as Record<string, unknown>;
     if (typeof rule.uri !== "string" || !rule.uri.trim()) return [];
     const matchType = typeof rule.matchType === "string" && URI_MATCH_TYPES.has(rule.matchType as LoginUriMatchType) ? rule.matchType as LoginUriMatchType : "base-domain";
-    return [{ uri: rule.uri.trim(), matchType }];
+    return [{ uri: rule.uri, matchType }];
   }) : [];
   const seen = new Set(existingRules.map((rule) => rule.uri));
   const uriRules = [...existingRules, ...uris.filter((uri) => !seen.has(uri)).map((uri) => ({ uri, matchType: "base-domain" as const }))];

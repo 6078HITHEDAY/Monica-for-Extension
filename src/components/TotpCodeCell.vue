@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { writeSecretClipboard } from '../lib/secret-clipboard';
 import { tr } from '../i18n';
 
 import { computed, onBeforeUnmount, ref, watch } from "vue";
@@ -81,7 +82,7 @@ async function useCode() {
     const isHotp = displayed.parameters.otpType === "HOTP";
     if (isHotp && !props.consumeCode) return;
     if (isHotp) nextOtpCounter(displayed.parameters.counter);
-    await navigator.clipboard.writeText(displayed.code);
+    await writeSecretClipboard(displayed.code);
     copied = true;
     // Keep copying disabled until the source counter has been saved and refreshed.
     if (isHotp) await props.consumeCode!(displayed.item);

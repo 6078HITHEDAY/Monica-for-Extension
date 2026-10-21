@@ -18,6 +18,44 @@ const peer = { deviceId: 'phone', name: 'Synthetic phone', pairId: 'pair-one', t
   lastSyncedAt: 0, sentRevision: '', receivedRevision: '', receivedRequest: '0' };
 const discovered = { protocol: 'monica-lan', version: 2, session: peer.pairId, name: 'Synthetic phone', port: 5555,
   address: '192.168.1.20', addresses: ['192.168.1.20', '10.0.0.7'], device_id: peer.deviceId, trusted: true, revision: 'r:0::0' };
+
+it('keeps a manual request while the paired phone is still preparing its listener', async () => {
+  const f = await fixture();
+  const original = f.transport.call.getMockImplementation()!;
+  let searches = 0;
+  f.transport.call.mockImplementation(async (operation, input) => {
+    if (operation === 'discovery_result') return { ready: true, result: { devices: ++searches < 5 ? [] : [discovered] } };
+    return original(operation, input);
+  });
+  vi.spyOn(f.coordinator as any, 'pause').mockResolvedValue(undefined);
+  await f.coordinator.prepare(peer.deviceId);
+  const view = await f.coordinator.start();
+  expect(searches).toBe(5);
+  expect(view.phase).toBe('transferring');
+  expect(f.operations.filter(operation => operation === 'connect')).toHaveLength(1);
+  f.coordinator.close();
+});
+
+it('rediscovers a replaced listener before sending and never retries authentication rejection', async () => {
+  for (const code of ['connection_failed', 'authentication_failed']) {
+    const f = await fixture();
+    const original = f.transport.call.getMockImplementation()!;
+    vi.spyOn(f.coordinator as any, 'pause').mockResolvedValue(undefined);
+    await f.coordinator.prepare(peer.deviceId); await f.coordinator.start();
+    f.transport.call.mockImplementation(async (operation, input) => operation === 'progress'
+      ? { phase: 'failed', failed_at: 'authenticating', error: code } : original(operation, input));
+    if (code === 'connection_failed') {
+      expect((await f.coordinator.poll()).phase).toBe('transferring');
+      expect(f.operations.filter(operation => operation === 'connect')).toHaveLength(2);
+      expect(f.operations.filter(operation => operation === 'replica_export')).toHaveLength(1);
+      expect(f.operations).not.toContain('replica_merge');
+    } else {
+      await expect(f.coordinator.poll()).rejects.toMatchObject({ code: 'authentication-failed' });
+      expect(f.operations.filter(operation => operation === 'connect')).toHaveLength(1);
+    }
+    f.coordinator.close();
+  }
+});
 async function fixture(items: VaultItem[] = [createLoginItem({ title: 'Original', password: 'synthetic password' })], saved: typeof peer = peer,
   devices: unknown[] = [discovered]) {
   const storage = new MemoryVaultStorage(), sessions = new MemoryVaultSessionStore(), service = new SecureVaultService(storage, sessions, Date.now, new MemoryVaultDeviceKeyStore());
@@ -25,14 +63,14 @@ async function fixture(items: VaultItem[] = [createLoginItem({ title: 'Original'
   const preferences = await service.nearbySessionPreferences(sessionId);
   await service.updateNearbyPreferences({ kind: 'remember', peer: saved, enrollment: true }, preferences.epoch, sessionId);
   const operations: string[] = [], params: Record<string, unknown>[] = [];
-  const transport = { close: vi.fn(), call: vi.fn(async (operation: NearbyOperation, input: Record<string, unknown> = {}) => {
+  const transport = { close: vi.fn(), call: vi.fn(async (operation: NearbyOperation, input: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
     operations.push(operation); params.push(input);
     switch (operation) {
       case 'snapshot_pairing': return { handle, revision: 'pairing-only-v1', asset_ids: [], pending: false };
       case 'snapshot_receive_only': return { handle, revision: 'receive-only-v1', asset_ids: [], pending: false };
       case 'replica_open': return { handle };
       case 'replica_pending': return { items: [], total: 0, next_cursor: null };
-      case 'replica_export': return { handle, revision: 'revision', asset_ids: [], pending: false };
+      case 'replica_export': return { handle, revision: 'revision', asset_ids: [], pending: false, deletion_policy: input.deletion_policy, deletion_count: 0 };
       case 'replica_revision': return { revision: 'revision', pending: false };
       case 'start': return { handle, code: '123456', invitations: [`monica-lan:2:127.0.0.1:12345:${peer.trustedKey}`] };
       case 'connect': return { handle };
@@ -46,6 +84,61 @@ async function fixture(items: VaultItem[] = [createLoginItem({ title: 'Original'
 }
 
 describe('nearby coordinator authorization and cancellation', () => {
+  async function deletionFixture(items?: VaultItem[]) {
+    const f = await fixture(items), original = f.transport.call.getMockImplementation()!;
+    f.transport.call.mockImplementation(async (op, input = {}) => {
+      const result = await original(op, input);
+      return op === 'replica_export' ? { ...result, deletion_count: 2 } : result;
+    });
+    return f;
+  }
+  it.each(['omit', 'include'] as const)('waits for explicit deletion review and applies only this transfer choice: %s', async choice => {
+    const f = await deletionFixture();
+    const view = await f.coordinator.prepare(peer.deviceId);
+    expect(view.phase).toBe('review'); expect(view.deletionReview).toMatchObject({ count: 2 });
+    expect(f.operations).not.toContain('start'); expect(f.operations).not.toContain('connect');
+    const resolved = await f.coordinator.confirmDeletions(view.deletionReview!.id, choice);
+    expect(resolved.phase).toBe('ready'); expect(resolved.deletionReview).toBeUndefined();
+    expect(f.params.filter((_, i) => f.operations[i] === 'replica_export').map(row => row.deletion_policy)).toEqual(choice === 'include' ? ['omit', 'include'] : ['omit']);
+    expect((await f.service.nearbySessionPreferences(f.sessionId)).incrementalOnly).toBe(true);
+    await f.coordinator.start(); expect(f.operations).toContain('connect');
+    f.coordinator.close();
+  });
+  it('cannot start before the deletion decision or reuse a stale decision', async () => {
+    const f = await deletionFixture(); await f.coordinator.prepare(peer.deviceId);
+    await expect(f.coordinator.start()).rejects.toMatchObject({ code: 'not-ready' });
+    expect(f.operations).not.toContain('connect');
+    const other = await deletionFixture(), review = (await other.coordinator.prepare(peer.deviceId)).deletionReview!;
+    await other.service.upsertItem({ ...(await other.service.readState()).items[0], notes: 'edited while reviewing' });
+    await expect(other.coordinator.confirmDeletions(review.id, 'include')).rejects.toMatchObject({ code: 'source-changed' });
+    expect(other.params.filter((_, i) => other.operations[i] === 'replica_export')).toHaveLength(1);
+  });
+  it('cancels deletion review without disclosing a snapshot', async () => {
+    const f = await deletionFixture(), review = (await f.coordinator.prepare(peer.deviceId)).deletionReview!;
+    f.coordinator.close();
+    await expect(f.coordinator.confirmDeletions(review.id, 'include')).rejects.toThrow();
+    expect(f.operations).not.toContain('connect'); expect(f.operations).not.toContain('start');
+  });
+  it('fails closed with a helper that does not acknowledge deletion filtering', async () => {
+    const f = await fixture(), original = f.transport.call.getMockImplementation()!;
+    f.transport.call.mockImplementation(async (op, input) => op === 'replica_export' ? { handle, revision: 'revision', pending: false, asset_ids: [] } as any : original(op, input));
+    await expect(f.coordinator.prepare(peer.deviceId)).rejects.toMatchObject({ code: 'host-update-required' });
+    expect(f.operations).not.toContain('connect'); expect(f.operations).not.toContain('start');
+  });
+  it.each(['passkey-first', 'deletion-first'] as const)('requires both independent reviews: %s', async order => {
+    const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+    const key: PasskeyItem = { ...createLoginItem({ title: 'Restricted key' }), kind: 'passkey', rpId: 'example.test', rpName: 'Example',
+      userHandle: 'dXNlcg', userName: 'synthetic', userDisplayName: 'Synthetic', credentialId: 'AQID', signCount: 0, algorithm: -7, discoverable: true,
+      backupEligible: false, sourceMode: 'browser-local', publicKey: bytesToBase64(new Uint8Array(await crypto.subtle.exportKey('spki', pair.publicKey))),
+      privateKeyPkcs8: bytesToBase64(new Uint8Array(await crypto.subtle.exportKey('pkcs8', pair.privateKey))) };
+    const f = await deletionFixture([key]), view = await f.coordinator.prepare(peer.deviceId);
+    expect(view.review).toBeDefined(); expect(view.deletionReview).toBeDefined();
+    const passkey = () => f.coordinator.confirm(view.review!.id);
+    const deletion = () => f.coordinator.confirmDeletions(view.deletionReview!.id, 'omit');
+    expect((await (order === 'passkey-first' ? passkey() : deletion())).phase).toBe('review');
+    expect((await (order === 'passkey-first' ? deletion() : passkey())).phase).toBe('ready');
+    expect(f.operations).not.toContain('connect'); f.coordinator.close();
+  });
   it('recovers a retained native intent without peers or any LAN calls', async () => {
     const f=await fixture(), preferences=await f.service.nearbySessionPreferences(f.sessionId);
     await f.service.updateNearbyPreferences({kind:'forget',deviceId:peer.deviceId},preferences.epoch,f.sessionId);
@@ -69,6 +162,41 @@ describe('nearby coordinator authorization and cancellation', () => {
     const view = await f.coordinator.pair(); expect(view.phase).toBe('pairing');
     expect(capture).not.toHaveBeenCalled(); expect(f.operations).toEqual(['snapshot_pairing', 'start']);
     f.coordinator.close(); expect(f.transport.close).toHaveBeenCalled();
+  });
+
+  it('resends the live replica record instead of local deletions while incremental-only sync is on', async () => {
+    const f = await fixture([createLoginItem({ title: 'Purged', password: 'purged secret' })]);
+    const [purged] = (await f.service.readState(false)).items;
+    await f.service.deleteItem(purged.id);
+    await f.service.emptyLocalTrash();
+    expect((await f.service.readState(false)).nearbyRetainedLocals).toEqual([`local:${purged.id}`]);
+    const trashed = await f.service.upsertItem(createLoginItem({ title: 'Trashed', password: 'synthetic password' }));
+    const live = new Map([[trashed.id, await nearbyLocalItemToWire(trashed, {})], [purged.id, await nearbyLocalItemToWire(purged, {})]]);
+    const original = f.transport.call.getMockImplementation()!;
+    f.transport.call.mockImplementation(async (operation, input = {}) => {
+      if (operation !== 'replica_local') return original(operation, input);
+      const ids = input.local_ids as string[];
+      return { items: [...live.entries()].filter(([id]) => ids.includes(`local:${id}`)).map(([id, data]) =>
+        ({ local_id: `local:${id}`, global_id: crypto.randomUUID(), deleted: false, data })) } as any;
+    });
+    await f.service.deleteItem(trashed.id);
+    await f.coordinator.prepare(peer.deviceId);
+    const scan = f.params.filter((_, index) => f.operations[index] === 'replica_scan_batch').flatMap(row => row.entries as any[]);
+    expect(scan.map(row => [row.local_id, row.deleted]).sort()).toEqual([[`local:${trashed.id}`, false], [`local:${purged.id}`, false]].sort());
+    expect(scan.find(row => row.local_id === `local:${purged.id}`)?.data).toEqual(live.get(purged.id));
+    expect(f.params.filter((_, index) => f.operations[index] === 'replica_local').every(row => row.include_data === true)).toBe(true);
+  });
+
+  it('sends local deletions to the peer when incremental-only sync is turned off', async () => {
+    const f = await fixture([createLoginItem({ title: 'Trashed', password: 'synthetic password' })]);
+    const [trashed] = (await f.service.readState(false)).items;
+    const preferences = await f.service.nearbySessionPreferences(f.sessionId);
+    await f.service.updateNearbyPreferences({ kind: 'preferences', incrementalOnly: false }, preferences.epoch, f.sessionId);
+    await f.service.deleteItem(trashed.id);
+    await f.coordinator.prepare(peer.deviceId);
+    const scan = f.params.filter((_, index) => f.operations[index] === 'replica_scan_batch').flatMap(row => row.entries as any[]);
+    expect(scan).toEqual([expect.objectContaining({ local_id: `local:${trashed.id}`, deleted: true })]);
+    expect(f.operations).not.toContain('replica_local');
   });
 
   it('does not revive a closed coordinator while vault initialization is awaiting', async () => {
@@ -181,6 +309,7 @@ describe('nearby connection roles and recovery hints', () => {
 
   it('ignores untrusted or differently paired advertisements and reports a missing phone', async () => {
     const f = await fixture(undefined, peer, [{ ...discovered, trusted: false }, { ...discovered, session: 'other-pair' }, { ...discovered, address: '8.8.8.8', addresses: [] }]);
+    vi.spyOn(f.coordinator as any, 'pause').mockResolvedValue(undefined);
     await f.coordinator.prepare(peer.deviceId);
     await expect(f.coordinator.start()).rejects.toThrow('peer-not-found');
     expect(f.operations).not.toContain('connect'); expect(f.coordinator.status()).toMatchObject({ phase: 'failed', error: 'peer-not-found' });

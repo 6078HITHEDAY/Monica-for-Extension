@@ -18,6 +18,8 @@ use std::{
 use uuid::Uuid;
 use zeroize::{Zeroize, Zeroizing};
 
+mod export_policy;
+
 const MAX_BUFFERS: usize = 4;
 const MAX_BYTES: usize = 16 * 1024 * 1024;
 const CHUNK: usize = 256 * 1024;
@@ -588,7 +590,12 @@ impl Nearby {
     }
 
     fn export(&mut self, params: Value) -> Result<Value> {
-        let mut p = args(params, &["handle"])?;
+        let mut p = args(params, &["handle", "deletion_policy"])?;
+        let policy = match p.remove("deletion_policy") {
+            None => None,
+            Some(Value::String(value)) if value == "omit" || value == "include" => Some(value),
+            _ => return Err(failure("nearby-invalid-request")),
+        };
         let opaque = token(&mut p, "handle")?;
         let handle = self.replica(&opaque)?;
         if self.replicas[&opaque].scan != ScanState::Ready {
@@ -607,6 +614,14 @@ impl Nearby {
             .as_str()
             .ok_or_else(|| failure("nearby-engine-invalid"))?
             .to_owned();
+        if let Some(policy) = &policy {
+            export_policy::apply(
+                &directory.path().join("changes.mdbxsync"),
+                &content_key,
+                policy == "omit",
+                &mut result.0,
+            )?;
+        }
         let revision = result.0["revision"]
             .as_str()
             .ok_or_else(|| failure("nearby-engine-invalid"))?
@@ -636,7 +651,8 @@ impl Nearby {
             }),
         );
         Ok(
-            json!({"handle":handle,"revision":revision,"asset_ids":result.0["asset_ids"].take(),"pending":result.0["pending"].take()}),
+            json!({"handle":handle,"revision":revision,"asset_ids":result.0["asset_ids"].take(),"pending":result.0["pending"].take(),
+                "deletion_policy":result.0["deletion_policy"].take(),"deletion_count":result.0["deletion_count"].take()}),
         )
     }
 

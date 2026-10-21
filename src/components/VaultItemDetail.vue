@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { writeSecretClipboard } from '../lib/secret-clipboard';
 import { CARD_NAMES, PROFILE_NAMES, PROFILE_EXTRAS, ADDRESS_EXTRAS, PROFILE_LABELS } from "../core/profile-fields";
 import { BILLING_ADDRESS_FIELDS, readBillingAddress, type BillingAddressField } from "../core/billing-address";
 import PasskeyBindings from "./PasskeyBindings.vue";
@@ -25,6 +26,9 @@ import { passwordGroupMembers } from "../core/password-groups";
 import { passwordProjectGroups } from "../core/password-project-view";
 import ProjectCredentialNavigation from './ProjectCredentialNavigation.vue';
 import PasswordHistoryDetail from './PasswordHistoryDetail.vue';
+import { readProjectCredential } from '../core/project-credentials';
+import { effectiveLoginUriRules } from '../core/url-rules';
+import { WALLET_TEMPLATE_LABELS, WALLET_PASS_FIELD_LABELS, isWalletPass } from '../core/wallet-pass';
 
 const props = defineProps<{
   item: VaultItem;
@@ -74,7 +78,7 @@ const rank = (token: string) => props.item.kind === "login" ? contentRank(props.
 const safeHref = (href: string) => { try { return /^https?:$/.test(new URL(href).protocol); } catch { return false; } };
 const providerName = computed(() => props.providers.find((provider) => provider.id === props.item.providerRefs[0]?.providerId)?.name || tr('Monica 本地库'));
 const stateLabel = computed(() => props.item.deletedAt ? tr('在回收站') : props.item.archivedAt ? tr('已归档') : props.item.favorite ? tr('已收藏') : '');
-const detailType = computed(() => props.item.kind === "login" ? ({ WIFI: "Wi-Fi", SSH_KEY: tr('SSH 密钥'), GPG_KEY: "GPG 密钥", API_KEY: "API Key", BARCODE: tr('条码') } as Record<string, string>)[props.item.loginType || ""] || itemKindLabel(props.item.kind) : itemKindLabel(props.item.kind));
+const detailType = computed(() => props.item.kind === 'identity' && isWalletPass(props.item) ? tr(WALLET_TEMPLATE_LABELS[props.item.walletTemplate!] ?? '卡包') : props.item.kind === "login" ? ({ WIFI: "Wi-Fi", SSH_KEY: tr('SSH 密钥'), GPG_KEY: "GPG 密钥", API_KEY: "API Key", BARCODE: tr('条码') } as Record<string, string>)[props.item.loginType || ""] || itemKindLabel(props.item.kind) : itemKindLabel(props.item.kind));
 const detailIcon = computed(() => props.item.kind === "login" ? ({ WIFI: "wifi", SSH_KEY: "terminal", BARCODE: "qr_code_2" } as Record<string, string>)[props.item.loginType || ""] || itemIcon(props.item.kind) : itemIcon(props.item.kind));
 const otpSource = computed(() => props.item.kind === "totp" ? props.item : props.item.kind === "login" ? findBoundTotpItem(props.item, props.items) || props.item : undefined);
 
@@ -97,7 +101,7 @@ function toggleSecret(field: DetailField) {
 
 async function copyField(field: DetailField) {
   try {
-    await navigator.clipboard.writeText(field.value);
+    await writeSecretClipboard(field.value);
     status.value = tr('已复制{0}。', { 0: field.label });
   } catch {
     status.value = tr('复制失败，请手动选择内容。');
@@ -154,11 +158,13 @@ const fields = computed<DetailField[]>(() => {
           rows.push({ label: tr('关联账号'), value: account ? [account.title, account.username].filter(Boolean).join(' · ') : tr('当前关联（尚未找到）') });
         }
       }
+      const credentialNote = readProjectCredential(item.customFields)?.note;
+      if (credentialNote?.trim()) rows.push({ label: tr('凭据备注'), value: credentialNote });
       if (item.totpSecret || item.boundTotpItemId || otpSource.value?.kind === "totp") rows.push({ label: tr('动态验证码'), value: "", otp: true, section: "AUTHENTICATOR" });
       if (item.loginType === "GPG_KEY") { try { const gpg = readGpgFields(item.customFields); rows.push({label:"GPG 公钥",value:gpg.publicKey,mono:true},{label:"指纹",value:gpg.fingerprint},{label:"用户身份",value:gpg.userId}); } catch { rows.push({label:"GPG 公钥状态",value:"分段或版本不受支持；原始字段完整保留。"}); } }
       if (item.loginType === "API_KEY") rows.push({label:"API 地址",value:item.customFields.find(field=>field.name==="monica_api_key_url")?.value||""});
       for (const [key,label,section] of [["email","邮箱","CONTACT"],["phone","电话","CONTACT"],["addressLine","街道地址","ADDRESS"],["city","城市","ADDRESS"],["state","州 / 省","ADDRESS"],["zipCode","邮编","ADDRESS"],["country","国家","ADDRESS"],["creditCardNumber","卡号","PAYMENT"],["creditCardHolder","持卡人","PAYMENT"],["creditCardExpiry","有效期","PAYMENT"],["creditCardCVV","安全码","PAYMENT"]]) { const value = item[key as keyof LoginItem]; if(typeof value === "string" && value) rows.push({label,value,section,secret:key==="creditCardNumber"||key==="creditCardCVV"}); }
-      for (const uri of item.uris) rows.push({ label: tr('网址'), value: uri, href: uri, section: "WEBSITES" });
+      for (const rule of effectiveLoginUriRules(item)) rows.push({ label: tr('网址'), value: rule.uri, ...(rule.matchType === 'regex' || rule.matchType === 'never' ? {} : { href: rule.uri }), section: "WEBSITES" });
       if (item.appName) rows.push({ secondary: true, label: tr('应用名称'), value: item.appName });
       if (item.appPackageName) rows.push({ secondary: true, label: tr('应用包名'), value: item.appPackageName, mono: true });
       for (const field of item.customFields.filter(field=>!isContentMetadata(field.name)&&!isCredentialMetadata(field.name))) rows.push({ label: field.name, value: field.value, secret: field.protected, mono: field.fieldType === "HIDDEN", custom: true });
@@ -190,6 +196,15 @@ const fields = computed<DetailField[]>(() => {
       return rows;
     }
     case "identity": {
+      if (isWalletPass(item)) return [
+        { label: tr('卡包模板'), value: tr(WALLET_TEMPLATE_LABELS[item.walletTemplate!] ?? item.walletTemplate!) },
+        { label: tr('卡号或票号'), value: item.documentNumber, secret: true, showLastFour: true, mono: true },
+        { label: tr('持有人'), value: item.fullName },
+        { label: tr('发行方'), value: item.issuedBy ?? '' },
+        { label: tr('有效期至'), value: item.expiryDate ?? '' },
+        ...Object.entries(item.walletFields ?? {}).map(([key, value]) => ({ label: tr(WALLET_PASS_FIELD_LABELS[key] ?? key), value })),
+        ...(item.customFields ?? []).map(field => ({ label: field.name, value: field.value, secret: field.protected, custom: true }))
+      ].filter(field => Boolean(field.value));
       const typeLabels = { ID_CARD: tr('身份证'), PASSPORT: tr('护照'), DRIVER_LICENSE: tr('驾驶证'), SOCIAL_SECURITY: tr('社会保障号'), OTHER: tr('其他证件') } as Record<string, string>;
       const rows = [
         { label: tr('证件类型'), value: typeLabels[item.documentType] || item.documentType },

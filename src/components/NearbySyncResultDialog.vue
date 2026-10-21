@@ -2,7 +2,7 @@
 import { tr } from '../i18n';
 import type { NearbySyncResult } from '../nearby/local-coordinator';
 import type { NearbySyncMode } from '../nearby/preferences';
-defineProps<{ result: NearbySyncResult; peerName?: string; mode?: NearbySyncMode }>();
+defineProps<{ result: NearbySyncResult; peerName?: string; mode?: NearbySyncMode; incrementalOnly?: boolean }>();
 const emit=defineEmits<{close:[]}>();
 const labels:Record<string,string>={login:'登录项','ssh-key':'SSH 密钥',totp:'动态验证码',note:'安全笔记',card:'银行卡',identity:'身份','billing-address':'地址','payment-account':'支付账户',passkey:'Passkey','api-token':'API 密钥','steam-mafile':'Steam',folder:'文件夹','vault-metadata':'密码库信息','document-ref':'附件',unknown:'其他项目'};
 </script>
@@ -16,6 +16,8 @@ const labels:Record<string,string>={login:'登录项','ssh-key':'SSH 密钥',tot
       <p>{{ tr(result.sent ? '发送已由对方确认。' : '本次未发送内容。') }}</p>
       <p v-if="mode === 'receive_only'">{{ tr('当前为「仅接收」：本机的修改和删除不会发送。要同步这些更改，请改用「双向同步」或「仅发送」，并让另一端允许接收。') }}</p>
       <p v-else-if="mode === 'send_only'">{{ tr('当前为「仅发送」：本机内容会发送，但不会接收另一端的更改。') }}</p>
+      <p v-if="result.includedDeletions">{{ tr('本次按你的选择包含 {0} 条历史删除记录。', { 0: result.includedDeletions }) }}</p>
+      <p v-else-if="incrementalOnly && mode !== 'receive_only'">{{ tr('「只同步新增和修改」已开启：本机进行的删除和清空回收站没有发送到另一端。') }}</p>
       <p>{{ tr('本机处理 {0} 项：保存 {1} 项，删除 {2} 项。',{0:result.processed,1:result.processed-result.deleted,2:result.deleted}) }}</p>
       <p v-if="!result.processed">{{ tr('本机没有需要写入的更新。') }}</p>
       <ul v-else>

@@ -1,10 +1,11 @@
 import { dialogContent, dialogSurface, editContentSection } from "./fixtures/material";
-import { chromium, expect, test, type BrowserContext, type Page, type TestInfo } from "@playwright/test";
+import { expect, test, type BrowserContext, type Page, type TestInfo } from "@playwright/test";
+import { launchTestContext } from './fixtures/edge';
 import path from "node:path";
 
 async function start(testInfo: TestInfo) {
   const extension = path.resolve("dist");
-  const context = await chromium.launchPersistentContext(testInfo.outputPath("profile"), { channel: "chromium", headless: true, locale: "zh-CN", colorScheme: "dark", viewport: { width: 1280, height: 900 }, args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`] });
+  const context = await launchTestContext(testInfo.outputPath("profile"), { channel: "chromium", headless: true, locale: "zh-CN", colorScheme: "dark", viewport: { width: 1280, height: 900 }, args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`] });
   const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
   const page = await context.newPage();
   await page.goto(`chrome-extension://${new URL(worker.url()).host}/index.html`);
@@ -18,7 +19,7 @@ async function openApiEditor(page: Page) {
   await page.getByRole("button", { name: "选择新建类型", exact: true }).click();
   const menu = page.getByRole("menu", { name: "选择新建类型", exact: true });
   await menu.getByRole("menuitem", { name: "API Token", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "添加 API 密钥", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "添加 API 令牌", exact: true })).toBeVisible();
   await expect(menu).toBeHidden();
 }
 

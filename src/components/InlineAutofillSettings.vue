@@ -56,9 +56,10 @@ async function toggle() {
 /* The component supplies its own rounded keyboard focus indicator. */
 .inline-autofill-setting m3e-switch:focus-visible { outline: none; }
 .inline-autofill-setting-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 16px; row-gap: 0; align-items: center; }
-.inline-autofill-setting-row > p { grid-column: 1 / -1; }
+.inline-autofill-setting-row > p { grid-column: 1; grid-row: 2; }
 .inline-autofill-setting strong { font-size: 1rem; font-weight: 600; overflow-wrap: anywhere; }
 .inline-autofill-setting p { margin: 4px 0 0; font-size: .875rem; line-height: 1.5; overflow-wrap: anywhere; }
 .inline-autofill-setting p:not(.form-error), .inline-autofill-setting small { color: var(--app-muted); }
 .inline-autofill-setting small { display: block; font-size: .75rem; line-height: 1.6; margin-top: 8px; overflow-wrap: anywhere; }
+.inline-autofill-setting-row > m3e-switch { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
 </style>

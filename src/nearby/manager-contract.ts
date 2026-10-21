@@ -12,6 +12,7 @@ export type NearbyManagerRequest = { id: number } & (
   | { type: 'pair'; invitation?: string }
   | { type: 'prepare'; peerId: string }
   | { type: 'confirm'; reviewId: string }
+  | { type: 'confirm-deletions'; reviewId: string; choice: 'omit' | 'include' }
   | { type: 'start'; endpoint?: NearbyEndpoint }
 );
 
@@ -45,6 +46,10 @@ export function readNearbyManagerRequest(value: unknown): NearbyManagerRequest {
       break;
     case 'prepare': fields(p, ['id', 'type', 'peerId']); text(p.peerId, identifier); break;
     case 'confirm': fields(p, ['id', 'type', 'reviewId']); text(p.reviewId, uuid); break;
+    case 'confirm-deletions':
+      fields(p, ['id', 'type', 'reviewId', 'choice']); text(p.reviewId, uuid);
+      if (!['omit', 'include'].includes(p.choice as string)) invalid();
+      break;
     case 'start': {
       fields(p, ['id', 'type', 'endpoint']);
       if (p.endpoint !== undefined) {
@@ -60,9 +65,10 @@ export function readNearbyManagerRequest(value: unknown): NearbyManagerRequest {
       const c = object(p.change);
       switch (c.kind) {
         case 'preferences':
-          fields(c, ['kind', 'name', 'enabled', 'mode', 'intervalSeconds']);
+          fields(c, ['kind', 'name', 'enabled', 'mode', 'intervalSeconds', 'incrementalOnly']);
           if (c.name !== undefined && (typeof c.name !== 'string' || !c.name.trim() || [...c.name].length > 64 || /[\u0000-\u001f\u007f-\u009f]/.test(c.name))) invalid();
           if (c.enabled !== undefined && typeof c.enabled !== 'boolean') invalid();
+          if (c.incrementalOnly !== undefined && typeof c.incrementalOnly !== 'boolean') invalid();
           if (c.mode !== undefined && !['bidirectional', 'send_only', 'receive_only'].includes(c.mode as string)) invalid();
           if (c.intervalSeconds !== undefined && (typeof c.intervalSeconds !== 'number' || !Number.isInteger(c.intervalSeconds)
             || c.intervalSeconds !== 0 && (c.intervalSeconds < 60 || c.intervalSeconds > 86400))) invalid();

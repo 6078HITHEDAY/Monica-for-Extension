@@ -11,6 +11,8 @@ $RegistryKeys = @(
     "HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\$HostName",
     "HKCU:\Software\Google\Chrome\NativeMessagingHosts\$WindowsHelloHostName",
     "HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\$WindowsHelloHostName"
+    "HKCU:\Software\Mozilla\NativeMessagingHosts\$HostName",
+    "HKCU:\Software\Mozilla\NativeMessagingHosts\$WindowsHelloHostName"
 )
 foreach ($Key in $RegistryKeys) {
     if (Test-Path -LiteralPath $Key) {

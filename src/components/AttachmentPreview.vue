@@ -4,6 +4,7 @@ import type { VaultItem } from "../core/model";
 import type { WalletAsset } from "../core/password-content";
 import { vaultClient } from "../runtime/client";
 import { readVerifiedAttachment } from "../manager/attachment-reader";
+import { cardFaceImageType } from "../manager/card-face-images";
 const props = defineProps<{ owner: VaultItem; name: string; label?: string; expected?: WalletAsset }>();
 const busy=ref(false), error=ref(""), url=ref(""), text=ref(""), visible=ref(false), mime=ref("");
 let generation=0; let controller: AbortController | undefined;
@@ -13,9 +14,11 @@ async function open(){ if(busy.value)return;close();busy.value=true;error.value=
   try { providerId=props.owner.providerRefs[0]?.providerId || 'local';
     const result=await readVerifiedAttachment(vaultClient,providerId,props.owner.id,props.name,props.expected,request.signal); const bytes=result.bytes;
     if(current!==generation)return;
-    mime.value=result.mediaType;
+    const rasterType=cardFaceImageType(bytes);
+    mime.value=rasterType || result.mediaType;
     // Never embed HTML, SVG, scripts or unknown active media in the extension origin.
-    const safeImage=/^image\/(png|jpeg|webp|gif)$/.test(mime.value);
+    const safeImage=Boolean(rasterType);
+    if(!safeImage && /^image\//i.test(mime.value))mime.value='application/octet-stream';
     if(/^text\/plain(?:;|$)/.test(mime.value))text.value=new TextDecoder("utf-8",{fatal:true}).decode(bytes);
     url.value=URL.createObjectURL(new Blob([bytes],{type:safeImage?mime.value:"application/octet-stream"}));visible.value=true;
   }catch(cause){if(!request.signal.aborted)error.value=cause instanceof Error?cause.message:"附件读取失败。";}finally{busy.value=false;}}

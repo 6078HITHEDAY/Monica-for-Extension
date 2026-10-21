@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { version } from "../../package.json";
+import { runtimeInfo } from './version';
 
-const compatible = { ok: true, data: { version, protocolVersion: 1 } };
+const compatible = { ok: true, data: runtimeInfo };
 const unsupported = { ok: false, error: "不支持的 Monica 运行时命令。" };
 
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.resetModules(); });
@@ -93,6 +94,7 @@ describe("UI and background compatibility", () => {
   });
 
   it.each([
+    { ...runtimeInfo, buildId: 'stale-same-version-build' },
     { version: "0.0.0", protocolVersion: 1 },
     { version, protocolVersion: 99 },
     null

@@ -11,13 +11,32 @@ async function send(page: Page, request: object): Promise<any> {
 async function setup(page: Page) {
   await page.addInitScript(() => {
     const original = chrome.runtime.sendMessage.bind(chrome.runtime);
-    chrome.runtime.sendMessage = (async (message: {type: string}) => message.type === 'VAULT_HELLO_STATUS' ? {
-      ok: true, data: {native: {available: false, supported: false, reason: 'Synthetic UI fixture'}, vaultEnrolled: false, bindingConsistent: true, protectionMode: 'device-key', unlockAvailable: false}
-    } : original(message)) as typeof chrome.runtime.sendMessage;
+    let mode = 'device-key';
+    chrome.runtime.sendMessage = (async (message: {type: string; newPassword?: string}) => {
+      if (message.type === 'VAULT_HELLO_STATUS') return { ok: true, data: {native: {available: false, supported: false, reason: 'Synthetic UI fixture'}, vaultEnrolled: false, bindingConsistent: true, protectionMode: mode, unlockAvailable: false} };
+      const result = await original(message);
+      if (result.ok && message.type === 'VAULT_CHANGE_MASTER_PASSWORD') mode = message.newPassword ? 'master-password' : 'device-key';
+      return result;
+    }) as typeof chrome.runtime.sendMessage;
   });
   await send(page, {type: 'VAULT_SETUP', masterPassword: ''});
   await page.reload();
   await page.getByRole('button', {name: '设置与备份', exact: true}).click();
+}
+
+async function expectCenteredSwitches(page: Page) {
+  const rows = page.locator('.automatic-sync-row, .inline-autofill-setting-row, .cli-integration-setting-row');
+  await expect(rows).toHaveCount(3);
+  for (const row of await rows.all()) {
+    const geometry = await row.evaluate(node => {
+      const bounds = node.getBoundingClientRect();
+      const toggle = node.querySelector('m3e-switch')!;
+      const track = toggle.shadowRoot!.querySelector('.track')!.getBoundingClientRect();
+      return { offset: Math.abs((bounds.top + bounds.bottom - track.top - track.bottom) / 2), inside: track.left >= bounds.left - 1 && track.right <= bounds.right + 1 };
+    });
+    expect(geometry.offset).toBeLessThanOrEqual(1);
+    expect(geometry.inside).toBe(true);
+  }
 }
 
 test('common settings act directly while grouped configuration pages retain focus and fit at 320px', async ({}, info) => {
@@ -29,10 +48,10 @@ test('common settings act directly while grouped configuration pages retain focu
     const page = await context.newPage(); await page.goto(`chrome-extension://${new URL(worker.url()).host}/index.html`);
     await setup(page);
     const home = page.locator('[data-settings-page="home"]');
-    const ids = ['appearance', 'exclusions', 'protection', 'backup', 'wifi-sync'];
+    const ids = ['appearance', 'exclusions', 'protection', 'backup', 'wifi-sync', 'diagnostics', 'updates'];
     await expect(home.locator('[data-settings-entry]')).toHaveCount(ids.length);
     await expect(home.getByRole('combobox')).toHaveCount(2);
-    await expect(home.getByRole('switch')).toHaveCount(2);
+    await expect(home.getByRole('switch')).toHaveCount(3);
     await expect(home.locator('.settings-group')).toHaveCount(3);
     await expect(home.locator('[data-settings-back]')).toHaveCount(0);
     // Direct preferences have no navigation wrapper; the only arrows lead to multi-control pages.
@@ -57,7 +76,8 @@ test('common settings act directly while grouped configuration pages retain focu
     await page.keyboard.press('Tab');
     await expect(mode).toBeFocused();
     await expect(modeRow).toHaveCSS('outline-style', 'solid');
-    await expect(modeRow).toHaveCSS('outline-width', '2px');
+    // Edge snaps the 2 CSS-pixel outline to device pixels at Windows scaling.
+    await expect.poll(() => modeRow.evaluate(node => Math.abs(parseFloat(getComputedStyle(node).outlineWidth) - 2) * devicePixelRatio)).toBeLessThanOrEqual(1);
     await expect(mode).toHaveCSS('outline-style', 'none');
     await expect(mode.locator(':scope > m3e-focus-ring .outline')).toHaveCSS('visibility', 'hidden');
     await home.screenshot({path: info.outputPath('settings-keyboard-focus.png')});
@@ -72,7 +92,7 @@ test('common settings act directly while grouped configuration pages retain focu
     await expect(mode).toBeFocused();
     await page.emulateMedia({forcedColors: 'active'});
     await expect(modeRow).toHaveCSS('outline-style', 'solid');
-    await expect(modeRow).toHaveCSS('outline-width', '2px');
+    await expect.poll(() => modeRow.evaluate(node => Math.abs(parseFloat(getComputedStyle(node).outlineWidth) - 2) * devicePixelRatio)).toBeLessThanOrEqual(1);
     await home.screenshot({path: info.outputPath('settings-high-contrast-focus.png')});
     await page.emulateMedia({forcedColors: 'none'});
     await chooseOption(mode, 'dark');
@@ -88,6 +108,7 @@ test('common settings act directly while grouped configuration pages retain focu
       expect(box!.height).toBeLessThanOrEqual(76);
       expect(box!.height).toBeGreaterThanOrEqual(48);
     }
+    await expectCenteredSwitches(page);
     await page.screenshot({path: info.outputPath('settings-dark-desktop.png'), fullPage: true});
     for (const id of ids) {
       await home.locator(`[data-settings-entry="${id}"]`).click();
@@ -100,6 +121,7 @@ test('common settings act directly while grouped configuration pages retain focu
     await page.setViewportSize({width: 320, height: 950});
     await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
+    await expectCenteredSwitches(page);
     await home.screenshot({path: info.outputPath('settings-dark-320-200.png')});
     await chooseOption(home.getByRole('combobox', {name: '显示模式', exact: true}), 'light');
     await expect(home).toBeVisible();
@@ -133,6 +155,7 @@ test('common settings act directly while grouped configuration pages retain focu
     await page.locator('[data-settings-back]').click();
     await chooseOption(home.getByRole('combobox', {name: '显示模式', exact: true}), 'light');
     await page.setViewportSize({width: 1180, height: 1000});
+    await expectCenteredSwitches(page);
     await page.screenshot({path: info.outputPath('settings-light-desktop.png'), fullPage: true});
   } finally { await context.close(); }
 });
@@ -169,10 +192,11 @@ test('secondary settings retain autofill exclusions, toggles, protection changes
     await back(); await open('backup');
     await page.getByRole('button', {name: '导出加密整库备份', exact: true}).click();
     const dialog = dialogContent(page, {name: '导出加密整库备份', exact: true});
+    await dialog.getByLabel('当前主密码', {exact: true}).fill(secret);
     await dialog.getByLabel('备份密码 *', {exact: true}).fill('Synthetic portable backup password');
     await dialog.getByLabel('确认备份密码 *', {exact: true}).fill('Synthetic portable backup password');
     const downloading = page.waitForEvent('download');
-    await dialog.getByRole('button', {name: '加密导出', exact: true}).click();
+    await dialog.getByRole('button', {name: '验证并导出', exact: true}).click();
     const download = await downloading, output = info.outputPath('synthetic-settings-backup.json'); await download.saveAs(output);
     const bytes = await readFile(output, 'utf8'); expect(bytes).not.toContain(secret); expect(JSON.parse(bytes).envelope).toBeDefined();
     await expect(page.locator('[data-settings-page="backup"]')).toBeVisible();

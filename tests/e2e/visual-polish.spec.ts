@@ -30,23 +30,27 @@ test("provider page is compact and decorated icon glyphs are centered", async ({
     await expect(connectionButtons).toHaveCount(5);
     await expect(page.locator(".provider-config-card")).toHaveCount(0);
     await expect(page.locator(".provider-list .source-card")).toHaveCount(1);
-    expect((await page.locator(".provider-page").boundingBox())!.width).toBeLessThanOrEqual(820.01);
+    expect((await page.locator(".provider-page").boundingBox())!.width).toBeLessThanOrEqual(900.01);
     const connectionBoxes = await Promise.all(Array.from({ length: 5 }, (_, index) => connectionButtons.nth(index).boundingBox()));
     for (const box of connectionBoxes.slice(1)) expect(Math.abs(connectionBoxes[0]!.width - box!.width)).toBeLessThanOrEqual(1);
     await expectCentered(page.locator(".source-icon").first(), page.locator(".source-icon m3e-icon").first());
     await expectCentered(page.locator(".connect-icon").first(), page.locator(".connect-icon m3e-icon").first());
     await expectCentered(page.locator(".connect-icon").nth(1), page.locator(".connect-icon m3e-icon").nth(1));
-    await expectRoundedAndClipped(page.locator(".connect-source-card").first());
     await expectRoundedAndClipped(page.locator(".provider-list .source-card").first());
     await expectAllRoundedAndClipped(page.locator("main m3e-card"));
     await expect(page.locator("m3e-card m3e-card")).toHaveCount(0);
-    const connectionShape = await page.locator(".connect-source-card").first().evaluate((host) => ({
-      host: getComputedStyle(host).borderRadius,
-      button: getComputedStyle(host.querySelector(".connect-source")!.shadowRoot!.querySelector("m3e-list-item-button")!.shadowRoot!.querySelector(".base")!).borderRadius
+    const connectionShape = await connectionButtons.evaluateAll(buttons => buttons.map(button => {
+      const style = getComputedStyle(button);
+      return [style.borderTopLeftRadius, style.borderBottomLeftRadius, style.padding, style.backgroundColor];
     }));
-    expect(connectionShape.button).toBe(connectionShape.host);
+    expect(connectionShape.map(shape => shape.slice(0, 3))).toEqual([
+      ['24px', '4px', '8px 16px'], ['4px', '4px', '8px 16px'], ['4px', '4px', '8px 16px'], ['4px', '4px', '8px 16px'], ['4px', '24px', '8px 16px']
+    ]);
+    const firstBox = connectionBoxes[0]!, secondBox = connectionBoxes[1]!;
+    expect(secondBox.y - firstBox.y - firstBox.height).toBeCloseTo(4, 0);
 
-    await page.getByRole("button", { name: /连接 MDBX2 保险库/ }).click();
+    await page.getByRole("button", { name: /连接 MDBX2 保险库/ }).focus();
+    await page.keyboard.press("Enter");
     const mdbx2Dialog = page.locator('.mdbx2-dialog[role="dialog"]');
     await expect(mdbx2Dialog).toBeVisible();
     await expect(mdbx2Dialog).toHaveCSS("border-radius", "28px");
@@ -75,8 +79,11 @@ test("provider page is compact and decorated icon glyphs are centered", async ({
     await page.getByRole("button", { name: "选择新建类型", exact: true }).click();
     const picker = page.getByRole("menu", { name: "选择新建类型", exact: true });
     await expect(picker).toBeVisible();
-    await expect(picker.getByRole("menuitem")).toHaveCount(13);
-    for (const option of await picker.getByRole("menuitem").all()) await expect(option).toBeInViewport({ ratio: 1 });
+    await expect(picker.getByRole("menuitem")).toHaveCount(16);
+    for (const option of await picker.getByRole("menuitem").all()) {
+      await option.scrollIntoViewIfNeeded();
+      await expect(option).toBeInViewport({ ratio: 1 });
+    }
     await page.keyboard.press("Escape");
     await expect(picker).toBeHidden();
     await page.getByRole("button", { name: "设置与备份" }).click();
@@ -91,6 +98,15 @@ test("provider page is compact and decorated icon glyphs are centered", async ({
     await page.waitForTimeout(400);
     await page.getByRole("button", { name: /连接 Monica Android WebDAV/ }).hover();
     await page.screenshot({ path: testInfo.outputPath("provider-page.png"), fullPage: true });
+    for (const width of [360, 320]) {
+      await page.setViewportSize({width, height: 950});
+      await page.evaluate(size => { document.documentElement.style.fontSize = size; }, width === 320 ? '200%' : '125%');
+      await expectNoHorizontalOverflow(page.locator('.provider-connect-grid'));
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+      const labels = await connectionButtons.locator('.settings-nav-copy').evaluateAll(nodes => nodes.map(node => node.scrollWidth <= node.clientWidth + 1));
+      expect(labels).toEqual([true, true, true, true, true]);
+      await page.screenshot({path: testInfo.outputPath(`provider-grouped-${width}.png`), fullPage: true, animations: 'disabled'});
+    }
   } finally { await context?.close(); }
 });
 

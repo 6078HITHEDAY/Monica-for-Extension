@@ -30,7 +30,8 @@ test('native coordinator orders paginated nested folder trash, restart restorati
     const peers=[(await app(a,'status')).peerId,(await app(b,'status')).peerId];
     const exchange=async()=>{
       for(const [page,peer]of [[a,peers[0]],[b,peers[1]]]as const){const view=await app(page,'prepare',peer);if(view.phase==='review')await app(page,'confirm',view.review.id);else expect(view.phase).toBe('ready');}
-      const listener=await app(a,'start');await app(b,'start',listener.endpoint);await complete();
+      const aListens=peers[1]>peers[0];
+      const listener=await app(aListens?a:b,'start');await app(aListens?b:a,'start',listener.endpoint);await complete();
     };
     await exchange();const copied=await app(b,'inspect');expect(copied.objects).toHaveLength(260);expect(copied.objects.map((o:any)=>o.id)).toEqual(original.objects.map((o:any)=>o.id));expect(copied.folders).toHaveLength(3);expect(copied.blockers).toEqual([]);expect(copied.files[0].hash).toBe(original.files[0].hash);
     await app(a,'lifecycle',true);await exchange();const trashed=await app(b,'inspect');expect(trashed.objects.every((o:any)=>o.deleted)).toBe(true);expect(trashed.folders.every((f:any)=>f.deleted)).toBe(true);expect(trashed.files).toEqual(copied.files);expect(trashed.journal).toBeUndefined();

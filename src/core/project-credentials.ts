@@ -11,6 +11,7 @@ export interface ProjectCredentialMetadata {
   primary: boolean;
   groupOrder: number;
   passwordOrder: number;
+  note?: string;
 }
 const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/;
 
@@ -24,11 +25,12 @@ export function readProjectCredential(fields: SecureCustomField[]): ProjectCrede
     if (typeof raw.groupId !== 'string' || !uuid.test(raw.groupId)
       || typeof raw.passwordId !== 'string' || !uuid.test(raw.passwordId)
       || raw.projectId != null && (typeof raw.projectId !== 'string' || !uuid.test(raw.projectId))
-      || typeof raw.label !== 'string' || typeof raw.primary !== 'boolean'
+      || typeof raw.label !== 'string' || typeof raw.primary !== 'boolean' || raw.note !== undefined && typeof raw.note !== 'string'
       || !Number.isInteger(raw.groupOrder) || raw.groupOrder < 0 || raw.groupOrder > 2147483647
       || !Number.isInteger(raw.passwordOrder) || raw.passwordOrder < 0 || raw.passwordOrder > 2147483647) return undefined;
     return { projectId: raw.projectId ?? undefined, groupId: raw.groupId, passwordId: raw.passwordId,
-      label: raw.label, primary: raw.primary, groupOrder: raw.groupOrder, passwordOrder: raw.passwordOrder };
+      label: raw.label, primary: raw.primary, groupOrder: raw.groupOrder, passwordOrder: raw.passwordOrder,
+      ...(raw.note === undefined ? {} : { note: raw.note }) };
   } catch { return undefined; }
 }
 

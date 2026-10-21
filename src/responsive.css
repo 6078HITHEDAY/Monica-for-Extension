@@ -217,7 +217,11 @@
   #root .shell.nav-open .sidebar { visibility: visible; pointer-events: auto; box-shadow: none; }
   #root .navigation-scrim { display: block; position: fixed; inset: 0; background: rgb(0 0 0 / 65%); z-index: 29; }
   #root .navigation-close { display: inline-grid; }
-  #root .sidebar-brand { grid-template-columns: minmax(0, 1fr) auto; }
+  /* More specific than the desktop header in material-manager.css, which can
+     load later. Once the logo is hidden, the wordmark needs the flexible track. */
+  #root .sidebar .sidebar-brand { grid-template-columns: minmax(0, 1fr) auto; align-items: start; }
+  #root .sidebar-brand > .sidebar-wordmark { grid-column: 1; grid-row: 1; }
+  #root .sidebar-brand > .navigation-close { grid-column: 2; grid-row: 1; justify-self: end; align-self: start; }
   #root .sidebar-brand > .brand-logo { display: none; }
   body:has(.shell.nav-open) { overflow-y: hidden; }
   @container manager-content (max-width: 40rem) {
@@ -240,7 +244,7 @@
 
 @media (max-height: 600px) {
   #root .sidebar { display: block; overflow-y: auto; overscroll-behavior: contain; }
-  #root .sidebar-brand { position: sticky; top: -12px; z-index: 2; min-height: 64px; padding-block: 8px; background: var(--app-bg); }
+  #root .sidebar-brand { position: sticky; top: 0; z-index: 2; min-height: 64px; padding-block: 8px; background: var(--app-bg); }
   #root .sidebar nav { overflow: visible; }
   #root .sidebar-footer .local-badge { display: none; }
   #root .page-appbar { position: static; }

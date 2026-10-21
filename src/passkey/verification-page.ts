@@ -1,7 +1,9 @@
 import { getUiLocale, initializeUiLocale, tr, translateRuntimeError } from "../i18n/runtime";
 import type { ExtensionResponse, PasskeyVerificationContext } from "../runtime/messages";
+import { initializeThemePreferences } from "../lib/theme";
 import "./verification-page.css";
 
+const disposeTheme = initializeThemePreferences();
 const verificationId = new URL(location.href).searchParams.get("request") || "";
 const form = document.querySelector("form")!;
 const password = document.querySelector<HTMLInputElement>("#password")!;
@@ -47,7 +49,7 @@ cancel.addEventListener("click", () => void dismiss());
 document.addEventListener("keydown", event => {
   if (event.key === "Escape") { event.preventDefault(); void dismiss(); }
 });
-window.addEventListener("pagehide", () => { password.value = ""; });
+window.addEventListener("pagehide", () => { password.value = ""; disposeTheme(); });
 
 void (async () => {
   await initializeUiLocale();

@@ -4,6 +4,7 @@ import { jsonScalarText } from "../core/lossless-json";
 import { normalizeOtpCounter } from "../core/otp-counter";
 import { apiTokenFromPayload, serializeApiTokenMetadata, serializeApiTokenPayload } from "../core/api-token";
 import { readWalletEditorSectionOrder } from '../providers/monica-item-data';
+import { readWalletPassData } from '../core/wallet-pass';
 
 const KINDS = new Set<VaultItemKind>(["login", "secure-note", "totp", "card", "identity", "billing-address", "payment-account", "api-token", "passkey", "opaque"]);
 
@@ -49,7 +50,7 @@ function normalizeKnownImportedItem(raw: Record<string, unknown>, now: string): 
   const base = {
     ...raw,
     ...(["card", "identity", "billing-address"].includes(kind) ? { cardFace: cardFace(raw.cardFace) } : {}),
-    ...(kind === "identity" ? { documentTitle: optional(raw.documentTitle) } : {}),
+    ...(kind === "identity" ? { documentTitle: optional(raw.documentTitle), ...readWalletPassData(raw) } : {}),
     ...(kind === "passkey" ? { signCountHighWaterMark: optionalNumber(raw.signCountHighWaterMark) } : {}),
     id: string(raw.id) || crypto.randomUUID(), kind, title: string(raw.title) || "导入项目", favorite: Boolean(raw.favorite), notes: string(raw.notes),
     createdAt: date(raw.createdAt, now), updatedAt: date(raw.updatedAt, now), deletedAt: optionalDate(raw.deletedAt), archivedAt: optionalDate(raw.archivedAt), categoryId: optionalNumber(raw.categoryId), categoryName: optional(raw.categoryName), sortOrder: optionalNumber(raw.sortOrder), imagePaths: strings(raw.imagePaths), boundNoteId: optionalNumber(raw.boundNoteId), boundNoteEntryId: optional(raw.boundNoteEntryId), replicaGroupId: optional(raw.replicaGroupId), keepassDatabaseId: optionalNumber(raw.keepassDatabaseId), keepassGroupPath: optional(raw.keepassGroupPath), keepassEntryUuid: optional(raw.keepassEntryUuid), keepassGroupUuid: optional(raw.keepassGroupUuid), mdbxDatabaseId: optionalNumber(raw.mdbxDatabaseId), mdbxFolderId: optional(raw.mdbxFolderId), providerRefs: Array.isArray(raw.providerRefs) ? raw.providerRefs.flatMap((value) => {
@@ -211,7 +212,7 @@ function secureCustomFields(value: unknown): SecureCustomField[] {
 }
 function customFieldType(value: unknown): "TEXT" | "HIDDEN" | "BOOLEAN" { const result = string(value).toUpperCase(); return result === "HIDDEN" || result === "BOOLEAN" ? result : "TEXT"; }
 function loginType(value: unknown): NonNullable<LoginItem["loginType"]> { const result = string(value).toUpperCase(); if (result === "SSH") return "SSH_KEY"; return result === "SSO" || result === "WIFI" || result === "SSH_KEY" || result === "GPG_KEY" || result === "API_KEY" || result === "STEAM_MAFILE" || result === "BARCODE" ? result : "PASSWORD"; }
-function loginUriRules(value: unknown, uris: string[]) { return Array.isArray(value) ? value.flatMap((entry) => { if (!entry || typeof entry !== "object") return []; const raw = entry as Record<string, unknown>; const uri = string(raw.uri); const matchType = string(raw.matchType) as LoginUriMatchType; return uri && ["base-domain", "domain", "starts-with", "exact", "regex", "never"].includes(matchType) ? [{ ...raw, uri, matchType }] : []; }) : uris.map((uri) => ({ uri, matchType: "base-domain" as const })); }
+function loginUriRules(value: unknown, uris: string[]) { return Array.isArray(value) ? value.flatMap((entry) => { if (!entry || typeof entry !== "object") return []; const raw = entry as Record<string, unknown>; const uri = string(raw.uri); const matchType = string(raw.matchType) as LoginUriMatchType; return uri && ["default", "base-domain", "host", "domain", "starts-with", "exact", "regex", "never"].includes(matchType) ? [{ ...raw, uri, matchType }] : []; }) : uris.map((uri) => ({ uri, matchType: "base-domain" as const })); }
 function passkeyAlgorithm(value: unknown): PasskeyItem["algorithm"] { const result = number(value, -7); return Number.isSafeInteger(result) ? result : -7; }
 function sourceMode(value: unknown): PasskeyItem["sourceMode"] { const result = string(value); return result === "bitwarden" || result === "android-metadata-only" ? result : "browser-local"; }
 function passkeyMode(value: unknown): PasskeyItem["passkeyMode"] { const result = string(value).toUpperCase(); return result === "BW_COMPAT" || result === "KEEPASS_COMPAT" ? result : result === "LEGACY" ? result : undefined; }
@@ -266,7 +267,7 @@ function validateImportShapes(raw: Record<string, unknown>): void {
     if (Array.isArray(raw[key]) && raw[key].some(value => typeof value !== "string")) throw new Error("字符串列表形状不兼容，完整内容仅可安全查看。");
   }
   if (Array.isArray(raw.uriRules)) for (const rule of raw.uriRules) {
-    if (!rule || typeof rule !== "object" || typeof rule.uri !== "string" || !rule.uri || !["base-domain", "domain", "starts-with", "exact", "regex", "never"].includes(rule.matchType)) throw new Error("网址规则尚未支持，完整内容仅可安全查看。");
+    if (!rule || typeof rule !== "object" || typeof rule.uri !== "string" || !rule.uri || !["default", "base-domain", "host", "domain", "starts-with", "exact", "regex", "never"].includes(rule.matchType)) throw new Error("网址规则尚未支持，完整内容仅可安全查看。");
   }
   if (Array.isArray(raw.providerRefs)) for (const reference of raw.providerRefs) {
     if (!reference || typeof reference !== "object" || typeof reference.providerId !== "string" || !reference.providerId) throw new Error("密码源引用形状不兼容，完整内容仅可安全查看。");
