@@ -36,10 +36,16 @@ it('produces the same build identity for LF and CRLF checkouts and repeated buil
   const { root, files, build } = fixture();
   const expected = build();
   expect(build()).toBe(expected);
+  const generatedPath = join(root, 'src/runtime/build-id.json');
+  const checkoutBytes = readFileSync(generatedPath, 'utf8').replace(/\n/g, '\r\n');
+  writeFileSync(generatedPath, checkoutBytes);
+  expect(build()).toBe(expected);
+  expect(readFileSync(generatedPath, 'utf8')).toBe(checkoutBytes);
   for (const [name, bytes] of Object.entries(files)) {
     if (typeof bytes === 'string') writeFileSync(join(root, name), bytes.replace(/\n/g, '\r\n'));
   }
   expect(build()).toBe(expected);
+  expect(readFileSync(generatedPath, 'utf8')).toContain('\r\n');
 });
 
 it('changes the build identity for a real source edit', () => {

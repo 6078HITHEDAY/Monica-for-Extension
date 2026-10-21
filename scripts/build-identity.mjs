@@ -32,5 +32,12 @@ for (const name of names.sort()) {
   hash.update(name); hash.update('\0'); hash.update(canonical); hash.update('\0');
 }
 const buildId = hash.digest('hex').slice(0, 20);
-await writeFile(resolve(root, target), JSON.stringify({buildId}, null, 2) + '\n');
+const current = await readFile(resolve(root, target), 'utf8');
+const generated = JSON.stringify({buildId}, null, 2) + '\n';
+// Preserve the checkout's line endings and avoid touching an unchanged file.
+// With core.autocrlf, rewriting a CRLF checkout as LF can appear dirty even
+// when Git's normalized diff is empty, blocking trusted release packaging.
+if (current.replace(/\r\n/g, '\n') !== generated) {
+  await writeFile(resolve(root, target), current.includes('\r\n') ? generated.replace(/\n/g, '\r\n') : generated);
+}
 console.log(`Source build identity: ${buildId}`);
