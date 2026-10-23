@@ -1,7 +1,31 @@
 import { describe, expect, it } from "vitest";
 import { normalizeImportedVaultItem } from "./import-items";
+import { importPlainBitwardenJson, isPlainBitwardenExport } from "./bitwarden-json-import";
 
 describe("manager vault import", () => {
+  it("converts every standard unencrypted Bitwarden type into local editable items", () => {
+    const source = {
+      encrypted: false,
+      folders: [{ id: "folder-1", name: "Personal" }],
+      items: [
+        { type: 1, name: "Login", notes: "note", folderId: "folder-1", login: { username: "alice", password: "secret", uris: [{ uri: "https://example.test", match: 3 }], totp: "JBSWY3DPEHPK3PXP" }, fields: [{ name: "PIN", type: 1, value: "1234" }] },
+        { type: 2, name: "Note", notes: "body", secureNote: { type: 0 }, fields: [] },
+        { type: 3, name: "Card", card: { cardholderName: "Alice", number: "4111111111111111", expMonth: "12", expYear: "2030", code: "123", brand: "Visa" }, fields: [] },
+        { type: 4, name: "Identity", identity: { firstName: "Alice", lastName: "Example", email: "alice@example.test", address1: "1 Main St" }, fields: [] },
+        { type: 5, name: "SSH", sshKey: { publicKey: "ssh-ed25519 AAAA", privateKey: "private", keyFingerprint: "SHA256:abc" }, fields: [] }
+      ]
+    };
+    expect(isPlainBitwardenExport(source)).toBe(true);
+    const items = importPlainBitwardenJson(source);
+    expect(items.map(item => item.kind)).toEqual(["login", "secure-note", "card", "identity", "login"]);
+    expect(items.every(item => item.kind !== "opaque" && item.providerRefs.length === 0)).toBe(true);
+    expect(items[0]).toMatchObject({ title: "Login", categoryName: "Personal", username: "alice", password: "secret", totpSecret: "JBSWY3DPEHPK3PXP", uriRules: [{ matchType: "exact" }], customFields: [{ name: "PIN", protected: true }] });
+    expect(items[1]).toMatchObject({ kind: "secure-note", content: "body" });
+    expect(items[2]).toMatchObject({ kind: "card", number: "4111111111111111", expiryMonth: "12", expiryYear: "2030" });
+    expect(items[3]).toMatchObject({ kind: "identity", firstName: "Alice", lastName: "Example", address: { streetAddress: "1 Main St" } });
+    expect(items[4]).toMatchObject({ kind: "login", loginType: "SSH_KEY" });
+  });
+
   it("retains stable SSO account identity in extension snapshots", () => {
     expect(normalizeImportedVaultItem({ kind: "login", id: "sso", ssoRefLogicalId: "password:account" })).toMatchObject({ ssoRefLogicalId: "password:account" });
   });

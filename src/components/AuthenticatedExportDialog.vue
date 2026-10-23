@@ -6,7 +6,7 @@ import SettingsPasswordField from './SettingsPasswordField.vue';
 import { MIN_MASTER_PASSWORD_LENGTH } from '../security/master-password-policy';
 import type { VaultExportResult } from '../security/authenticated-export';
 
-const props = defineProps<{ format: 'plaintext' | 'encrypted'; mode: 'master-password' | 'device-key' | 'unknown'; helloAvailable: boolean; count: number; recoveryId?: string }>();
+const props = defineProps<{ format: 'plaintext' | 'encrypted'; mode: 'master-password' | 'device-key' | 'unknown'; helloAvailable: boolean; count: number; recoveryId?: string; title?: string; description?: string }>();
 const emit = defineEmits<{ close: []; exported: [value: VaultExportResult] }>();
 const password = ref(''), backupPassword = ref(''), confirmation = ref(''), error = ref(''), busy = ref(false);
 let active = true;
@@ -31,9 +31,9 @@ async function submit() {
 <template>
   <div class="modal-backdrop" role="presentation" @mousedown.self="close">
     <section class="editor-dialog backup-password-dialog" role="dialog" aria-modal="true" aria-labelledby="authenticated-export-title">
-      <header><div><h2 id="authenticated-export-title">{{ tr(format === 'plaintext' ? '导出明文 JSON' : '导出加密整库备份') }}</h2><p>{{ tr('每次导出都需要重新验证身份。') }}</p></div><m3e-icon-button :aria-label="tr('关闭')" @click="close"><m3e-icon name="close" /></m3e-icon-button></header>
+      <header><div><h2 id="authenticated-export-title">{{ title || tr(format === 'plaintext' ? '导出明文 JSON' : '导出加密整库备份') }}</h2><p>{{ tr('每次导出都需要重新验证身份。') }}</p></div><m3e-icon-button :aria-label="tr('关闭')" @click="close"><m3e-icon name="close" /></m3e-icon-button></header>
       <form class="editor-form" @submit.prevent="submit">
-        <p v-if="format === 'plaintext'" class="settings-safety-note">{{ tr('导出全部 {0} 个未归档项目，包含密码等敏感信息；不含回收站、附件文件与连接配置。', {0: count}) }}</p>
+        <p v-if="format === 'plaintext'" class="settings-safety-note">{{ description || tr('导出全部 {0} 个未归档项目，包含密码等敏感信息；不含回收站、附件文件与连接配置。', {0: count}) }}</p>
         <p v-else class="supporting">{{ recoveryId ? tr('导出选中的历史恢复副本。不会替换当前库，也不会撤回远端已完成的修改。') : tr('完整备份包含项目、连接配置与本地附件。独立备份密码用于恢复，与当前主密码互不影响。') }}</p>
         <SettingsPasswordField v-if="mode === 'master-password'" v-model="password" :label="tr('当前主密码')" autocomplete="current-password" />
         <p v-else-if="helloAvailable" class="supporting">{{ tr('继续后，Windows Hello 将验证你的身份。') }}</p>

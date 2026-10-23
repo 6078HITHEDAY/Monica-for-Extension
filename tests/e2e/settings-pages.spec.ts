@@ -48,7 +48,7 @@ test('common settings act directly while grouped configuration pages retain focu
     const page = await context.newPage(); await page.goto(`chrome-extension://${new URL(worker.url()).host}/index.html`);
     await setup(page);
     const home = page.locator('[data-settings-page="home"]');
-    const ids = ['appearance', 'exclusions', 'protection', 'backup', 'wifi-sync', 'diagnostics', 'updates'];
+    const ids = ['appearance', 'exclusions', 'protection', 'transfer', 'backup', 'wifi-sync', 'diagnostics', 'updates'];
     await expect(home.locator('[data-settings-entry]')).toHaveCount(ids.length);
     await expect(home.getByRole('combobox')).toHaveCount(2);
     await expect(home.getByRole('switch')).toHaveCount(3);
@@ -146,7 +146,7 @@ test('common settings act directly while grouped configuration pages retain focu
         await page.screenshot({path: info.outputPath('protection-320-200-bottom.png')});
       }
       if (id === 'protection') await expect(secondary.getByRole('heading', {name: 'Windows Hello', exact: true})).toBeVisible();
-      if (id === 'backup') await expect(secondary.getByRole('heading', {name: '明文手动迁移', exact: true})).toBeVisible();
+      if (id === 'transfer') await expect(secondary.getByRole('heading', {name: '导入文件', exact: true})).toBeVisible();
       await secondary.locator('[data-settings-back]').click();
     }
     await page.evaluate(() => { document.documentElement.style.fontSize = ''; });

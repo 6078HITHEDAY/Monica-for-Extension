@@ -9,6 +9,7 @@ import "@m3e/web/icon";
 import "@m3e/web/icon-button";
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, defineAsyncComponent, watch, toRaw, type ComputedRef } from "vue";
 import KeePassSourceStatus from './components/KeePassSourceStatus.vue';
+const ImportExportSettings = defineAsyncComponent(() => import('./components/ImportExportSettings.vue'));
 import KeePassProjectConflicts from './components/KeePassProjectConflicts.vue';
 import OneDriveKeePassDialog from './components/OneDriveKeePassDialog.vue';
 import { isRemoteKeePassSource, hasLocalKeePassWorkingCopy } from './providers/keepass/keepass-source';
@@ -76,7 +77,6 @@ import { putApiKeyFields, putGpgFields, readGpgFields } from "./core/credential-
 import { createProjectPassword } from "./manager/project-password-create";
 import { groupedPasswords, passwordGroupKey, passwordGroupMembers } from "./core/password-groups";
 import type { M3eListActionElement } from '@m3e/web/list';
-import { parseLosslessJson } from "./core/lossless-json";
 import { readVerifiedAttachment } from "./manager/attachment-reader";
 import { readVerifiedMdbxExport } from "./manager/mdbx-export-reader";
 import { preserveLoginFormSource } from "./manager/login-edit-projection";
@@ -105,8 +105,6 @@ import { homeItemSummary, itemIcon, itemKindLabel, itemSafeSummary, itemSearchTe
 import { homeSourceIds } from "./manager/home-catalog";
 import { managerFolders, matchesManagerFolder, readManagerScope, type ManagerScope } from './manager/folder-scope';
 import FolderScopeList from './components/FolderScopeList.vue';
-import { independentImportedPasskey, normalizeImportedVaultItem } from "./manager/import-items";
-import { parseCsvToVaultItems } from "./manager/csv-import";
 import { projectSteamItem } from "./core/steam-item";
 import { isLocalTrashItem } from "./core/local-trash";
 import { presentKeePassRemoteError, type KeePassRemoteErrorPresentation } from "./providers/keepass/keepass-remote-status";
@@ -331,7 +329,8 @@ const settingsEntries = computed(() => [
   {id: 'appearance', group: 'general', title: tr('配色'), description: tr(paletteNames[paletteId.value]), icon: 'palette'},
   {id: 'exclusions', group: 'filling', title: tr('自动填充排除项'), description: tr('自动填充 {0} 个 · 保存提示 {1} 个', {0: autofillSitePolicy.value.blockedHosts.length, 1: autofillSitePolicy.value.saveBlockedHosts.length}), icon: 'domain_disabled'},
   {id: 'protection', group: 'vault', title: tr('解锁与保护'), description: (windowsHelloProtectionMode.value === 'device-key' ? tr('设备密钥') : tr('主密码')) + ' · Windows Hello ' + (windowsHelloStatus.value?.vaultEnrolled ? tr('已注册') : tr('未注册')), icon: 'key_vertical'},
-  {id: 'backup', group: 'vault', title: tr('备份与迁移'), description: tr('加密备份、恢复与 JSON / CSV 迁移'), icon: 'encrypted'},
+  {id: 'transfer', group: 'vault', title: tr('导入与导出'), description: tr('Android 备份、KeePass、JSON、CSV 与验证器'), icon: 'swap_vert'},
+  {id: 'backup', group: 'vault', title: tr('加密备份与恢复'), description: tr('完整备份插件，包括附件文件与连接配置。'), icon: 'encrypted'},
   {id: 'diagnostics', group: 'general', title: tr('运行诊断'), description: tr('检查构建与组件状态，下载脱敏报告'), icon: 'info'},
   {id: 'updates', group: 'general', title: tr('检查更新'), description: tr('当前版本 {0}', {0: runtimeInfo.version}), icon: 'download'}
 ]);
@@ -2694,13 +2693,6 @@ function downloadJsonFile(fileName: string, value: unknown) {
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
-function exportVault() {
-  exportRecoveryId.value = undefined;
-  exportFormat.value = 'plaintext';
-  exportBackupDialogOpen.value = true;
-  void refreshWindowsHelloStatus();
-}
-
 function openExportBackupDialog() {
   exportRecoveryId.value = undefined;
   exportFormat.value = 'encrypted';
@@ -2802,41 +2794,6 @@ async function changeMasterPassword() {
     securityError.value = errorMessage(error);
   } finally {
     securityBusy.value = "";
-  }
-}
-
-async function importVault(event: Event) {
-  const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
-  input.value = "";
-  if (!file) return;
-  try {
-    const isCsv = file.name.toLowerCase().endsWith(".csv") || file.type === "text/csv";
-    let items: VaultItem[] = [];
-    if (isCsv) {
-      const result = parseCsvToVaultItems(await file.text());
-      items = result.items.flatMap((normalized) => {
-        return [{ ...normalized, providerRefs: normalized.providerRefs.filter((reference) => providers.value.some((provider) => provider.id === reference.providerId)) } as VaultItem];
-      });
-    } else {
-      const parsed = parseLosslessJson(await file.text()) as { items?: unknown[]; credentials?: Array<Record<string, unknown>> };
-      items = Array.isArray(parsed.items) ? parsed.items.flatMap((item) => {
-        const normalized = normalizeImportedVaultItem(item);
-        return normalized ? [{ ...normalized, providerRefs: normalized.providerRefs.filter((reference) => providers.value.some((provider) => provider.id === reference.providerId)) } as VaultItem] : [];
-      }) : [];
-      if (!items.length && Array.isArray(parsed.credentials)) {
-        for (const legacy of parsed.credentials) {
-          if (typeof legacy.password !== "string" || !Array.isArray(legacy.urls)) continue;
-          items.push(createLoginItem({ title: String(legacy.name || tr('导入登录项')), username: String(legacy.username || ""), password: legacy.password, uris: legacy.urls.map(String), notes: String(legacy.notes || ""), favorite: Boolean(legacy.favorite) }));
-        }
-      }
-    }
-    if (!items.length) throw new Error("no supported items");
-    await vaultClient.importItems(items.map(independentImportedPasskey));
-    await refreshItems();
-    showNotice(tr('已加密导入 {0} 个密码库项目。', { 0: items.length }));
-  } catch {
-    showNotice(tr('导入失败：文件中没有可识别的 Monica 密码库项目。'));
   }
 }
 
@@ -3234,6 +3191,7 @@ function errorCode(error: unknown): string | undefined {
           <template #diagnostics><RuntimeDiagnostics /></template>
           <template #updates><ExtensionUpdates /></template>
           <template #wifi-sync><NearbySyncSettings /></template>
+          <template #transfer><ImportExportSettings :items="vaultItems" :mode="protectionMode" :hello-available="Boolean(windowsHelloStatus?.unlockAvailable)" @imported="refreshItems" @busy="settingsChildBusy = $event" @backup="settingsPage = 'backup'" /></template>
           <template #exclusions><AutofillSitePolicyPage @close="settingsPage = 'home'" @saved="refreshAutofillSitePolicy" @busy="settingsChildBusy = $event" /></template>
           <template #protection><section class="settings-content" aria-labelledby="settings-protection-heading"><h2 id="settings-protection-heading">{{ tr('更改保护方式') }}</h2><p class="settings-safety-note">{{ tr('建议使用长而独立的主密码；设备密钥模式依赖浏览器与操作系统保护。') }}</p>
                 <SettingsPasswordField v-model="passwordChange.currentPassword" :label="tr('当前主密码（设备密钥模式留空）')" autocomplete="current-password" />
@@ -3261,7 +3219,7 @@ function errorCode(error: unknown): string | undefined {
               <m3e-button variant="filled" :disabled="Boolean(securityBusy)" @click="restoreEncryptedVault">{{ securityBusy === 'restore' ? tr('正在验证并恢复…') : tr('验证并替换当前密码库') }}</m3e-button>
             </template><p v-if="securityError" class="form-error" role="alert">{{ securityError }}</p></section>
 <VaultStoragePanel @export-recovery="exportRecoveryCopy" />
-<section class="settings-content" aria-labelledby="settings-migration-heading"><h2 id="settings-migration-heading">{{ tr('明文手动迁移') }}</h2><p class="supporting">{{ tr('明文文件包含密码等敏感信息，请保存到可信位置。') }}</p><m3e-button variant="tonal" :aria-label="tr('导出明文 JSON')" @click="exportVault"><m3e-icon slot="icon" name="download"></m3e-icon>{{ tr('导出 JSON') }}</m3e-button><label class="file-action"><m3e-icon name="upload"></m3e-icon><span>{{ tr('导入明文 JSON / CSV') }}</span><input type="file" accept="application/json,.json,.csv,text/csv" @change="importVault" /></label></section></template>
+</template>
         </SettingsNavigation>
         <ListPagination :page="listPagination.page.value" :total="listTotal" target="main-content" @change="listPagination.change" />
         </div>
