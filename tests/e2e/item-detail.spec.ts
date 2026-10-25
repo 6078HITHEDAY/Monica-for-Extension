@@ -1,6 +1,7 @@
 import { dialogContent } from "./fixtures/material";
 import AxeBuilder from "@axe-core/playwright";
-import { chromium, expect, test, type BrowserContext } from "@playwright/test";
+import { expect, test, type BrowserContext } from "@playwright/test";
+import { launchTestContext } from './fixtures/edge';
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -8,7 +9,7 @@ test("list rows open a masked M3E detail page for every item kind", async ({}, t
   const extensionPath = path.resolve("dist");
   let context: BrowserContext | undefined;
   try {
-    context = await chromium.launchPersistentContext(testInfo.outputPath("item-detail-profile"), { channel: "chromium", headless: true, locale: "zh-CN", viewport: { width: 1280, height: 900 }, args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`] });
+    context = await launchTestContext(testInfo.outputPath("item-detail-profile"), { channel: "chromium", headless: true, locale: "zh-CN", viewport: { width: 1280, height: 900 }, args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`] });
     const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
     const page = await context.newPage();
     await page.goto(`chrome-extension://${new URL(worker.url()).host}/index.html`);
@@ -26,8 +27,11 @@ test("list rows open a masked M3E detail page for every item kind", async ({}, t
       { ...common, id: "detail-totp", kind: "totp", title: "Detail OTP", secret: "JBSWY3DPEHPK3PXP", issuer: "Example", accountName: "joy@example.com" }
     ] }), "utf8");
     await page.locator("button.nav-item").filter({ hasText: "设置与备份" }).click();
-    await page.locator('[data-settings-entry="backup"]').click();
-    await page.locator("label.file-action").filter({ hasText: "导入明文 JSON" }).locator('input[type="file"]').setInputFiles(importPath);
+    await page.locator('[data-settings-entry="transfer"]').click();
+    await page.locator('[data-transfer-file]').setInputFiles(importPath);
+    await page.getByRole('button', { name: '读取并预览', exact: true }).click();
+    await expect(page.locator('[data-transfer-preview]')).toContainText('可导入 5 个项目');
+    await page.getByRole('button', { name: '导入 5 个项目', exact: true }).click();
     await expect(page.getByText(/已加密导入 5 个密码库项目/)).toBeVisible();
 
     await page.locator("button.nav-item").filter({ hasText: "登录项" }).click();

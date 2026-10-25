@@ -98,9 +98,15 @@ test("manager UI creates edits imports and deletes non-login vault records", asy
     ] }), "utf8");
 
     await manager.getByRole("button", { name: "设置与备份" }).click();
-    await manager.locator('[data-settings-entry="backup"]').click();
-    await manager.locator("label.file-action").filter({ hasText: "导入明文 JSON" }).locator('input[type="file"]').setInputFiles(importPath);
-    await expect(manager.getByText(/已加密导入 4 个密码库项目/)).toBeVisible();
+    await manager.locator('[data-settings-entry="transfer"]').click();
+    await manager.locator('[data-transfer-file]').setInputFiles(importPath);
+    await manager.getByRole('button', { name: '读取并预览', exact: true }).click();
+    await expect(manager.locator('[data-transfer-preview]')).toContainText('可导入 4 个项目');
+    await manager.getByRole('button', { name: '导入 4 个项目', exact: true }).click();
+    await expect.poll(() => manager.evaluate(async () => {
+      const result = await chrome.runtime.sendMessage({ type: 'VAULT_LIST_ITEMS' });
+      return result.data.filter((item: { title: string }) => item.title.startsWith('Imported ')).length;
+    })).toBe(4);
     await manager.getByRole("button", { name: /钱包与身份/ }).click();
     for (const title of ["Imported Passport", "Imported Home", "Imported Bank"]) await expect(manager.locator(".vault-tile-open").getByText(title, { exact: true })).toBeVisible();
     await manager.getByRole("button", { name: /Passkey/ }).click();

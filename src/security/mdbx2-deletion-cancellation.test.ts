@@ -16,7 +16,9 @@ class FailableStorage extends MemoryVaultStorage {
 }
 const password='Synthetic cancellation envelope password';
 async function fixture(mode:'existing'|'new'|'mixed'='existing') {
-  const storage=new FailableStorage(),service=new SecureVaultService(storage,new MemoryVaultSessionStore());
+  // These cases require distinct revisions even when CI executes two writes in one millisecond.
+  let clock=Date.now();
+  const storage=new FailableStorage(),service=new SecureVaultService(storage,new MemoryVaultSessionStore(),()=>++clock);
   const provider:ProviderAccount={id:'native',kind:'mdbx2',name:'Native',enabled:true,isDefaultSaveTarget:false,config:{vaultHandle:'handle',nativeVaultId:'vault'}};
   const rows:LoginItem[]=[0,1,2].map(index=>{
     const row:LoginItem={...createLoginItem({title:'Rich project',username:'account',password:`private-${index}`}),passwordGroupId:'project',

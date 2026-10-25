@@ -27,9 +27,10 @@ test('fresh export authentication and optional clipboard expiry use production E
     expect((await send(page, {type: 'VAULT_UPSERT_ITEM', item: {id:'synthetic-export-item',kind:'login',title:'Synthetic export account',username:'synthetic',password:'Synthetic clipboard value',uris:[],customFields:[],notes:'',favorite:false,providerRefs:[],createdAt:now,updatedAt:now}})).ok).toBe(true);
     await page.reload();
     await page.getByRole('button', {name:'设置与备份',exact:true}).click();
-    await page.locator('[data-settings-entry="backup"]').click();
-    await page.getByRole('button',{name:'导出明文 JSON',exact:true}).click();
-    const dialog = page.getByRole('dialog',{name:'导出明文 JSON',exact:true});
+    await page.locator('[data-settings-entry="transfer"]').click();
+    await page.locator('[data-transfer-export-format]').selectOption('json');
+    await page.getByRole('button',{name:'验证身份并导出',exact:true}).click();
+    const dialog = page.getByRole('dialog',{name:'验证身份并导出',exact:true});
     await expect(dialog).toBeVisible();
     await dialog.getByLabel('当前主密码',{exact:true}).fill('wrong password');
     await dialog.getByRole('button',{name:'验证并导出',exact:true}).click();

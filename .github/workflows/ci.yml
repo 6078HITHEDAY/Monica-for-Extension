@@ -103,3 +103,38 @@ jobs:
           name: monica-mdbx2-host-windows-x64
           path: release/monica-mdbx2-host-windows-x64-*
           if-no-files-found: error
+
+  publish-preview:
+    name: Publish rolling Preview
+    needs: [validate, mdbx2-host-windows]
+    if: >-
+      github.repository == 'Monica-Pass/Monica-for-Extension' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: extension-preview-release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: monica-extension
+          path: .artifacts/preview/extension
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: monica-mdbx2-host-windows-x64
+          path: .artifacts/preview/host
+      - name: Verify and replace Preview assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/publish-preview.mjs

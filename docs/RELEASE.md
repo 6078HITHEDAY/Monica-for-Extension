@@ -24,6 +24,14 @@ npm run release:check
 
 ## 发布产物
 
+### 自动更新的 Preview
+
+固定预发布入口为 [Development Preview](https://github.com/Monica-Pass/Monica-for-Extension/releases/tag/preview)。每次上游 `main` 推送都会执行 CI；也可在 GitHub Actions 手动运行 `CI`（选择 `main`）。Linux 完整发布门禁与 Windows Edge / MDBX Host 验证均通过后，`publish-preview` 下载同一次运行的产物，复核 SHA-256、干净工作树证据及源提交，再更新 `preview` 标签和预发布附件。
+
+公开附件仅含 Chromium 扩展 ZIP、Windows x64 MDBX Host ZIP 及各自校验文件。文件名追加 `preview-<提交前12位>-<运行编号>-<重试编号>`，ZIP 内版本和源证据保留原构建内容；普通扩展更新检测继续使用最新正式版。Firefox 未签名 XPI 继续留在 CI artifact 中，安装限制见 Firefox 说明。
+
+发布步骤串行执行，发布前再次核对 `main`，防止较旧运行覆盖新提交。新包全部上传成功后才更新发布说明并清理旧附件；构建或校验失败时继续保留上一次成功的 Preview。首次创建使用草稿，完整上传后公开。PR、分支和 fork 构建均不会写入 Preview。
+
 GitHub Release 的公开下载附件只上传插件 ZIP 与对应 `.zip.sha256`。不要使用 `release/*` 通配符上传到 Release；三个独立 JSON 继续留在本地／CI 审计产物中，并已逐字节嵌入 ZIP，无需重复占用公开下载列表。GitHub 自动生成的两个 Source code 下载项保留。若另行发布可选本机助手，同样只上传它的安装 ZIP 和校验文件。
 
 普通用户只需下载插件 ZIP。此规则自 0.1.39 起执行；2026-10-14 经用户确认已移除该版三个重复 JSON 附件，ZIP、校验文件及发布标签保持不变。后续创建 Release 时显式列出两个文件，例如：
