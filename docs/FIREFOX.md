@@ -1,6 +1,6 @@
 # Firefox 桌面版
 
-当前源码版本为 **1.0.101**，支持 Firefox **153 及以上**。最低版本来自敏感操作对浏览器原生 `documentId` 的要求；不会通过省略页面身份检查兼容更旧版本。Windows 上已使用 Firefox 155.0.1 验证，其他桌面系统和 Firefox Android 尚无实际验收证据。
+当前源码版本为 **1.0.102**，支持 Firefox **153 及以上**。最低版本来自敏感操作对浏览器原生 `documentId` 的要求；不会通过省略页面身份检查兼容更旧版本。Windows 上已使用 Firefox 155.0.1 验证，其他桌面系统和 Firefox Android 尚无实际验收证据。
 
 ## 构建与本地安装
 
@@ -10,7 +10,7 @@ npm run build:firefox
 npm run package:firefox
 ```
 
-Edge/Chrome 加载 `dist/`；Firefox 使用 `dist-firefox/`，不要混用清单。Firefox 打开 `about:debugging#/runtime/this-firefox`，选择“临时载入附加组件”，打开 `dist-firefox/manifest.json`。也可选择生成的 `.artifacts/firefox/monica-extension-1.0.101-firefox-unsigned.xpi`。临时加载的扩展在退出 Firefox 后需要重新载入，修改文件后需要在调试页面重新加载。
+Edge/Chrome 加载 `dist/`；Firefox 使用 `dist-firefox/`，不要混用清单。Firefox 打开 `about:debugging#/runtime/this-firefox`，选择“临时载入附加组件”，打开 `dist-firefox/manifest.json`。也可选择生成的 `.artifacts/firefox/monica-extension-1.0.102-firefox-unsigned.xpi`。临时加载的扩展在退出 Firefox 后需要重新载入，修改文件后需要在调试页面重新加载。
 
 XPI 是本地未签名测试包。普通 Firefox 永久安装和分发需要 Mozilla 签名；当前未提交 AMO、未签名或发布。提交前还需按实际的可选同步、网站填充和认证数据用途填写 Mozilla 数据收集声明，不能未经核对声明所有功能都不传输数据。保留已有安装使用的附加组件 ID，避免新建平行密码库。
 

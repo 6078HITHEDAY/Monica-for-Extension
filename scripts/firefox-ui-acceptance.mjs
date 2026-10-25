@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 const directory=await mkdtemp(path.join(scratch,'permission-fixture-'));
 await cp(path.join(root,'dist-firefox'),directory,{recursive:true});
 const manifestFile=path.join(directory,'manifest.json'),manifest=JSON.parse(await readFile(manifestFile,'utf8'));
+const currentVersion=manifest.version,nextVersion=currentVersion.replace(/\d+$/,patch=>String(Number(patch)+1));
 manifest.permissions.push(...manifest.optional_permissions);delete manifest.optional_permissions;
 // Stub the native API before Monica binds it. This never opens a system
 // authenticator or enumerates any personal credentials.
@@ -36,11 +37,11 @@ try{
   mark('rendered manager, imported OTP and real right-click multi-selection/Escape');
   await ff.evaluate(`const b=[...document.querySelectorAll('#primary-navigation button')].find(b=>/设置与备份|Settings and backup/.test(b.textContent));if(b)b.dataset.testSettings='';return true;`);
   await click('[data-test-settings]');await click('[data-settings-entry="updates"]');
-  await ff.evaluate(`window.__updateMode='new';window.__updateCalls=0;const original=window.fetch.bind(window);window.fetch=async(input,init)=>{if(String(input).includes('api.github.com/repos/Monica-Pass/Monica-for-Extension/releases/latest')){__updateCalls++;if(__updateMode==='limited')return new Response('{}',{status:403});if(__updateMode==='none')return new Response('{}',{status:404});if(__updateMode==='bad')return new Response('<html>');return Response.json({tag_name:__updateMode==='same'?'v1.0.101':'v1.0.102',draft:false,prerelease:false,html_url:'https://evil.invalid'});}return original(input,init)};return true;`);
+  await ff.evaluate(`window.__updateMode='new';window.__updateCalls=0;const original=window.fetch.bind(window);window.fetch=async(input,init)=>{if(String(input).includes('api.github.com/repos/Monica-Pass/Monica-for-Extension/releases/latest')){__updateCalls++;if(__updateMode==='limited')return new Response('{}',{status:403});if(__updateMode==='none')return new Response('{}',{status:404});if(__updateMode==='bad')return new Response('<html>');return Response.json({tag_name:__updateMode==='same'?'v${currentVersion}':'v${nextVersion}',draft:false,prerelease:false,html_url:'https://evil.invalid'});}return original(input,init)};return true;`);
   assert.equal(await ff.evaluate('return window.__updateCalls;'),0);
-  for(const [mode,text]of [['new','发现新版本 1.0.102'],['same','未发现更新（GitHub 最新发布 1.0.101）。'],['limited','GitHub 请求过于频繁，请稍后重试。'],['none','GitHub 暂无正式发布版本。'],['bad','无法识别 GitHub 发布信息，请打开发布页查看。']]){
+  for(const [mode,text]of [['new',`发现新版本 ${nextVersion}`],['same',`未发现更新（GitHub 最新发布 ${currentVersion}）。`],['limited','GitHub 请求过于频繁，请稍后重试。'],['none','GitHub 暂无正式发布版本。'],['bad','无法识别 GitHub 发布信息，请打开发布页查看。']]){
     await ff.evaluate('window.__updateMode=arguments[0];',[mode]);await click('[data-extension-updates] m3e-button');await wait('return document.querySelector("[data-extension-updates] [role=status] p").textContent;',text);
-    if(mode==='new')assert.equal(await ff.evaluate('return document.querySelector("[data-extension-updates] a").href;'),'https://github.com/Monica-Pass/Monica-for-Extension/releases/tag/v1.0.102');
+    if(mode==='new')assert.equal(await ff.evaluate('return document.querySelector("[data-extension-updates] a").href;'),`https://github.com/Monica-Pass/Monica-for-Extension/releases/tag/v${nextVersion}`);
   }
   await ff.call('POST','/window/rect',{width:420,height:850});assert.equal(await ff.evaluate('return document.documentElement.scrollWidth<=innerWidth+1;'),true);
   await writeFile(path.join(scratch,'updates-firefox.png'),Buffer.from(await ff.call('GET','/screenshot'),'base64'));

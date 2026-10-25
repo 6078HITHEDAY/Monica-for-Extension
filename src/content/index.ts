@@ -17,7 +17,7 @@ const inlineAutofill = installInlineAutofill({
   openManager: sessionId => sendRuntime({ type: "AUTOFILL_INLINE_OPEN", sessionId })
 });
 
-chrome.runtime.onMessage.addListener((message: { type?: string; credential?: FillCredentialInput; context?: SavePromptContext; wallet?: WalletFillPayload; expectedOrigin?: string; candidateId?: string; sessionId?: string }, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message: { type?: string; credential?: FillCredentialInput; context?: SavePromptContext | null; wallet?: WalletFillPayload; expectedOrigin?: string; candidateId?: string; sessionId?: string }, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL("")) || sender.tab !== undefined) return false;
   if (message?.type === "MONICA_INLINE_INVALIDATE") {
     inlineAutofill.dismiss();
@@ -50,9 +50,9 @@ chrome.runtime.onMessage.addListener((message: { type?: string; credential?: Fil
     sendResponse(fillWallet(message.wallet));
     return false;
   }
-  if (message?.type === "MONICA_SHOW_SAVE_PROMPT" && message.context) {
-    inlineAutofill.dismiss();
-    showPrompt(message.context);
+  if (message?.type === "MONICA_SHOW_SAVE_PROMPT" && message.context !== undefined) {
+    if (message.context) inlineAutofill.dismiss();
+    void showPrompt(message.context);
     return false;
   }
   if (message?.type === "MONICA_CANCEL_PASSKEY" && message.candidateId) {
@@ -255,7 +255,7 @@ function isBoundedBridgeRequest(request: unknown): request is PasskeyRequest {
 async function submitCandidate(candidate: CredentialCaptureInput, root: ParentNode): Promise<void> {
   try {
     const contexts = await createFieldContextsForRoot(root);
-    const context = await sendRuntime<SavePromptContext>({ type: "CREDENTIAL_CAPTURE", candidate: { ...candidate, fieldSignatures: [...new Set(contexts.map((field) => field.signature))] } });
+    const context = await sendRuntime<SavePromptContext | null>({ type: "CREDENTIAL_CAPTURE", candidate: { ...candidate, fieldSignatures: [...new Set(contexts.map((field) => field.signature))] } });
     if (window.top === window) showPrompt(context);
   } catch (error) {
     // Locked vaults and unsupported pages fail closed without retaining the password in page state.
@@ -278,8 +278,15 @@ async function restorePendingPrompt(): Promise<void> {
   }
 }
 
-async function showPrompt(context: SavePromptContext): Promise<void> {
+let savePromptGeneration = 0;
+async function showPrompt(context: SavePromptContext | null): Promise<void> {
+  const generation = ++savePromptGeneration;
+  if (!context) {
+    document.getElementById("monica-save-prompt-host")?.remove();
+    return;
+  }
   await initializeUiLocale();
+  if (generation !== savePromptGeneration) return;
   // Clicking Passkey on a populated login form can also trigger password capture.
   // Its async result must not replace (and cancel) the active WebAuthn ceremony.
   if (currentPasskeyRequestId) return;

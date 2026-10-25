@@ -3,6 +3,7 @@ import { localNearbySource } from '../nearby/source-adapter';
 import { nativeNearbySource } from '../nearby/native-adapter';
 import { isLoginItem, createLoginItem, type BillingAddressItem, type CardItem, type IdentityItem, type LoginItem, type PasskeyItem, type PaymentAccountItem, type ProviderAccount, type ProviderConflict, type ProviderConflictSummary, type TotpItem, type VaultItem } from "../core/model";
 import { loginMatchScore, matchingLogins } from "../core/matching";
+import { credentialSaveDecision, normalizedCredentialUsername } from "./credential-save-decision";
 import { customIconProjection } from '../core/custom-icon';
 import { BitwardenBatchTransferCoordinator } from '../providers/bitwarden/bitwarden-batch-coordinator';
 import { KeePassBitwardenMove } from '../providers/keepass/keepass-bitwarden-move';
@@ -3240,7 +3241,7 @@ async function clearPendingUsernameContexts(): Promise<void> {
   if (keys.length) await chrome.storage.session.remove(keys);
 }
 
-async function captureCredentialCandidate(input: CredentialCaptureInput, sender: chrome.runtime.MessageSender): Promise<SavePromptContext> {
+async function captureCredentialCandidate(input: CredentialCaptureInput, sender: chrome.runtime.MessageSender): Promise<SavePromptContext | null> {
   const source = assertWebPageSender(sender);
   if ((await service.status()) !== "unlocked") throw new VaultLockedError("密码库已锁定；请先解锁 Monica，再重新提交登录表单。");
   if (await savePromptBlocked(source.url)) throw new Error("此网站已禁止显示密码保存提示。");
@@ -3259,11 +3260,21 @@ async function captureCredentialCandidate(input: CredentialCaptureInput, sender:
   purgeExpiredCaptures();
 
   const state = await service.readState();
-  const matches = matchingLogins(state.items.filter(isLoginItem), candidate.pageUrl);
-  const normalizedUsername = candidate.username.trim().toLocaleLowerCase();
-  const existingCandidates = normalizedUsername
-    ? matches.filter((item) => item.username.trim().toLocaleLowerCase() === normalizedUsername)
-    : candidate.captureKind === "password-change" ? matches : [];
+  const decision = credentialSaveDecision(candidate, state.items.filter(isLoginItem));
+  if (decision.unchanged) {
+    // A previous submission from this account may still be pending after an
+    // edited password is reverted. Do not restore that stale update on navigation.
+    for (const [id, pending] of pendingCredentialCaptures) {
+      if (pending.tabId === source.tabId && pending.frameId === source.frameId
+        && pending.sourceOrigin === source.origin
+        && normalizedCredentialUsername(pending.username) === normalizedCredentialUsername(candidate.username)) pendingCredentialCaptures.delete(id);
+    }
+    if (source.frameId !== 0) {
+      void chrome.tabs.sendMessage(source.tabId, { type: "MONICA_SHOW_SAVE_PROMPT", context: null }, { frameId: 0 }).catch(() => undefined);
+    }
+    return null;
+  }
+  const existingCandidates = decision.updateCandidates;
   const existing = existingCandidates.length === 1 ? existingCandidates[0] : undefined;
   const duplicate = [...pendingCredentialCaptures.values()].find((pending) =>
     pending.tabId === source.tabId
@@ -3302,6 +3313,10 @@ async function pendingCredentialCandidate(sender: chrome.runtime.MessageSender):
     .sort((left, right) => right.createdAt - left.createdAt)[0];
   if (!pending || (await service.status()) !== "unlocked") return null;
   const state = await service.readState();
+  if (credentialSaveDecision(pending, state.items.filter(isLoginItem)).unchanged) {
+    pendingCredentialCaptures.delete(pending.id);
+    return null;
+  }
   return savePromptContext(pending, state.providers, state.settings.defaultProviderId, state.items.filter(isLoginItem));
 }
 
