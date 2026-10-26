@@ -34,7 +34,10 @@ function mockGh({ existing = true, uploadFailure = false, advanced = false } = {
   const gh = args => {
     calls.push(args);
     if (args[1]?.endsWith('/git/ref/heads/main')) return advanced || ++mainChecks > 99 ? 'b'.repeat(40) : sha;
-    if (args.includes('--slurp')) return JSON.stringify(existing ? [{ tag_name: 'preview', draft: true }] : []);
+    if (args.includes('--slurp')) {
+      assert.ok(!args.includes('--jq'), 'gh cannot combine --slurp and --jq');
+      return JSON.stringify([existing ? [{ tag_name: 'preview', draft: true }] : []]);
+    }
     if (args[0] === 'release' && args[1] === 'upload' && uploadFailure) throw Error('Synthetic upload failure');
     if (args[1]?.endsWith('/git/ref/tags/preview')) return existing ? '{}' : null;
     if (args[1]?.endsWith('/releases/tags/preview')) return JSON.stringify({ assets: [{ id: 9, name: 'old-preview.zip' }, { id: 10, name: `monica-extension-1.0.102-preview-${sha.slice(0,12)}-123-1.zip` }] });

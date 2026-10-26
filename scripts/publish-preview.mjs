@@ -85,7 +85,8 @@ export async function publishPreview({ env = process.env, projectRoot = root, gh
   await writeFile(notesPath, `## 中文\n\n自动更新的开发预览版，可能含有尚未稳定的改动。\n\n- 扩展版本：${extensionVersion}；源提交：\`${sourceCommit}\`。\n- [验证与构建记录](${runUrl})：Linux 发布门禁和 Windows Edge / MDBX Host 验证通过。\n- Chrome / Edge 使用扩展 ZIP；Windows MDBX Host 为可选本机助手。解压扩展后在开发者模式加载，更新时替换解压目录并重新加载。\n- 每个 ZIP 附带 SHA-256；内含的源码提交和清单保持原构建内容。此预览版不替代正式版更新通道。\n\n## English\n\nRolling development preview; changes may be unstable.\n\n- Extension version: ${extensionVersion}; source commit: \`${sourceCommit}\`.\n- [Validation and build](${runUrl}): Linux release gates and Windows Edge / MDBX Host checks passed.\n- Use the extension ZIP for Chrome / Edge; the Windows MDBX Host is optional. Extract and load in developer mode; replace the extracted directory and reload to update.\n- Each ZIP includes a SHA-256 sidecar. Embedded source evidence and manifests retain the original build contents. Stable update checks continue to use stable releases.\n`);
   const releasePath = `repos/${repository}/releases/tags/preview`;
   // Listing also finds a draft left by an interrupted first upload.
-  const previews = JSON.parse(gh(['api', `repos/${repository}/releases`, '--paginate', '--slurp', '--jq', 'map(.[]) | map(select(.tag_name == "preview"))']));
+  const previews = JSON.parse(gh(['api', `repos/${repository}/releases`, '--paginate', '--slurp']))
+    .flat().filter(release => release.tag_name === 'preview');
   assert.ok(previews.length <= 1, 'Multiple preview releases require cleanup before publication');
   const previous = previews[0];
   if (!previous) {
