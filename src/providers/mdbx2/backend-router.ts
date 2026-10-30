@@ -59,7 +59,9 @@ export class Mdbx2BackendRouter extends Mdbx2NativeClient {
     for (const item of handles) {
       const row = this.known.get(item.handle);
       if (row && !row.roles.includes(item.role)) throw mdbx2RoutingError('mdbx-handle-role-invalid');
-      const origin = row?.backend || 'native';
+      // Unbound inbound files and transfers are created by the bundled engine.
+      // Unknown vault handles still keep Native Host semantics for pre-index copies.
+      const origin = row?.backend || (item.role === 'file' || item.role === 'transfer' ? 'browser' : 'native');
       if (backend && backend !== origin) throw mdbx2RoutingError(); backend = origin;
     }
     return backend || 'browser';
@@ -80,8 +82,14 @@ export class Mdbx2BackendRouter extends Mdbx2NativeClient {
     // Reserve previously unindexed legacy handles before touching the native
     // vault. A concurrent origin collision or failed index write must stop the
     // operation before either engine can mutate data.
+    const remember = (items: Mdbx2OwnedHandle[]) => {
+      for (const item of items) {
+        const row = this.known.get(item.handle);
+        this.known.set(item.handle, { version: 1, backend, roles: [...new Set([...(row?.roles || []), item.role])] });
+      }
+    };
     const legacy = handles.filter(item => !this.known.has(item.handle));
-    if (legacy.length) { await this.origins.bind(backend, legacy); for (const item of legacy) this.known.delete(item.handle); }
+    if (legacy.length) { await this.origins.bind(backend, legacy); remember(legacy); }
     if (epoch !== this.epoch) throw new Mdbx2NativeHostError('native-host-closed', 'MDBX 会话已关闭。', false);
     const result = backend === 'browser' ? await this.browser.request(method, snapshot, timeoutMs) : await this.native.request(method, snapshot, timeoutMs);
     const response = object(result), allocated = response ? handlesOf(method, response, true) : [];
@@ -90,7 +98,7 @@ export class Mdbx2BackendRouter extends Mdbx2NativeClient {
     try {
       const changed = learned.filter(item => this.known.get(item.handle)?.backend !== backend || !this.known.get(item.handle)?.roles.includes(item.role));
       await this.origins.bind(backend, changed);
-      for (const item of changed) this.known.delete(item.handle);
+      remember(changed);
     } catch (error) { this.close(); throw error; }
     if (epoch !== this.epoch) throw new Mdbx2NativeHostError('native-host-closed', 'MDBX 会话已关闭。', false);
     return result;

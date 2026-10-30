@@ -5,6 +5,7 @@ import type { BlockedFieldSignatureRecord } from "../autofill/field-policy";
 import type { ProviderAttachmentMutationResult, ProviderAttachmentPage, ProviderAttachmentReadBeginResult, ProviderAttachmentReadChunk, ProviderAttachmentUploadBeginResult, ProviderAttachmentUploadChunkResult } from "../providers/attachments/attachment-contract";
 import type { ProviderAttachmentTransferRequest, ProviderAttachmentTransferResult } from "../providers/attachments/attachment-transfer";
 import type { Mdbx2CollectionMutationResult, Mdbx2CollectionSummaryPage, Mdbx2CommitDiffResult, Mdbx2CommitHistoryPage, Mdbx2CommitRevertResult, Mdbx2ConflictResolutionChoice, Mdbx2ConflictResolutionResult, Mdbx2ConflictSummaryPage, Mdbx2HealthRepairApplyResult, Mdbx2HealthRepairDecision, Mdbx2HealthRepairPlan, Mdbx2HostStatus, Mdbx2ManagedSnapshotPage, Mdbx2ObjectDeleteResult, Mdbx2ObjectRecord, Mdbx2ObjectSummaryPage, Mdbx2ObjectUpsertInput, Mdbx2ObjectWriteResult, Mdbx2SnapshotCreateResult, Mdbx2SnapshotDeleteResult, Mdbx2SnapshotPrunePlan, Mdbx2SnapshotPruneResult, Mdbx2SnapshotRestoreResult, Mdbx2SnapshotStructurePage, Mdbx2SnapshotStructureSide, Mdbx2TransferBeginResult, Mdbx2TransferChunkResult, Mdbx2TransferFinishResult, Mdbx2VaultCredential, Mdbx2VaultDiagnosticsReport, Mdbx2VaultInspection, Mdbx2VaultRuntimeStatus, Mdbx2VaultSessionSummary, Mdbx2VaultSource, Mdbx2VaultTigaPosture, Mdbx2WindowsHelloStatus } from "../providers/mdbx2/native-contract";
+import type { MdbxImportCommitResult, MdbxImportDetectResult, MdbxImportOperation, MdbxImportPrepareResult } from "../providers/mdbx2/mdbx-import-coordinator";
 import type { Mdbx2BatchTransferExecuteResult, Mdbx2BatchTransferPlanResult, Mdbx2BatchTransferRequest, Mdbx2BatchTransferStatus } from "../providers/mdbx2/mdbx2-batch-transfer-coordinator";
 import type { KeePassSessionSummary } from "../providers/keepass/keepass-provider";
 import type { KeePassRemoteManagerStatus, KeePassRemoteProbeResult, KeePassWebDavOpenInput } from "../providers/keepass/keepass-remote-session";
@@ -431,6 +432,11 @@ export type ExtensionRequest =
   | { type: "MDBX2_FILE_RELEASE"; fileHandle: string }
   | { type: "MDBX2_VAULT_INSPECT"; source: Mdbx2VaultSource }
   | { type: "MDBX2_VAULT_OPEN"; input: Mdbx2VaultOpenInput }
+  | { type: "MDBX2_IMPORT_DETECT"; source: Mdbx2VaultSource; kind?: "mdbx-vault" | "mdbx-complete-backup-zip" }
+  | { type: "MDBX2_IMPORT_PREPARE"; operationId: string; source: Mdbx2VaultSource; credential: Mdbx2VaultCredential; name: string; kind?: "mdbx-vault" | "mdbx-complete-backup-zip" }
+  | { type: "MDBX2_IMPORT_COMMIT"; operationId: string; name: string; isDefaultSaveTarget?: boolean; pluginMasterPassword?: string }
+  | { type: "MDBX2_IMPORT_CANCEL"; operationId: string }
+  | { type: "MDBX2_IMPORT_RECOVER"; operationId?: string }
   | { type: "MDBX2_VAULT_STATUS"; providerId: string }
   | { type: "MDBX2_VAULT_DIAGNOSTICS"; providerId: string }
   | { type: "MDBX2_HEALTH_REPAIR_PLAN"; providerId: string }
@@ -525,6 +531,7 @@ export type { ProviderAttachmentTransferRequest, ProviderAttachmentTransferResul
 export type { AndroidGeneratorHistoryEntry };
 export type { BitwardenSendDetail, BitwardenSendPage, BitwardenSendSummary, BitwardenSendTextInput, BitwardenSendUpdateInput } from "../providers/bitwarden/bitwarden-sends";
 export type { Mdbx2CollectionMutationResult, Mdbx2CollectionSummaryPage, Mdbx2CommitDiffResult, Mdbx2CommitHistoryPage, Mdbx2CommitRevertResult, Mdbx2ConflictResolutionChoice, Mdbx2ConflictResolutionResult, Mdbx2ConflictSummaryPage, Mdbx2HealthRepairApplyResult, Mdbx2HealthRepairDecision, Mdbx2HealthRepairPlan, Mdbx2HostStatus, Mdbx2ManagedSnapshotPage, Mdbx2ObjectDeleteResult, Mdbx2ObjectRecord, Mdbx2ObjectSummaryPage, Mdbx2ObjectUpsertInput, Mdbx2ObjectWriteResult, Mdbx2SnapshotCreateResult, Mdbx2SnapshotDeleteResult, Mdbx2SnapshotPrunePlan, Mdbx2SnapshotPruneResult, Mdbx2SnapshotRestoreResult, Mdbx2SnapshotStructurePage, Mdbx2SnapshotStructureSide, Mdbx2TransferBeginResult, Mdbx2TransferChunkResult, Mdbx2TransferFinishResult, Mdbx2VaultCredential, Mdbx2VaultDiagnosticsReport, Mdbx2VaultInspection, Mdbx2VaultRuntimeStatus, Mdbx2VaultSessionSummary, Mdbx2VaultSource, Mdbx2VaultTigaPosture, KeePassSessionSummary };
+export type { MdbxImportCommitResult, MdbxImportDetectResult, MdbxImportOperation, MdbxImportPrepareResult };
 export type { Mdbx2BatchTransferExecuteResult, Mdbx2BatchTransferPlanResult, Mdbx2BatchTransferRequest, Mdbx2BatchTransferStatus };
 export type { KeePassGroupMutationResult, KeePassGroupPage };
 export type { BitwardenFolderMutationResult, BitwardenFolderPage };

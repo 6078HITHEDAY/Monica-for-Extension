@@ -38,7 +38,10 @@ used = set()
 for file in (root / "src").rglob("*"):
     if file.suffix not in (".ts", ".vue") or file.name.endswith(".test.ts"):
         continue
-    used.update(re.findall(r'''["']([a-z][a-z0-9_]*)["']''', file.read_text(encoding="utf-8")))
+    text = file.read_text(encoding="utf-8")
+    text = re.sub(r'''\.createElement\(["'][a-z][a-z0-9-]*["']\)''', "", text)
+    text = re.sub(r'''\brole=["'][a-z][a-z0-9-]*["']''', "", text)
+    used.update(re.findall(r'''["']([a-z][a-z0-9_]*)["']''', text))
 selected = sorted(used.intersection(symbols))
 options = subset.Options()
 options.layout_closure = False

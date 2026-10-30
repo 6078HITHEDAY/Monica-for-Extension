@@ -77,7 +77,8 @@ pub(crate) fn restore_archive(source: &Path, imports: &Path, handle: &str) -> Re
     }
     if !names.contains("vault.mdbx") { return Err(failure()); }
     let info = mdbx_ffi::inspect_vault_migration(staged.path().join("vault.mdbx").to_string_lossy().into_owned()).map_err(|_| failure())?;
-    if !info.initialized || info.format_version.as_deref() != Some("MDBX-2") || info.unknown_critical_extensions { return Err(failure()); }
+    if !info.initialized || info.unknown_critical_extensions { return Err(failure()); }
+    if !matches!(info.format_version.as_deref(), Some("MDBX-1" | "MDBX-1-DRAFT" | "MDBX-2")) { return Err(failure()); }
     let destination = imports.join(handle);
     if destination.exists() { return Err(failure()); }
     fs::rename(staged.path(), &destination).map_err(|_| failure())?;

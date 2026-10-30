@@ -1,6 +1,7 @@
 import {
   MDBX2_BLOB_REFERENCE_PAGE_SIZE,
   MDBX2_FORMAT_VERSION,
+  MDBX_IMPORTABLE_FORMAT_VERSIONS,
   MDBX2_MAX_BINARY_CHUNK_BYTES,
   MDBX2_MAX_COLLECTION_TITLE_BYTES,
   MDBX2_MAX_ATTACHMENT_BYTES,
@@ -115,6 +116,8 @@ import {
   type Mdbx2VaultHealthIssueKind,
   type Mdbx2VaultHealthSeverity,
   type Mdbx2VaultHealthSummary,
+  type MdbxImportableFormatVersion,
+  type MdbxInspectedUnlockMethod,
   type Mdbx2VaultInspection,
   type Mdbx2VaultRuntimeStatus,
   type Mdbx2WriteRevision,
@@ -253,6 +256,11 @@ export class Mdbx2NativeClient {
 
   async openVault(source: Mdbx2VaultSource, credential: Mdbx2VaultCredential, timeoutMs = 5 * 60_000): Promise<Mdbx2VaultSessionSummary> {
     return vaultSessionSummary(await this.request("vault.open", { source: vaultSource(source), credential }, timeoutMs));
+  }
+
+  async discardVault(vaultHandle: string, timeoutMs = 15_000): Promise<boolean> {
+    const result = objectResult(await this.request("vault.discard", { vaultHandle: opaqueHandle(vaultHandle, "保险库") }, timeoutMs), "Native Host 丢弃工作副本响应无效。");
+    return booleanResult(result.discarded, "Native Host 丢弃工作副本状态无效。");
   }
 
   async createVault(password: string, mode: Mdbx2TigaProfile = 'sky'): Promise<Mdbx2VaultSessionSummary> {
@@ -1520,21 +1528,45 @@ function vaultInspection(input: unknown): Mdbx2VaultInspection {
   const source = objectResult(value.source, "Native Host 保险库来源无效。");
   const kind = source.kind === "file" || source.kind === "vault" ? source.kind : undefined;
   if (!kind) throw incompatibleResult("Native Host 保险库来源类型无效。");
-  if (value.initialized !== true || value.formatVersion !== MDBX2_FORMAT_VERSION || value.unknownCriticalExtensions !== false || value.targetFormatVersion !== MDBX2_FORMAT_VERSION) {
-    throw incompatibleResult("Native Host 返回了非 MDBX2 保险库检查结果。");
+  const formatVersion = importableFormatVersion(value.formatVersion);
+  const unlockMethods = inspectUnlockMethods(value.unlockMethods);
+  if (value.initialized !== true || value.unknownCriticalExtensions !== false || value.targetFormatVersion !== MDBX2_FORMAT_VERSION) {
+    throw incompatibleResult("Native Host 返回了非可导入 MDBX 保险库检查结果。");
   }
   return {
     source: { kind, handle: opaqueHandle(source.handle, "来源") },
     initialized: true,
-    formatVersion: MDBX2_FORMAT_VERSION,
+    formatVersion,
     schemaVersion: optionalInteger(value.schemaVersion, "Schema 版本"),
     minReaderVersion: optionalString(value.minReaderVersion, 64, "最低读取版本"),
     minWriterVersion: optionalString(value.minWriterVersion, 64, "最低写入版本"),
     requiresUpgrade: booleanResult(value.requiresUpgrade, "升级状态无效。"),
     unknownCriticalExtensions: false,
     targetFormatVersion: MDBX2_FORMAT_VERSION,
-    targetSchemaVersion: safeInteger(value.targetSchemaVersion, "目标 Schema 版本")
+    targetSchemaVersion: safeInteger(value.targetSchemaVersion, "目标 Schema 版本"),
+    unlockMethods,
+    portableUnlockAvailable: value.portableUnlockAvailable == null
+      ? unlockMethods.includes("password") || unlockMethods.includes("pin")
+      : booleanResult(value.portableUnlockAvailable, "可移植解锁状态无效。")
   };
+}
+
+function importableFormatVersion(value: unknown): MdbxImportableFormatVersion {
+  if (typeof value === "string" && (MDBX_IMPORTABLE_FORMAT_VERSIONS as readonly string[]).includes(value)) return value as MdbxImportableFormatVersion;
+  throw incompatibleResult("Native Host 返回了非可导入 MDBX 保险库检查结果。");
+}
+
+function inspectUnlockMethods(value: unknown): MdbxInspectedUnlockMethod[] {
+  if (value == null) return [];
+  if (!Array.isArray(value)) throw incompatibleResult("Native Host 解锁方式列表无效。");
+  const methods: MdbxInspectedUnlockMethod[] = [];
+  for (const item of value) {
+    if (item !== "pin" && item !== "password" && item !== "security-key" && item !== "password-security-key") {
+      throw incompatibleResult("Native Host 解锁方式无效。");
+    }
+    if (!methods.includes(item)) methods.push(item);
+  }
+  return methods;
 }
 
 function vaultSessionSummary(input: unknown): Mdbx2VaultSessionSummary {
@@ -2005,7 +2037,7 @@ function collectionSummaryResult(input: unknown): Mdbx2CollectionSummaryPage["it
     title: textResult(item.title, 64 * 1024, true, "Collection 标题无效。"),
     collectionTypeId: optionalString(item.collectionTypeId, 512, "Collection 类型"),
     profileSchemaVersion: optionalInteger(item.profileSchemaVersion, "Collection Profile Schema 版本"),
-    groupId: optionalDomainIdentity(item.groupId, "Collection 分组"),
+    groupId: optionalString(item.groupId, 4096, "Collection 分组"),
     iconRef: optionalString(item.iconRef, 4096, "Collection 图标引用"),
     favorite: booleanResult(item.favorite, "Collection 收藏状态无效。"),
     archived: booleanResult(item.archived, "Collection 归档状态无效。"),

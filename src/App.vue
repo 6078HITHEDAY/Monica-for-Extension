@@ -50,6 +50,7 @@ import KeePassHistoryDialog from "./components/KeePassHistoryDialog.vue";
 import Mdbx2BatchTransferDialog from "./components/Mdbx2BatchTransferDialog.vue";
 import Mdbx2PendingMoves from "./components/Mdbx2PendingMoves.vue";
 import Mdbx2SourceDialog from "./components/Mdbx2SourceDialog.vue";
+import FirstRunMdbxImport from "./components/FirstRunMdbxImport.vue";
 import ProviderAttachmentsDialog from "./components/ProviderAttachmentsDialog.vue";
 import M3eConfirmationDialog from "./components/ProviderConfirmationDialog.vue";
 const SteamAccountDialog = defineAsyncComponent(() => import("./components/SteamAccountDialog.vue"));
@@ -206,6 +207,7 @@ const createButtonLabel = computed(() => activeSection.value === "wallet" ? tr('
 const loading = ref(true);
 const authBusy = ref(false);
 const authError = ref("");
+const authAction = ref<"create" | "mdbx" | "restore">("create");
 const runtimeReloadRequired = ref(false);
 const mobileNavOpen = ref(false);
 let navigationOpener: HTMLElement | undefined;
@@ -681,6 +683,7 @@ async function initialize() {
     const status = await vaultClient.status();
     if (revision !== vaultViewRevision) return;
     lifecycle.value = status;
+    if (status === "uninitialized" || status === "locked") void vaultClient.recoverMdbx2Imports().catch(() => undefined);
     // Native capability discovery must not block access to the encrypted vault.
     // Its own controls remain busy until the native host responds.
     void refreshWindowsHelloStatus();
@@ -711,8 +714,17 @@ function rememberProtectionMode(mode: "master-password" | "device-key") {
   }
 }
 
+function submitAuthForm() {
+  if (lifecycle.value === "uninitialized") {
+    if (authAction.value === "create") return setupVault();
+    return;
+  }
+  return unlockVault();
+}
+
 async function setupVault() {
   authError.value = "";
+  if (authAction.value !== "create") return;
   if (auth.masterPassword && auth.masterPassword.length < MIN_MASTER_PASSWORD_LENGTH) {
     authError.value = tr('主密码至少需要 {0} 个字符。', { 0: MIN_MASTER_PASSWORD_LENGTH });
     return;
@@ -722,6 +734,16 @@ async function setupVault() {
     return;
   }
   await authenticate(() => vaultClient.setup(auth.masterPassword));
+}
+
+async function finishFirstRunMdbx(items: VaultItem[], protection: "master-password" | "device-key") {
+  vaultItems.value = items;
+  lifecycle.value = "unlocked";
+  rememberProtectionMode(protection);
+  auth.masterPassword = "";
+  auth.confirmation = "";
+  authError.value = "";
+  await Promise.all([refreshItems(), refreshProviders()]);
 }
 
 async function unlockVault() {
@@ -2832,7 +2854,7 @@ function errorCode(error: unknown): string | undefined {
       <img class="brand-logo" src="/icons/logo-256.png" width="48" height="48" alt="" /><h1>Monica</h1><p>{{ tr('正在检查加密密码库…') }}</p>
     </div>
 
-    <form v-else-if="lifecycle !== 'unlocked'" class="login vault-auth" @submit.prevent="lifecycle === 'uninitialized' ? setupVault() : unlockVault()">
+    <form v-else-if="lifecycle !== 'unlocked'" class="login vault-auth" @submit.prevent="submitAuthForm">
       <m3e-card variant="filled" class="login-card">
         <div slot="content" class="stack login-stack">
           <div class="login-brand"><img class="brand-logo" src="/icons/logo-256.png" width="48" height="48" alt="" /><span class="login-brand-copy">Monica<small>{{ tr('浏览器插件') }}</small></span></div>
@@ -2843,10 +2865,17 @@ function errorCode(error: unknown): string | undefined {
             <m3e-button variant="filled" type="button" @click="reloadRuntime">{{ tr('重新加载扩展') }}</m3e-button>
           </div>
           <template v-else>
-          <div class="login-heading"><h1>{{ lifecycle === 'uninitialized' ? tr('创建加密密码库') : tr('解锁 Monica') }}</h1><p class="supporting">{{ lifecycle === 'uninitialized' ? tr('主密码可选，也可使用设备密钥。') : protectionMode === 'device-key' ? tr('设备密钥模式可留空解锁。') : tr('输入主密码解锁。') }}</p></div>
+          <div class="login-heading"><h1>{{ lifecycle === 'uninitialized' ? tr('创建加密密码库') : tr('解锁 Monica') }}</h1><p class="supporting">{{ lifecycle === 'uninitialized' ? (authAction === 'create' ? tr('主密码可选，也可使用设备密钥。') : authAction === 'mdbx' ? tr('打开已有的 MDBX 或完整备份，并同时选择插件保护方式。') : tr('恢复插件状态（条目与密码源配置）。独立 MDBX 数据库需要单独的 MDBX 备份。')) : protectionMode === 'device-key' ? tr('设备密钥模式可留空解锁。') : tr('输入主密码解锁。') }}</p></div>
+          <div v-if="lifecycle === 'uninitialized'" class="auth-action-picker" role="tablist" :aria-label="tr('首次使用')">
+            <button type="button" role="tab" :aria-selected="authAction === 'create'" :class="{ selected: authAction === 'create' }" @click="authAction = 'create'">{{ tr('创建密码库') }}</button>
+            <button type="button" role="tab" :aria-selected="authAction === 'mdbx'" :class="{ selected: authAction === 'mdbx' }" @click="authAction = 'mdbx'">{{ tr('打开已有的密码库') }}</button>
+            <button type="button" role="tab" :aria-selected="authAction === 'restore'" :class="{ selected: authAction === 'restore' }" @click="authAction = 'restore'">{{ tr('恢复插件备份') }}</button>
+          </div>
+          <template v-if="lifecycle !== 'uninitialized' || authAction === 'create'">
           <m3e-form-field v-field-label variant="outlined" hide-required-marker class="field auth-password-field"><label slot="label">{{ tr('主密码{0}', { 0: lifecycle === 'uninitialized' || protectionMode === 'device-key' ? tr('（可选）') : '' }) }}</label><input v-model="auth.masterPassword" :aria-label="tr('主密码')" type="password" :minlength="auth.masterPassword ? MIN_MASTER_PASSWORD_LENGTH : undefined" autocomplete="current-password" autofocus /></m3e-form-field>
           <m3e-form-field v-field-label variant="outlined" hide-required-marker v-if="lifecycle === 'uninitialized'" class="field auth-password-field"><label slot="label">{{ tr('确认主密码') }}</label><input v-model="auth.confirmation" type="password" :minlength="auth.confirmation ? MIN_MASTER_PASSWORD_LENGTH : undefined" autocomplete="new-password" /></m3e-form-field>
           <p v-if="lifecycle === 'uninitialized'" class="settings-safety-note">{{ auth.masterPassword ? tr('主密码保护：每次解锁需要主密码。请保存独立加密备份，忘记密码后无法直接找回。') : tr('设备密钥保护：依赖当前浏览器与操作系统，使用此浏览器配置的人可解锁。创建后可绑定 Windows Hello；请保存独立加密备份以便迁移或恢复。') }}</p>
+          </template>
           <div v-if="lifecycle === 'locked' && windowsHelloStatus?.unlockAvailable" class="hello-unlock-action">
             <m3e-button variant="tonal" type="button" :disabled="Boolean(windowsHelloBusy) || authBusy" @click="unlockVaultWithWindowsHello"><m3e-icon slot="icon" name="fingerprint"></m3e-icon>{{ windowsHelloBusy === 'verify' ? tr('正在等待 Windows Hello…') : tr('使用 Windows Hello 解锁') }}</m3e-button>
             <small>{{ tr('仅解锁当前浏览器会话。') }}</small>
@@ -2855,9 +2884,10 @@ function errorCode(error: unknown): string | undefined {
           <p v-else-if="lifecycle === 'locked' && windowsHelloStatus?.vaultEnrolled && !windowsHelloStatus.native.available" class="supporting hello-status-note">{{ tr('Windows Hello 暂不可用。') }}</p>
           <p v-else-if="lifecycle === 'locked' && windowsHelloError" class="supporting hello-status-note">{{ tr('Windows Hello 状态检查失败。') }}</p>
           <p v-if="authError" class="form-error" role="alert">{{ authError }}</p>
-          <m3e-button variant="filled" type="submit" :disabled="authBusy">{{ authBusy ? tr('处理中…') : lifecycle === 'uninitialized' ? tr('创建并解锁') : tr('解锁') }}</m3e-button>
-          <div v-if="lifecycle === 'uninitialized' || lifecycle === 'locked' && windowsHelloStatus?.vaultEnrolled" class="recovery-panel stack">
-            <div><strong>{{ lifecycle === 'locked' ? tr('备份恢复') : tr('已有加密整库备份？') }}</strong><p class="supporting">{{ tr('选择备份文件恢复。') }}</p></div>
+          <m3e-button v-if="lifecycle !== 'uninitialized' || authAction === 'create'" variant="filled" type="submit" :disabled="authBusy">{{ authBusy ? tr('处理中…') : lifecycle === 'uninitialized' ? tr('创建并解锁') : tr('解锁') }}</m3e-button>
+          <FirstRunMdbxImport v-if="lifecycle === 'uninitialized' && authAction === 'mdbx'" @completed="finishFirstRunMdbx" />
+          <div v-if="lifecycle === 'uninitialized' && authAction === 'restore' || lifecycle === 'locked' && windowsHelloStatus?.vaultEnrolled" class="recovery-panel stack">
+            <div><strong>{{ lifecycle === 'locked' ? tr('备份恢复') : tr('恢复插件备份') }}</strong><p class="supporting">{{ lifecycle === 'uninitialized' ? tr('恢复插件状态（条目与密码源配置）。独立 MDBX 数据库需要单独的 MDBX 备份。') : tr('选择备份文件恢复。') }}</p></div>
             <label class="file-action"><m3e-icon name="upload" aria-hidden="true"></m3e-icon><span>{{ tr('选择加密整库备份') }}</span><input type="file" :aria-label="tr('选择加密整库备份')" accept="application/json,.json" @change="selectEncryptedBackup" /></label>
             <template v-if="selectedEncryptedBackup">
               <p class="supporting">{{ tr('已选择：{0}', { 0: selectedEncryptedBackupName }) }}</p>
@@ -3191,7 +3221,7 @@ function errorCode(error: unknown): string | undefined {
           <template #diagnostics><RuntimeDiagnostics /></template>
           <template #updates><ExtensionUpdates /></template>
           <template #wifi-sync><NearbySyncSettings /></template>
-          <template #transfer><ImportExportSettings :items="vaultItems" :mode="protectionMode" :hello-available="Boolean(windowsHelloStatus?.unlockAvailable)" @imported="refreshItems" @busy="settingsChildBusy = $event" @backup="settingsPage = 'backup'" /></template>
+          <template #transfer><ImportExportSettings :items="vaultItems" :mode="protectionMode" :hello-available="Boolean(windowsHelloStatus?.unlockAvailable)" @imported="refreshItems" @busy="settingsChildBusy = $event" @backup="settingsPage = 'backup'" @mdbx="openMdbx2Dialog(undefined, 'local')" /></template>
           <template #exclusions><AutofillSitePolicyPage @close="settingsPage = 'home'" @saved="refreshAutofillSitePolicy" @busy="settingsChildBusy = $event" /></template>
           <template #protection><section class="settings-content" aria-labelledby="settings-protection-heading"><h2 id="settings-protection-heading">{{ tr('更改保护方式') }}</h2><p class="settings-safety-note">{{ tr('建议使用长而独立的主密码；设备密钥模式依赖浏览器与操作系统保护。') }}</p>
                 <SettingsPasswordField v-model="passwordChange.currentPassword" :label="tr('当前主密码（设备密钥模式留空）')" autocomplete="current-password" />

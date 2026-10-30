@@ -291,6 +291,41 @@ m3e-icon-button {
   margin: 0;
 }
 
+.auth-action-picker {
+  display: grid;
+  gap: 8px;
+}
+
+.auth-action-picker button {
+  min-height: 40px;
+  border: 1px solid var(--md-sys-color-outline-variant, var(--app-outline));
+  border-radius: 12px;
+  background: var(--md-sys-color-surface, var(--app-surface));
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.auth-action-picker button.selected {
+  border-color: var(--md-sys-color-primary, var(--app-primary));
+  background: var(--md-sys-color-secondary-container, var(--app-surface-container));
+}
+
+.mdbx-first-import .mdbx2-inspection {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.mdbx-first-import .mdbx2-inspection span {
+  display: grid;
+  gap: 2px;
+}
+
+.mdbx-first-import .mdbx2-inspection small {
+  color: var(--md-sys-color-on-surface-variant, var(--app-muted));
+}
+
 .login-card m3e-button[type="submit"] {
   min-height: 48px;
   width: 100%;

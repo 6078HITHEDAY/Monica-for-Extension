@@ -57,6 +57,27 @@ describe('MDBX backend ownership', () => {
     expect(f.native.calls.map(r => r.method)).toEqual(['vault.status']); expect(f.browser.calls.map(r => r.method)).toEqual(['transfer.begin']);
     expect(f.origins.rows.get(id(1))?.backend).toBe('native'); expect(f.origins.rows.get(id(2))?.backend).toBe('browser'); f.router.close();
   });
+  it('inspects and opens an inbound file on the engine that accepted the transfer', async () => {
+    const f = fixture(r => r.method === 'transfer.begin' ? { transferId: id(2), nextOffset: 0, maxChunkBytes: 262144 }
+      : r.method === 'transfer.finish' ? { fileHandle: id(3), purpose: 'vault-bootstrap', sizeBytes: 3, sha256: 'a'.repeat(64) }
+      : {});
+    await f.router.beginInboundTransfer(3);
+    await f.router.finishInboundTransfer(id(2));
+    await f.router.request('vault.inspect', { source: { kind: 'file', handle: id(3) } });
+    await f.router.request('vault.open', { source: { kind: 'file', handle: id(3) }, credential: { method: 'password', password: 'synthetic' } });
+    expect(f.native.calls).toHaveLength(0);
+    expect(f.browser.calls.map(r => r.method)).toEqual(['transfer.begin', 'transfer.finish', 'vault.inspect', 'vault.open']);
+    expect(f.origins.rows.get(id(3))).toEqual({ version: 1, backend: 'browser', roles: ['file'] });
+    f.router.close();
+  });
+  it('sends an unindexed inbound file to the browser instead of Native Host', async () => {
+    const f = fixture();
+    await f.router.request('vault.inspect', { source: { kind: 'file', handle: id(3) } });
+    expect(f.native.calls).toHaveLength(0);
+    expect(f.browser.calls.map(r => r.method)).toEqual(['vault.inspect']);
+    expect(f.origins.rows.get(id(3))?.backend).toBe('browser');
+    f.router.close();
+  });
   it('retains browser ownership after replacing the router and never rewrites an ID', async () => {
     const f = fixture(() => ({ vaultHandle: id(1) }));
     await f.router.request('vault.create', { password: 'synthetic', mode: 'sky' }); f.router.close();
@@ -73,6 +94,7 @@ describe('MDBX backend ownership', () => {
   });
   it('rejects mixed engines and wrong handle roles before either receives a request', async () => {
     const f = fixture(); await f.origins.bind('browser', [{ handle: id(1), role: 'vault' }, { handle: id(3), role: 'file' }]);
+    await f.origins.bind('native', [{ handle: id(2), role: 'file' }]);
     await expect(f.router.request('sync.segment.inspect', { vaultHandle: id(1), fileHandle: id(2) })).rejects.toMatchObject({ code: 'mdbx-backend-conflict' });
     await expect(f.router.request('vault.open', { source: { kind: 'vault', handle: id(3) } })).rejects.toMatchObject({ code: 'mdbx-handle-role-invalid' });
     expect(f.native.calls).toHaveLength(0); expect(f.browser.calls).toHaveLength(0); f.router.close();
