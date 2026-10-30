@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { strToU8, zipSync } from "fflate";
-import { handshakeUnlock, mergeMdbxImportInspection, sniffMdbxImportFile } from "./mdbx-import-detect";
+import { advertisedUnlockMethods, handshakeUnlock, mergeMdbxImportInspection, resolveImportUnlockMethod, sniffMdbxImportFile } from "./mdbx-import-detect";
 
 function sqliteBytes(): Uint8Array {
   const bytes = new Uint8Array(32);
@@ -45,6 +45,14 @@ describe("sniffMdbxImportFile", () => {
   it("treats PIN-only unlock as non-handshake portable", () => {
     expect(handshakeUnlock(["pin"])).toEqual({ password: false, securityKey: false, pinOnly: true });
     expect(handshakeUnlock(["password", "pin"])).toEqual({ password: true, securityKey: false, pinOnly: false });
+  });
+
+  it("does not coerce independent password and security-key methods into a combined method", () => {
+    expect(advertisedUnlockMethods(["password", "security-key"])).toEqual(["password", "security-key"]);
+    expect(resolveImportUnlockMethod(["password", "security-key"])).toBe("password");
+    expect(resolveImportUnlockMethod(["password", "security-key"], "security-key")).toBe("security-key");
+    expect(resolveImportUnlockMethod(["password", "security-key"], "password-security-key")).toBe("password");
+    expect(resolveImportUnlockMethod(["password-security-key"])).toBe("password-security-key");
   });
 
   it("keeps empty unlock methods importable and PIN-only blocked", () => {

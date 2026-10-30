@@ -4020,6 +4020,7 @@
   "已初始化后可在导入与导出中作为条目导入。": "After setup, import it as items in Import and export.",
   "无法识别此文件。": "This file could not be recognized.",
   "插件密码库已创建，MDBX 尚未接入。可在导入与导出中重试。": "The plugin vault was created, but MDBX is not attached yet. Retry from Import and export.",
+  "MDBX 已接入，首次同步未完成，可稍后重试。": "MDBX is attached, but the first sync did not finish. Retry later.",
   "未找到这次导入的 MDBX 文件，请重新选择后再打开。": "The MDBX file for this import was not found. Select it again and open it.",
   "完整备份 ZIP 会同时恢复数据库和附件。将在独立工作副本上升级为 MDBX-2。原始文件不会被修改。": "Complete backup ZIPs restore the database and attachments together. They are upgraded to MDBX-2 on an independent working copy. The original file is not modified.",
   "MDBX 可移植备份 *": "MDBX portable backup *",

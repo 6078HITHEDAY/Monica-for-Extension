@@ -3,6 +3,7 @@ import {
   MDBX3_RUNTIME_NAME,
   type MdbxImportableFormatVersion,
   type MdbxInspectedUnlockMethod,
+  type Mdbx2UnlockMethod,
   type Mdbx2VaultInspection
 } from "./native-contract";
 
@@ -97,6 +98,19 @@ export function handshakeUnlock(methods: readonly MdbxInspectedUnlockMethod[]): 
     securityKey,
     pinOnly: methods.includes("pin") && !password && !securityKey
   };
+}
+
+export function advertisedUnlockMethods(methods: readonly MdbxInspectedUnlockMethod[]): Mdbx2UnlockMethod[] {
+  return (["password", "security-key", "password-security-key"] as const).filter((method) => methods.includes(method));
+}
+
+export function resolveImportUnlockMethod(
+  methods: readonly MdbxInspectedUnlockMethod[],
+  selected?: Mdbx2UnlockMethod
+): Mdbx2UnlockMethod {
+  const available = advertisedUnlockMethods(methods);
+  if (selected && (available.length === 0 || available.includes(selected))) return selected;
+  return available[0] || "password";
 }
 
 function baseSniff(kind: MdbxImportKind): MdbxImportSniff {

@@ -63,6 +63,7 @@ describe("login URL matching", () => {
     expect(loginMatchScore(login("GitHub", []), "https://github.com/login")).toBe(0);
     expect(loginMatchScore(login("Notes", []), "https://ctf.show/login")).toBe(0);
     expect(loginMatchScore(login("users.nexusmods.com", [{ uri: "https://gitlab.com", matchType: "base-domain" }]), "https://users.nexusmods.com/auth/sign_in")).toBe(0);
+    expect(loginMatchScore(login("example.com", [{ uri: "https://example.com", matchType: "never" }]), "https://example.com/login")).toBe(0);
   });
 });
 

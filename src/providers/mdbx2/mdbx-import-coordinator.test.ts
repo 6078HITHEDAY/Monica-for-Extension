@@ -140,6 +140,12 @@ describe("mdbx import coordinator", () => {
       credential: { method: "password", password: "wrong" },
       name: "Wrong"
     })).rejects.toMatchObject({ code: "vault-unlock-incorrect-credential" });
+    await expect(prepareMdbxImport(store, native({ inspectVault: async () => inspection(["password", "security-key"]) }), {
+      operationId: "77777777-7777-4777-8777-777777777777",
+      source: { kind: "file", handle: fileHandle },
+      credential: { method: "password-security-key", password: "x", keyMaterialBase64: "YQ==" },
+      name: "Split"
+    })).rejects.toMatchObject({ code: "vault-unlock-method-missing" });
   });
 
   it("sets up an uninitialized plugin vault then registers without duplicating the account", async () => {
@@ -165,5 +171,38 @@ describe("mdbx import coordinator", () => {
     expect(runtime.discarded).toContain(vaultHandle);
     expect(recovered.find((row) => row.operationId === operationId)?.stage).toBe("cancelled");
     expect(recovered.find((row) => row.providerId === "provider")?.stage).toBe("syncing");
+  });
+
+  it("does not cancel a recently prepared import during recover", async () => {
+    const store = memoryStore([
+      { operationId, stage: "prepared", kind: "mdbx-vault", source: { kind: "vault", handle: vaultHandle }, name: "Live", vaultHandle, createdAt: Date.now(), updatedAt: Date.now() }
+    ]);
+    const runtime = native();
+    const recovered = await recoverMdbxImports(store, runtime);
+    expect(runtime.discarded).toEqual([]);
+    expect(recovered[0]?.stage).toBe("prepared");
+  });
+
+  it("keeps the working copy if provider registration succeeds but operation storage fails", async () => {
+    const inner = memoryStore();
+    const store: MdbxImportStore = {
+      read: () => inner.read(),
+      async write(operations) {
+        if (operations.some((row) => row.stage === "registered" || row.stage === "syncing" || row.stage === "completed")) {
+          throw new Error("quota");
+        }
+        await inner.write(operations);
+      }
+    };
+    const runtime = native();
+    await prepareMdbxImport(store, runtime, {
+      operationId, source: { kind: "file", handle: fileHandle }, credential: { method: "password", password: "mdbx1-golden-password" }, name: "Golden"
+    });
+    const committed = await commitMdbxImport(store, runtime, vault("uninitialized"), async () => undefined, {
+      operationId, name: "Golden", pluginMasterPassword: "plugin-master"
+    });
+    expect(runtime.discarded).toEqual([]);
+    expect(committed.account?.kind).toBe("mdbx2");
+    expect(committed.operation.stage).toBe("registered");
   });
 });

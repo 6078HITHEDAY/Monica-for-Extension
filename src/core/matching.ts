@@ -22,7 +22,7 @@ export function loginMatchScore(item: LoginItem, pageUrl: string): number {
   if (!page) return 0;
   const rules = effectiveLoginUriRules(item), android = hasAndroidUrlRules(item.customFields);
   const score = rules.reduce((best, rule) => Math.max(best, uriRuleMatchScore(rule, page, android)), 0);
-  if (score > 0 || android || rules.some((rule) => rule.uri.trim() && rule.matchType !== "never")) return score;
+  if (score > 0 || android || rules.some((rule) => rule.uri.trim())) return score;
   return uriRuleMatchScore({ uri: hostnameTitle(item.title), matchType: "base-domain" }, page, false);
 }
 

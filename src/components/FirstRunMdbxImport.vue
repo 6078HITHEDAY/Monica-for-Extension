@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, shallowRef } from "vue";
+import { computed, onBeforeUnmount, ref, shallowRef, watch } from "vue";
 import { tr } from "../i18n";
 import { MIN_MASTER_PASSWORD_LENGTH } from "../security/master-password-policy";
 import { vaultClient } from "../runtime/client";
-import { MDBX2_MAX_INBOUND_FILE_BYTES, MDBX3_RUNTIME_NAME, type Mdbx2VaultCredential, type Mdbx2VaultInspection } from "../providers/mdbx2/native-contract";
-import { sniffMdbxImportBlob, type MdbxImportSniff } from "../providers/mdbx2/mdbx-import-detect";
+import { MDBX2_MAX_INBOUND_FILE_BYTES, MDBX3_RUNTIME_NAME, type Mdbx2UnlockMethod, type Mdbx2VaultCredential, type Mdbx2VaultInspection } from "../providers/mdbx2/native-contract";
+import { advertisedUnlockMethods, resolveImportUnlockMethod, sniffMdbxImportBlob, type MdbxImportSniff } from "../providers/mdbx2/mdbx-import-detect";
 import { mdbxImportUserMessage } from "../providers/mdbx2/mdbx-import-coordinator";
 import { bytesToBase64 } from "../security/encoding";
 import type { VaultItem } from "../core/model";
@@ -35,8 +35,16 @@ async function sendFirstRun<T>(request: Record<string, unknown>): Promise<T> {
 const isKdbx = computed(() => sniff.value?.kind === "kdbx");
 const isMdbx = computed(() => sniff.value?.kind === "mdbx-vault" || sniff.value?.kind === "mdbx-complete-backup-zip");
 const canUnlock = computed(() => Boolean((isMdbx.value || isKdbx.value) && sniff.value && !sniff.value.incompatibilityReason));
-const needsPassword = computed(() => Boolean(sniff.value?.needsPasswordPrompt));
-const needsSecurityKey = computed(() => Boolean(sniff.value?.needsSecurityKey));
+const selectedUnlock = ref<Mdbx2UnlockMethod>("password");
+const unlockChoices = computed(() => advertisedUnlockMethods(sniff.value?.unlockMethods || []));
+const unlockMethod = computed(() => resolveImportUnlockMethod(sniff.value?.unlockMethods || [], selectedUnlock.value));
+const needsPassword = computed(() => isKdbx.value ? Boolean(sniff.value?.needsPasswordPrompt) : unlockMethod.value !== "security-key");
+const needsSecurityKey = computed(() => !isKdbx.value && unlockMethod.value !== "password");
+
+watch(unlockChoices, (choices) => {
+  if (choices.length && !choices.includes(selectedUnlock.value)) selectedUnlock.value = choices[0];
+  if (!choices.length) selectedUnlock.value = "password";
+});
 
 onBeforeUnmount(() => {
   vaultPassword.value = "";
@@ -93,7 +101,6 @@ async function importVault() {
     return;
   }
   try {
-    const credential = await buildCredential();
     if (!sourceHandle.value) {
       busy.value = "upload";
       sourceHandle.value = await stageFile(file.value);
@@ -104,6 +111,12 @@ async function importVault() {
     sniff.value = detected.sniff;
     inspection.value = detected.inspection;
     if (detected.sniff.incompatibilityReason) throw new Error(mdbxImportUserMessage(detected.sniff.incompatibilityReason) || "无法识别此文件。");
+    selectedUnlock.value = resolveImportUnlockMethod(detected.sniff.unlockMethods, selectedUnlock.value);
+    if (unlockMethod.value !== "password" && !securityKeyFile.value) {
+      error.value = tr("所选解锁方式需要安全密钥文件。");
+      return;
+    }
+    const credential = await buildCredential();
     if (!operationId.value) operationId.value = crypto.randomUUID();
     busy.value = "prepare";
     await vaultClient.prepareMdbx2Import({
@@ -119,16 +132,20 @@ async function importVault() {
       name: file.value.name.replace(/(?:\.mdbx-backup\.zip|\.mdbx|\.zip)$/i, "") || "Monica MDBX",
       pluginMasterPassword: pluginPassword.value
     });
-    operationId.value = "";
     if (committed.operation.stage !== "completed" && committed.operation.stage !== "syncing" && committed.operation.stage !== "registered") {
       throw new Error(committed.operation.lastError?.message || "MDBX 导入失败。");
     }
-    emit("completed", committed.items || [], pluginPassword.value ? "master-password" : "device-key");
+    const items = committed.items?.length ? committed.items : await vaultClient.listItems();
+    if (committed.operation.stage !== "completed" && committed.operation.lastError && !items.length) {
+      error.value = tr(mdbxImportUserMessage(committed.operation.lastError.code) || committed.operation.lastError.message);
+      return;
+    }
+    operationId.value = "";
+    emit("completed", items, pluginPassword.value ? "master-password" : "device-key");
   } catch (cause) {
     const code = cause && typeof cause === "object" && "code" in cause ? String((cause as { code?: string }).code || "") : "";
     if (code === "mdbx-import-setup-orphan") pluginOrphan.value = true;
-    const prepared = busy.value === "commit";
-    if (sourceHandle.value && !prepared) {
+    if (sourceHandle.value && (busy.value === "commit" || code === "vault-source-not-found")) {
       await vaultClient.releaseMdbx2File(sourceHandle.value).catch(() => undefined);
       sourceHandle.value = "";
     }
@@ -159,15 +176,17 @@ async function importKdbx() {
     busy.value = "commit";
     const password = String(pluginPassword.value || "");
     const databasePassword = String(vaultPassword.value || "");
+    let pluginCreated = false;
     try {
       await sendFirstRun({ type: "VAULT_SETUP", masterPassword: password });
+      pluginCreated = true;
     } catch (cause) {
       if (!(cause instanceof Error) || cause.message !== "Vault has already been initialized") throw cause;
-      pluginOrphan.value = true;
       await sendFirstRun({ type: "VAULT_UNLOCK", masterPassword: password });
     }
+    let opened: { account: { id: string } };
     try {
-      const opened = await sendFirstRun<{ account: { id: string } }>({
+      opened = await sendFirstRun<{ account: { id: string } }>({
         type: "KEEPASS_OPEN",
         input: {
           name: file.value.name.replace(/\.kdbx$/i, "") || "KeePass",
@@ -178,10 +197,14 @@ async function importKdbx() {
           isDefaultSaveTarget: true
         }
       });
-      await sendFirstRun({ type: "PROVIDER_SYNC", providerId: opened.account.id });
     } catch (cause) {
-      pluginOrphan.value = true;
+      if (pluginCreated) pluginOrphan.value = true;
       throw cause;
+    }
+    try {
+      await sendFirstRun({ type: "PROVIDER_SYNC", providerId: opened.account.id });
+    } catch {
+      // KeePass is already attached; listing still finishes first-run.
     }
     emit("completed", await sendFirstRun<VaultItem[]>({ type: "VAULT_LIST_ITEMS" }), password ? "master-password" : "device-key");
   } catch (cause) {
@@ -208,10 +231,11 @@ async function stageFile(chosen: File): Promise<string> {
 }
 
 async function buildCredential(): Promise<Mdbx2VaultCredential> {
-  if (needsSecurityKey.value && needsPassword.value) {
-    return { method: "password-security-key", password: vaultPassword.value, keyMaterialBase64: await readKey() };
+  const method = unlockMethod.value;
+  if (method === "password-security-key") {
+    return { method, password: vaultPassword.value, keyMaterialBase64: await readKey() };
   }
-  if (needsSecurityKey.value) return { method: "security-key", keyMaterialBase64: await readKey() };
+  if (method === "security-key") return { method, keyMaterialBase64: await readKey() };
   return { method: "password", password: vaultPassword.value };
 }
 
@@ -240,6 +264,9 @@ async function readKey(): Promise<string> {
     </div>
     <p v-if="inspection?.requiresUpgrade || sniff?.requiresMigration" class="settings-safety-note">{{ tr("将在独立工作副本上升级为 MDBX-2。原始文件不会被修改。") }}</p>
     <template v-if="canUnlock">
+      <div v-if="!isKdbx && unlockChoices.length > 1" class="auth-action-picker" role="radiogroup" :aria-label="tr('解锁方式')">
+        <button v-for="method in unlockChoices" :key="method" type="button" role="radio" :aria-checked="selectedUnlock === method" :class="{ selected: selectedUnlock === method }" @click="selectedUnlock = method">{{ method === "password" ? tr("密码") : method === "security-key" ? tr("安全密钥") : tr("密码 + 安全密钥") }}</button>
+      </div>
       <m3e-form-field v-if="needsPassword" v-field-label variant="outlined" hide-required-marker class="field auth-password-field"><label slot="label">{{ isKdbx ? tr("数据库密码（可留空）") : tr("MDBX 密码") }}</label><input v-model="vaultPassword" type="password" autocomplete="off" :aria-label="isKdbx ? tr('数据库密码（可留空）') : tr('MDBX 密码')" @keydown.enter.prevent="importVault" /></m3e-form-field>
       <label v-if="needsSecurityKey || isKdbx" class="file-action"><m3e-icon name="key"></m3e-icon><span>{{ securityKeyFile?.name || (isKdbx ? tr("选择密钥文件（可选）") : tr("选择最大 64 KiB 的安全密钥文件")) }}</span><input type="file" :aria-label="isKdbx ? tr('选择密钥文件（可选）') : tr('MDBX2 安全密钥文件')" @change="securityKeyFile = ($event.target as HTMLInputElement).files?.[0] || undefined" /></label>
       <m3e-form-field v-field-label variant="outlined" hide-required-marker class="field auth-password-field"><label slot="label">{{ tr("插件主密码{0}", { 0: tr("（可选）") }) }}</label><input v-model="pluginPassword" type="password" autocomplete="new-password" :aria-label="tr('插件主密码{0}', { 0: tr('（可选）') })" @keydown.enter.prevent="importVault" /></m3e-form-field>
@@ -247,7 +274,7 @@ async function readKey(): Promise<string> {
       <p class="settings-safety-note">{{ pluginPassword ? tr("主密码保护：每次解锁需要主密码。请保存独立加密备份，忘记密码后无法直接找回。") : tr("设备密钥保护：依赖当前浏览器与操作系统，使用此浏览器配置的人可解锁。创建后可绑定 Windows Hello；请保存独立加密备份以便迁移或恢复。") }}</p>
       <m3e-button variant="filled" type="button" :disabled="Boolean(busy)" @click="importVault">{{ busy ? tr("处理中…") : tr("打开并接入密码库") }}</m3e-button>
     </template>
+    <p v-if="error" class="form-error" role="alert">{{ error }}</p>
     <p v-if="pluginOrphan" class="form-error" role="alert">{{ tr("插件密码库已创建，所选密码库尚未接入。可在导入与导出中重试。") }}</p>
-    <p v-else-if="error" class="form-error" role="alert">{{ error }}</p>
   </div>
 </template>

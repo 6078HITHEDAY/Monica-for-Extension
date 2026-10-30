@@ -272,19 +272,9 @@ export async function commitMdbxImport(
       hostVerifiedAt: new Date().toISOString()
     }
   };
+  let saved: ProviderAccount;
   try {
-    const saved = await vault.upsertProvider(account, true, undefined, { sessionId });
-    credentials.delete(operationId);
-    const registered: MdbxImportOperation = {
-      ...operation,
-      stage: "registered",
-      providerId: saved.id,
-      name: saved.name,
-      pluginSetupCompleted,
-      updatedAt: Date.now()
-    };
-    await saveOperation(store, registered);
-    return finishRegistered(store, vault, sync, registered, saved, items);
+    saved = await vault.upsertProvider(account, true, undefined, { sessionId });
   } catch (error) {
     await native.discardVault(operation.vaultHandle).catch(() => undefined);
     credentials.delete(operationId);
@@ -303,6 +293,21 @@ export async function commitMdbxImport(
       ? new Mdbx2NativeHostError("mdbx-import-setup-orphan", "插件密码库已创建，MDBX 尚未接入。可在导入与导出中重试。", true)
       : toHostError(mapped);
   }
+  credentials.delete(operationId);
+  const registered: MdbxImportOperation = {
+    ...operation,
+    stage: "registered",
+    providerId: saved.id,
+    name: saved.name,
+    pluginSetupCompleted,
+    updatedAt: Date.now()
+  };
+  try {
+    await saveOperation(store, registered);
+  } catch {
+    return { operation: registered, account: saved, items, pluginSetupCompleted };
+  }
+  return finishRegistered(store, vault, sync, registered, saved, items);
 }
 
 export async function cancelMdbxImport(store: MdbxImportStore, native: MdbxImportNative, operationId: string): Promise<{ cancelled: true }> {
@@ -314,22 +319,29 @@ export async function cancelMdbxImport(store: MdbxImportStore, native: MdbxImpor
   return { cancelled: true };
 }
 
+const MDBX_IMPORT_STALE_MS = 15 * 60 * 1000;
+
 export async function recoverMdbxImports(store: MdbxImportStore, native: MdbxImportNative): Promise<MdbxImportOperation[]> {
-  const operations = await store.read();
-  const next: MdbxImportOperation[] = [];
-  for (const operation of operations) {
+  const snapshot = await store.read();
+  const recovered: MdbxImportOperation[] = [];
+  for (const operation of snapshot) {
     if (operation.stage === "completed" || operation.stage === "cancelled") {
-      next.push(operation);
+      recovered.push(operation);
       continue;
     }
     if (operation.providerId && (operation.stage === "registered" || operation.stage === "syncing")) {
-      next.push({ ...operation, stage: "syncing", lastError: importError("mdbx-import-sync-retry", "MDBX 已接入，首次同步未完成，可稍后重试。", true), updatedAt: Date.now() });
+      recovered.push({ ...operation, stage: "syncing", lastError: importError("mdbx-import-sync-retry", "MDBX 已接入，首次同步未完成，可稍后重试。", true), updatedAt: Date.now() });
+      continue;
+    }
+    const inFlight = operation.stage === "prepared" || operation.stage === "committing" || operation.stage === "detecting";
+    if (inFlight && Date.now() - operation.updatedAt < MDBX_IMPORT_STALE_MS) {
+      recovered.push(operation);
       continue;
     }
     if (operation.vaultHandle && !operation.providerId) await native.discardVault(operation.vaultHandle).catch(() => undefined);
     if (operation.source.kind === "file") await native.releaseFile(operation.source.handle).catch(() => undefined);
     credentials.delete(operation.operationId);
-    next.push({
+    recovered.push({
       ...operation,
       stage: "cancelled",
       vaultHandle: undefined,
@@ -337,8 +349,15 @@ export async function recoverMdbxImports(store: MdbxImportStore, native: MdbxImp
       updatedAt: Date.now()
     });
   }
-  await store.write(next.filter((operation) => operation.stage !== "cancelled" || Date.now() - operation.updatedAt < 86_400_000));
-  return next;
+  const latest = await store.read();
+  const byId = new Map(latest.map((row) => [row.operationId, row]));
+  for (const row of recovered) {
+    const current = byId.get(row.operationId);
+    if (!current || current.updatedAt <= row.updatedAt) byId.set(row.operationId, row);
+  }
+  const merged = [...byId.values()];
+  await store.write(merged.filter((operation) => operation.stage !== "cancelled" || Date.now() - operation.updatedAt < 86_400_000));
+  return merged;
 }
 
 export function mdbxImportUserMessage(code: string): string {
@@ -365,6 +384,8 @@ export function mdbxImportUserMessage(code: string): string {
       return "无法识别此文件。";
     case "mdbx-import-setup-orphan":
       return "插件密码库已创建，MDBX 尚未接入。可在导入与导出中重试。";
+    case "mdbx-import-sync-retry":
+      return "MDBX 已接入，首次同步未完成，可稍后重试。";
     case "vault-locked":
       return "MDBX 会话已关闭，请重新解锁后重试导入。";
     case "vault-source-not-found":
@@ -379,6 +400,9 @@ function assertUnlockAllowed(sniff: MdbxImportSniff, credential: Mdbx2VaultCrede
   if (sniff.incompatibilityReason === "vault-invalid") throw new Mdbx2NativeHostError("vault-invalid", "不是受支持的加密 MDBX。", false);
   const handshake = handshakeUnlock(sniff.unlockMethods);
   const methodsUnknown = sniff.unlockMethods.length === 0;
+  if (credential.method === "password-security-key" && !methodsUnknown && !sniff.unlockMethods.includes("password-security-key")) {
+    throw new Mdbx2NativeHostError("vault-unlock-method-missing", mdbxImportUserMessage("vault-unlock-method-missing"), false);
+  }
   if (credential.method === "password" && !handshake.password && !methodsUnknown) {
     throw new Mdbx2NativeHostError(handshake.securityKey ? "vault-unlock-method-missing" : "vault-unlock-not-portable", handshake.securityKey ? mdbxImportUserMessage("vault-unlock-method-missing") : mdbxImportUserMessage("vault-unlock-not-portable"), false);
   }
