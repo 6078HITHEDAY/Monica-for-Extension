@@ -1,0 +1,211 @@
+{
+  "title": "Monica · 接收恢复",
+  "brief": "紧凑连续分组；冲突先检查再确认，不重叠时保留本机条目修改继续保存附件与文件夹。无法证明则保留冲突。",
+  "frame": "phone",
+  "platform": "web",
+  "paletteKey": "teal",
+  "theme": {
+    "dark": true,
+    "bothModes": true,
+    "contrast": "standard",
+    "shape": "rounded",
+    "font": "system",
+    "emphasized": true,
+    "motion": "standard"
+  },
+  "frames": [
+    {
+      "id": "recovery",
+      "name": "接收恢复",
+      "x": 0,
+      "y": 0,
+      "w": 420,
+      "h": 720
+    }
+  ],
+  "groups": [
+    {
+      "id": "group-0",
+      "frameId": "recovery",
+      "x": 12,
+      "y": 12,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "item-0",
+          "kind": "topAppBar",
+          "label": "Wi-Fi 同步",
+          "supporting": "",
+          "size": 396,
+          "radius": 4,
+          "variant": "tonal",
+          "corners": {
+            "tl": 24,
+            "tr": 24,
+            "bl": 4,
+            "br": 4
+          },
+          "icon": null
+        }
+      ]
+    },
+    {
+      "id": "group-1",
+      "frameId": "recovery",
+      "x": 12,
+      "y": 100,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "item-1",
+          "kind": "listItem",
+          "label": "未完成的接收",
+          "supporting": "已保存 2 步，剩余 2 步",
+          "size": 396,
+          "radius": 4,
+          "variant": "tonal",
+          "corners": {
+            "tl": 4,
+            "tr": 4,
+            "bl": 4,
+            "br": 4
+          },
+          "icon": "restore"
+        }
+      ]
+    },
+    {
+      "id": "group-2",
+      "frameId": "recovery",
+      "x": 12,
+      "y": 188,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "item-2",
+          "kind": "listItem",
+          "label": "本机条目修改与剩余接收不重叠",
+          "supporting": "检查到 1 次修改，涉及 1 个条目；剩余 2 步。",
+          "size": 396,
+          "radius": 4,
+          "variant": "tonal",
+          "corners": {
+            "tl": 4,
+            "tr": 4,
+            "bl": 4,
+            "br": 4
+          },
+          "icon": "info"
+        }
+      ]
+    },
+    {
+      "id": "group-3",
+      "frameId": "recovery",
+      "x": 12,
+      "y": 276,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "item-3",
+          "kind": "listItem",
+          "label": "接收内容已加密保留",
+          "supporting": "包括本次接收中已经保存的附件副本。",
+          "size": 396,
+          "radius": 4,
+          "variant": "tonal",
+          "corners": {
+            "tl": 4,
+            "tr": 4,
+            "bl": 4,
+            "br": 4
+          },
+          "icon": null
+        }
+      ]
+    },
+    {
+      "id": "group-4",
+      "frameId": "recovery",
+      "x": 12,
+      "y": 364,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "item-4",
+          "kind": "button",
+          "label": "保留本机修改并继续",
+          "supporting": "",
+          "size": 396,
+          "radius": 4,
+          "variant": "filled",
+          "corners": {
+            "tl": 4,
+            "tr": 4,
+            "bl": 4,
+            "br": 4
+          },
+          "icon": null
+        }
+      ]
+    },
+    {
+      "id": "group-5",
+      "frameId": "recovery",
+      "x": 12,
+      "y": 452,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "item-5",
+          "kind": "button",
+          "label": "稍后处理",
+          "supporting": "",
+          "size": 396,
+          "radius": 4,
+          "variant": "tonal",
+          "corners": {
+            "tl": 4,
+            "tr": 4,
+            "bl": 4,
+            "br": 4
+          },
+          "icon": null
+        }
+      ]
+    },
+    {
+      "id": "group-6",
+      "frameId": "recovery",
+      "x": 12,
+      "y": 540,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "item-6",
+          "kind": "listItem",
+          "label": "无需另一台设备在线",
+          "supporting": "确认前再次核对数据库；版本已变化时重新检查。",
+          "size": 396,
+          "radius": 4,
+          "variant": "tonal",
+          "corners": {
+            "tl": 4,
+            "tr": 4,
+            "bl": 24,
+            "br": 24
+          },
+          "icon": null
+        }
+      ]
+    }
+  ],
+  "dynamicColor": false
+}

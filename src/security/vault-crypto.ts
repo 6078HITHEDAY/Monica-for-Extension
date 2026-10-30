@@ -1,6 +1,8 @@
 import { argon2id } from "hash-wasm";
 import type { VaultState } from "../core/model";
 import { MAX_SOURCE_RECORD_TAG_LENGTH, migrateVaultState, validProviderMutationReceipt } from "../core/migrations";
+import { normalizeSitePolicy } from "../autofill/site-policy";
+import { normalizeBlockedFieldSignatures } from "../autofill/field-policy";
 import { base64ToBytes, bytesToBase64, randomBytes } from "./encoding";
 
 const AAD = new TextEncoder().encode("monica-extension-vault-envelope-v1");
@@ -107,7 +109,13 @@ export async function createDeviceVaultKey(): Promise<{ key: CryptoKey; rawKey: 
 export async function encryptVaultState(state: VaultState, key: CryptoKey, kdf: VaultKdfParameters): Promise<VaultEnvelope> {
   const iv = randomBytes(12);
   const plaintext = new TextEncoder().encode(JSON.stringify(state));
-  const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv: iv as BufferSource, additionalData: AAD as BufferSource, tagLength: 128 }, key, plaintext);
+  let encrypted: ArrayBuffer;
+  try {
+    // The reader enforces this same limit, including the 16-byte GCM tag.
+    // Refuse an oversized write before replacing a still-readable envelope.
+    if (plaintext.byteLength + 16 > MAX_VAULT_CIPHERTEXT_BYTES) throw new Error('密码库超过 64 MiB 加密存储上限，原始密码库已保留。');
+    encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv: iv as BufferSource, additionalData: AAD as BufferSource, tagLength: 128 }, key, plaintext);
+  } finally { plaintext.fill(0); }
   return {
     version: 1,
     kdf,
@@ -125,7 +133,10 @@ export async function decryptVaultState(envelope: VaultEnvelope, key: CryptoKey)
     key,
     base64ToBytes(envelope.ciphertext) as BufferSource
   );
-  const state = migrateVaultState(JSON.parse(new TextDecoder().decode(decrypted)));
+  let state: VaultState;
+  try { state = migrateVaultState(JSON.parse(new TextDecoder().decode(decrypted))); }
+  catch { throw new Error('Vault payload is invalid or unsupported'); }
+  finally { new Uint8Array(decrypted).fill(0); }
   if (
     state.magic !== "MONICA_EXTENSION_VAULT" ||
     state.schemaVersion !== 2 ||
@@ -148,6 +159,7 @@ export async function decryptVaultState(envelope: VaultEnvelope, key: CryptoKey)
     typeof state.settings.defaultProviderId !== "string" ||
     (state.settings.protectionMode !== "master-password" && state.settings.protectionMode !== "device-key") ||
     (state.settings.windowsHello !== undefined && !validWindowsHelloBinding(state.settings.windowsHello)) ||
+    !validSitePolicySettings(state.settings) ||
     !Number.isInteger(state.settings.autoLockMinutes) ||
     state.settings.autoLockMinutes < 1 ||
     state.settings.autoLockMinutes > 1440 ||
@@ -156,6 +168,17 @@ export async function decryptVaultState(envelope: VaultEnvelope, key: CryptoKey)
     throw new Error("Vault payload is invalid or unsupported");
   }
   return state;
+}
+
+function validSitePolicySettings(settings: VaultState["settings"]): boolean {
+  try {
+    const normalized = normalizeSitePolicy({ blockedHosts: settings.autofillBlockedHosts, saveBlockedHosts: settings.saveBlockedHosts });
+    return JSON.stringify(normalized.blockedHosts) === JSON.stringify(settings.autofillBlockedHosts)
+      && JSON.stringify(normalized.saveBlockedHosts) === JSON.stringify(settings.saveBlockedHosts)
+      && JSON.stringify(normalizeBlockedFieldSignatures(settings.autofillBlockedFieldSignatures)) === JSON.stringify(settings.autofillBlockedFieldSignatures);
+  } catch {
+    return false;
+  }
 }
 
 function validWindowsHelloBinding(value: unknown): boolean {

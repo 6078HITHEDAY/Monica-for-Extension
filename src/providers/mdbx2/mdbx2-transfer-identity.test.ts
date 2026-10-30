@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   assertMdbx2TransferOperationId,
   mdbx2TransferOperationScope,
@@ -8,6 +8,21 @@ import {
 const OPERATION_ID = "11111111-1111-4111-8111-111111111111";
 
 describe("MDBX2 transfer identities", () => {
+  it.each([false, true])('clears the encoded secret snapshot after hashing (failure=%s)', async fail => {
+    const digest = crypto.subtle.digest.bind(crypto.subtle);
+    let retained: Uint8Array | undefined;
+    const spy = vi.spyOn(crypto.subtle, 'digest').mockImplementation(async (algorithm, data) => {
+      retained = data as Uint8Array;
+      if (fail) throw new Error('synthetic digest failure');
+      return digest(algorithm, data);
+    });
+    try {
+      const result = mdbx2TransferOperationScope({ password: 'synthetic snapshot secret' });
+      if (fail) await expect(result).rejects.toThrow('synthetic digest failure'); else await result;
+      expect(retained!.length).toBeGreaterThan(0);
+      expect(retained!.every(value => value === 0)).toBe(true);
+    } finally { spy.mockRestore(); }
+  });
   it("derives stable standard UUIDv5 identities", async () => {
     const first = await mdbx2TransferUuid(OPERATION_ID, "item:source-1");
     const repeated = await mdbx2TransferUuid(OPERATION_ID, "item:source-1");

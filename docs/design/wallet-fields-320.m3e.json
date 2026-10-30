@@ -1,0 +1,249 @@
+{
+  "title": "Monica · 独立姓名与联系方式",
+  "brief": "沿用现有编辑器：完整姓名保留核心位置，分段姓名、地址第三行、区县与家庭工作联系方式在补充信息中独立编辑。",
+  "frame": "phone",
+  "platform": "web",
+  "paletteKey": "teal",
+  "theme": {
+    "dark": true,
+    "bothModes": true,
+    "contrast": "standard",
+    "shape": "rounded",
+    "font": "system",
+    "emphasized": true,
+    "motion": "standard"
+  },
+  "frames": [
+    {
+      "id": "profile",
+      "name": "姓名与联系方式",
+      "x": 0,
+      "y": 0,
+      "w": 420,
+      "h": 720
+    }
+  ],
+  "groups": [
+    {
+      "id": "group-0",
+      "frameId": "profile",
+      "x": 12,
+      "y": 12,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "item-0",
+          "kind": "topAppBar",
+          "label": "姓名与联系方式",
+          "supporting": "",
+          "size": 396,
+          "radius": 24,
+          "variant": "filled",
+          "icon": null
+        }
+      ]
+    },
+    {
+      "id": "group-1",
+      "frameId": "profile",
+      "x": 12,
+      "y": 100,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "item-1",
+          "kind": "textField",
+          "label": "名",
+          "supporting": "",
+          "size": 192,
+          "radius": 24,
+          "variant": "filled",
+          "icon": null
+        }
+      ]
+    },
+    {
+      "id": "group-2",
+      "frameId": "profile",
+      "x": 216,
+      "y": 100,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "item-2",
+          "kind": "textField",
+          "label": "中间名",
+          "supporting": "",
+          "size": 192,
+          "radius": 24,
+          "variant": "filled",
+          "icon": null
+        }
+      ]
+    },
+    {
+      "id": "group-3",
+      "frameId": "profile",
+      "x": 12,
+      "y": 190,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "item-3",
+          "kind": "textField",
+          "label": "姓",
+          "supporting": "",
+          "size": 192,
+          "radius": 24,
+          "variant": "filled",
+          "icon": null
+        }
+      ]
+    },
+    {
+      "id": "group-4",
+      "frameId": "profile",
+      "x": 216,
+      "y": 190,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "item-4",
+          "kind": "textField",
+          "label": "地址第三行",
+          "supporting": "",
+          "size": 192,
+          "radius": 24,
+          "variant": "filled",
+          "icon": null
+        }
+      ]
+    },
+    {
+      "id": "group-5",
+      "frameId": "profile",
+      "x": 12,
+      "y": 280,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "item-5",
+          "kind": "textField",
+          "label": "区/县",
+          "supporting": "",
+          "size": 192,
+          "radius": 24,
+          "variant": "filled",
+          "icon": null
+        }
+      ]
+    },
+    {
+      "id": "group-6",
+      "frameId": "profile",
+      "x": 216,
+      "y": 280,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "item-6",
+          "kind": "textField",
+          "label": "家庭邮箱",
+          "supporting": "",
+          "size": 192,
+          "radius": 24,
+          "variant": "filled",
+          "icon": null
+        }
+      ]
+    },
+    {
+      "id": "group-7",
+      "frameId": "profile",
+      "x": 12,
+      "y": 370,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "item-7",
+          "kind": "textField",
+          "label": "家庭电话",
+          "supporting": "",
+          "size": 192,
+          "radius": 24,
+          "variant": "filled",
+          "icon": null
+        }
+      ]
+    },
+    {
+      "id": "group-8",
+      "frameId": "profile",
+      "x": 216,
+      "y": 370,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "item-8",
+          "kind": "textField",
+          "label": "工作邮箱",
+          "supporting": "",
+          "size": 192,
+          "radius": 24,
+          "variant": "filled",
+          "icon": null
+        }
+      ]
+    },
+    {
+      "id": "group-9",
+      "frameId": "profile",
+      "x": 12,
+      "y": 460,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "item-9",
+          "kind": "textField",
+          "label": "工作电话",
+          "supporting": "",
+          "size": 192,
+          "radius": 24,
+          "variant": "filled",
+          "icon": null
+        }
+      ]
+    },
+    {
+      "id": "group-10",
+      "frameId": "profile",
+      "x": 288,
+      "y": 572,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "item-10",
+          "kind": "button",
+          "label": "完成",
+          "supporting": "",
+          "size": 120,
+          "radius": 24,
+          "variant": "filled",
+          "icon": null
+        }
+      ]
+    }
+  ],
+  "dynamicColor": false
+}

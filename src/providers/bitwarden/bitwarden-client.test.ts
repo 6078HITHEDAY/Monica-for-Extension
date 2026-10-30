@@ -6,6 +6,22 @@ const EMAIL = "alice@example.com";
 const PASSWORD = "correct horse battery staple";
 
 describe("Bitwarden auth client", () => {
+  it('does not replay a journaled Passkey copy creation after response loss', async () => {
+    const fetcher = vi.fn(async () => { throw new TypeError('Create response lost after commit'); });
+    await expect(new BitwardenClient(fetcher, fastTransport()).createCipherOnce(activeSession(), { type: 1, login: { fido2Credentials: [] } })).rejects.toThrow();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it('does not replay a trash request after network response loss', async () => {
+    const fetcher = vi.fn(async () => { throw new TypeError('Response lost after commit'); });
+    const client = new BitwardenClient(fetcher, fastTransport());
+    await expect(client.softDeleteCipher(activeSession(), 'cipher-1')).rejects.toThrow();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it('does not replay a journaled compensation restore after network response loss', async () => {
+    const fetcher = vi.fn(async () => { throw new TypeError('Restore response lost after commit'); });
+    await expect(new BitwardenClient(fetcher, fastTransport()).restoreCipherOnce(activeSession(), 'cipher-1')).rejects.toThrow();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
   it("maps official US/EU and self-hosted URLs without cross-origin discovery", () => {
     expect(inferBitwardenServerUrls("https://vault.bitwarden.com")).toEqual({ vault: "https://vault.bitwarden.com", api: "https://api.bitwarden.com", identity: "https://identity.bitwarden.com" });
     expect(inferBitwardenServerUrls("vault.bitwarden.eu")).toEqual({ vault: "https://vault.bitwarden.eu", api: "https://api.bitwarden.eu", identity: "https://identity.bitwarden.eu" });
@@ -65,6 +81,34 @@ describe("Bitwarden auth client", () => {
     }) as unknown as typeof fetch;
     const result = await new BitwardenClient(fetcher).login({ vaultUrl: "https://self.example.com", email: EMAIL, masterPassword: PASSWORD, deviceId: "device-1" });
     expect(result).toEqual({ status: "two-factor-required", providers: [0, 1], providerData: { "0": {}, "1": {} } });
+  });
+
+  it("returns the organization identifier when password login requires SSO", async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes("/accounts/prelogin")) return json({ kdf: 0, kdfIterations: 1 });
+      return json({ error: "invalid_grant", SsoOrganizationIdentifier: "acme" }, 400);
+    }) as unknown as typeof fetch;
+    await expect(new BitwardenClient(fetcher).login({ vaultUrl: "https://self.example.com", email: EMAIL, masterPassword: PASSWORD, deviceId: "device-1" }))
+      .resolves.toEqual({ status: "sso-required", organizationIdentifier: "acme" });
+  });
+
+  it("prevalidates SSO through the official domainHint endpoint", async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      expect(String(input)).toBe("https://self.example.com/identity/sso/prevalidate?domainHint=acme%20corp");
+      return json({ token: "prevalidated-token" });
+    }) as unknown as typeof fetch;
+    await expect(new BitwardenClient(fetcher).prevalidateSso("https://self.example.com", " acme corp "))
+      .resolves.toEqual({ urls: { vault: "https://self.example.com", api: "https://self.example.com/api", identity: "https://self.example.com/identity" }, token: "prevalidated-token" });
+  });
+
+  it("revokes refresh tokens without retrying or exposing the token", async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe("https://self.example.com/identity/connect/revoke");
+      expect((init?.body as URLSearchParams).get("token")).toBe("refresh-secret");
+      return new Response(null, { status: 200 });
+    }) as unknown as typeof fetch;
+    await expect(new BitwardenClient(fetcher).revoke(activeSession())).resolves.toBeUndefined();
+    expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
   it("turns Bitwarden's invalid credential response into an actionable region-safe error", async () => {
@@ -223,6 +267,26 @@ describe("Bitwarden auth client", () => {
     expect(fetcher).toHaveBeenCalledTimes(2);
     const calls = (fetcher as unknown as { mock: { calls: Array<[RequestInfo | URL, RequestInit]> } }).mock.calls;
     expect(new Headers(calls[0][1].headers).get("Authorization")).toBe("Bearer access-secret");
+  });
+
+  it("refreshes once when a non-expired access token is revoked", async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/sync?excludeDomains=true")) {
+        const authorization = new Headers(init?.headers).get("Authorization");
+        if (authorization === "Bearer access-secret") return json({ error: "invalid_token" }, 401);
+        expect(authorization).toBe("Bearer rotated-access");
+        return json({ Profile: { Id: "user" }, Ciphers: [] });
+      }
+      if (url.endsWith("/identity/connect/token")) {
+        expect((init?.body as URLSearchParams).get("grant_type")).toBe("refresh_token");
+        return json({ access_token: "rotated-access", refresh_token: "rotated-refresh", expires_in: 3600 });
+      }
+      throw new Error(`Unexpected URL ${url}`);
+    }) as unknown as typeof fetch;
+    const result = await new BitwardenClient(fetcher).sync(activeSession());
+    expect(result.session).toMatchObject({ accessToken: "rotated-access", refreshToken: "rotated-refresh" });
+    expect(fetcher).toHaveBeenCalledTimes(3);
   });
 
   it("does not retry token login after an ambiguous network failure", async () => {
@@ -392,6 +456,25 @@ describe("Bitwarden attachment write client", () => {
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
+
+describe("actual Vaultwarden 1.37.3 direct-upload URL contract", () => {
+  it("accepts the exact same-cipher relative direct-upload path without treating it as an Azure URL", async () => {
+    const client = new BitwardenClient(async () => new Response(JSON.stringify({ attachmentId: "attachment-1", fileUploadType: 0, url: "/ciphers/cipher-1/attachment/attachment-1" }), { status: 200 }));
+    const result = await client.prepareAttachmentUpload(activeSession(), "cipher-1", { key: "synthetic-wrapped-key", fileName: "synthetic-encrypted-name", fileSize: 96, lastKnownRevisionDate: "2026-09-30T00:00:00.000Z" });
+    expect(result.upload).toMatchObject({ attachmentId: "attachment-1", fileUploadType: 0, url: "/ciphers/cipher-1/attachment/attachment-1" });
+  });
+
+  it.each([
+    { fileUploadType: 0, url: "/ciphers/other/attachment/attachment-1" },
+    { fileUploadType: 0, url: "/ciphers/cipher-1/attachment/other" },
+    { fileUploadType: 0, url: "//external.example/collect" },
+    { fileUploadType: 0, url: "/ciphers/cipher-1/attachment/attachment-1?target=other" },
+    { fileUploadType: 1, url: "/ciphers/cipher-1/attachment/attachment-1" }
+  ])("rejects ambiguous or wrong-target relative upload hint $url ($fileUploadType)", async data => {
+    const client = new BitwardenClient(async () => new Response(JSON.stringify({ attachmentId: "attachment-1", ...data }), { status: 200 }));
+    await expect(client.prepareAttachmentUpload(activeSession(), "cipher-1", { key: "synthetic-wrapped-key", fileName: "synthetic-encrypted-name", fileSize: 96, lastKnownRevisionDate: "2026-09-30T00:00:00.000Z" })).rejects.toThrow();
+  });
+});
 
 function activeSession() {
   return {

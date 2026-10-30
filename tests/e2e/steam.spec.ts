@@ -8,7 +8,7 @@ test("Steam manager handles approvals, inventory, market listings, and devices",
   try {
     context = await chromium.launchPersistentContext(testInfo.outputPath("steam-profile"), {
       channel: "chromium",
-      headless: true,
+      headless: true, locale: "zh-CN",
       args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
     });
     const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
@@ -56,7 +56,7 @@ test("Steam manager handles approvals, inventory, market listings, and devices",
     await manager.getByLabel("主密码", { exact: true }).fill("steam e2e master password");
     await manager.getByLabel("确认主密码", { exact: true }).fill("steam e2e master password");
     await manager.getByRole("button", { name: "创建并解锁" }).click();
-    await expect(manager.getByRole("heading", { name: "密码库概览" })).toBeVisible();
+    await expect(manager.getByRole("heading", { name: "全部项目", exact: true })).toBeVisible();
     const now = new Date().toISOString();
     const accessToken = jwt(4_102_444_800);
     const upsert = await manager.evaluate(async ({ now, token }) => chrome.runtime.sendMessage({
@@ -72,7 +72,10 @@ test("Steam manager handles approvals, inventory, market listings, and devices",
     for (const forbidden of [accessToken, "MTIzNDU2Nzg=", "steamLoginSecure", "access_token", "refresh_token"]) expect(serializedResponses).not.toContain(forbidden);
     await manager.reload();
     await manager.getByRole("button", { name: /^Steam/ }).click();
-    const account = manager.locator(".steam-account-panel").filter({ hasText: "Steam E2E" });
+    await expect(manager.locator(".vault-tile")).toHaveCount(1);
+    await expect(manager.locator(".steam-account-panel")).toHaveCount(0);
+    await manager.getByRole("button", { name: "查看Steam E2E详情", exact: true }).click();
+    const account = manager.locator(".steam-account-panel");
     await expect(account).toBeVisible();
 
     await account.getByRole("button", { name: "刷新待批准操作" }).click();

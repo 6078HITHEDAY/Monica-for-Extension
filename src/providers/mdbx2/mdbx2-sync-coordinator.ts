@@ -6,6 +6,7 @@ import {
   MDBX2_MAX_BINARY_CHUNK_BYTES,
   MDBX2_MAX_INBOUND_FILE_BYTES,
   MDBX2_MAX_REMOTE_BLOB_BYTES,
+  Mdbx2NativeHostError,
   type Mdbx2ExternalBlobChunk,
   type Mdbx2ExternalBlobReceiveState,
   type Mdbx2ExternalBlobReferencePage,
@@ -58,6 +59,7 @@ export interface Mdbx2CloudSyncReport {
 
 export interface Mdbx2CloudRuntime {
   beginInboundTransfer(sizeBytes: number, sha256?: string, purpose?: "vault-bootstrap" | "sync-segment"): Promise<Mdbx2TransferBeginResult>;
+  beginInboundTransferForVault?(vaultHandle: string, sizeBytes: number, sha256?: string, purpose?: "vault-bootstrap" | "sync-segment"): Promise<Mdbx2TransferBeginResult>;
   sendInboundChunk(transferId: string, offset: number, bytes: Uint8Array): Promise<Mdbx2TransferChunkResult>;
   finishInboundTransfer(transferId: string): Promise<Mdbx2TransferFinishResult>;
   abortInboundTransfer(transferId: string): Promise<boolean>;
@@ -79,6 +81,7 @@ export interface Mdbx2CloudRuntime {
   markRemoteBlobVerified(vaultHandle: string, stateHandle: string, remoteBinding: string, blobId: string, totalSize: number): Promise<void>;
   beginExternalBlobReceive(vaultHandle: string, stateHandle: string, remoteBinding: string, blobId: string, totalSize: number): Promise<Mdbx2ExternalBlobReceiveState>;
   writeExternalBlobReceiveChunk(vaultHandle: string, stateHandle: string, remoteBinding: string, blobId: string, totalSize: number, offset: number, bytes: Uint8Array, finalize: boolean): Promise<Mdbx2ExternalBlobReceiveState>;
+  abortExternalBlobReceive(vaultHandle: string, stateHandle: string, remoteBinding: string, blobId: string): Promise<boolean>;
 }
 
 interface PreparedContext {
@@ -95,13 +98,24 @@ export class Mdbx2SyncCoordinator {
     private readonly fetcher: typeof fetch = globalThis.fetch.bind(globalThis)
   ) {}
 
-  async publishBootstrap(input: Omit<Mdbx2CloudSyncInput, "syncStateHandle"> & { syncStateHandle?: string }, signal?: AbortSignal): Promise<{ stateHandle: string; status: Mdbx2SyncStateStatus }> {
+  async publishBootstrap(input: Omit<Mdbx2CloudSyncInput, "syncStateHandle"> & { syncStateHandle?: string }, signal?: AbortSignal,
+    retainPreparedState?: (stateHandle: string) => Promise<void>): Promise<{ stateHandle: string; status: Mdbx2SyncStateStatus }> {
     signal?.throwIfAborted();
     const remotePath = normalizeMdbx2RemotePath(input.remotePath);
     const remoteBinding = await mdbx2RemoteBinding(input, remotePath);
     const webdav = this.webdav(input);
     await webdav.testConnection(signal);
+    if (input.syncStateHandle) {
+      const status = await this.runtime.syncStateStatus(input.vaultHandle, input.syncStateHandle, remoteBinding);
+      // The durable commit can outlive its response or the manager page. Reuse
+      // its authenticated result instead of generating a second bootstrap.
+      if (status.initialized) return { stateHandle: input.syncStateHandle, status };
+    }
     const prepared = await this.runtime.prepareSyncBootstrap(input.vaultHandle, remoteBinding, input.syncStateHandle);
+    // Bind recovery state before the first external write. A lost PUT response
+    // must not leave the encrypted account unable to find this exact snapshot.
+    await retainPreparedState?.(prepared.stateHandle);
+    signal?.throwIfAborted();
     try {
       const body = await this.readOutputBlob(input.vaultHandle, prepared.stateHandle, remoteBinding, prepared.file, signal);
       await webdav.putImmutable(remotePath, body, prepared.file.sha256, signal);
@@ -149,6 +163,13 @@ export class Mdbx2SyncCoordinator {
       conflicts: 0,
       blockedStreams: 0
     };
+    if (context.status.pendingRemoteAcknowledgement) {
+      // A prior receive can have committed objects before its Blob download was
+      // interrupted. Finish that exact segment before preparing any local send.
+      await this.receiveRemote(context, report, signal, true);
+      const recovered = await this.runtime.syncStateStatus(input.vaultHandle, input.syncStateHandle, context.remoteBinding);
+      if (recovered.pendingRemoteAcknowledgement) throw new Mdbx2NativeHostError('sync-remote-acknowledgement-pending', 'MDBX2 尚有未完成的附件接收，请恢复对应的远端增量段和附件后重试。', true);
+    }
     await this.publishLocal(context, report, signal);
     await this.receiveRemote(context, report, signal);
     const status = await this.runtime.syncStateStatus(input.vaultHandle, input.syncStateHandle, context.remoteBinding);
@@ -258,7 +279,7 @@ export class Mdbx2SyncCoordinator {
     return uploaded;
   }
 
-  private async receiveRemote(context: PreparedContext, report: Mdbx2CloudSyncReport, signal?: AbortSignal): Promise<void> {
+  private async receiveRemote(context: PreparedContext, report: Mdbx2CloudSyncReport, signal?: AbortSignal, resumePendingOnly = false): Promise<void> {
     const descriptors = (await listRemoteSegments(context.webdav, context.remotePath, signal))
       .filter((descriptor) => descriptor.deviceId !== context.status.deviceId);
     let streams = new Map((await this.runtime.listSyncStreams(
@@ -274,6 +295,9 @@ export class Mdbx2SyncCoordinator {
         for (const descriptor of files) {
           signal?.throwIfAborted();
           const expected = stream?.nextSequence || 0;
+          // While recovering, do not block or advance unrelated streams. The
+          // engine itself accepts only the exact previously applied descriptor.
+          if (resumePendingOnly && descriptor.sequence !== expected) continue;
           if (descriptor.sequence < expected) {
             if (descriptor.sequence === expected - 1 && stream?.lastAppliedDigest && stream.lastAppliedDigest !== descriptor.digestHex) {
               stream = await this.runtime.blockSyncStream(
@@ -298,7 +322,7 @@ export class Mdbx2SyncCoordinator {
             break;
           }
           const remote = await requireRemoteFile(context.webdav, descriptor.path, MDBX2_MAX_INBOUND_FILE_BYTES, signal);
-          const transferred = await this.downloadToHost(context.webdav, remote, "sync-segment", signal);
+          const transferred = await this.downloadToHost(context.webdav, remote, "sync-segment", signal, context.input.vaultHandle);
           report.downloadedSegments += 1;
           try {
             const inspected = await this.runtime.inspectSyncSegment(context.input.vaultHandle, transferred.fileHandle);
@@ -318,6 +342,7 @@ export class Mdbx2SyncCoordinator {
             );
           } catch (error) {
             await this.runtime.releaseFile(transferred.fileHandle).catch(() => undefined);
+            if (resumePendingOnly && error instanceof Mdbx2NativeHostError && error.code === 'sync-remote-acknowledgement-pending') continue;
             throw error;
           }
           report.appliedCommits += applied.appliedCommits;
@@ -340,6 +365,7 @@ export class Mdbx2SyncCoordinator {
               hostDescriptor(descriptor)
             );
             streams.set(streamId, stream);
+            if (resumePendingOnly) return;
           }
           progressed = true;
         }
@@ -373,20 +399,36 @@ export class Mdbx2SyncCoordinator {
           remote.sizeBytes
         );
         if (receive.complete) continue;
+        const abortIncompleteReceive = () => this.runtime.abortExternalBlobReceive(
+          context.input.vaultHandle, context.input.syncStateHandle, context.remoteBinding, reference.blobId
+        ).catch(() => false);
         const result = await context.webdav.download(remotePath, remote.sizeBytes, async (chunk, offset) => {
           const nextOffset = offset + chunk.length;
-          receive = await this.runtime.writeExternalBlobReceiveChunk(
-            context.input.vaultHandle,
-            context.input.syncStateHandle,
-            context.remoteBinding,
-            reference.blobId,
-            remote.sizeBytes,
-            offset,
-            chunk,
-            nextOffset === remote.sizeBytes
-          );
+          try {
+            receive = await this.runtime.writeExternalBlobReceiveChunk(
+              context.input.vaultHandle,
+              context.input.syncStateHandle,
+              context.remoteBinding,
+              reference.blobId,
+              remote.sizeBytes,
+              offset,
+              chunk,
+              nextOffset === remote.sizeBytes
+            );
+          } catch (error) {
+            // A rejected write can leave corrupt bytes in the leased partial
+            // file. Remove only this transfer so corrected remote data can be
+            // retried. Network failures and uncertain replies keep progress;
+            // the authenticated pending segment is never acknowledged here.
+            if (error instanceof Mdbx2NativeHostError &&
+              (error.code === 'sync-blob-write-failed' || error.code === 'sync-blob-finalize-failed')) {
+              await abortIncompleteReceive();
+            }
+            throw error;
+          }
         }, signal);
         if (result.sha256 !== reference.blobId || result.sizeBytes !== remote.sizeBytes || !receive.complete) {
+          await abortIncompleteReceive();
           throw new Error(`MDBX2 WebDAV Blob 完整性检查失败: ${reference.blobId}`);
         }
         downloaded += 1;
@@ -456,9 +498,12 @@ export class Mdbx2SyncCoordinator {
     webdav: Mdbx2WebDavClient,
     remote: Required<Pick<Mdbx2WebDavObject, "path" | "sizeBytes">> & Mdbx2WebDavObject,
     purpose: "vault-bootstrap" | "sync-segment",
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    ownerVaultHandle?: string
   ): Promise<Mdbx2TransferFinishResult> {
-    const begun = await this.runtime.beginInboundTransfer(remote.sizeBytes, undefined, purpose);
+    const begun = ownerVaultHandle && this.runtime.beginInboundTransferForVault
+      ? await this.runtime.beginInboundTransferForVault(ownerVaultHandle, remote.sizeBytes, undefined, purpose)
+      : await this.runtime.beginInboundTransfer(remote.sizeBytes, undefined, purpose);
     let finished = false;
     try {
       const downloaded = await webdav.download(remote.path, remote.sizeBytes, async (chunk, offset) => {

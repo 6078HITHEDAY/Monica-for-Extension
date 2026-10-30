@@ -1,0 +1,246 @@
+{
+  "title": "Monica · 平铺紧凑列表",
+  "frame": "phone",
+  "platform": "web",
+  "paletteKey": "teal",
+  "theme": {
+    "dark": true,
+    "bothModes": true,
+    "contrast": "standard",
+    "shape": "rounded",
+    "font": "system",
+    "emphasized": true,
+    "motion": "standard"
+  },
+  "frames": [
+    {
+      "id": "all",
+      "name": "全部项目 · 紧凑列表",
+      "x": 0,
+      "y": 0,
+      "w": 600,
+      "h": 620
+    },
+    {
+      "id": "login",
+      "name": "登录项 · 同一列表",
+      "x": 640,
+      "y": 0,
+      "w": 600,
+      "h": 620
+    }
+  ],
+  "groups": [
+    {
+      "id": "allheading",
+      "frameId": "all",
+      "x": 12,
+      "y": 12,
+      "axis": "y",
+      "gap": 3,
+      "items": [
+        {
+          "id": "allheading0",
+          "size": 576,
+          "variant": "tonal",
+          "icon": "menu",
+          "kind": "topAppBar",
+          "label": "全部项目"
+        }
+      ]
+    },
+    {
+      "id": "allsearch",
+      "frameId": "all",
+      "x": 12,
+      "y": 88,
+      "axis": "y",
+      "gap": 3,
+      "items": [
+        {
+          "id": "allsearch0",
+          "size": 576,
+          "variant": "tonal",
+          "icon": "search",
+          "kind": "searchBar",
+          "label": "搜索当前分类"
+        }
+      ]
+    },
+    {
+      "id": "allsource",
+      "frameId": "all",
+      "x": 12,
+      "y": 164,
+      "axis": "y",
+      "gap": 3,
+      "items": [
+        {
+          "id": "allsource0",
+          "size": 576,
+          "variant": "tonal",
+          "icon": null,
+          "kind": "select",
+          "label": "当前数据库",
+          "supporting": "全部数据库"
+        }
+      ]
+    },
+    {
+      "id": "allrows",
+      "frameId": "all",
+      "x": 12,
+      "y": 248,
+      "axis": "y",
+      "gap": 3,
+      "items": [
+        {
+          "id": "allrows0",
+          "size": 576,
+          "variant": "tonal",
+          "icon": "password",
+          "kind": "listItem",
+          "label": "Example · 个人账号",
+          "supporting": "personal@example.test · Bitwarden",
+          "radius": 20
+        },
+        {
+          "id": "allrows1",
+          "size": 576,
+          "variant": "tonal",
+          "icon": "password",
+          "kind": "listItem",
+          "label": "Example · 工作账号",
+          "supporting": "work@example.test · Bitwarden",
+          "radius": 4
+        },
+        {
+          "id": "allrows2",
+          "size": 576,
+          "variant": "tonal",
+          "icon": "mail",
+          "kind": "listItem",
+          "label": "Mail · 两组账号",
+          "supporting": "mail@example.test · Monica 本地库",
+          "radius": 4
+        },
+        {
+          "id": "allrows3",
+          "size": 576,
+          "variant": "tonal",
+          "icon": "description",
+          "kind": "listItem",
+          "label": "旅行笔记",
+          "supporting": "安全笔记 · Monica 本地库",
+          "radius": 20
+        }
+      ]
+    },
+    {
+      "id": "loginheading",
+      "frameId": "login",
+      "x": 652,
+      "y": 12,
+      "axis": "y",
+      "gap": 3,
+      "items": [
+        {
+          "id": "loginheading0",
+          "size": 576,
+          "variant": "tonal",
+          "icon": "menu",
+          "kind": "topAppBar",
+          "label": "登录项"
+        }
+      ]
+    },
+    {
+      "id": "loginsearch",
+      "frameId": "login",
+      "x": 652,
+      "y": 88,
+      "axis": "y",
+      "gap": 3,
+      "items": [
+        {
+          "id": "loginsearch0",
+          "size": 576,
+          "variant": "tonal",
+          "icon": "search",
+          "kind": "searchBar",
+          "label": "搜索当前分类"
+        }
+      ]
+    },
+    {
+      "id": "loginsource",
+      "frameId": "login",
+      "x": 652,
+      "y": 164,
+      "axis": "y",
+      "gap": 3,
+      "items": [
+        {
+          "id": "loginsource0",
+          "size": 576,
+          "variant": "tonal",
+          "icon": null,
+          "kind": "select",
+          "label": "当前数据库",
+          "supporting": "全部数据库"
+        }
+      ]
+    },
+    {
+      "id": "loginrows",
+      "frameId": "login",
+      "x": 652,
+      "y": 248,
+      "axis": "y",
+      "gap": 3,
+      "items": [
+        {
+          "id": "loginrows0",
+          "size": 576,
+          "variant": "tonal",
+          "icon": "password",
+          "kind": "listItem",
+          "label": "Example · 个人账号",
+          "supporting": "personal@example.test · Bitwarden",
+          "radius": 20
+        },
+        {
+          "id": "loginrows1",
+          "size": 576,
+          "variant": "tonal",
+          "icon": "password",
+          "kind": "listItem",
+          "label": "Example · 工作账号",
+          "supporting": "work@example.test · Bitwarden",
+          "radius": 4
+        },
+        {
+          "id": "loginrows2",
+          "size": 576,
+          "variant": "tonal",
+          "icon": "mail",
+          "kind": "listItem",
+          "label": "Mail · 两组账号",
+          "supporting": "mail@example.test · Monica 本地库",
+          "radius": 4
+        },
+        {
+          "id": "loginrows3",
+          "size": 576,
+          "variant": "tonal",
+          "icon": "key",
+          "kind": "listItem",
+          "label": "Developer API",
+          "supporting": "API Key · Monica 本地库",
+          "radius": 20
+        }
+      ]
+    }
+  ],
+  "brief": "登录项和全部项目复用连续列表。移除显示分组和管理堆叠。压缩垂直留白，保留标题、摘要、来源和独立操作。"
+}

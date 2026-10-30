@@ -1,3 +1,4 @@
+import { chooseOption, editContentSection } from "./fixtures/material";
 import { expect, test, chromium, type BrowserContext } from "@playwright/test";
 import path from "node:path";
 
@@ -7,7 +8,7 @@ test("login popup fills username, password, and TOTP through the MV3 background 
   try {
     context = await chromium.launchPersistentContext(testInfo.outputPath("profile"), {
       channel: "chromium",
-      headless: true,
+      headless: true, locale: "zh-CN",
       args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
     });
     const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
@@ -73,7 +74,7 @@ test("manager saves a metadata-only SSO login with empty username, password, and
   try {
     context = await chromium.launchPersistentContext(testInfo.outputPath("empty-sso-profile"), {
       channel: "chromium",
-      headless: true,
+      headless: true, locale: "zh-CN",
       args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
     });
     const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
@@ -82,13 +83,16 @@ test("manager saves a metadata-only SSO login with empty username, password, and
     await manager.goto(`chrome-extension://${extensionId}/index.html`);
     expect(await manager.evaluate(async () => chrome.runtime.sendMessage({ type: "VAULT_SETUP", masterPassword: "metadata login password" }))).toMatchObject({ ok: true });
     await manager.reload();
-    await manager.getByRole("button", { name: "添加登录项" }).click();
+    await manager.locator(".sidebar").getByRole("button", { name: /^登录项/ }).click();
+    await manager.getByRole("button", { name: "新建", exact: true }).click();
     await manager.getByLabel("名称 *").fill("Company SSO");
-    await manager.getByRole("radio", { name: "SSO", exact: true }).check();
-    await manager.getByLabel("SSO 提供商").fill("GOOGLE");
+    await editContentSection(manager, "登录方式", async section => {
+      await chooseOption(section.getByRole("combobox", { name: "登录方式", exact: true }), "SSO");
+      await section.getByLabel("SSO 提供商").fill("GOOGLE");
+    });
     await manager.screenshot({ path: testInfo.outputPath("metadata-login-editor.png"), fullPage: true });
     await manager.getByRole("button", { name: "加密保存" }).click();
-    await manager.getByRole("button", { name: /^登录项/ }).click();
+    await manager.getByRole("navigation", { name: "主导航" }).getByRole("button", { name: /^登录项/ }).click();
     await expect(manager.getByText("Company SSO", { exact: true })).toBeVisible();
 
     const response = await manager.evaluate(async () => chrome.runtime.sendMessage({ type: "VAULT_LIST_ITEMS" })) as { ok: boolean; data: Array<Record<string, unknown>> };
@@ -103,7 +107,7 @@ test("popup shows top-level parent-RP Passkey status without exposing a signing 
   const extensionPath = path.resolve("dist");
   let context: BrowserContext | undefined;
   try {
-    context = await chromium.launchPersistentContext(testInfo.outputPath("passkey-status-profile"), { channel: "chromium", headless: true, args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`] });
+    context = await chromium.launchPersistentContext(testInfo.outputPath("passkey-status-profile"), { channel: "chromium", headless: true, locale: "zh-CN", args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`] });
     const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
     const extensionId = new URL(worker.url()).host;
     await context.route("https://login.accounts.example.co.uk/**", (route) => route.fulfill({ contentType: "text/html", body: "<!doctype html><title>Passkey-only site</title>" }));
@@ -129,13 +133,12 @@ test("popup shows top-level parent-RP Passkey status without exposing a signing 
     expect(await popup.evaluate(() => ({ client: document.documentElement.clientWidth, scroll: document.documentElement.scrollWidth }))).toMatchObject({ client: 390, scroll: 390 });
     await popup.evaluate(() => { document.documentElement.style.fontSize = "200%"; });
     const scaledCard = await popup.locator(".passkey-card").last().evaluate((card) => {
-      const copy = card.querySelector<HTMLElement>(".credential-copy")!;
+      const copy = card.querySelector<HTMLElement>(".popup-passkey-support > span:first-child")!;
       const state = card.querySelector<HTMLElement>(".passkey-state")!;
       const cardRect = card.getBoundingClientRect();
       const copyRect = copy.getBoundingClientRect();
       const stateRect = state.getBoundingClientRect();
       return {
-        display: getComputedStyle(card).display,
         cardWidth: cardRect.width,
         stateWidth: stateRect.width,
         stateTop: stateRect.top,
@@ -147,7 +150,6 @@ test("popup shows top-level parent-RP Passkey status without exposing a signing 
         documentScrollWidth: document.documentElement.scrollWidth
       };
     });
-    expect(scaledCard.display).toBe("grid");
     expect(scaledCard.stateWidth).toBeGreaterThan(scaledCard.cardWidth * 0.55);
     expect(scaledCard.stateTop).toBeGreaterThanOrEqual(scaledCard.copyBottom - 1);
     expect(scaledCard.alignedLeft).toBeLessThanOrEqual(1);
@@ -167,7 +169,7 @@ test("login popup discovers and safely fills a cross-origin login frame", async 
   try {
     context = await chromium.launchPersistentContext(testInfo.outputPath("frame-profile"), {
       channel: "chromium",
-      headless: true,
+      headless: true, locale: "zh-CN",
       args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
     });
     const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");

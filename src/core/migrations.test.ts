@@ -3,6 +3,23 @@ import { createEmptyVaultState, createLoginItem } from "./model";
 import { migrateVaultState } from "./migrations";
 
 describe("vault schema migrations", () => {
+  it.each([undefined, 1, 2])('preserves durable fingerprint version %s without rewriting its digest', fingerprintVersion => {
+    const state = createEmptyVaultState('2026-10-12T00:00:00Z');
+    const receipt = { version: 1, providerId: 'bw', itemId: 'passkey', mutationId: 'create', operation: 'create',
+      stage: 'attempted', intentFingerprint: 'a'.repeat(64), fingerprintVersion, attemptCount: 1,
+      createdAt: state.createdAt, updatedAt: state.updatedAt, attemptedAt: state.createdAt };
+    expect(migrateVaultState({ ...state, providerMutationReceipts: [receipt] }).providerMutationReceipts).toEqual([receipt]);
+  });
+
+  it.each([3, null, '2'])('refuses unknown fingerprint version %s without discarding the recovery receipt', fingerprintVersion => {
+    const state = createEmptyVaultState('2026-10-12T00:00:00Z');
+    const input = { ...state, providerMutationReceipts: [{ version: 1, providerId: 'bw', itemId: 'passkey', mutationId: 'create',
+      operation: 'create', stage: 'attempted', intentFingerprint: 'a'.repeat(64), fingerprintVersion, attemptCount: 1,
+      createdAt: state.createdAt, updatedAt: state.updatedAt, attemptedAt: state.createdAt }] };
+    const before = structuredClone(input);
+    expect(() => migrateVaultState(input)).toThrow('回执'); expect(input).toEqual(before);
+  });
+
   it("migrates v1 URI strings and defaults idempotently", () => {
     const current = createEmptyVaultState("2026-07-18T00:00:00.000Z");
     const login = createLoginItem({ title: "Legacy", password: "", uris: ["example.com", "https://login.example.com"] });
@@ -18,7 +35,9 @@ describe("vault schema migrations", () => {
     delete legacy.providerMutationReceipts;
 
     const migrated = migrateVaultState(legacy);
-    expect(migrated).toMatchObject({ schemaVersion: 2, sourceRecords: [], providerMutationReceipts: [], settings: { protectionMode: "master-password" } });
+    expect(migrated).toMatchObject({ schemaVersion: 2, sourceRecords: [], providerMutationReceipts: [], settings: {
+      protectionMode: "master-password", autofillBlockedHosts: [], saveBlockedHosts: [], autofillBlockedFieldSignatures: []
+    } });
     expect(migrated.items[0]).toMatchObject({
       kind: "login",
       uriRules: [
@@ -26,6 +45,29 @@ describe("vault schema migrations", () => {
         { uri: "https://login.example.com", matchType: "base-domain" }
       ]
     });
+    expect(migrateVaultState(migrated)).toEqual(migrated);
+  });
+
+  it("normalizes encrypted site-policy settings idempotently", () => {
+    const current = createEmptyVaultState("2026-08-23T00:00:00.000Z");
+    const migrated = migrateVaultState({ ...current, settings: {
+      ...current.settings,
+      autofillBlockedHosts: ["Login.Example.com.", "login.example.com"],
+      saveBlockedHosts: ["save.example.net"]
+    } });
+    expect(migrated.settings.autofillBlockedHosts).toEqual(["login.example.com"]);
+    expect(migrated.settings.saveBlockedHosts).toEqual(["save.example.net"]);
+    expect(migrateVaultState(migrated)).toEqual(migrated);
+  });
+
+  it("normalizes encrypted field exclusions idempotently", () => {
+    const current = createEmptyVaultState("2026-08-23T00:00:00.000Z");
+    const signature = "a".repeat(64);
+    const migrated = migrateVaultState({ ...current, settings: {
+      ...current.settings,
+      autofillBlockedFieldSignatures: [{ signature, hostname: "Login.Example.com.", frameScope: "top-level", role: "username", hints: ["username"], blockedAt: "2026-08-23T00:00:00.000Z" }]
+    } });
+    expect(migrated.settings.autofillBlockedFieldSignatures).toEqual([{ signature, hostname: "login.example.com", frameScope: "top-level", role: "username", hints: ["username"], blockedAt: "2026-08-23T00:00:00.000Z" }]);
     expect(migrateVaultState(migrated)).toEqual(migrated);
   });
 

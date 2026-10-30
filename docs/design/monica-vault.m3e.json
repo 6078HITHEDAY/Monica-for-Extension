@@ -1,0 +1,4070 @@
+{
+  "title": "Monica 插件 · Material 3 Expressive",
+  "brief": "Monica 0.1.37 可编辑布局稿。M3 Expressive 主导组件、形状、字体、动效和布局；Nothing 只作为可选的黑白红配色，不改变结构。默认 Monica 青绿色，支持浅色、深色、系统模式。参考 Monica Android 的信息顺序：名称、凭据和常用操作优先，更多字段与来源记录分层。顶部使用随页面切换的拆分新建按钮。示例均为虚构的 example.test 数据；保留 Monica 官方应用图标。插件使用系统字体和本地 Material 图标，不引入 Canvas 编辑器或修改 Android 数据与同步格式。 卡包、2FA 与 Steam 参考 Android 磁贴：大字号摘要或当前验证码、下一组预览、统一更多菜单；同周期验证码共享倒计时。Steam 完整操作面板按需打开，磁贴不改变原始数据类型。",
+  "frame": "phone",
+  "platform": "web",
+  "paletteKey": "teal",
+  "theme": {
+    "dark": false,
+    "bothModes": true,
+    "contrast": "standard",
+    "shape": "rounded",
+    "font": "system",
+    "emphasized": true,
+    "motion": "standard"
+  },
+  "frames": [
+    {
+      "id": "vault",
+      "name": "密码库",
+      "x": 0,
+      "y": 0,
+      "w": 1440,
+      "h": 1000,
+      "note": "直接进入密码库。顶部左侧直接打开当前页面或筛选类型的创建弹窗，未限定类型时默认新建登录项；右侧打开所有类型菜单。数据库只切换查看范围。"
+    },
+    {
+      "id": "create",
+      "name": "新建类型",
+      "x": 1520,
+      "y": 0,
+      "w": 1440,
+      "h": 1000,
+      "note": "模态选择器用两组连续列表呈现全部 11 种可手动新建的类型。窄窗口两组上下排列，标题和关闭始终可见。"
+    },
+    {
+      "id": "detail",
+      "name": "项目详情",
+      "x": 3040,
+      "y": 0,
+      "w": 1440,
+      "h": 1000,
+      "note": "参考 Monica Android。名称、用户名、密码与绑定验证码优先；更多信息与自定义字段折叠；右侧显示来源记录。窄屏单列，标题和底部操作固定。"
+    },
+    {
+      "id": "editor",
+      "name": "编辑项目",
+      "x": 4560,
+      "y": 0,
+      "w": 1440,
+      "h": 1000,
+      "note": "编辑时不重复显示只读类型。名称和保存位置靠前；账号、网站与验证码分组，附加字段展开后编辑。标题和保存操作固定；同步刷新保留草稿。"
+    },
+    {
+      "id": "narrow",
+      "name": "窄屏密码库",
+      "x": 6080,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "note": "窄窗口中导航收进抽屉。拆分按钮保留两个独立点击区；菜单按可用高度滚动，200% 字体仍可操作，支持减少动态效果。"
+    },
+    {
+      "id": "create-menu",
+      "name": "拆分新建菜单",
+      "x": 6560,
+      "y": 0,
+      "w": 1440,
+      "h": 1000,
+      "note": "左侧新建密码，右侧展开 11 种类型；勾选当前类型。真实菜单支持箭头、Home/End、Escape、外部关闭与焦点恢复。旧浏览器回退完整选择器。"
+    },
+    {
+      "id": "m3e37-tiles-wallet",
+      "name": "钱包与身份 · 磁贴",
+      "x": 0,
+      "y": 1120,
+      "w": 1440,
+      "h": 1000,
+      "note": "使用虚构数据的磁贴布局稿；生产版采用 @m3e/web 的卡片、菜单、焦点环与短动效。"
+    },
+    {
+      "id": "m3e37-tiles-otp",
+      "name": "动态验证码 · 磁贴",
+      "x": 1520,
+      "y": 1120,
+      "w": 1440,
+      "h": 1000,
+      "note": "使用虚构数据的磁贴布局稿；生产版采用 @m3e/web 的卡片、菜单、焦点环与短动效。"
+    },
+    {
+      "id": "m3e37-tiles-steam",
+      "name": "Steam · 账户磁贴",
+      "x": 3040,
+      "y": 1120,
+      "w": 1440,
+      "h": 1000,
+      "note": "使用虚构数据的磁贴布局稿；生产版采用 @m3e/web 的卡片、菜单、焦点环与短动效。"
+    },
+    {
+      "id": "m3e37-tiles-narrow",
+      "name": "动态验证码",
+      "x": 4560,
+      "y": 1120,
+      "w": 390,
+      "h": 1000,
+      "note": "窄屏保持双列，空间不足或放大字体时单列。当前码与下一组分层显示，HOTP 不生成下一组预览。"
+    }
+  ],
+  "groups": [
+    {
+      "id": "group-2",
+      "x": 0,
+      "y": 0,
+      "axis": "x",
+      "items": [
+        {
+          "id": "part-1",
+          "kind": "navRail",
+          "label": "Monica",
+          "icon": "menu",
+          "variant": "filled",
+          "railExpanded": true,
+          "size2": 1000,
+          "tabs": [
+            {
+              "icon": "list",
+              "label": "全部项目"
+            },
+            {
+              "icon": "password",
+              "label": "登录项"
+            },
+            {
+              "icon": "key",
+              "label": "API 密钥"
+            },
+            {
+              "icon": "wallet",
+              "label": "钱包与身份"
+            },
+            {
+              "icon": "note_stack",
+              "label": "安全笔记"
+            },
+            {
+              "icon": "timer",
+              "label": "动态验证码"
+            },
+            {
+              "icon": "key_vertical",
+              "label": "Passkey"
+            },
+            {
+              "icon": "archive",
+              "label": "归档"
+            },
+            {
+              "icon": "delete",
+              "label": "回收站"
+            },
+            {
+              "icon": "cloud_sync",
+              "label": "密码源"
+            },
+            {
+              "icon": "settings",
+              "label": "设置与备份"
+            }
+          ],
+          "selected": 0,
+          "actions": {
+            "tab:0": {
+              "to": "vault",
+              "transition": "fade"
+            }
+          },
+          "note": "草图展示主要入口；实际插件沿用完整导航与 Monica 官方图标，不以此处通用图标替换品牌。"
+        }
+      ]
+    },
+    {
+      "id": "group-4",
+      "x": 252,
+      "y": 20,
+      "axis": "x",
+      "items": [
+        {
+          "id": "part-3",
+          "kind": "searchBar",
+          "label": "搜索当前分类",
+          "icon": null,
+          "variant": "filled",
+          "size": 680
+        }
+      ]
+    },
+    {
+      "id": "group-6",
+      "x": 1136,
+      "y": 20,
+      "axis": "x",
+      "items": [
+        {
+          "id": "part-5",
+          "kind": "splitButton",
+          "label": "新建",
+          "icon": "add",
+          "variant": "filled",
+          "size": 176,
+          "action": {
+            "to": "create-menu",
+            "transition": "fade"
+          },
+          "note": "实际插件：左侧新建当前类型，右侧展开其他类型。Canvas 只支持整个组件的动作，因此此节点演示菜单，完整选择器另有页面。"
+        }
+      ]
+    },
+    {
+      "id": "group-8",
+      "x": 252,
+      "y": 112,
+      "axis": "x",
+      "items": [
+        {
+          "id": "part-7",
+          "kind": "text",
+          "label": "全部项目",
+          "icon": null,
+          "variant": "filled",
+          "size": 36
+        }
+      ]
+    },
+    {
+      "id": "group-10",
+      "x": 252,
+      "y": 192,
+      "axis": "x",
+      "items": [
+        {
+          "id": "part-9",
+          "kind": "select",
+          "label": "全部数据库",
+          "icon": "database",
+          "variant": "filled",
+          "size": 240,
+          "tabs": [
+            {
+              "label": "全部数据库"
+            },
+            {
+              "label": "Monica 本地库"
+            },
+            {
+              "label": "工作数据库"
+            }
+          ],
+          "selected": 0,
+          "note": "只切换列表范围，保持项目原来的数据库归属；高级筛选仍在筛选对话框。"
+        }
+      ]
+    },
+    {
+      "id": "group-12",
+      "x": 516,
+      "y": 192,
+      "axis": "x",
+      "items": [
+        {
+          "id": "part-11",
+          "kind": "button",
+          "label": "收藏",
+          "icon": "star",
+          "variant": "text",
+          "size": 112,
+          "toggle": {
+            "icon": "star",
+            "variant": "tonal",
+            "label": "收藏"
+          }
+        }
+      ]
+    },
+    {
+      "id": "group-14",
+      "x": 1190,
+      "y": 212,
+      "axis": "x",
+      "items": [
+        {
+          "id": "part-13",
+          "kind": "text",
+          "label": "8 个结果",
+          "icon": null,
+          "variant": "filled",
+          "size": 14
+        }
+      ]
+    },
+    {
+      "id": "group-23",
+      "x": 252,
+      "y": 280,
+      "axis": "y",
+      "items": [
+        {
+          "id": "part-15",
+          "kind": "listItem",
+          "label": "Proton Mail",
+          "icon": "password",
+          "variant": "filled",
+          "icon2": "chevron_right",
+          "size": 1156,
+          "supporting": "studio@example.test · 登录项 · 已收藏 · Monica 本地库",
+          "action": {
+            "to": "detail",
+            "transition": "fade"
+          }
+        },
+        {
+          "id": "part-16",
+          "kind": "listItem",
+          "label": "GitHub · Monica",
+          "icon": "password",
+          "variant": "filled",
+          "size": 1156,
+          "supporting": "monica-studio · 登录项 · Monica 本地库"
+        },
+        {
+          "id": "part-17",
+          "kind": "listItem",
+          "label": "Figma · Design workspace",
+          "icon": "password",
+          "variant": "filled",
+          "size": 1156,
+          "supporting": "design@example.test · 登录项 · Monica 本地库"
+        },
+        {
+          "id": "part-18",
+          "kind": "listItem",
+          "label": "Monica 开发环境",
+          "icon": "key",
+          "variant": "filled",
+          "size": 1156,
+          "supporting": "Example API · API 密钥 · 已收藏 · Monica 本地库"
+        },
+        {
+          "id": "part-19",
+          "kind": "listItem",
+          "label": "日常支付卡",
+          "icon": "credit_card",
+          "variant": "filled",
+          "size": 1156,
+          "supporting": "Visa · •••• 1111 · 银行卡 · Monica 本地库"
+        },
+        {
+          "id": "part-20",
+          "kind": "listItem",
+          "label": "账号恢复指引",
+          "icon": "note",
+          "variant": "filled",
+          "size": 1156,
+          "supporting": "已加密笔记 · 内容不在列表展开 · Monica 本地库"
+        },
+        {
+          "id": "part-21",
+          "kind": "listItem",
+          "label": "Studio 验证器",
+          "icon": "timer",
+          "variant": "filled",
+          "size": 1156,
+          "supporting": "动态验证码 · Monica 本地库"
+        },
+        {
+          "id": "part-22",
+          "kind": "listItem",
+          "label": "示例通行密钥",
+          "icon": "key_vertical",
+          "variant": "filled",
+          "size": 1156,
+          "supporting": "passkey.example.test · Android 元数据，仅可查看"
+        }
+      ]
+    },
+    {
+      "id": "group-25",
+      "x": 1840,
+      "y": 160,
+      "axis": "x",
+      "items": [
+        {
+          "id": "part-24",
+          "kind": "box",
+          "label": "",
+          "icon": null,
+          "variant": "filled",
+          "size": 800,
+          "size2": 680,
+          "fill": "surfaceContainerLow",
+          "radiusTop": 28,
+          "radiusBottom": 28
+        }
+      ]
+    },
+    {
+      "id": "group-27",
+      "x": 1868,
+      "y": 190,
+      "axis": "x",
+      "items": [
+        {
+          "id": "part-26",
+          "kind": "text",
+          "label": "新建项目",
+          "icon": null,
+          "variant": "filled",
+          "size": 28
+        }
+      ]
+    },
+    {
+      "id": "group-29",
+      "x": 1868,
+      "y": 234,
+      "axis": "x",
+      "items": [
+        {
+          "id": "part-28",
+          "kind": "text",
+          "label": "选择要保存的内容",
+          "icon": null,
+          "variant": "filled",
+          "size": 16
+        }
+      ]
+    },
+    {
+      "id": "group-31",
+      "x": 2572,
+      "y": 184,
+      "axis": "x",
+      "items": [
+        {
+          "id": "part-30",
+          "kind": "iconButton",
+          "label": "",
+          "icon": "close",
+          "variant": "text",
+          "action": {
+            "to": "back",
+            "transition": "fade"
+          }
+        }
+      ]
+    },
+    {
+      "id": "group-33",
+      "x": 1868,
+      "y": 296,
+      "axis": "x",
+      "items": [
+        {
+          "id": "part-32",
+          "kind": "text",
+          "label": "账号与安全",
+          "icon": null,
+          "variant": "filled",
+          "size": 16
+        }
+      ]
+    },
+    {
+      "id": "group-35",
+      "x": 2256,
+      "y": 296,
+      "axis": "x",
+      "items": [
+        {
+          "id": "part-34",
+          "kind": "text",
+          "label": "钱包与其他",
+          "icon": null,
+          "variant": "filled",
+          "size": 16
+        }
+      ]
+    },
+    {
+      "id": "group-42",
+      "x": 1868,
+      "y": 336,
+      "axis": "y",
+      "items": [
+        {
+          "id": "part-36",
+          "kind": "listItem",
+          "label": "密码",
+          "icon": "password",
+          "variant": "filled",
+          "size": 360,
+          "supporting": "网站与应用账号",
+          "action": {
+            "to": "editor",
+            "transition": "fade"
+          }
+        },
+        {
+          "id": "part-37",
+          "kind": "listItem",
+          "label": "API 密钥",
+          "icon": "key",
+          "variant": "filled",
+          "size": 360,
+          "supporting": "服务商密钥与访问令牌"
+        },
+        {
+          "id": "part-38",
+          "kind": "listItem",
+          "label": "动态验证码",
+          "icon": "timer",
+          "variant": "filled",
+          "size": 360,
+          "supporting": "TOTP、HOTP 与其他验证器"
+        },
+        {
+          "id": "part-39",
+          "kind": "listItem",
+          "label": "Wi-Fi",
+          "icon": "wifi",
+          "variant": "filled",
+          "size": 360,
+          "supporting": "网络密码与连接配置"
+        },
+        {
+          "id": "part-40",
+          "kind": "listItem",
+          "label": "SSH 密钥",
+          "icon": "terminal",
+          "variant": "filled",
+          "size": 360,
+          "supporting": "公钥、私钥与指纹"
+        },
+        {
+          "id": "part-41",
+          "kind": "listItem",
+          "label": "安全笔记",
+          "icon": "note",
+          "variant": "filled",
+          "size": 360,
+          "supporting": "需要加密保存的文字"
+        }
+      ]
+    },
+    {
+      "id": "group-48",
+      "x": 2256,
+      "y": 336,
+      "axis": "y",
+      "items": [
+        {
+          "id": "part-43",
+          "kind": "listItem",
+          "label": "银行卡",
+          "icon": "credit_card",
+          "variant": "filled",
+          "size": 356,
+          "supporting": "卡号与账单信息"
+        },
+        {
+          "id": "part-44",
+          "kind": "listItem",
+          "label": "证件",
+          "icon": "badge",
+          "variant": "filled",
+          "size": 356,
+          "supporting": "身份信息与证件号码"
+        },
+        {
+          "id": "part-45",
+          "kind": "listItem",
+          "label": "账单地址",
+          "icon": "home_pin",
+          "variant": "filled",
+          "size": 356,
+          "supporting": "收件人与联系方式"
+        },
+        {
+          "id": "part-46",
+          "kind": "listItem",
+          "label": "支付账号",
+          "icon": "account_balance",
+          "variant": "filled",
+          "size": 356,
+          "supporting": "付款账户与银行信息"
+        },
+        {
+          "id": "part-47",
+          "kind": "listItem",
+          "label": "条码",
+          "icon": "qr_code_2",
+          "variant": "filled",
+          "size": 356,
+          "supporting": "二维码与条形码内容"
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-2",
+      "x": 3240,
+      "y": 96,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-1",
+          "kind": "box",
+          "label": "",
+          "icon": null,
+          "variant": "filled",
+          "size": 1040,
+          "size2": 800,
+          "fill": "surfaceContainer",
+          "radiusTop": 28,
+          "radiusBottom": 28
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-4",
+      "x": 3272,
+      "y": 132,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-3",
+          "kind": "text",
+          "label": "Proton Mail",
+          "icon": null,
+          "variant": "filled",
+          "size": 32
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-6",
+      "x": 3272,
+      "y": 184,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-5",
+          "kind": "text",
+          "label": "登录项 · 已收藏 · 日常",
+          "icon": null,
+          "variant": "filled",
+          "size": 16
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-8",
+      "x": 4204,
+      "y": 124,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-7",
+          "kind": "iconButton",
+          "label": "",
+          "icon": "close",
+          "variant": "text",
+          "action": {
+            "to": "back",
+            "transition": "fade"
+          }
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-10",
+      "x": 3272,
+      "y": 254,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-9",
+          "kind": "text",
+          "label": "账号信息",
+          "icon": null,
+          "variant": "filled",
+          "size": 16
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-15",
+      "x": 3272,
+      "y": 296,
+      "axis": "y",
+      "items": [
+        {
+          "id": "m3e42-item-11",
+          "kind": "listItem",
+          "label": "用户名",
+          "icon": null,
+          "variant": "filled",
+          "size": 676,
+          "supporting": "studio@example.test",
+          "icon2": "content_copy"
+        },
+        {
+          "id": "m3e42-item-12",
+          "kind": "listItem",
+          "label": "密码",
+          "icon": null,
+          "variant": "filled",
+          "size": 676,
+          "supporting": "••••••••",
+          "icon2": "visibility",
+          "note": "由用户主动显示或复制，设计稿不含真实密码。"
+        },
+        {
+          "id": "m3e42-item-13",
+          "kind": "listItem",
+          "label": "动态验证码",
+          "icon": null,
+          "variant": "filled",
+          "size": 676,
+          "supporting": "绑定的 Studio 验证器",
+          "icon2": "content_copy"
+        },
+        {
+          "id": "m3e42-item-14",
+          "kind": "listItem",
+          "label": "网址",
+          "icon": null,
+          "variant": "filled",
+          "size": 676,
+          "supporting": "https://mail.example.test",
+          "icon2": "open_in_new"
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-17",
+      "x": 3272,
+      "y": 672,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-16",
+          "kind": "listItem",
+          "label": "更多信息",
+          "icon": null,
+          "variant": "filled",
+          "size": 676,
+          "icon2": "expand_more",
+          "note": "银行卡账单字段、证件签发信息、OTP 算法、Passkey 技术参数等按类型放入此处，保持字段完整。"
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-19",
+      "x": 3272,
+      "y": 736,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-18",
+          "kind": "listItem",
+          "label": "自定义字段",
+          "icon": null,
+          "variant": "filled",
+          "size": 676,
+          "icon2": "expand_more"
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-21",
+      "x": 3980,
+      "y": 254,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-20",
+          "kind": "text",
+          "label": "来源与记录",
+          "icon": null,
+          "variant": "filled",
+          "size": 16
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-25",
+      "x": 3980,
+      "y": 296,
+      "axis": "y",
+      "items": [
+        {
+          "id": "m3e42-item-22",
+          "kind": "listItem",
+          "label": "密码源",
+          "icon": null,
+          "variant": "filled",
+          "size": 268,
+          "supporting": "Monica 本地库"
+        },
+        {
+          "id": "m3e42-item-23",
+          "kind": "listItem",
+          "label": "创建时间",
+          "icon": null,
+          "variant": "filled",
+          "size": 268,
+          "supporting": "2026-09-14"
+        },
+        {
+          "id": "m3e42-item-24",
+          "kind": "listItem",
+          "label": "更新时间",
+          "icon": null,
+          "variant": "filled",
+          "size": 268,
+          "supporting": "2026-09-14"
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-27",
+      "x": 3968,
+      "y": 824,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-26",
+          "kind": "button",
+          "label": "关闭",
+          "icon": null,
+          "variant": "text",
+          "size": 120,
+          "action": {
+            "to": "back",
+            "transition": "fade"
+          }
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-29",
+      "x": 4104,
+      "y": 824,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-28",
+          "kind": "button",
+          "label": "编辑",
+          "icon": "edit",
+          "variant": "filled",
+          "size": 144,
+          "action": {
+            "to": "editor",
+            "transition": "fade"
+          }
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-31",
+      "x": 4900,
+      "y": 32,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-30",
+          "kind": "box",
+          "label": "",
+          "icon": null,
+          "variant": "filled",
+          "size": 760,
+          "size2": 936,
+          "fill": "surfaceContainer",
+          "radiusTop": 28,
+          "radiusBottom": 28
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-33",
+      "x": 4928,
+      "y": 68,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-32",
+          "kind": "text",
+          "label": "编辑登录项",
+          "icon": null,
+          "variant": "filled",
+          "size": 28
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-35",
+      "x": 5588,
+      "y": 60,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-34",
+          "kind": "iconButton",
+          "label": "",
+          "icon": "close",
+          "variant": "text",
+          "action": {
+            "to": "back",
+            "transition": "fade"
+          }
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-37",
+      "x": 4948,
+      "y": 140,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-36",
+          "kind": "textField",
+          "label": "Proton Mail",
+          "icon": null,
+          "variant": "outlined",
+          "size": 664,
+          "supporting": "名称 · 必填"
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-39",
+      "x": 4948,
+      "y": 248,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-38",
+          "kind": "text",
+          "label": "保存到",
+          "icon": null,
+          "variant": "filled",
+          "size": 14
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-41",
+      "x": 5116,
+      "y": 232,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-40",
+          "kind": "select",
+          "label": "Monica 本地库",
+          "icon": null,
+          "variant": "filled",
+          "size": 496,
+          "tabs": [
+            {
+              "label": "Monica 本地库"
+            }
+          ],
+          "selected": 0
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-43",
+      "x": 4924,
+      "y": 320,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-42",
+          "kind": "box",
+          "label": "",
+          "icon": null,
+          "variant": "filled",
+          "size": 712,
+          "size2": 292,
+          "fill": "surfaceContainerLow",
+          "radiusTop": 20,
+          "radiusBottom": 20
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-45",
+      "x": 4948,
+      "y": 344,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-44",
+          "kind": "text",
+          "label": "账号信息",
+          "icon": null,
+          "variant": "filled",
+          "size": 16
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-47",
+      "x": 4948,
+      "y": 388,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-46",
+          "kind": "textField",
+          "label": "studio@example.test",
+          "icon": null,
+          "variant": "outlined",
+          "size": 316,
+          "supporting": "用户名"
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-49",
+      "x": 5288,
+      "y": 388,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-48",
+          "kind": "textField",
+          "label": "••••••••",
+          "icon": null,
+          "variant": "outlined",
+          "size": 324,
+          "supporting": "密码",
+          "icon2": "visibility"
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-51",
+      "x": 4948,
+      "y": 500,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-50",
+          "kind": "textField",
+          "label": "https://mail.example.test",
+          "icon": null,
+          "variant": "outlined",
+          "size": 664,
+          "supporting": "匹配网站 · 基础域名"
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-53",
+      "x": 4924,
+      "y": 628,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-52",
+          "kind": "box",
+          "label": "",
+          "icon": null,
+          "variant": "filled",
+          "size": 712,
+          "size2": 208,
+          "fill": "surfaceContainerLow",
+          "radiusTop": 20,
+          "radiusBottom": 20
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-55",
+      "x": 4948,
+      "y": 652,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-54",
+          "kind": "text",
+          "label": "补充信息",
+          "icon": null,
+          "variant": "filled",
+          "size": 16
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-57",
+      "x": 4948,
+      "y": 694,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-56",
+          "kind": "listItem",
+          "label": "两步验证",
+          "icon": null,
+          "variant": "filled",
+          "size": 664,
+          "supporting": "已绑定 Studio 验证器",
+          "icon2": "expand_more"
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-59",
+      "x": 4948,
+      "y": 778,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-58",
+          "kind": "listItem",
+          "label": "自定义字段与高级设置",
+          "icon": null,
+          "variant": "filled",
+          "size": 664,
+          "icon2": "expand_more"
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-61",
+      "x": 5364,
+      "y": 888,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-60",
+          "kind": "button",
+          "label": "取消",
+          "icon": null,
+          "variant": "text",
+          "size": 112,
+          "action": {
+            "to": "back",
+            "transition": "fade"
+          }
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-63",
+      "x": 5496,
+      "y": 888,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-62",
+          "kind": "button",
+          "label": "加密保存",
+          "icon": null,
+          "variant": "filled",
+          "size": 140,
+          "action": {
+            "to": "detail",
+            "transition": "fade"
+          },
+          "note": "草图演示导航。实际保存继续使用现有加密、来源绑定和远端版本检查。"
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-65",
+      "x": 6096,
+      "y": 16,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-64",
+          "kind": "iconButton",
+          "label": "",
+          "icon": "menu",
+          "variant": "text"
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-67",
+      "x": 6294,
+      "y": 16,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-66",
+          "kind": "splitButton",
+          "label": "新建",
+          "icon": "add",
+          "variant": "filled",
+          "action": {
+            "to": "create-menu",
+            "transition": "fade"
+          }
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-69",
+      "x": 6096,
+      "y": 92,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-68",
+          "kind": "searchBar",
+          "label": "搜索当前分类",
+          "icon": null,
+          "variant": "filled",
+          "size": 358
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-71",
+      "x": 6096,
+      "y": 172,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-70",
+          "kind": "text",
+          "label": "全部项目",
+          "icon": null,
+          "variant": "filled",
+          "size": 28
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-73",
+      "x": 6096,
+      "y": 228,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-72",
+          "kind": "select",
+          "label": "全部数据库",
+          "icon": "database",
+          "variant": "filled",
+          "size": 232,
+          "tabs": [
+            {
+              "label": "全部数据库"
+            },
+            {
+              "label": "Monica 本地库"
+            }
+          ],
+          "selected": 0
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-75",
+      "x": 6344,
+      "y": 228,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-74",
+          "kind": "button",
+          "label": "收藏",
+          "icon": "star",
+          "variant": "text",
+          "size": 110
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-81",
+      "x": 6096,
+      "y": 320,
+      "axis": "y",
+      "items": [
+        {
+          "id": "m3e42-item-76",
+          "kind": "listItem",
+          "label": "Proton Mail",
+          "icon": "password",
+          "variant": "filled",
+          "size": 358,
+          "supporting": "studio@example.test · 已收藏",
+          "action": {
+            "to": "detail",
+            "transition": "fade"
+          }
+        },
+        {
+          "id": "m3e42-item-77",
+          "kind": "listItem",
+          "label": "Monica 开发环境",
+          "icon": "key",
+          "variant": "filled",
+          "size": 358,
+          "supporting": "API 密钥 · GitHub"
+        },
+        {
+          "id": "m3e42-item-78",
+          "kind": "listItem",
+          "label": "日常支付卡",
+          "icon": "credit_card",
+          "variant": "filled",
+          "size": 358,
+          "supporting": "Visa · •••• 1111"
+        },
+        {
+          "id": "m3e42-item-79",
+          "kind": "listItem",
+          "label": "账号恢复指引",
+          "icon": "note",
+          "variant": "filled",
+          "size": 358,
+          "supporting": "安全笔记 · 内容已加密"
+        },
+        {
+          "id": "m3e42-item-80",
+          "kind": "listItem",
+          "label": "Studio 验证器",
+          "icon": "timer",
+          "variant": "filled",
+          "size": 358,
+          "supporting": "动态验证码 · Monica 本地库"
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-83",
+      "x": 6592,
+      "y": 24,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-82",
+          "kind": "searchBar",
+          "label": "搜索登录项",
+          "icon": null,
+          "variant": "filled",
+          "size": 720
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-85",
+      "x": 7668,
+      "y": 24,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-84",
+          "kind": "splitButton",
+          "label": "新建密码",
+          "icon": "add",
+          "variant": "filled",
+          "action": {
+            "to": "editor",
+            "transition": "fade"
+          },
+          "note": "此帧演示登录页：左边进入登录项编辑器，右边的完整类型菜单已展开。"
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-87",
+      "x": 6592,
+      "y": 116,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-86",
+          "kind": "text",
+          "label": "登录项",
+          "icon": null,
+          "variant": "filled",
+          "size": 36
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-91",
+      "x": 6592,
+      "y": 204,
+      "axis": "y",
+      "items": [
+        {
+          "id": "m3e42-item-88",
+          "kind": "listItem",
+          "label": "Proton Mail",
+          "icon": "password",
+          "variant": "filled",
+          "size": 976,
+          "supporting": "studio@example.test · Monica 本地库",
+          "action": {
+            "to": "detail",
+            "transition": "fade"
+          }
+        },
+        {
+          "id": "m3e42-item-89",
+          "kind": "listItem",
+          "label": "GitHub · Monica",
+          "icon": "password",
+          "variant": "filled",
+          "size": 976,
+          "supporting": "monica-studio · Monica 本地库"
+        },
+        {
+          "id": "m3e42-item-90",
+          "kind": "listItem",
+          "label": "Figma · Design workspace",
+          "icon": "password",
+          "variant": "filled",
+          "size": 976,
+          "supporting": "design@example.test · Monica 本地库"
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-93",
+      "x": 7624,
+      "y": 96,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-92",
+          "kind": "box",
+          "label": "",
+          "icon": null,
+          "variant": "filled",
+          "size": 344,
+          "size2": 844,
+          "fill": "surfaceContainerHigh",
+          "radiusTop": 20,
+          "radiusBottom": 20
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-95",
+      "x": 7640,
+      "y": 120,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-94",
+          "kind": "text",
+          "label": "账号与安全",
+          "icon": null,
+          "variant": "filled",
+          "size": 14
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-102",
+      "x": 7632,
+      "y": 152,
+      "axis": "y",
+      "items": [
+        {
+          "id": "m3e42-item-96",
+          "kind": "listItem",
+          "label": "密码",
+          "icon": "password",
+          "variant": "filled",
+          "icon2": "check",
+          "size": 328,
+          "action": {
+            "to": "editor",
+            "transition": "fade"
+          }
+        },
+        {
+          "id": "m3e42-item-97",
+          "kind": "listItem",
+          "label": "API 密钥",
+          "icon": "key",
+          "variant": "filled",
+          "size": 328
+        },
+        {
+          "id": "m3e42-item-98",
+          "kind": "listItem",
+          "label": "动态验证码",
+          "icon": "timer",
+          "variant": "filled",
+          "size": 328
+        },
+        {
+          "id": "m3e42-item-99",
+          "kind": "listItem",
+          "label": "Wi-Fi",
+          "icon": "wifi",
+          "variant": "filled",
+          "size": 328
+        },
+        {
+          "id": "m3e42-item-100",
+          "kind": "listItem",
+          "label": "SSH 密钥",
+          "icon": "terminal",
+          "variant": "filled",
+          "size": 328
+        },
+        {
+          "id": "m3e42-item-101",
+          "kind": "listItem",
+          "label": "安全笔记",
+          "icon": "note",
+          "variant": "filled",
+          "size": 328
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-104",
+      "x": 7640,
+      "y": 558,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-103",
+          "kind": "text",
+          "label": "钱包与其他",
+          "icon": null,
+          "variant": "filled",
+          "size": 14
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-110",
+      "x": 7632,
+      "y": 590,
+      "axis": "y",
+      "items": [
+        {
+          "id": "m3e42-item-105",
+          "kind": "listItem",
+          "label": "银行卡",
+          "icon": "credit_card",
+          "variant": "filled",
+          "size": 328
+        },
+        {
+          "id": "m3e42-item-106",
+          "kind": "listItem",
+          "label": "证件",
+          "icon": "badge",
+          "variant": "filled",
+          "size": 328
+        },
+        {
+          "id": "m3e42-item-107",
+          "kind": "listItem",
+          "label": "账单地址",
+          "icon": "home_pin",
+          "variant": "filled",
+          "size": 328
+        },
+        {
+          "id": "m3e42-item-108",
+          "kind": "listItem",
+          "label": "支付账号",
+          "icon": "account_balance",
+          "variant": "filled",
+          "size": 328
+        },
+        {
+          "id": "m3e42-item-109",
+          "kind": "listItem",
+          "label": "条码",
+          "icon": "qr_code_2",
+          "variant": "filled",
+          "size": 328
+        }
+      ]
+    },
+    {
+      "id": "m3e42-group-112",
+      "x": 6592,
+      "y": 884,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e42-item-111",
+          "kind": "button",
+          "label": "查看完整新建选择器",
+          "icon": null,
+          "variant": "tonal",
+          "action": {
+            "to": "create",
+            "transition": "fade"
+          }
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-1-group",
+      "x": 252,
+      "y": 1160,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-1",
+          "kind": "text",
+          "label": "钱包与身份 · 磁贴",
+          "icon": null,
+          "variant": "filled",
+          "size": 32
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-2-group",
+      "x": 0,
+      "y": 1120,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-2",
+          "kind": "navRail",
+          "label": "Monica",
+          "icon": null,
+          "variant": "filled",
+          "railExpanded": true,
+          "size2": 1000,
+          "tabs": [
+            {
+              "icon": "wallet",
+              "label": "钱包与身份"
+            },
+            {
+              "icon": "timer",
+              "label": "动态验证码"
+            },
+            {
+              "icon": "sports_esports",
+              "label": "Steam"
+            }
+          ],
+          "selected": 0,
+          "actions": {
+            "tab:0": {
+              "to": "m3e37-tiles-wallet",
+              "transition": "fade"
+            },
+            "tab:1": {
+              "to": "m3e37-tiles-otp",
+              "transition": "fade"
+            },
+            "tab:2": {
+              "to": "m3e37-tiles-steam",
+              "transition": "fade"
+            }
+          },
+          "note": "实际插件使用原有导航及 Monica 官方应用图标。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-3-group",
+      "x": 1200,
+      "y": 1152,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-3",
+          "kind": "splitButton",
+          "label": "新建",
+          "icon": "add",
+          "variant": "filled",
+          "size": 176,
+          "note": "左侧直接创建本页类型；右侧展开其他类型，生产交互见插件。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-4-group",
+      "x": 252,
+      "y": 1224,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-4",
+          "kind": "text",
+          "label": "全部数据库 · 收藏",
+          "icon": null,
+          "variant": "filled",
+          "size": 14
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-5-group",
+      "x": 252,
+      "y": 1300,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-5",
+          "kind": "card",
+          "label": "",
+          "icon": null,
+          "variant": "tonal",
+          "noImage": true,
+          "size": 352,
+          "size2": 212,
+          "note": "整卡状态反馈；当前码可复制，更多操作使用 M3E 菜单。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-6-group",
+      "x": 268,
+      "y": 1318,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-6",
+          "kind": "text",
+          "label": "日常消费卡",
+          "icon": null,
+          "variant": "filled",
+          "size": 16
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-7-group",
+      "x": 268,
+      "y": 1344,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-7",
+          "kind": "text",
+          "label": "示例银行 · Visa",
+          "icon": null,
+          "variant": "filled",
+          "size": 13
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-8-group",
+      "x": 556,
+      "y": 1308,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-8",
+          "kind": "iconButton",
+          "label": "",
+          "icon": "more_vert",
+          "variant": "text",
+          "size": 40
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-9-group",
+      "x": 268,
+      "y": 1384,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-9",
+          "kind": "text",
+          "label": "•••• 1111",
+          "icon": null,
+          "variant": "filled",
+          "size": 32,
+          "note": "只显示掩码尾号或地址摘要。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-10-group",
+      "x": 268,
+      "y": 1430,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-10",
+          "kind": "text",
+          "label": "MONICA DESIGN · 12 / 30",
+          "icon": null,
+          "variant": "filled",
+          "size": 14
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-11-group",
+      "x": 268,
+      "y": 1484,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-11",
+          "kind": "text",
+          "label": "Monica 本地库",
+          "icon": null,
+          "variant": "filled",
+          "size": 12
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-12-group",
+      "x": 628,
+      "y": 1300,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-12",
+          "kind": "card",
+          "label": "",
+          "icon": null,
+          "variant": "tonal",
+          "noImage": true,
+          "size": 352,
+          "size2": 212,
+          "note": "整卡状态反馈；当前码可复制，更多操作使用 M3E 菜单。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-13-group",
+      "x": 644,
+      "y": 1318,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-13",
+          "kind": "text",
+          "label": "旅行证件",
+          "icon": null,
+          "variant": "filled",
+          "size": 16
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-14-group",
+      "x": 644,
+      "y": 1344,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-14",
+          "kind": "text",
+          "label": "护照",
+          "icon": null,
+          "variant": "filled",
+          "size": 13
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-15-group",
+      "x": 932,
+      "y": 1308,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-15",
+          "kind": "iconButton",
+          "label": "",
+          "icon": "more_vert",
+          "variant": "text",
+          "size": 40
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-16-group",
+      "x": 644,
+      "y": 1384,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-16",
+          "kind": "text",
+          "label": "•••• 9876",
+          "icon": null,
+          "variant": "filled",
+          "size": 32,
+          "note": "只显示掩码尾号或地址摘要。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-17-group",
+      "x": 644,
+      "y": 1430,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-17",
+          "kind": "text",
+          "label": "MONICA DESIGN",
+          "icon": null,
+          "variant": "filled",
+          "size": 14
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-18-group",
+      "x": 644,
+      "y": 1484,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-18",
+          "kind": "text",
+          "label": "Monica 本地库",
+          "icon": null,
+          "variant": "filled",
+          "size": 12
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-19-group",
+      "x": 1004,
+      "y": 1300,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-19",
+          "kind": "card",
+          "label": "",
+          "icon": null,
+          "variant": "tonal",
+          "noImage": true,
+          "size": 352,
+          "size2": 212,
+          "note": "整卡状态反馈；当前码可复制，更多操作使用 M3E 菜单。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-20-group",
+      "x": 1020,
+      "y": 1318,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-20",
+          "kind": "text",
+          "label": "工作室账单",
+          "icon": null,
+          "variant": "filled",
+          "size": 16
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-21-group",
+      "x": 1020,
+      "y": 1344,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-21",
+          "kind": "text",
+          "label": "账单地址",
+          "icon": null,
+          "variant": "filled",
+          "size": 13
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-22-group",
+      "x": 1308,
+      "y": 1308,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-22",
+          "kind": "iconButton",
+          "label": "",
+          "icon": "more_vert",
+          "variant": "text",
+          "size": 40
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-23-group",
+      "x": 1020,
+      "y": 1384,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-23",
+          "kind": "text",
+          "label": "示例市",
+          "icon": null,
+          "variant": "filled",
+          "size": 32,
+          "note": "只显示掩码尾号或地址摘要。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-24-group",
+      "x": 1020,
+      "y": 1430,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-24",
+          "kind": "text",
+          "label": "Monica Studio",
+          "icon": null,
+          "variant": "filled",
+          "size": 14
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-25-group",
+      "x": 1020,
+      "y": 1484,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-25",
+          "kind": "text",
+          "label": "Monica 本地库",
+          "icon": null,
+          "variant": "filled",
+          "size": 12
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-26-group",
+      "x": 252,
+      "y": 1532,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-26",
+          "kind": "card",
+          "label": "",
+          "icon": null,
+          "variant": "tonal",
+          "noImage": true,
+          "size": 352,
+          "size2": 212,
+          "note": "整卡状态反馈；当前码可复制，更多操作使用 M3E 菜单。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-27-group",
+      "x": 268,
+      "y": 1550,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-27",
+          "kind": "text",
+          "label": "旅行账户",
+          "icon": null,
+          "variant": "filled",
+          "size": 16
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-28-group",
+      "x": 268,
+      "y": 1576,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-28",
+          "kind": "text",
+          "label": "示例支付账号",
+          "icon": null,
+          "variant": "filled",
+          "size": 13
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-29-group",
+      "x": 556,
+      "y": 1540,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-29",
+          "kind": "iconButton",
+          "label": "",
+          "icon": "more_vert",
+          "variant": "text",
+          "size": 40
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-30-group",
+      "x": 268,
+      "y": 1616,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-30",
+          "kind": "text",
+          "label": "•••• 4321",
+          "icon": null,
+          "variant": "filled",
+          "size": 32,
+          "note": "只显示掩码尾号或地址摘要。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-31-group",
+      "x": 268,
+      "y": 1662,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-31",
+          "kind": "text",
+          "label": "MONICA DESIGN · EUR",
+          "icon": null,
+          "variant": "filled",
+          "size": 14
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-32-group",
+      "x": 268,
+      "y": 1716,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-32",
+          "kind": "text",
+          "label": "Monica 本地库",
+          "icon": null,
+          "variant": "filled",
+          "size": 12
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-33-group",
+      "x": 1772,
+      "y": 1160,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-33",
+          "kind": "text",
+          "label": "动态验证码 · 磁贴",
+          "icon": null,
+          "variant": "filled",
+          "size": 32
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-34-group",
+      "x": 1520,
+      "y": 1120,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-34",
+          "kind": "navRail",
+          "label": "Monica",
+          "icon": null,
+          "variant": "filled",
+          "railExpanded": true,
+          "size2": 1000,
+          "tabs": [
+            {
+              "icon": "wallet",
+              "label": "钱包与身份"
+            },
+            {
+              "icon": "timer",
+              "label": "动态验证码"
+            },
+            {
+              "icon": "sports_esports",
+              "label": "Steam"
+            }
+          ],
+          "selected": 1,
+          "actions": {
+            "tab:0": {
+              "to": "m3e37-tiles-wallet",
+              "transition": "fade"
+            },
+            "tab:1": {
+              "to": "m3e37-tiles-otp",
+              "transition": "fade"
+            },
+            "tab:2": {
+              "to": "m3e37-tiles-steam",
+              "transition": "fade"
+            }
+          },
+          "note": "实际插件使用原有导航及 Monica 官方应用图标。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-35-group",
+      "x": 2720,
+      "y": 1152,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-35",
+          "kind": "splitButton",
+          "label": "新建",
+          "icon": "add",
+          "variant": "filled",
+          "size": 176,
+          "note": "左侧直接创建本页类型；右侧展开其他类型，生产交互见插件。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-36-group",
+      "x": 1772,
+      "y": 1224,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-36",
+          "kind": "text",
+          "label": "全部数据库 · 收藏",
+          "icon": null,
+          "variant": "filled",
+          "size": 14
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-37-group",
+      "x": 1772,
+      "y": 1278,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-37",
+          "kind": "text",
+          "label": "共享倒计时 24 秒 · 不同周期分别显示 · HOTP 复制后才推进",
+          "icon": null,
+          "variant": "filled",
+          "size": 14
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-38-group",
+      "x": 1772,
+      "y": 1328,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-38",
+          "kind": "card",
+          "label": "",
+          "icon": null,
+          "variant": "tonal",
+          "noImage": true,
+          "size": 352,
+          "size2": 228,
+          "note": "整卡状态反馈；当前码可复制，更多操作使用 M3E 菜单。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-39-group",
+      "x": 1788,
+      "y": 1346,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-39",
+          "kind": "text",
+          "label": "工作邮箱",
+          "icon": null,
+          "variant": "filled",
+          "size": 16
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-40-group",
+      "x": 1788,
+      "y": 1372,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-40",
+          "kind": "text",
+          "label": "studio@example.test",
+          "icon": null,
+          "variant": "filled",
+          "size": 13
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-41-group",
+      "x": 2076,
+      "y": 1336,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-41",
+          "kind": "iconButton",
+          "label": "",
+          "icon": "more_vert",
+          "variant": "text",
+          "size": 40
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-42-group",
+      "x": 1788,
+      "y": 1412,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-42",
+          "kind": "text",
+          "label": "123 456",
+          "icon": null,
+          "variant": "filled",
+          "size": 32,
+          "note": "当前验证码；实际代码按周期更新，复制内容不含分隔空格。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-43-group",
+      "x": 1788,
+      "y": 1458,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-43",
+          "kind": "text",
+          "label": "下一组 654 321",
+          "icon": null,
+          "variant": "filled",
+          "size": 14
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-44-group",
+      "x": 1788,
+      "y": 1528,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-44",
+          "kind": "text",
+          "label": "Monica 本地库",
+          "icon": null,
+          "variant": "filled",
+          "size": 12
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-45-group",
+      "x": 2148,
+      "y": 1328,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-45",
+          "kind": "card",
+          "label": "",
+          "icon": null,
+          "variant": "tonal",
+          "noImage": true,
+          "size": 352,
+          "size2": 228,
+          "note": "整卡状态反馈；当前码可复制，更多操作使用 M3E 菜单。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-46-group",
+      "x": 2164,
+      "y": 1346,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-46",
+          "kind": "text",
+          "label": "代码托管",
+          "icon": null,
+          "variant": "filled",
+          "size": 16
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-47-group",
+      "x": 2164,
+      "y": 1372,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-47",
+          "kind": "text",
+          "label": "studio@example.test",
+          "icon": null,
+          "variant": "filled",
+          "size": 13
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-48-group",
+      "x": 2452,
+      "y": 1336,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-48",
+          "kind": "iconButton",
+          "label": "",
+          "icon": "more_vert",
+          "variant": "text",
+          "size": 40
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-49-group",
+      "x": 2164,
+      "y": 1412,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-49",
+          "kind": "text",
+          "label": "123 456",
+          "icon": null,
+          "variant": "filled",
+          "size": 32,
+          "note": "当前验证码；实际代码按周期更新，复制内容不含分隔空格。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-50-group",
+      "x": 2164,
+      "y": 1458,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-50",
+          "kind": "text",
+          "label": "下一组 654 321",
+          "icon": null,
+          "variant": "filled",
+          "size": 14
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-51-group",
+      "x": 2164,
+      "y": 1528,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-51",
+          "kind": "text",
+          "label": "Monica 本地库",
+          "icon": null,
+          "variant": "filled",
+          "size": 12
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-52-group",
+      "x": 2524,
+      "y": 1328,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-52",
+          "kind": "card",
+          "label": "",
+          "icon": null,
+          "variant": "tonal",
+          "noImage": true,
+          "size": 352,
+          "size2": 228,
+          "note": "整卡状态反馈；当前码可复制，更多操作使用 M3E 菜单。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-53-group",
+      "x": 2540,
+      "y": 1346,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-53",
+          "kind": "text",
+          "label": "云端备份",
+          "icon": null,
+          "variant": "filled",
+          "size": 16
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-54-group",
+      "x": 2540,
+      "y": 1372,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-54",
+          "kind": "text",
+          "label": "studio@example.test",
+          "icon": null,
+          "variant": "filled",
+          "size": 13
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-55-group",
+      "x": 2828,
+      "y": 1336,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-55",
+          "kind": "iconButton",
+          "label": "",
+          "icon": "more_vert",
+          "variant": "text",
+          "size": 40
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-56-group",
+      "x": 2540,
+      "y": 1412,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-56",
+          "kind": "text",
+          "label": "123 456",
+          "icon": null,
+          "variant": "filled",
+          "size": 32,
+          "note": "当前验证码；实际代码按周期更新，复制内容不含分隔空格。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-57-group",
+      "x": 2540,
+      "y": 1458,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-57",
+          "kind": "text",
+          "label": "下一组 654 321",
+          "icon": null,
+          "variant": "filled",
+          "size": 14
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-58-group",
+      "x": 2540,
+      "y": 1528,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-58",
+          "kind": "text",
+          "label": "Monica 本地库",
+          "icon": null,
+          "variant": "filled",
+          "size": 12
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-59-group",
+      "x": 1772,
+      "y": 1576,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-59",
+          "kind": "card",
+          "label": "",
+          "icon": null,
+          "variant": "tonal",
+          "noImage": true,
+          "size": 352,
+          "size2": 228,
+          "note": "整卡状态反馈；当前码可复制，更多操作使用 M3E 菜单。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-60-group",
+      "x": 1788,
+      "y": 1594,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-60",
+          "kind": "text",
+          "label": "项目账户",
+          "icon": null,
+          "variant": "filled",
+          "size": 16
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-61-group",
+      "x": 1788,
+      "y": 1620,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-61",
+          "kind": "text",
+          "label": "studio@example.test",
+          "icon": null,
+          "variant": "filled",
+          "size": 13
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-62-group",
+      "x": 2076,
+      "y": 1584,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-62",
+          "kind": "iconButton",
+          "label": "",
+          "icon": "more_vert",
+          "variant": "text",
+          "size": 40
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-63-group",
+      "x": 1788,
+      "y": 1660,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-63",
+          "kind": "text",
+          "label": "123 456",
+          "icon": null,
+          "variant": "filled",
+          "size": 32,
+          "note": "当前验证码；实际代码按周期更新，复制内容不含分隔空格。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-64-group",
+      "x": 1788,
+      "y": 1706,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-64",
+          "kind": "text",
+          "label": "下一组 654 321",
+          "icon": null,
+          "variant": "filled",
+          "size": 14
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-65-group",
+      "x": 1788,
+      "y": 1776,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-65",
+          "kind": "text",
+          "label": "Monica 本地库",
+          "icon": null,
+          "variant": "filled",
+          "size": 12
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-66-group",
+      "x": 2148,
+      "y": 1576,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-66",
+          "kind": "card",
+          "label": "",
+          "icon": null,
+          "variant": "tonal",
+          "noImage": true,
+          "size": 352,
+          "size2": 228,
+          "note": "整卡状态反馈；当前码可复制，更多操作使用 M3E 菜单。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-67-group",
+      "x": 2164,
+      "y": 1594,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-67",
+          "kind": "text",
+          "label": "恢复账户",
+          "icon": null,
+          "variant": "filled",
+          "size": 16
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-68-group",
+      "x": 2164,
+      "y": 1620,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-68",
+          "kind": "text",
+          "label": "studio@example.test",
+          "icon": null,
+          "variant": "filled",
+          "size": 13
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-69-group",
+      "x": 2452,
+      "y": 1584,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-69",
+          "kind": "iconButton",
+          "label": "",
+          "icon": "more_vert",
+          "variant": "text",
+          "size": 40
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-70-group",
+      "x": 2164,
+      "y": 1660,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-70",
+          "kind": "text",
+          "label": "123 456",
+          "icon": null,
+          "variant": "filled",
+          "size": 32,
+          "note": "当前验证码；实际代码按周期更新，复制内容不含分隔空格。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-71-group",
+      "x": 2164,
+      "y": 1706,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-71",
+          "kind": "text",
+          "label": "下一组 654 321",
+          "icon": null,
+          "variant": "filled",
+          "size": 14
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-72-group",
+      "x": 2164,
+      "y": 1776,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-72",
+          "kind": "text",
+          "label": "Monica 本地库",
+          "icon": null,
+          "variant": "filled",
+          "size": 12
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-73-group",
+      "x": 2524,
+      "y": 1576,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-73",
+          "kind": "card",
+          "label": "",
+          "icon": null,
+          "variant": "tonal",
+          "noImage": true,
+          "size": 352,
+          "size2": 228,
+          "note": "整卡状态反馈；当前码可复制，更多操作使用 M3E 菜单。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-74-group",
+      "x": 2540,
+      "y": 1594,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-74",
+          "kind": "text",
+          "label": "旅行账户",
+          "icon": null,
+          "variant": "filled",
+          "size": 16
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-75-group",
+      "x": 2540,
+      "y": 1620,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-75",
+          "kind": "text",
+          "label": "studio@example.test",
+          "icon": null,
+          "variant": "filled",
+          "size": 13
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-76-group",
+      "x": 2828,
+      "y": 1584,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-76",
+          "kind": "iconButton",
+          "label": "",
+          "icon": "more_vert",
+          "variant": "text",
+          "size": 40
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-77-group",
+      "x": 2540,
+      "y": 1660,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-77",
+          "kind": "text",
+          "label": "123 456",
+          "icon": null,
+          "variant": "filled",
+          "size": 32,
+          "note": "当前验证码；实际代码按周期更新，复制内容不含分隔空格。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-78-group",
+      "x": 2540,
+      "y": 1706,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-78",
+          "kind": "text",
+          "label": "下一组 654 321",
+          "icon": null,
+          "variant": "filled",
+          "size": 14
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-79-group",
+      "x": 2540,
+      "y": 1776,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-79",
+          "kind": "text",
+          "label": "Monica 本地库",
+          "icon": null,
+          "variant": "filled",
+          "size": 12
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-80-group",
+      "x": 3292,
+      "y": 1160,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-80",
+          "kind": "text",
+          "label": "Steam · 账户磁贴",
+          "icon": null,
+          "variant": "filled",
+          "size": 32
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-81-group",
+      "x": 3040,
+      "y": 1120,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-81",
+          "kind": "navRail",
+          "label": "Monica",
+          "icon": null,
+          "variant": "filled",
+          "railExpanded": true,
+          "size2": 1000,
+          "tabs": [
+            {
+              "icon": "wallet",
+              "label": "钱包与身份"
+            },
+            {
+              "icon": "timer",
+              "label": "动态验证码"
+            },
+            {
+              "icon": "sports_esports",
+              "label": "Steam"
+            }
+          ],
+          "selected": 2,
+          "actions": {
+            "tab:0": {
+              "to": "m3e37-tiles-wallet",
+              "transition": "fade"
+            },
+            "tab:1": {
+              "to": "m3e37-tiles-otp",
+              "transition": "fade"
+            },
+            "tab:2": {
+              "to": "m3e37-tiles-steam",
+              "transition": "fade"
+            }
+          },
+          "note": "实际插件使用原有导航及 Monica 官方应用图标。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-82-group",
+      "x": 4240,
+      "y": 1152,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-82",
+          "kind": "splitButton",
+          "label": "新建",
+          "icon": "add",
+          "variant": "filled",
+          "size": 176,
+          "note": "左侧直接创建本页类型；右侧展开其他类型，生产交互见插件。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-83-group",
+      "x": 3292,
+      "y": 1224,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-83",
+          "kind": "text",
+          "label": "全部数据库 · 收藏",
+          "icon": null,
+          "variant": "filled",
+          "size": 14
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-84-group",
+      "x": 3292,
+      "y": 1278,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-84",
+          "kind": "text",
+          "label": "Steam Guard · 24 秒",
+          "icon": null,
+          "variant": "filled",
+          "size": 14
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-85-group",
+      "x": 3292,
+      "y": 1328,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-85",
+          "kind": "card",
+          "label": "",
+          "icon": null,
+          "variant": "tonal",
+          "noImage": true,
+          "size": 352,
+          "size2": 228,
+          "note": "整卡状态反馈；当前码可复制，更多操作使用 M3E 菜单。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-86-group",
+      "x": 3308,
+      "y": 1346,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-86",
+          "kind": "text",
+          "label": "Steam 示例账户",
+          "icon": null,
+          "variant": "filled",
+          "size": 16
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-87-group",
+      "x": 3308,
+      "y": 1372,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-87",
+          "kind": "text",
+          "label": "synthetic-player",
+          "icon": null,
+          "variant": "filled",
+          "size": 13
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-88-group",
+      "x": 3596,
+      "y": 1336,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-88",
+          "kind": "iconButton",
+          "label": "",
+          "icon": "more_vert",
+          "variant": "text",
+          "size": 40
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-89-group",
+      "x": 3308,
+      "y": 1412,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-89",
+          "kind": "text",
+          "label": "2B3CD",
+          "icon": null,
+          "variant": "filled",
+          "size": 32,
+          "note": "当前验证码；实际代码按周期更新，复制内容不含分隔空格。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-90-group",
+      "x": 3308,
+      "y": 1458,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-90",
+          "kind": "text",
+          "label": "下一组 4F5GH",
+          "icon": null,
+          "variant": "filled",
+          "size": 14
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-91-group",
+      "x": 3308,
+      "y": 1528,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-91",
+          "kind": "text",
+          "label": "Monica 本地库",
+          "icon": null,
+          "variant": "filled",
+          "size": 12
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-92-group",
+      "x": 3668,
+      "y": 1328,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-92",
+          "kind": "card",
+          "label": "",
+          "icon": null,
+          "variant": "tonal",
+          "noImage": true,
+          "size": 352,
+          "size2": 228,
+          "note": "整卡状态反馈；当前码可复制，更多操作使用 M3E 菜单。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-93-group",
+      "x": 3684,
+      "y": 1346,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-93",
+          "kind": "text",
+          "label": "Steam 游戏账户",
+          "icon": null,
+          "variant": "filled",
+          "size": 16
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-94-group",
+      "x": 3684,
+      "y": 1372,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-94",
+          "kind": "text",
+          "label": "synthetic-player",
+          "icon": null,
+          "variant": "filled",
+          "size": 13
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-95-group",
+      "x": 3972,
+      "y": 1336,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-95",
+          "kind": "iconButton",
+          "label": "",
+          "icon": "more_vert",
+          "variant": "text",
+          "size": 40
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-96-group",
+      "x": 3684,
+      "y": 1412,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-96",
+          "kind": "text",
+          "label": "2B3CD",
+          "icon": null,
+          "variant": "filled",
+          "size": 32,
+          "note": "当前验证码；实际代码按周期更新，复制内容不含分隔空格。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-97-group",
+      "x": 3684,
+      "y": 1458,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-97",
+          "kind": "text",
+          "label": "下一组 4F5GH",
+          "icon": null,
+          "variant": "filled",
+          "size": 14
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-98-group",
+      "x": 3684,
+      "y": 1528,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-98",
+          "kind": "text",
+          "label": "Monica 本地库",
+          "icon": null,
+          "variant": "filled",
+          "size": 12
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-99-group",
+      "x": 3292,
+      "y": 1604,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-99",
+          "kind": "text",
+          "label": "点击账户进入批准、库存、市场与设备；复制验证码不打开面板。",
+          "icon": null,
+          "variant": "filled",
+          "size": 16
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-100-group",
+      "x": 4576,
+      "y": 1160,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-100",
+          "kind": "text",
+          "label": "动态验证码",
+          "icon": null,
+          "variant": "filled",
+          "size": 24
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-101-group",
+      "x": 4576,
+      "y": 1210,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-101",
+          "kind": "text",
+          "label": "24 秒 · 统一倒计时",
+          "icon": null,
+          "variant": "filled",
+          "size": 14
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-102-group",
+      "x": 4576,
+      "y": 1250,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-102",
+          "kind": "card",
+          "label": "",
+          "icon": null,
+          "variant": "tonal",
+          "noImage": true,
+          "size": 173,
+          "size2": 184,
+          "note": "整卡状态反馈；当前码可复制，更多操作使用 M3E 菜单。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-103-group",
+      "x": 4592,
+      "y": 1268,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-103",
+          "kind": "text",
+          "label": "工作邮箱",
+          "icon": null,
+          "variant": "filled",
+          "size": 14
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-104-group",
+      "x": 4592,
+      "y": 1294,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-104",
+          "kind": "text",
+          "label": "studio@ex…",
+          "icon": null,
+          "variant": "filled",
+          "size": 11
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-105-group",
+      "x": 4701,
+      "y": 1258,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-105",
+          "kind": "iconButton",
+          "label": "",
+          "icon": "more_vert",
+          "variant": "text",
+          "size": 40
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-106-group",
+      "x": 4592,
+      "y": 1334,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-106",
+          "kind": "text",
+          "label": "123 456",
+          "icon": null,
+          "variant": "filled",
+          "size": 24,
+          "note": "当前验证码；实际代码按周期更新，复制内容不含分隔空格。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-107-group",
+      "x": 4592,
+      "y": 1380,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-107",
+          "kind": "text",
+          "label": "下一组 654 321",
+          "icon": null,
+          "variant": "filled",
+          "size": 12
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-108-group",
+      "x": 4592,
+      "y": 1406,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-108",
+          "kind": "text",
+          "label": "Monica 本地库",
+          "icon": null,
+          "variant": "filled",
+          "size": 12
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-109-group",
+      "x": 4761,
+      "y": 1250,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-109",
+          "kind": "card",
+          "label": "",
+          "icon": null,
+          "variant": "tonal",
+          "noImage": true,
+          "size": 173,
+          "size2": 184,
+          "note": "整卡状态反馈；当前码可复制，更多操作使用 M3E 菜单。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-110-group",
+      "x": 4777,
+      "y": 1268,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-110",
+          "kind": "text",
+          "label": "代码托管",
+          "icon": null,
+          "variant": "filled",
+          "size": 14
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-111-group",
+      "x": 4777,
+      "y": 1294,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-111",
+          "kind": "text",
+          "label": "studio@ex…",
+          "icon": null,
+          "variant": "filled",
+          "size": 11
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-112-group",
+      "x": 4886,
+      "y": 1258,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-112",
+          "kind": "iconButton",
+          "label": "",
+          "icon": "more_vert",
+          "variant": "text",
+          "size": 40
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-113-group",
+      "x": 4777,
+      "y": 1334,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-113",
+          "kind": "text",
+          "label": "123 456",
+          "icon": null,
+          "variant": "filled",
+          "size": 24,
+          "note": "当前验证码；实际代码按周期更新，复制内容不含分隔空格。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-114-group",
+      "x": 4777,
+      "y": 1380,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-114",
+          "kind": "text",
+          "label": "下一组 654 321",
+          "icon": null,
+          "variant": "filled",
+          "size": 12
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-115-group",
+      "x": 4777,
+      "y": 1406,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-115",
+          "kind": "text",
+          "label": "Monica 本地库",
+          "icon": null,
+          "variant": "filled",
+          "size": 12
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-116-group",
+      "x": 4576,
+      "y": 1446,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-116",
+          "kind": "card",
+          "label": "",
+          "icon": null,
+          "variant": "tonal",
+          "noImage": true,
+          "size": 173,
+          "size2": 184,
+          "note": "整卡状态反馈；当前码可复制，更多操作使用 M3E 菜单。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-117-group",
+      "x": 4592,
+      "y": 1464,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-117",
+          "kind": "text",
+          "label": "云端备份",
+          "icon": null,
+          "variant": "filled",
+          "size": 14
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-118-group",
+      "x": 4592,
+      "y": 1490,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-118",
+          "kind": "text",
+          "label": "studio@ex…",
+          "icon": null,
+          "variant": "filled",
+          "size": 11
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-119-group",
+      "x": 4701,
+      "y": 1454,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-119",
+          "kind": "iconButton",
+          "label": "",
+          "icon": "more_vert",
+          "variant": "text",
+          "size": 40
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-120-group",
+      "x": 4592,
+      "y": 1530,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-120",
+          "kind": "text",
+          "label": "123 456",
+          "icon": null,
+          "variant": "filled",
+          "size": 24,
+          "note": "当前验证码；实际代码按周期更新，复制内容不含分隔空格。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-121-group",
+      "x": 4592,
+      "y": 1576,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-121",
+          "kind": "text",
+          "label": "下一组 654 321",
+          "icon": null,
+          "variant": "filled",
+          "size": 12
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-122-group",
+      "x": 4592,
+      "y": 1602,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-122",
+          "kind": "text",
+          "label": "Monica 本地库",
+          "icon": null,
+          "variant": "filled",
+          "size": 12
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-123-group",
+      "x": 4761,
+      "y": 1446,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-123",
+          "kind": "card",
+          "label": "",
+          "icon": null,
+          "variant": "tonal",
+          "noImage": true,
+          "size": 173,
+          "size2": 184,
+          "note": "整卡状态反馈；当前码可复制，更多操作使用 M3E 菜单。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-124-group",
+      "x": 4777,
+      "y": 1464,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-124",
+          "kind": "text",
+          "label": "项目账户",
+          "icon": null,
+          "variant": "filled",
+          "size": 14
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-125-group",
+      "x": 4777,
+      "y": 1490,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-125",
+          "kind": "text",
+          "label": "studio@ex…",
+          "icon": null,
+          "variant": "filled",
+          "size": 11
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-126-group",
+      "x": 4886,
+      "y": 1454,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-126",
+          "kind": "iconButton",
+          "label": "",
+          "icon": "more_vert",
+          "variant": "text",
+          "size": 40
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-127-group",
+      "x": 4777,
+      "y": 1530,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-127",
+          "kind": "text",
+          "label": "123 456",
+          "icon": null,
+          "variant": "filled",
+          "size": 24,
+          "note": "当前验证码；实际代码按周期更新，复制内容不含分隔空格。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-128-group",
+      "x": 4777,
+      "y": 1576,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-128",
+          "kind": "text",
+          "label": "下一组 654 321",
+          "icon": null,
+          "variant": "filled",
+          "size": 12
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-129-group",
+      "x": 4777,
+      "y": 1602,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-129",
+          "kind": "text",
+          "label": "Monica 本地库",
+          "icon": null,
+          "variant": "filled",
+          "size": 12
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-130-group",
+      "x": 4576,
+      "y": 1642,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-130",
+          "kind": "card",
+          "label": "",
+          "icon": null,
+          "variant": "tonal",
+          "noImage": true,
+          "size": 173,
+          "size2": 184,
+          "note": "整卡状态反馈；当前码可复制，更多操作使用 M3E 菜单。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-131-group",
+      "x": 4592,
+      "y": 1660,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-131",
+          "kind": "text",
+          "label": "恢复账户",
+          "icon": null,
+          "variant": "filled",
+          "size": 14
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-132-group",
+      "x": 4592,
+      "y": 1686,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-132",
+          "kind": "text",
+          "label": "studio@ex…",
+          "icon": null,
+          "variant": "filled",
+          "size": 11
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-133-group",
+      "x": 4701,
+      "y": 1650,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-133",
+          "kind": "iconButton",
+          "label": "",
+          "icon": "more_vert",
+          "variant": "text",
+          "size": 40
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-134-group",
+      "x": 4592,
+      "y": 1726,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-134",
+          "kind": "text",
+          "label": "123 456",
+          "icon": null,
+          "variant": "filled",
+          "size": 24,
+          "note": "当前验证码；实际代码按周期更新，复制内容不含分隔空格。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-135-group",
+      "x": 4592,
+      "y": 1772,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-135",
+          "kind": "text",
+          "label": "下一组 654 321",
+          "icon": null,
+          "variant": "filled",
+          "size": 12
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-136-group",
+      "x": 4592,
+      "y": 1798,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-136",
+          "kind": "text",
+          "label": "Monica 本地库",
+          "icon": null,
+          "variant": "filled",
+          "size": 12
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-137-group",
+      "x": 4761,
+      "y": 1642,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-137",
+          "kind": "card",
+          "label": "",
+          "icon": null,
+          "variant": "tonal",
+          "noImage": true,
+          "size": 173,
+          "size2": 184,
+          "note": "整卡状态反馈；当前码可复制，更多操作使用 M3E 菜单。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-138-group",
+      "x": 4777,
+      "y": 1660,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-138",
+          "kind": "text",
+          "label": "旅行账户",
+          "icon": null,
+          "variant": "filled",
+          "size": 14
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-139-group",
+      "x": 4777,
+      "y": 1686,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-139",
+          "kind": "text",
+          "label": "studio@ex…",
+          "icon": null,
+          "variant": "filled",
+          "size": 11
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-140-group",
+      "x": 4886,
+      "y": 1650,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-140",
+          "kind": "iconButton",
+          "label": "",
+          "icon": "more_vert",
+          "variant": "text",
+          "size": 40
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-141-group",
+      "x": 4777,
+      "y": 1726,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-141",
+          "kind": "text",
+          "label": "123 456",
+          "icon": null,
+          "variant": "filled",
+          "size": 24,
+          "note": "当前验证码；实际代码按周期更新，复制内容不含分隔空格。"
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-142-group",
+      "x": 4777,
+      "y": 1772,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-142",
+          "kind": "text",
+          "label": "下一组 654 321",
+          "icon": null,
+          "variant": "filled",
+          "size": 12
+        }
+      ]
+    },
+    {
+      "id": "m3e37-tiles-143-group",
+      "x": 4777,
+      "y": 1798,
+      "axis": "x",
+      "items": [
+        {
+          "id": "m3e37-tiles-143",
+          "kind": "text",
+          "label": "Monica 本地库",
+          "icon": null,
+          "variant": "filled",
+          "size": 12
+        }
+      ]
+    }
+  ]
+}

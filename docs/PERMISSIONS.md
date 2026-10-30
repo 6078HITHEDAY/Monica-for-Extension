@@ -5,10 +5,14 @@ Monica 的单一用途是安全管理并按用户明确操作保存、同步和�
 | 权限 | 使用目的 | 不会做什么 |
 | --- | --- | --- |
 | `webNavigation` | 枚举当前标签页的主页面和跨域 frame，使用户能选择正确的登录/支付 frame，并在后台重新核验 frame URL。 | 不跟踪用户跨站导航轨迹。 |
-| `storage` | 使用 `chrome.storage.session` 临时保存解锁会话密钥；读取并删除旧原型的 `chrome.storage.local` 数据以完成一次性安全迁移。 | 不使用同步存储上传密码库。 |
-| `alarms` | 每分钟检查解锁会话是否到期，并在锁定后清除待保存密码、Passkey 请求及 Provider 同步。 | 不用于后台遥测或定时上传。 |
+| `storage` | 使用 `chrome.storage.session` 临时保存解锁会话密钥；在 `chrome.storage.local` 保存界面语言，以及读取并删除旧原型数据以完成一次性安全迁移。 | 不使用同步存储上传密码库。 |
+| `alarms` | 每分钟检查解锁会话是否到期，并为用户配置的密码源安排自动同步；锁定后清除待保存密码、Passkey 请求并停止同步。自动同步可在设置中关闭。 | 不用于后台遥测，不向用户未配置的密码源上传密码库。 |
+| `favicon` | 为用户保存的登录网址读取 Chrome／Edge 本地缓存的网站图标，显示于列表、详情与 Popup。 | 不枚举浏览历史，不使用第三方图标服务。未命中时的网站图标请求范围见隐私政策。 |
 | `cookies` | 仅在用户明确刷新或处理 Steam 登录/交易确认时，临时设置 Steam Mobile Confirmation 所需 Cookie；请求结束后恢复用户原有 Cookie。 | 不读取、上传或修改其他网站 Cookie，也不会长期保留 Steam 会话 Cookie。 |
-| `nativeMessaging` | 由后台 Service Worker 连接本机安装的 `com.monica_pass.mdbx2` Host，在受限消息中执行 MDBX2 格式、加密、Commit 与同步操作。Host 清单只授权安装时写入的精确插件 ID。 | Content Script 与 Popup 无法连接 Host；插件不向 Host 暴露网页来源，也不允许 MDBX1 文件进入 MDBX2 运行环境。 |
+| `identity` | 为用户明确发起的 Bitwarden 企业 SSO 和 WebAuthn 两步验证打开官方 OAuth/connector 窗口，并接收一次性回调。 | 不读取其他扩展的身份数据，不保存 OAuth code、PKCE verifier 或 WebAuthn token。 |
+| `nativeMessaging` | 保留已有本机助手中的 MDBX 工作副本，以及 Windows Hello 等可选本机能力。新建或导入 MDBX 使用内置浏览器引擎，无需安装助手。Host 清单只授权精确插件 ID。 | 不自动移动或转换旧工作副本，不向 Host 暴露网页来源。 |
+| `offscreen` | 在受控后台文档中运行内置 MDBX 专用 Worker，以支持数据库、附件、备份和重启恢复。 | 文档先认证自身上下文，连接只接受本扩展后台；普通页面不能接管，脚本和 WASM 不对网站开放。 |
+| `sidePanel` | 用户点击 Popup 的“打开侧栏”后，在 Edge 真实侧栏中打开同一个 `index.html` 管理页；查询参数只标识呈现位置。 | 不自动打开、不替换 Popup、不绕过主密码或锁定状态；不扩大网页、内容脚本或可访问资源的权限。 |
 
 ## 主机权限
 
@@ -25,7 +29,9 @@ Popup 与后台会使用 `chrome.tabs.query/get/sendMessage` 访问当前 HTTP/H
 
 - 隔离世界 `content.js` 在所有 HTTP/HTTPS frame 中扫描字段、执行明确填充以及显示保存/Passkey 确认 UI。
 - MAIN world `main-world.js` 在 document-start 安装 WebAuthn/开放 ShadowRoot 桥接。它不包含密码库、Provider 凭据或 Passkey 私钥。
-- 唯一的 web-accessible resource 是 `icons/logo-256.png`，只用于网页内 Monica 保存提示显示品牌图；它不包含代码或用户数据。
+- Web-accessible resources 仅包含品牌图 `icons/logo-256.png` 和明确列出的日、韩、德、西、俄、越六个离线语言 JSON，使用动态 URL。语言文件只含应用文案，供网页内提示按需加载，不包含可执行代码、密码库或用户数据。
 - 所有运行时代码随扩展打包；Content Security Policy 禁止远程脚本和任意对象加载。
 
 更详细的数据流见 [隐私政策](PRIVACY.md) 和 [架构说明](ARCHITECTURE.md)。
+
+1.0.315 互通适配后的最低 Chromium API 版本为 128，保证无损 JSON 的 `JSON.rawJSON` / reviver source 能力；本次真实浏览器验收只使用 Microsoft Edge。侧栏与全页遵循相同的 runtime sender origin/path 校验与会话级解锁，未引入新远端脚本。

@@ -1,3 +1,4 @@
+import { dialogContent } from "./fixtures/material";
 import AxeBuilder from "@axe-core/playwright";
 import { chromium, expect, test, type BrowserContext } from "@playwright/test";
 import path from "node:path";
@@ -6,7 +7,7 @@ test("OTP transfer and credential generator work in the M3E manager", async ({},
   const extensionPath = path.resolve("dist");
   let context: BrowserContext | undefined;
   try {
-    context = await chromium.launchPersistentContext(testInfo.outputPath("otp-generator-profile"), { channel: "chromium", headless: true, viewport: { width: 1280, height: 900 }, args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`] });
+    context = await chromium.launchPersistentContext(testInfo.outputPath("otp-generator-profile"), { channel: "chromium", headless: true, locale: "zh-CN", viewport: { width: 1280, height: 900 }, args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`] });
     const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
     const page = await context.newPage();
     await page.goto(`chrome-extension://${new URL(worker.url()).host}/index.html`);
@@ -22,13 +23,15 @@ test("OTP transfer and credential generator work in the M3E manager", async ({},
     await page.getByRole("button", { name: "重新生成", exact: true }).last().click();
     await expect(page.locator(".generator-result output")).toHaveText(/^\d{8}$/);
 
-    await page.getByRole("button", { name: /^动态验证码/ }).click();
+    await page.getByRole("navigation", { name: "主导航" }).getByRole("button", { name: /^动态验证码/ }).click();
     await page.getByRole("button", { name: "添加验证码" }).click();
-    const dialog = page.getByRole("dialog");
+    const dialog = dialogContent(page);
     await dialog.getByLabel("名称 *").fill("HOTP E2E");
+    await dialog.locator(".editor-disclosure [slot=\"header\"]").filter({ hasText: "导入与导出验证器" }).click();
     await dialog.getByLabel("OTP URI").fill("otpauth://hotp/Example:alice?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&issuer=Example&counter=7&digits=8");
     await dialog.getByRole("button", { name: "解析 URI" }).click();
-    await expect(dialog.getByLabel("验证码类型")).toHaveValue("HOTP");
+    await expect(dialog.getByLabel("验证码类型")).toHaveJSProperty("value", "HOTP");
+    await dialog.locator(".editor-disclosure [slot=\"header\"]").filter({ hasText: "验证器高级设置" }).click();
     await expect(dialog.getByLabel("计数器")).toHaveValue("7");
     await dialog.getByRole("button", { name: "生成二维码" }).click();
     await expect(dialog.getByAltText("当前验证器的 OTP 二维码")).toBeVisible();

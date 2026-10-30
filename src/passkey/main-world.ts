@@ -1,5 +1,6 @@
+import { publicKeyCredential } from "./credential-response";
 import { OPEN_SHADOW_ROOT_EVENT } from "../content/shadow-bridge";
-import { shouldInterceptPasskeyCreate, shouldInterceptPasskeyGet } from "./interception-policy";
+import { requestedPasskeyExtensionNames, shouldInterceptPasskeyCreate, shouldInterceptPasskeyGet } from "./interception-policy";
 
 const PAGE_SOURCE = "monica-passkey-page";
 const EXTENSION_SOURCE = "monica-passkey-extension";
@@ -25,7 +26,7 @@ if (navigator.credentials && !(navigator.credentials as CredentialsContainer & {
     if (!options?.publicKey) return nativeCreate(options);
     const pk = options.publicKey;
     const selection = pk.authenticatorSelection;
-    const extensionNames = Object.keys(pk.extensions || {});
+    const extensionNames = requestedPasskeyExtensionNames(pk.extensions);
     if (!shouldInterceptPasskeyCreate({
       topLevel: window.top === window,
       authenticatorAttachment: selection?.authenticatorAttachment,
@@ -39,7 +40,7 @@ if (navigator.credentials && !(navigator.credentials as CredentialsContainer & {
         userId: encode(pk.user.id), userName: pk.user.name, userDisplayName: pk.user.displayName,
         algorithms: pk.pubKeyCredParams.map((param) => param.alg), excludeCredentialIds: (pk.excludeCredentials || []).map((item) => encode(item.id)),
         discoverable: selection?.residentKey === "required" || selection?.residentKey === "preferred" || selection?.requireResidentKey === true,
-        userVerificationRequired: selection?.userVerification === "required", credProps: Boolean(pk.extensions?.credProps), timeoutMs: normalizeTimeout(pk.timeout)
+        userVerificationRequired: selection?.userVerification !== "discouraged", credProps: Boolean(pk.extensions?.credProps), timeoutMs: normalizeTimeout(pk.timeout)
       }, normalizeTimeout(pk.timeout), (options as CredentialCreationOptions & { signal?: AbortSignal }).signal);
       return publicKeyCredential(result);
     } catch (error) {
@@ -57,7 +58,7 @@ if (navigator.credentials && !(navigator.credentials as CredentialsContainer & {
       topLevel: window.top === window,
       mediation,
       userVerification: pk.userVerification,
-      extensionNames: Object.keys(pk.extensions || {}),
+      extensionNames: requestedPasskeyExtensionNames(pk.extensions),
       externalOnly
     })) return nativeGet(options);
     try {
@@ -79,12 +80,11 @@ function bridge(request: Record<string, unknown>, timeoutMs = 120_000, signal?: 
     let cancellationName = "NotAllowedError";
     let timeout = 0;
     let acknowledgementTimeout = 0;
-    let acknowledgementFallback = 0;
     let terminalWatchdog = 0;
+    let dispatched = false;
     const cleanup = () => {
       window.clearTimeout(timeout);
       window.clearTimeout(acknowledgementTimeout);
-      window.clearTimeout(acknowledgementFallback);
       window.clearTimeout(terminalWatchdog);
       window.removeEventListener("message", listener);
       signal?.removeEventListener("abort", abort);
@@ -92,6 +92,7 @@ function bridge(request: Record<string, unknown>, timeoutMs = 120_000, signal?: 
     const fail = (message: string, name: string) => { if (settled) return; settled = true; cleanup(); reject(new DOMException(message, name)); };
     const requestCancellation = (message: string, name: string) => {
       if (settled || cancellationRequested) return;
+      if (!dispatched) return fail(message, name);
       cancellationRequested = true;
       cancellationMessage = message;
       cancellationName = name;
@@ -100,10 +101,18 @@ function bridge(request: Record<string, unknown>, timeoutMs = 120_000, signal?: 
       window.postMessage({ source: "monica-passkey-page-cancel", requestId, message, name }, location.origin);
     };
     const listener = (event: MessageEvent) => {
-      if (event.source !== window || event.origin !== location.origin || event.data?.source !== EXTENSION_SOURCE || event.data?.requestId !== requestId) return;
+      if (event.source !== window || event.origin !== location.origin || event.data?.source !== EXTENSION_SOURCE) return;
+      if (event.data.ready === true && (!event.data.requestId || event.data.requestId === requestId)) {
+        if (!dispatched && !settled) {
+          dispatched = true;
+          window.clearTimeout(acknowledgementTimeout);
+          window.postMessage({ source: PAGE_SOURCE, requestId, request }, location.origin);
+        }
+        return;
+      }
+      if (event.data?.requestId !== requestId) return;
       if (event.data.ack === true) {
         window.clearTimeout(acknowledgementTimeout);
-        window.clearTimeout(acknowledgementFallback);
         return;
       }
       if (settled) return; settled = true; cleanup();
@@ -114,11 +123,10 @@ function bridge(request: Record<string, unknown>, timeoutMs = 120_000, signal?: 
     signal?.addEventListener("abort", abort, { once: true });
     window.addEventListener("message", listener);
     timeout = window.setTimeout(() => requestCancellation("Monica Passkey 请求超时。", "NotAllowedError"), timeoutMs);
-    acknowledgementTimeout = window.setTimeout(() => {
-      requestCancellation("Monica Passkey 通道没有响应。", "NotAllowedError");
-      acknowledgementFallback = window.setTimeout(() => fail(cancellationMessage, cancellationName), 1_000);
-    }, 750);
-    window.postMessage({ source: PAGE_SOURCE, requestId, request }, location.origin);
+    // MAIN runs at document_start; the isolated content script may arrive much later.
+    // Wait for readiness without retrying the credential request (which could create two keys).
+    acknowledgementTimeout = window.setTimeout(() => fail("Monica Passkey 通道没有响应。", "NotSupportedError"), 10_000);
+    window.postMessage({ source: "monica-passkey-ready-check", requestId }, location.origin);
   });
 }
 
@@ -126,28 +134,6 @@ function normalizeTimeout(value?: number): number {
   return Number.isFinite(value) ? Math.max(1_000, Math.min(120_000, Math.trunc(value!))) : 120_000;
 }
 
-function publicKeyCredential(result: Record<string, any>): Credential {
-  const responseData = result.response;
-  const responsePrototype = result.operation === "create" ? window.AuthenticatorAttestationResponse?.prototype : window.AuthenticatorAssertionResponse?.prototype;
-  const response = Object.create(responsePrototype || Object.prototype);
-  const binaryFields = result.operation === "create" ? ["clientDataJSON", "attestationObject"] : ["clientDataJSON", "authenticatorData", "signature", "userHandle"];
-  for (const key of binaryFields) Object.defineProperty(response, key, { enumerable: true, value: decode(responseData[key]) });
-  if (result.operation === "create") {
-    Object.defineProperties(response, {
-      getAuthenticatorData: { value: () => decode(responseData.authenticatorData) }, getPublicKey: { value: () => decode(responseData.publicKey) },
-      getPublicKeyAlgorithm: { value: () => responseData.publicKeyAlgorithm }, getTransports: { value: () => ["internal"] }
-    });
-  }
-  const credential = Object.create(window.PublicKeyCredential?.prototype || Object.prototype);
-  Object.defineProperties(credential, {
-    id: { enumerable: true, value: result.id }, rawId: { enumerable: true, value: decode(result.rawId) }, type: { enumerable: true, value: "public-key" },
-    response: { enumerable: true, value: response }, authenticatorAttachment: { enumerable: true, value: "platform" },
-    getClientExtensionResults: { value: () => result.clientExtensionResults || {} }, toJSON: { value: () => ({ id: result.id, rawId: result.rawId, type: "public-key", authenticatorAttachment: "platform", response: responseData, clientExtensionResults: result.clientExtensionResults || {} }) }
-  });
-  return credential as Credential;
-}
-
 function encode(value: BufferSource): string { const bytes = value instanceof ArrayBuffer ? new Uint8Array(value) : new Uint8Array(value.buffer, value.byteOffset, value.byteLength); let binary = ""; for (const byte of bytes) binary += String.fromCharCode(byte); return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
-function decode(value: string): ArrayBuffer { const normalized = value.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - value.length % 4) % 4); const binary = atob(normalized); return Uint8Array.from(binary, (char) => char.charCodeAt(0)).buffer; }
 
 export {};

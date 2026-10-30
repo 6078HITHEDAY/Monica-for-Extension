@@ -199,17 +199,6 @@ export interface AuditEvent {
   state: SyncState;
 }
 
-export interface TimelineEntry {
-  id: string;
-  itemType: string;
-  itemTitle: string;
-  operationType: "CREATE" | "UPDATE" | "ATTACHMENT" | "IMPORT" | "EXPORT" | "SYNC" | "DELETE" | "RESTORE";
-  deviceName: string;
-  createdAt: string;
-  reverted: boolean;
-  state: SyncState;
-}
-
 export interface SyncJob {
   id: string;
   vaultName: string;
@@ -342,7 +331,6 @@ export interface MonicaServerSnapshot {
   backups: BackupRecord[];
   devices: DeviceRecord[];
   auditEvents: AuditEvent[];
-  timeline: TimelineEntry[];
   syncJobs: SyncJob[];
   syncSources: SyncSource[];
   mdbxDatabases: MdbxDatabaseRecord[];
@@ -825,14 +813,6 @@ export async function loadServerSnapshot(): Promise<MonicaServerSnapshot> {
       audit("evt-4", "MacBook Pro", "Queued sync bundle", "Family Shared", "sync", hoursAgo(3), "10.0.0.12", "pending"),
       audit("evt-5", "owner@monica.local", "Created Send", "Guest Wi-Fi", "send", daysAgo(1), "192.168.1.42", "healthy")
     ],
-    timeline: [
-      timeline("tl-1", "Password", "GitHub", "UPDATE", "John-Windows", minutesAgo(16), false, "healthy"),
-      timeline("tl-2", "Attachment", "travel-visa-front.png", "ATTACHMENT", "John-Windows", hoursAgo(11), false, "healthy"),
-      timeline("tl-3", "Sync", "Family Streaming", "SYNC", "MacBook Pro", hoursAgo(3), false, "conflict"),
-      timeline("tl-4", "Import", "Legacy Monica JSON", "IMPORT", "Linux Workstation", daysAgo(2), false, "attention"),
-      timeline("tl-5", "Secure Note", "Old Backup Codes", "DELETE", "Android Phone", daysAgo(2), false, "pending"),
-      timeline("tl-6", "Snapshot", "snap-8841", "RESTORE", "Monica Server", daysAgo(4), true, "healthy")
-    ],
     syncJobs: [
       syncJob("job-1", "Family Shared", "bundle", 62, hoursAgo(3), "pending"),
       syncJob("job-2", "Personal Vault", "retention", 100, hoursAgo(6), "healthy"),
@@ -1048,19 +1028,6 @@ function device(
 
 function audit(id: string, actor: string, action: string, target: string, itemType: string, createdAt: string, ipAddress: string, state: SyncState): AuditEvent {
   return { id, actor, action, target, itemType, createdAt, ipAddress, state };
-}
-
-function timeline(
-  id: string,
-  itemType: string,
-  itemTitle: string,
-  operationType: TimelineEntry["operationType"],
-  deviceName: string,
-  createdAt: string,
-  reverted: boolean,
-  state: SyncState
-): TimelineEntry {
-  return { id, itemType, itemTitle, operationType, deviceName, createdAt, reverted, state };
 }
 
 function syncJob(id: string, vaultName: string, type: SyncJob["type"], progress: number, queuedAt: string, state: SyncState): SyncJob {

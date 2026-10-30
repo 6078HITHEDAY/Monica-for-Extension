@@ -1,9 +1,77 @@
 import { JSDOM } from "jsdom";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { passkeyPromptRootForTest, renderPasskeyPrompt } from "./passkey-prompt";
 
+beforeEach(() => vi.stubGlobal("chrome", { runtime: { getURL: (path: string) => `chrome-extension://test/${path}` } }));
+afterEach(() => vi.unstubAllGlobals());
+
 describe("Passkey confirmation prompt", () => {
-  it("uses a stable vector icon and confirms an explicit create request", async () => {
+  it.each([false, true])("offers a separate native action with locked=%s and prevents duplicate submissions", async (unlockRequired) => {
+    const dom = new JSDOM("<html><body></body></html>", { url: "https://passkey.example.test", pretendToBeVisual: true });
+    let complete!: () => void;
+    const accept = vi.fn(() => new Promise<void>(resolve => { complete = resolve; }));
+    const dismiss = vi.fn();
+    const host = renderPasskeyPrompt({ candidateId: "native", operation: "get", rpId: "passkey.example.test", rpName: "Example", origin: "https://passkey.example.test", userName: "", saveTargets: [], credentials: [], expiresAt: Date.now() + 10_000, unlockRequired }, accept, dismiss, dom.window.document, { allowUntrustedEvents: true });
+    const shadow = passkeyPromptRootForTest(host)!;
+    const native = shadow.querySelector<HTMLButtonElement>('.native-authenticator button')!;
+    expect(native.textContent).toBe('使用 Windows/浏览器验证器');
+    expect(shadow.querySelector('#monica-passkey-native-description')?.textContent).toContain('手机扫码');
+    native.click(); native.click();
+    shadow.querySelector<HTMLButtonElement>('.primary')!.click();
+    expect(accept).toHaveBeenCalledExactlyOnceWith(undefined, undefined, true);
+    expect(dismiss).not.toHaveBeenCalled();
+    complete();
+    await vi.waitFor(() => expect(host.isConnected).toBe(false));
+    dom.window.close();
+  });
+
+  it("rejects synthetic native clicks and keeps cancellation separate", async () => {
+    const dom = new JSDOM("<html><body></body></html>", { url: "https://passkey.example.test" });
+    const accept = vi.fn(); const dismiss = vi.fn().mockResolvedValue(undefined);
+    const context = { candidateId: "native", operation: "get" as const, rpId: "passkey.example.test", rpName: "Example", origin: "https://passkey.example.test", userName: "", saveTargets: [], credentials: [], expiresAt: Date.now() + 10_000 };
+    const protectedHost = renderPasskeyPrompt(context, accept, dismiss, dom.window.document);
+    passkeyPromptRootForTest(protectedHost)!.querySelector<HTMLButtonElement>('.native-authenticator button')!.click();
+    expect(accept).not.toHaveBeenCalled();
+    const host = renderPasskeyPrompt(context, accept, dismiss, dom.window.document, { allowUntrustedEvents: true });
+    passkeyPromptRootForTest(host)!.querySelector<HTMLButtonElement>('.actions .secondary')!.click();
+    await vi.waitFor(() => expect(dismiss).toHaveBeenCalledOnce());
+    expect(accept).not.toHaveBeenCalled();
+    dom.window.close();
+  });
+  it("transitions from unlock to account selection without accepting a credential or cancelling the request", async () => {
+    const dom = new JSDOM("<html><body><button id='login'>Login</button></body></html>", { url: "https://passkey.example.test", pretendToBeVisual: true });
+    const context = { candidateId: "locked", operation: "get" as const, rpId: "passkey.example.test", rpName: "Example", origin: "https://passkey.example.test", userName: "", saveTargets: [], credentials: [], expiresAt: Date.now() + 10_000, unlockRequired: true };
+    const next = { ...context, unlockRequired: false, userVerified: true, credentials: [{ itemId: "selected", title: "Synthetic", userName: "synthetic", userDisplayName: "Synthetic", providerName: "Local", sourceMode: "browser-local" as const, credentialConflict: false, useCount: 0 }] };
+    const accept = vi.fn().mockResolvedValueOnce(next).mockResolvedValueOnce(undefined);
+    const dismiss = vi.fn().mockResolvedValue(undefined);
+    dom.window.document.getElementById('login')!.focus();
+    const first = renderPasskeyPrompt(context, accept, dismiss, dom.window.document, { allowUntrustedEvents: true });
+    expect(passkeyPromptRootForTest(first)!.querySelector('input, [role=radio], select')).toBeNull();
+    passkeyPromptRootForTest(first)!.querySelector<HTMLButtonElement>('.primary')!.click();
+    await vi.waitFor(() => expect(first.isConnected).toBe(false));
+    const current = dom.window.document.getElementById('monica-passkey-prompt-host')!;
+    expect(passkeyPromptRootForTest(current)!.textContent).toContain('已验证身份');
+    expect(dismiss).not.toHaveBeenCalled();
+    expect(accept).toHaveBeenCalledTimes(1);
+    passkeyPromptRootForTest(current)!.querySelector<HTMLButtonElement>('.primary')!.click();
+    await vi.waitFor(() => expect(accept).toHaveBeenLastCalledWith('selected', undefined));
+    await vi.waitFor(() => expect(dom.window.document.activeElement?.id).toBe('login'));
+    dom.window.close();
+  });
+
+  it("announces Windows Hello before a UV-required operation", () => {
+    const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "https://passkey.example.test" });
+    const host = renderPasskeyPrompt({
+      candidateId: "candidate-uv", operation: "create", rpId: "passkey.example.test", rpName: "示例网站",
+      origin: "https://passkey.example.test", userName: "demo", userVerificationRequired: true,
+      saveTargets: [{ providerId: "local", name: "Monica 本地库", sourceMode: "browser-local" }], defaultSaveTargetId: "local",
+      credentials: [], expiresAt: Date.now() + 10_000
+    }, vi.fn().mockResolvedValue(undefined), vi.fn().mockResolvedValue(undefined), dom.window.document, { allowUntrustedEvents: true });
+    expect(passkeyPromptRootForTest(host)?.textContent).toContain("Windows Hello 验证身份");
+    dom.window.close();
+  });
+
+  it("uses the original Monica logo and confirms an explicit create request", async () => {
     const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "https://passkey.example.test" });
     const accept = vi.fn().mockResolvedValue(undefined);
     renderPasskeyPrompt({
@@ -23,7 +91,8 @@ describe("Passkey confirmation prompt", () => {
     const host = dom.window.document.getElementById("monica-passkey-prompt-host")!;
     expect(host.shadowRoot).toBeNull();
     const shadow = passkeyPromptRootForTest(host)!;
-    expect(shadow.querySelector(".brand-icon svg")).not.toBeNull();
+    expect(shadow.querySelector('.native-authenticator')).toBeNull();
+    expect(shadow.querySelector<HTMLImageElement>(".header .brand-logo")?.src).toBe("chrome-extension://test/icons/logo-256.png");
     expect(shadow.textContent).not.toContain("🔑");
     (shadow.querySelector("button.primary") as HTMLButtonElement).click();
     await vi.waitFor(() => expect(accept).toHaveBeenCalledWith(undefined, "local"));
@@ -43,8 +112,8 @@ describe("Passkey confirmation prompt", () => {
       userName: "demo@example.test",
       saveTargets: [],
       credentials: [
-        { itemId: "local", title: "本地凭据", userName: "demo", userDisplayName: "Demo", sourceMode: "browser-local", useCount: 0 },
-        { itemId: "bw", title: "工作凭据", userName: "work", userDisplayName: "Work", sourceMode: "bitwarden", useCount: 3 }
+        { itemId: "local", title: "本地凭据", userName: "demo", userDisplayName: "Demo", sourceMode: "browser-local", providerName: "Monica 本地库", credentialConflict: false, useCount: 0 },
+        { itemId: "bw", title: "工作凭据", userName: "work", userDisplayName: "Work", sourceMode: "bitwarden", providerName: "工作 Bitwarden", credentialConflict: false, useCount: 3 }
       ],
       expiresAt: Date.now() + 10_000
     }, accept, vi.fn().mockResolvedValue(undefined), dom.window.document, { allowUntrustedEvents: true });
@@ -59,6 +128,25 @@ describe("Passkey confirmation prompt", () => {
     choices[1].click();
     (shadow.querySelector(".primary") as HTMLButtonElement).click();
     await vi.waitFor(() => expect(accept).toHaveBeenCalledWith("bw", undefined));
+    dom.window.close();
+  });
+
+  it("names real provider accounts and marks duplicate credential choices", () => {
+    const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "https://passkey.example.test" });
+    const host = renderPasskeyPrompt({
+      candidateId: "candidate-conflict", operation: "get", rpId: "passkey.example.test", rpName: "示例网站",
+      origin: "https://passkey.example.test", userName: "demo", saveTargets: [],
+      credentials: [
+        { itemId: "work", title: "工作账号", userName: "demo", userDisplayName: "Demo", sourceMode: "bitwarden", providerName: "工作 Bitwarden", credentialConflict: true, useCount: 2 },
+        { itemId: "family", title: "家庭账号", userName: "demo", userDisplayName: "Demo", sourceMode: "browser-local", providerName: "家庭 KeePass", credentialConflict: true, useCount: 0 }
+      ],
+      expiresAt: Date.now() + 10_000
+    }, vi.fn(), vi.fn(), dom.window.document, { allowUntrustedEvents: true });
+
+    const text = passkeyPromptRootForTest(host)?.textContent || "";
+    expect(text).toContain("工作 Bitwarden");
+    expect(text).toContain("家庭 KeePass");
+    expect(text).toContain("凭据 ID 重复，请确认密码源");
     dom.window.close();
   });
 
@@ -126,7 +214,7 @@ describe("Passkey confirmation prompt", () => {
     const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "https://passkey.example.test" });
     const host = renderPasskeyPrompt({ candidateId: "candidate", operation: "create", rpId: "passkey.example.test", rpName: "Example", origin: "https://passkey.example.test", userName: "joy", saveTargets: [{ providerId: "local", name: "Local", sourceMode: "browser-local" }], defaultSaveTargetId: "local", credentials: [], expiresAt: Date.now() + 10_000 }, vi.fn(), vi.fn(), dom.window.document, { allowUntrustedEvents: true });
     const styles = passkeyPromptRootForTest(host)!.querySelector("style")!.textContent!;
-    expect(styles).toContain(".brand-icon svg, .icon-button svg");
+    expect(styles).toContain(".icon-button svg");
     expect(styles).toContain("display: grid; place-items: center");
     expect(styles).toContain("font: 0.875rem/1.45");
     dom.window.close();

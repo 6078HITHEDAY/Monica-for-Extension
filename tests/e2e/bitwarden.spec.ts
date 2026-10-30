@@ -1,3 +1,4 @@
+import { dialogContent } from "./fixtures/material";
 import { chromium, expect, test, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import path from "node:path";
 
@@ -10,7 +11,7 @@ test("Bitwarden status conflict permission and recovery UI is truthful responsiv
   try {
     context = await chromium.launchPersistentContext(testInfo.outputPath("bitwarden-status-ui-profile"), {
       channel: "chromium",
-      headless: true,
+      headless: true, locale: "zh-CN",
       colorScheme: "dark",
       reducedMotion: "reduce",
       viewport: { width: 375, height: 1000 },
@@ -75,13 +76,23 @@ test("Bitwarden status conflict permission and recovery UI is truthful responsiv
                 enabled: true,
                 isDefaultSaveTarget: false,
                 config: {
+                  authenticated: true,
                   email: "very.long.account.address.for.layout@example.test",
-                  vaultUrl: "https://vault.example.test/a/very/long/private/path?access_token=never-render-url-token"
+                  vaultUrl: "https://vault.example.test/a/very/long/private/path?access_token=never-render-url-token",
+                  accountState: { organizations: [{ id: "org-1" }], policies: [] }
                 },
                 lastSyncAt: now,
                 lastError: queueCleared ? undefined : "连接超时，请检查服务器状态。",
                 requiresEmptyRemoteConfirmation: !emptyConfirmed,
                 compatibility: { preservedUnsupportedRecords: 2, unreadableRecords: 1 }
+              }, {
+                id: "bitwarden-secondary",
+                kind: "bitwarden",
+                name: "Bitwarden 备用库",
+                enabled: true,
+                isDefaultSaveTarget: false,
+                config: { authenticated: true, email: "secondary@example.test", vaultUrl: "https://secondary.example.test" },
+                lastSyncAt: now
               }]
             };
           }
@@ -110,6 +121,13 @@ test("Bitwarden status conflict permission and recovery UI is truthful responsiv
             return { ok: true, data: { warnings: [], conflicts: conflicts.length } };
           }
           if (message.type === "PROVIDER_SYNC_CANCEL" && message.providerId === providerId) return { ok: true, data: { cancelled: true } };
+          if (message.type === "BITWARDEN_SYNC_ALL") return {
+            ok: true,
+            data: [
+              { providerId, ok: false, conflicts: 0, warnings: 0 },
+              { providerId: "bitwarden-secondary", ok: true, conflicts: 0, warnings: 0 }
+            ]
+          };
           return originalSend(message);
         }
       });
@@ -122,12 +140,12 @@ test("Bitwarden status conflict permission and recovery UI is truthful responsiv
 
     const card = page.locator(".bitwarden-provider-card").filter({ has: page.getByRole("heading", { name: "Bitwarden 工作库" }) });
     await expect(card).toBeVisible();
-    await expect(card).toHaveCSS("border-radius", "8px");
+    await expect(card).toHaveCSS("border-radius", "24px");
     await expect(card.getByText("vault.example.test", { exact: true })).toBeVisible();
     await expect(card).not.toContainText("never-render-url-token");
     await expect(card.getByText("4 个冲突", { exact: true })).toBeVisible();
     await expect(card.getByText("5 待同步 · 1 恢复中 · 2 失败", { exact: true })).toBeVisible();
-    await expect(card.getByText("个人文件夹 + 组织 Collection", { exact: true })).toBeVisible();
+    await expect(card.getByText("1 个", { exact: true })).toBeVisible();
     await expect(card.getByText("连接超时，请检查服务器状态。", { exact: true })).toHaveCount(1);
     await expect(card.getByText("兼容模式保留 3 个项目", { exact: true })).toBeVisible();
     await expect(card.getByText("第三个账号", { exact: true })).toHaveCount(0);
@@ -138,6 +156,11 @@ test("Bitwarden status conflict permission and recovery UI is truthful responsiv
     await expectMinimumTargets(card.locator("m3e-button, m3e-icon-button"));
     await expectSecretsAbsent(page);
 
+    await page.getByRole("button", { name: "同步全部" }).click();
+    await expect(page.getByText("1 个账户已同步 · 1 个失败", { exact: true })).toBeVisible();
+    await expect(page.locator("body")).not.toContainText("private server detail");
+    await expectNoHorizontalOverflow(page.locator("html"));
+
     const conflictToggle = card.locator(".bitwarden-conflict-toggle");
     await expect(conflictToggle).toContainText("查看其余 2 个冲突");
     await conflictToggle.click();
@@ -147,7 +170,7 @@ test("Bitwarden status conflict permission and recovery UI is truthful responsiv
     await expect(card.getByText("第四个账号", { exact: true })).toBeVisible();
 
     await card.getByRole("button", { name: "采用 Bitwarden 版本" }).first().click();
-    const conflictDialog = page.getByRole("dialog", { name: "采用 Bitwarden 版本？" });
+    const conflictDialog = dialogContent(page, { name: "采用 Bitwarden 版本？" });
     await expect(conflictDialog).toBeVisible();
     await expectFourRoundedCorners(conflictDialog, "16px");
     await expect(conflictDialog.getByRole("button", { name: "取消" })).toBeFocused();
@@ -160,7 +183,7 @@ test("Bitwarden status conflict permission and recovery UI is truthful responsiv
 
     const emptyButton = card.getByRole("button", { name: "查看并确认空库" });
     await emptyButton.click();
-    const emptyDialog = page.getByRole("dialog", { name: "采用服务器空密码库？" });
+    const emptyDialog = dialogContent(page, { name: "采用服务器空密码库？" });
     await expect(emptyDialog).toBeVisible();
     await expectFourRoundedCorners(emptyDialog, "16px");
     await expect(emptyDialog.getByRole("button", { name: "取消" })).toBeFocused();
@@ -169,7 +192,7 @@ test("Bitwarden status conflict permission and recovery UI is truthful responsiv
     await expect(emptyButton).toBeFocused();
 
     await emptyButton.click();
-    const retryDialog = page.getByRole("dialog", { name: "采用服务器空密码库？" });
+    const retryDialog = dialogContent(page, { name: "采用服务器空密码库？" });
     await retryDialog.getByRole("button", { name: "确认采用空库" }).click();
     await expect(retryDialog.getByRole("alert")).toContainText("网络暂时不可用，请重试空库确认。");
     await expect(retryDialog).toBeVisible();

@@ -1,3 +1,5 @@
+import { dialogContent } from "./fixtures/material";
+import { launchTestContext } from './fixtures/edge';
 import { chromium, expect, test, type BrowserContext, type Page, type Route, type TestInfo } from "@playwright/test";
 import path from "node:path";
 import { createLoginItem } from "../../src/core/model";
@@ -17,9 +19,9 @@ test("manager archive and recycle-bin views keep records recoverable and privile
   let context: BrowserContext | undefined;
   try {
     const extensionPath = path.resolve("dist");
-    context = await chromium.launchPersistentContext(testInfo.outputPath("p"), {
+    context = await launchTestContext(testInfo.outputPath("p"), {
       channel: "chromium",
-      headless: true,
+      headless: true, locale: "zh-CN",
       viewport: { width: 375, height: 1100 },
       colorScheme: "dark",
       reducedMotion: "reduce",
@@ -42,21 +44,21 @@ test("manager archive and recycle-bin views keep records recoverable and privile
     await manager.reload();
     await manager.waitForLoadState("load");
     await openMobileSection(manager, /^归档/);
-    await expect(manager.getByRole("row").filter({ hasText: "Archived account" })).toBeVisible();
+    await expect(manager.locator(".item-card").filter({ hasText: "Archived account" })).toBeVisible();
     await expect(manager.getByRole("button", { name: "取消归档 Archived account" })).toBeVisible();
-    await expect(manager.locator(".data-card").first()).toHaveCSS("border-radius", "8px");
+    await expect(manager.locator(".data-card").first()).toHaveCSS("border-radius", "20px");
     await manager.evaluate(() => { document.documentElement.style.fontSize = "200%"; });
     await expectNoHorizontalOverflow(manager);
     await expectNoGradients(manager.locator(".lifecycle-page"));
     await manager.getByRole("button", { name: "取消归档 Archived account" }).click();
-    await expect(manager.getByRole("row").filter({ hasText: "Archived account" })).toHaveCount(0);
+    await expect(manager.locator(".item-card").filter({ hasText: "Archived account" })).toHaveCount(0);
 
     await openMobileSection(manager, /^回收站/);
-    await expect(manager.getByRole("row").filter({ hasText: "Deleted account" })).toBeVisible();
+    await expect(manager.locator(".item-card").filter({ hasText: "Deleted account" })).toBeVisible();
     await manager.getByRole("button", { name: "恢复 Deleted account" }).click();
-    await expect(manager.getByRole("row").filter({ hasText: "Deleted account" })).toHaveCount(0);
+    await expect(manager.locator(".item-card").filter({ hasText: "Deleted account" })).toHaveCount(0);
     await openMobileSection(manager, /^登录项/);
-    await expect(manager.getByRole("row").filter({ hasText: "Deleted account" })).toBeVisible();
+    await expect(manager.locator(".vault-list-card .item-card").filter({ hasText: "Deleted account" })).toBeVisible();
 
     const popup = await context.newPage();
     await popup.goto(`chrome-extension://${extensionId}/popup.html`);
@@ -82,9 +84,9 @@ test("manager requires explicit confirmation before adopting an authenticated em
   const server = await createEmptyVaultServer();
   try {
     const extensionPath = path.resolve("dist");
-    context = await chromium.launchPersistentContext(testInfo.outputPath("p"), {
+    context = await launchTestContext(testInfo.outputPath("p"), {
       channel: "chromium",
-      headless: true,
+      headless: true, locale: "zh-CN",
       viewport: { width: 375, height: 1100 },
       colorScheme: "dark",
       reducedMotion: "reduce",
@@ -120,7 +122,7 @@ test("manager requires explicit confirmation before adopting an authenticated em
     await expectNoGradients(manager.locator(".provider-page"));
     await expectNoHorizontalOverflow(manager);
     await openConfirmation.click();
-    const confirmation = manager.getByRole("dialog", { name: "采用服务器空密码库？" });
+    const confirmation = dialogContent(manager, { name: "采用服务器空密码库？" });
     await expect(confirmation).toBeVisible();
     await expect(confirmation).toHaveCSS("border-radius", "16px");
     await confirmation.getByRole("button", { name: "确认采用空库" }).click();
@@ -128,7 +130,7 @@ test("manager requires explicit confirmation before adopting an authenticated em
     await expect(openConfirmation).toHaveCount(0);
 
     await openMobileSection(manager, /^登录项/);
-    await expect(manager.getByRole("row").filter({ hasText: "Server account" })).toHaveCount(0);
+    await expect(manager.locator(".vault-list-card .item-card").filter({ hasText: "Server account" })).toHaveCount(0);
 
     const popup = await context.newPage();
     await popup.goto(`chrome-extension://${extensionId}/popup.html`);
@@ -149,7 +151,7 @@ function sendRuntime<T = unknown>(page: Page, request: Record<string, unknown>):
 
 async function openMobileSection(page: Page, name: RegExp): Promise<void> {
   await page.getByRole("button", { name: "打开导航" }).click();
-  await page.getByRole("button", { name }).click();
+  await page.getByRole("navigation", { name: "主导航" }).getByRole("button", { name }).click();
 }
 
 interface EmptyVaultServer {

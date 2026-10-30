@@ -39,7 +39,9 @@ try {
   await mkdir(recordDirectory, { recursive: true });
   await writeFile(recordPath, JSON.stringify({ version: 1, bindingId: randomUUID(), rpId: "monica-extension.local", credentialId: "AA", createdAtUnixSecs: 1 }), { flag: "wx" });
   const damaged = expectHostSuccess(await request("hello.status", { bindingId }), "hello.status(damaged)");
-  if (damaged.enrolled !== false || damaged.reason !== "binding-record-invalid") throw new Error("Windows Hello damaged binding did not fail closed.");
+  // Off Windows the platform reason takes precedence; the record must still be rejected below.
+  const damagedReason = process.platform === "win32" ? "binding-record-invalid" : "windows-only";
+  if (damaged.enrolled !== false || damaged.reason !== damagedReason) throw new Error("Windows Hello damaged binding did not fail closed.");
   expectHostError(await request("hello.verify", { bindingId, challengeBase64Url }), "hello-record-invalid", "hello.verify(damaged)");
   await unlink(recordPath);
   const revoked = expectHostSuccess(await request("hello.revoke", { bindingId, confirmed: true }), "hello.revoke(missing)");

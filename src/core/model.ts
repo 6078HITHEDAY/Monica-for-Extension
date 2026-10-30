@@ -1,3 +1,5 @@
+import type { HomePreferences } from "./home-preferences";
+
 export type VaultItemKind =
   | "login"
   | "secure-note"
@@ -6,6 +8,8 @@ export type VaultItemKind =
   | "identity"
   | "billing-address"
   | "payment-account"
+  | "api-token"
+  | "opaque"
   | "passkey";
 
 export type ProviderKind = "local" | "monica-webdav" | "bitwarden" | "mdbx2" | "mdbx-legacy" | "keepass";
@@ -20,7 +24,7 @@ export interface ProviderReference {
   etag?: string;
 }
 
-export type LoginUriMatchType = "base-domain" | "domain" | "starts-with" | "exact" | "regex" | "never";
+export type LoginUriMatchType = "default" | "base-domain" | "host" | "domain" | "starts-with" | "exact" | "regex" | "never";
 
 export interface LoginUriRule {
   uri: string;
@@ -66,6 +70,8 @@ export interface VaultItemBase {
   sortOrder?: number;
   imagePaths?: string[];
   boundNoteId?: number;
+  /** Android native note logical ID; Room IDs must never be used across vaults. */
+  boundNoteEntryId?: string;
   replicaGroupId?: string;
   keepassDatabaseId?: number;
   keepassGroupPath?: string;
@@ -83,16 +89,24 @@ export interface LoginItem extends VaultItemBase {
   uris: string[];
   uriRules?: LoginUriRule[];
   totpSecret?: string;
-  /** Canonical extension link; Android boundPasswordId is resolved to this on import. */
+  /** Android boundPasswordId resolves to this link; empty means explicitly unlinked, absent permits legacy lookup. */
   boundTotpItemId?: string;
   customFields: SecureCustomField[];
   /** Encrypted local marker: this Bitwarden Cipher completed the Android-compatible field adapter. */
   bitwardenCustomFieldsVersion?: 1;
+  /** Derived from an acknowledged Bitwarden response; local item IDs may stay unchanged. */
+  bitwardenCipherId?: string;
   /** Derived encrypted marker for truthful SSH UI and format-preserving writes. */
   bitwardenSshKeyMode?: "native" | "fallback";
-  loginType?: "PASSWORD" | "SSO" | "WIFI" | "SSH_KEY" | "BARCODE";
+  loginType?: "PASSWORD" | "SSO" | "WIFI" | "SSH_KEY" | "GPG_KEY" | "API_KEY" | "BARCODE" | "STEAM_MAFILE";
+  /** Explicit Android membership, scoped to the source vault; never inferred from content. */
+  passwordGroupId?: string;
+  /** Android display-stack cover; never establishes password-project membership. */
+  isGroupCover?: boolean;
   ssoProvider?: string;
   ssoRefEntryId?: number;
+  /** Stable password logical identity; numeric ssoRefEntryId is only a Room projection. */
+  ssoRefLogicalId?: string;
   appPackageName?: string;
   appName?: string;
   email?: string;
@@ -102,6 +116,10 @@ export interface LoginItem extends VaultItemBase {
   state?: string;
   zipCode?: string;
   country?: string;
+  creditCardNumber?: string;
+  creditCardHolder?: string;
+  creditCardExpiry?: string;
+  creditCardCVV?: string;
   passkeyBindings?: string;
   sshKeyData?: string;
   wifiMetadata?: string;
@@ -109,6 +127,28 @@ export interface LoginItem extends VaultItemBase {
   customIconType?: string;
   customIconValue?: string;
   customIconUpdatedAt?: number;
+  /** Android Bitwarden Steam carrier metadata, decrypted from its marked maFile attachment. */
+  steamAccountName?: string;
+  steamDisplayName?: string;
+  steamDeviceId?: string;
+  steamSharedSecretBase64?: string;
+  steamId?: string;
+  steamAccessToken?: string;
+  steamRefreshToken?: string;
+  steamLoginSecure?: string;
+  steamRevocationCode?: string;
+  steamIdentitySecret?: string;
+  steamTokenGid?: string;
+  steamRawJson?: string;
+  /** Android password_history.json entries, encrypted with the containing Monica vault. */
+  passwordHistory?: PasswordHistoryRecord[];
+  /** The source retains history rows this client cannot project or decrypt. */
+  passwordHistoryIncomplete?: boolean;
+}
+
+export interface PasswordHistoryRecord {
+  password: string;
+  lastUsedAt: string;
 }
 
 export interface SecureNoteItem extends VaultItemBase {
@@ -116,6 +156,18 @@ export interface SecureNoteItem extends VaultItemBase {
   content: string;
   tags?: string[];
   isMarkdown?: boolean;
+  customFields?: SecureCustomField[];
+}
+
+/** Android native `api-token` objects. Payload and label extensions stay encrypted verbatim. */
+export interface ApiTokenItem extends VaultItemBase {
+  kind: "api-token";
+  provider: string;
+  apiBase: string;
+  token: string;
+  customFields: Array<SecureCustomField & { id?: number | string }>;
+  apiTokenPayload?: string;
+  apiTokenMetadata?: string;
 }
 
 export interface TotpItem extends VaultItemBase {
@@ -125,7 +177,7 @@ export interface TotpItem extends VaultItemBase {
   accountName?: string;
   /** Monica Android's OTP discriminator. STEAM uses the Steam Guard alphabet. */
   otpType?: "TOTP" | "HOTP" | "STEAM" | "YANDEX" | "MOTP";
-  counter?: number;
+  counter?: number | string;
   pin?: string;
   pinLength?: number;
   link?: string;
@@ -156,6 +208,9 @@ export interface TotpItem extends VaultItemBase {
 export interface CardItem extends VaultItemBase {
   kind: "card";
   cardholderName: string;
+  cardholderFirstName?: string;
+  cardholderMiddleName?: string;
+  cardholderLastName?: string;
   number: string;
   expiryMonth: string;
   expiryYear: string;
@@ -177,6 +232,16 @@ export interface CardItem extends VaultItemBase {
   currency?: string;
   customerServicePhone?: string;
   customFields?: SecureCustomField[];
+  cardFace?: CardFaceConfig | null;
+  /** Android wallet presentation metadata; retain unknown section keys and their order. */
+  editorSectionOrder?: string[];
+}
+
+export interface CardFaceConfig {
+  imageAttachmentName: string;
+  displayMode: "ALL" | "CARD_NUMBER_ONLY" | "HIDDEN";
+  showBrandIcon: boolean;
+  [key: string]: unknown;
 }
 
 export interface IdentityItem extends VaultItemBase {
@@ -187,6 +252,13 @@ export interface IdentityItem extends VaultItemBase {
   middleName: string;
   lastName: string;
   fullName: string;
+  district?: string;
+  homeEmail?: string;
+  homePhone?: string;
+  workEmail?: string;
+  workPhone?: string;
+  /** DocumentData.title is the person's prefix, independent of the record title. */
+  documentTitle?: string;
   birthDate?: string;
   issuedDate?: string;
   expiryDate?: string;
@@ -203,9 +275,25 @@ export interface IdentityItem extends VaultItemBase {
   phone?: string;
   address?: Partial<AddressFields>;
   customFields?: SecureCustomField[];
+  cardFace?: CardFaceConfig | null;
+  /** Android wallet presentation metadata; independent of custom-field ordering. */
+  editorSectionOrder?: string[];
+  /** Android wallet pass presentation template; unknown values remain editable as metadata. */
+  walletTemplate?: string;
+  /** Android wallet pass fields, kept as strings so leading zeros and time-zone text survive. */
+  walletFields?: Record<string, string>;
 }
 
 export interface AddressFields {
+  firstName?: string;
+  middleName?: string;
+  lastName?: string;
+  addressLine3?: string;
+  district?: string;
+  homeEmail?: string;
+  homePhone?: string;
+  workEmail?: string;
+  workPhone?: string;
   fullName: string;
   company: string;
   streetAddress: string;
@@ -222,6 +310,7 @@ export interface BillingAddressItem extends VaultItemBase, AddressFields {
   kind: "billing-address";
   isDefault?: boolean;
   customFields?: SecureCustomField[];
+  cardFace?: CardFaceConfig | null;
 }
 
 export interface PaymentAccountItem extends VaultItemBase {
@@ -261,11 +350,20 @@ export interface PasskeyItem extends VaultItemBase {
   keyAlgorithm?: string;
   publicKey: string;
   privateKeyPkcs8?: string;
+  /** Non-secret projection of an unresolved device reference; never grants signing capability. */
+  keyMaterialHint?: "device-reference";
+  /** Persisted source counter. Independent/file-backed assertions use zero without rewriting it. */
   signCount: number;
+  /** Local history of observed counters; an unconfirmed local increment does not advance it. */
+  signCountHighWaterMark?: number;
+  /** Registration-time backup eligibility must stay stable when a key moves between clients. */
+  backupEligible?: boolean;
+  backupState?: boolean;
   discoverable: boolean;
   userVerificationRequired?: boolean;
   transports?: string[];
   aaguid?: string;
+  /** Installation-local statistics; these do not trigger provider writes. */
   lastUsedAt?: string;
   useCount?: number;
   iconUrl?: string;
@@ -274,7 +372,16 @@ export interface PasskeyItem extends VaultItemBase {
   sourceMode: "browser-local" | "bitwarden" | "android-metadata-only";
 }
 
-export type VaultItem = LoginItem | SecureNoteItem | TotpItem | CardItem | IdentityItem | BillingAddressItem | PaymentAccountItem | PasskeyItem;
+/** Protected generic disclosure. It never enters credential or editor adapters. */
+export interface OpaqueItem extends VaultItemBase {
+  kind: "opaque";
+  nativeType: string;
+  payloadSchemaVersion: number;
+  originalPayload?: string;
+  readOnlyReason: string;
+}
+
+export type VaultItem = LoginItem | SecureNoteItem | TotpItem | CardItem | IdentityItem | BillingAddressItem | PaymentAccountItem | ApiTokenItem | PasskeyItem | OpaqueItem;
 
 export interface ProviderAccount {
   id: string;
@@ -302,6 +409,8 @@ export interface PendingMutation {
   createdAt: string;
   attempts: number;
   lastError?: string;
+  /** Explicit user restore of an existing KDBX entry; never inferred from an edit. */
+  keepassRestore?: true;
 }
 
 export type ProviderMutationReceiptStage = "prepared" | "attempted" | "committed";
@@ -319,6 +428,8 @@ export interface ProviderMutationReceipt {
   operation: PendingMutation["operation"];
   stage: ProviderMutationReceiptStage;
   intentFingerprint: string;
+  /** Absent means the original string-based fingerprint. Never reinterpret an attempted receipt. */
+  fingerprintVersion?: 1 | 2;
   remoteId?: string;
   baseRevision?: string;
   attemptCount: number;
@@ -331,6 +442,8 @@ export interface ProviderMutationReceipt {
 export interface ProviderConflictInput {
   itemId: string;
   reason: string;
+  /** Recovery retained data that ordinary refresh must not silently discard. */
+  requiresExplicitResolution?: true;
   local?: VaultItem;
   remote?: VaultItem;
 }
@@ -387,7 +500,36 @@ export interface ProviderDiagnosticExport {
   diagnostics: ProviderDiagnostic[];
 }
 
+import type { BlockedFieldSignatureRecord } from "../autofill/field-policy";
+
 export interface VaultState {
+  /** Local device identity and peer trust; excluded when restoring a portable backup. */
+  nearbyPreferences?: import('../nearby/preferences').NearbyPreferences;
+  nearbyNativeJournal?: import('../nearby/native-journal').NearbyNativeJournal;
+  /** Encrypted nearby application receipts; never synchronized as item fields. */
+  nearbyLocalReceipts?: import('../nearby/local-adoption').NearbyLocalReceipt[];
+  /** Lossless nearby folders/root metadata and their encrypted adoption receipts. */
+  nearbyLocalMetadata?: import('../nearby/local-metadata').NearbyLocalMetadata[];
+  /** Local ids whose records stay live in the native replica after permanent local deletion. */
+  nearbyRetainedLocals?: string[];
+  /** Local encrypted two-phase password removal, never synchronized as item metadata. */
+  passwordProjectRemovals?: import("./password-project-removal-journal").PasswordProjectRemovalRecord[];
+  mdbx2Restores?: import('./mdbx2-restore-journal').Mdbx2RestoreRecord[];
+  mdbx2RestoreBatches?: import('./mdbx2-restore-batch-journal').Mdbx2RestoreBatchRecord[];
+  keepassProjectRestores?: import('./keepass-project-restore').KeePassProjectRestoreReceipt[];
+  keepassProjectRemovalIntents?: import('./keepass-project-removal-journal').KeePassProjectRemovalIntent[];
+  keepassProjectResolutionIntents?: import('./keepass-project-resolution-journal').KeePassProjectResolutionIntent[];
+  mdbx2DeletionCancellations?: import('./mdbx2-deletion-cancellation').Mdbx2DeletionCancellation[];
+  /** Local encrypted recovery records, never a provider-synchronized field. */
+  mdbx2MoveFinalizations?: import("./mdbx2-move-journal").Mdbx2MoveFinalizationRecord[];
+  localTransferReceipts?: import('./local-transfer').LocalTransferReceipt[];
+  keepassTransfers?: import('./keepass-transfer-journal').KeePassTransferIntent[];
+  bitwardenCipherCopies?: import('./bitwarden-transfer-journal').BitwardenCipherCopyRecord[];
+  bitwardenBatchTransfers?: import('./bitwarden-batch-transfer').BitwardenBatchIntent[];
+  localTransferFolders?: import('./local-transfer').LocalTransferFolder[];
+  localItemAttachments?: import('./local-transfer').LocalItemAttachment[];
+  localItemOrigins?: import('./local-transfer').LocalItemOrigin[];
+  localAttachmentReceipts?: import('./local-attachments').LocalAttachmentReceipt[];
   magic: "MONICA_EXTENSION_VAULT";
   schemaVersion: 2;
   createdAt: string;
@@ -403,7 +545,13 @@ export interface VaultState {
     autoLockMinutes: number;
     defaultProviderId: string;
     protectionMode: "master-password" | "device-key";
+    autofillBlockedHosts: string[];
+    saveBlockedHosts: string[];
+    autofillBlockedFieldSignatures: BlockedFieldSignatureRecord[];
+    /** Explicit grants on this installation; never imported from a provider. */
+    lockedAutofillItemIds?: string[];
     windowsHello?: WindowsHelloBinding;
+    home?: HomePreferences;
   };
 }
 
@@ -440,7 +588,10 @@ export function createEmptyVaultState(now = new Date().toISOString()): VaultStat
     settings: {
       autoLockMinutes: 15,
       defaultProviderId: localProviderId,
-      protectionMode: "master-password"
+      protectionMode: "master-password",
+      autofillBlockedHosts: [],
+      saveBlockedHosts: [],
+      autofillBlockedFieldSignatures: []
     }
   };
 }

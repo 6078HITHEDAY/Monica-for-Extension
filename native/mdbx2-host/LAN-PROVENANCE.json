@@ -1,0 +1,42 @@
+{
+  "source": {
+    "repository": "https://github.com/Monica-Pass/Monica",
+    "commit": "15b5ec7203c1ba51e19e298aebf2daca82fa55c2",
+    "directory": "Monica for Android/rust-lan-sync",
+    "working_tree_clean": true,
+    "crate_declared_license": "MIT",
+    "repository_license_included": "GPL-3.0-or-later",
+    "captured": "2026-10-12"
+  },
+  "files": {
+    "Cargo.toml": "beb21c5a36e110b4934e922949a97c0af08d69109f7fe44009f6da22ea86d21b",
+    "src/assets.rs": "f0f089cf3c637f732dffc50dea311f23a305613a68438c807340c192eab889f2",
+    "src/discovery.rs": "1cbbcf11ad7c2f0393705c17f67205996a2e3401327f19eb85493bd4bdd1a728",
+    "src/lib.rs": "5af3c54a57df15b8a56fa9e510cba0fb20e65325f8e9033d880048ceaec3cfa6",
+    "src/peering.rs": "2fb3908df0470a516883f2694e7c487a2a212a5a96effefa40ef28852e39d047",
+    "src/replica.rs": "5f2bbabf0ea5b9b1325c3949b960163c8f687c4992f8129d3878c2d366a4df4f",
+    "src/storage.rs": "91178c438853299bc9a57a3ad6bc8a30acc66ccf8660aa65b454d5995ba974e7",
+    "src/tests.rs": "209d64ac1d5229cf2dd317d82ae7251bf4f47c1d0f59185bfef37c465addc972",
+    "src/transport.rs": "c5ec5a14d06bed55ba2b55d230462832d0bf5d5bdc845ee89fbeafddf1890ec4",
+    "LICENSE": "d5a3e06a8433f635a87072a148ca09ec26f33d6c450710997383a292c38aa879",
+    "Cargo.lock": "e43e22d524e8bda218b02bf3d1f3bacc8aba6b96158062969421ebafe2854f9c"
+  },
+  "extension_overlays": [
+    {
+      "id": "extension-lan-lossless-json",
+      "reason": "Preserve literal JSON marker keys and validated numeric lexemes across native requests, encrypted replica state, Noise transfer and reply serialization. Wire/storage formats unchanged. Android source checkout is untouched.",
+      "patch": "runtime-patches/extension-lan-lossless-json.patch",
+      "patch_sha256": "5d3f3880a472d041d185da9b43e8d73245ef4669dff3374ad80906e77aab5e24",
+      "base_files": {
+        "Cargo.toml": "beb21c5a36e110b4934e922949a97c0af08d69109f7fe44009f6da22ea86d21b",
+        "src/lib.rs": "5af3c54a57df15b8a56fa9e510cba0fb20e65325f8e9033d880048ceaec3cfa6",
+        "src/replica.rs": "5f2bbabf0ea5b9b1325c3949b960163c8f687c4992f8129d3878c2d366a4df4f"
+      },
+      "files": {
+        "Cargo.toml": "87df8bb874c09e88a7934f5056f1a0fe82776e15b8b48e97cf34b09c1eae9da3",
+        "src/lib.rs": "77270d787196e3b77d103f22f41b9dec794d036379ed5aad9e161a69f5ace0d8",
+        "src/replica.rs": "60125bbe9029b114c5189a5a7fdec03bcf03f9f02dbc679bfe25811881d64a82"
+      }
+    }
+  ]
+}

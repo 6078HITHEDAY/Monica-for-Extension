@@ -1,9 +1,11 @@
 import type { ProviderAccount, ProviderReference, ProviderSourceRecord, VaultItem } from "../../core/model";
 import type { ProviderAdapter, ProviderSyncContext, ProviderSyncResult } from "../../core/provider";
 import { decryptAndroidBackup, encryptAndroidBackup, isAndroidEncryptedBackup } from "./android-backup-crypto";
-import { deleteAndroidBackupItem, readAndroidBackup, writeAndroidBackup, type AndroidBackupDocument } from "./android-backup-codec";
+import { deleteAndroidBackupItem, deleteAndroidGeneratorHistoryEntry, deleteAndroidPortableAttachment, listAndroidGeneratorHistory, listAndroidPortableAttachments, readAndroidBackup, readAndroidPortableAttachment, upsertAndroidPortableAttachment, writeAndroidBackup, type AndroidBackupDocument, type AndroidGeneratorHistoryEntry } from "./android-backup-codec";
+import type { ProviderAttachmentPage, ProviderAttachmentReadBeginResult, ProviderAttachmentSummary } from "../attachments/attachment-contract";
 import { WebDavClient, type WebDavBackupFile, type WebDavCredentials } from "./webdav-client";
 import { createSourceRecord } from "../../core/source-records";
+import { assertPasswordProjectRemovalSyncSafe } from "../../core/password-project-removal-sync";
 
 export interface MonicaWebDavConfig extends WebDavCredentials, Record<string, unknown> {
   backupPassword?: string;
@@ -23,7 +25,14 @@ export class MonicaWebDavProvider implements ProviderAdapter {
   }
 
   async sync(account: ProviderAccount, context: ProviderSyncContext): Promise<ProviderSyncResult> {
-    const loaded = await this.loadLatest(account, context.signal);
+    assertPasswordProjectRemovalSyncSafe(account, context);
+    const config = readConfig(account);
+    const [latest] = await this.client(account).listBackups(context.signal);
+    const unchanged = context.syncHint?.type === "check-remote" && latest?.etag && config.lastEtag === latest.etag && config.lastFileName === latest.name
+      && !context.pendingMutations?.some(mutation => mutation.providerId === account.id)
+      && !context.localItems.some(item => hasProviderReference(item, account.id) && (!providerReference(item, account.id)?.revision || item.updatedAt !== providerReference(item, account.id)?.revision));
+    if (unchanged) return { items: context.localItems, conflicts: [], warnings: [], unchanged: true };
+    const loaded = latest ? await this.loadLatest(account, context.signal, latest) : null;
     // Android serialization assigns missing path references as it writes. Never
     // let that codec-side normalization leak back into the caller's baseline.
     const localItems = structuredClone(context.localItems);
@@ -48,9 +57,9 @@ export class MonicaWebDavProvider implements ProviderAdapter {
       };
     }
 
+    for (const item of localScoped) bindDocumentIdentity(loaded.document, item, account.id);
     const sourceRecords = await androidSourceRecords(loaded.document, account.id);
 
-    const config = readConfig(account);
     const hasBaseline = Boolean(config.lastFileName);
     const localByRemoteId = new Map(localScoped.map((item) => [remoteIdOf(item, account.id), item]));
     const remoteByRemoteId = new Map(loaded.document.items.map((item) => [remoteIdOf(item, account.id), item]));
@@ -85,7 +94,7 @@ export class MonicaWebDavProvider implements ProviderAdapter {
 
       if (!hasBaseline || !baselineRevision) {
         if (local.deletedAt || Date.parse(local.updatedAt) > Date.parse(remote.updatedAt)) {
-          if (!local.deletedAt) merged.push(local);
+          merged.push(local);
           needsUpload = true;
         } else {
           merged.push(remote);
@@ -99,7 +108,7 @@ export class MonicaWebDavProvider implements ProviderAdapter {
         conflicts.push({ itemId: local.id, reason: "浏览器和 Monica Android 在上次同步后都修改了此项目。", local, remote });
         merged.push(local);
       } else if (localChanged) {
-        if (!local.deletedAt) merged.push(local);
+        merged.push(local);
         needsUpload = true;
       } else {
         merged.push(remote);
@@ -117,7 +126,7 @@ export class MonicaWebDavProvider implements ProviderAdapter {
     }
 
     let baselineFile = loaded.file;
-    if (needsUpload) baselineFile = await this.uploadDocument(account, loaded.document, [...merged, ...localScoped.filter((item) => item.deletedAt)], context.signal, loaded.file);
+    if (needsUpload) baselineFile = await this.uploadDocument(account, loaded.document, merged, context.signal, loaded.file);
     const synced = finalizeItems(merged, account.id, baselineFile);
     return {
       items: [...unrelated, ...synced],
@@ -138,6 +147,7 @@ export class MonicaWebDavProvider implements ProviderAdapter {
   async update(account: ProviderAccount, item: VaultItem, signal?: AbortSignal): Promise<VaultItem> {
     const loaded = await this.loadLatest(account, signal);
     const document = loaded?.document || emptyDocument();
+    bindDocumentIdentity(document, item, account.id);
     const items = document.items.some((candidate) => candidate.id === item.id)
       ? document.items.map((candidate) => (candidate.id === item.id ? item : candidate))
       : [...document.items, item];
@@ -148,18 +158,93 @@ export class MonicaWebDavProvider implements ProviderAdapter {
   async remove(account: ProviderAccount, item: VaultItem, signal?: AbortSignal): Promise<void> {
     const loaded = await this.loadLatest(account, signal);
     if (!loaded) return;
+    bindDocumentIdentity(loaded.document, item, account.id);
     deleteAndroidBackupItem(loaded.document, item.id);
     await this.uploadDocument(account, loaded.document, loaded.document.items, signal, loaded.file);
   }
 
-  async loadLatest(account: ProviderAccount, signal?: AbortSignal): Promise<{ file: WebDavBackupFile; document: AndroidBackupDocument } | null> {
+  async listGeneratorHistory(account: ProviderAccount, signal?: AbortSignal): Promise<AndroidGeneratorHistoryEntry[]> {
+    const loaded = await this.loadLatest(account, signal);
+    return loaded ? listAndroidGeneratorHistory(loaded.document) : [];
+  }
+
+  async deleteGeneratorHistoryEntry(account: ProviderAccount, entryId: string, signal?: AbortSignal): Promise<boolean> {
+    const loaded = await this.loadLatest(account, signal);
+    if (!loaded || !deleteAndroidGeneratorHistoryEntry(loaded.document, entryId)) return false;
+    await this.uploadDocument(account, loaded.document, loaded.document.items, signal, loaded.file);
+    return true;
+  }
+
+  async listAttachments(account: ProviderAccount, item: VaultItem, signal?: AbortSignal): Promise<ProviderAttachmentPage> {
+    const loaded = await this.loadLatest(account, signal);
+    if (!loaded) return { items: [] };
+    bindDocumentIdentity(loaded.document, item, account.id);
+    const items = listAndroidPortableAttachments(loaded.document, item).map((attachment) => portableSummary(attachment));
+    return { items };
+  }
+
+  async readAttachment(account: ProviderAccount, item: VaultItem, attachmentId: string, signal?: AbortSignal): Promise<ProviderAttachmentReadBeginResult & { bytes: Uint8Array }> {
+    const loaded = await this.loadLatest(account, signal);
+    if (!loaded) throw new Error("WebDAV 中尚无 Monica Android 备份。");
+    bindDocumentIdentity(loaded.document, item, account.id);
+    const attachment = listAndroidPortableAttachments(loaded.document, item).find((candidate) => candidate.attachmentId === attachmentId);
+    if (!attachment) throw new Error("Android portable 附件不存在或不属于当前项目。");
+    const bytes = await readAndroidPortableAttachment(loaded.document, attachment);
+    return { ...portableSummary(attachment), readHandle: "", maxChunkBytes: 256 * 1024, bytes };
+  }
+
+  async addAttachment(account: ProviderAccount, item: VaultItem, input: { fileName: string; mediaType?: string; sizeBytes: number; sha256Hex: string; attachmentId?: string }, bytes: Uint8Array, signal?: AbortSignal): Promise<ProviderAttachmentSummary> {
+    const config = readConfig(account);
+    if (!config.backupPassword) throw new Error("写入 Android portable 附件前必须设置 WebDAV 备份密码。");
+    const loaded = await this.loadLatest(account, signal);
+    if (!loaded) throw new Error("WebDAV 中尚无 Monica Android 备份，请先完成一次同步。");
+    bindDocumentIdentity(loaded.document, item, account.id);
+    const entry = upsertAndroidPortableAttachment(loaded.document, item, { ...input, mimeType: input.mediaType }, bytes);
+    await this.uploadDocument(account, loaded.document, loaded.document.items, signal, loaded.file);
+    return portableSummary(entry);
+  }
+
+  async deleteAttachment(account: ProviderAccount, item: VaultItem, attachmentId: string, signal?: AbortSignal): Promise<boolean> {
+    const config = readConfig(account);
+    if (!config.backupPassword) throw new Error("删除 Android portable 附件前必须设置 WebDAV 备份密码。");
+    const loaded = await this.loadLatest(account, signal);
+    if (!loaded) return false;
+    bindDocumentIdentity(loaded.document, item, account.id);
+    const changed = deleteAndroidPortableAttachment(loaded.document, item, attachmentId);
+    if (!changed) return false;
+    await this.uploadDocument(account, loaded.document, loaded.document.items, signal, loaded.file);
+    return true;
+  }
+
+  async loadLatest(account: ProviderAccount, signal?: AbortSignal, selectedFile?: WebDavBackupFile): Promise<{ file: WebDavBackupFile; document: AndroidBackupDocument } | null> {
     const client = this.client(account);
-    const [file] = await client.listBackups(signal);
+    const file = selectedFile || (await client.listBackups(signal))[0];
     if (!file) return null;
     const config = readConfig(account);
     const remoteBytes = await client.download(file, signal);
-    const zipBytes = isAndroidEncryptedBackup(remoteBytes) ? await decryptAndroidBackup(remoteBytes, config.backupPassword || "") : remoteBytes;
-    return { file, document: readAndroidBackup(zipBytes, account.id) };
+    const encrypted = isAndroidEncryptedBackup(remoteBytes);
+    const zipBytes = encrypted ? await decryptAndroidBackup(remoteBytes, config.backupPassword || "") : remoteBytes;
+    return { file, document: readAndroidBackup(zipBytes, account.id, { allowPortablePasskeys: encrypted, allowPortableAttachments: encrypted }) };
+  }
+
+  /** Complete read-only snapshot for a batch. Do not create a missing source
+   * directory or download the whole archive separately for every attachment. */
+  async readTransferSnapshot(account: ProviderAccount, signal?: AbortSignal): Promise<{ file: WebDavBackupFile; document: AndroidBackupDocument; sha256: string }> {
+    const client = this.client(account), config = readConfig(account);
+    const [file] = await client.listBackups(signal, false);
+    if (!file || config.lastFileName !== file.name || config.lastEtag && config.lastEtag.replace(/^W\//, '') !== file.etag?.replace(/^W\//, ''))
+      throw new Error('WebDAV 来源备份已变化或尚未同步，请先同步再预览。');
+    const remote = await client.download(file, signal); let zip: Uint8Array | undefined;
+    try {
+      const sha256 = [...new Uint8Array(await crypto.subtle.digest('SHA-256', remote as BufferSource))].map(value => value.toString(16).padStart(2, '0')).join('');
+      const encrypted = isAndroidEncryptedBackup(remote);
+      zip = encrypted ? await decryptAndroidBackup(remote, config.backupPassword || '') : remote;
+      const document = readAndroidBackup(zip, account.id, { allowPortablePasskeys: encrypted, allowPortableAttachments: encrypted });
+      const [after] = await client.listBackups(signal, false);
+      if (!after || !sameBackupVersion(file, after) || file.size !== after.size || file.lastModified !== after.lastModified)
+        throw new Error('读取期间 WebDAV 来源备份已变化。');
+      return { file, document, sha256 };
+    } finally { zip?.fill(0); remote.fill(0); }
   }
 
   private async uploadDocument(
@@ -169,24 +254,50 @@ export class MonicaWebDavProvider implements ProviderAdapter {
     signal?: AbortSignal,
     expectedLatest?: WebDavBackupFile
   ): Promise<WebDavBackupFile> {
+    signal?.throwIfAborted();
     const config = readConfig(account);
-    const zipBytes = writeAndroidBackup(document, items, account.id);
     const encrypted = Boolean(config.backupPassword);
+    const stagedItems = structuredClone(items);
+    const zipBytes = writeAndroidBackup(document, stagedItems, account.id, { allowPortablePasskeys: encrypted });
     const payload = encrypted ? await encryptAndroidBackup(zipBytes, config.backupPassword!) : zipBytes;
+    signal?.throwIfAborted();
     const client = this.client(account);
+    const before = await client.listBackups(signal);
     if (expectedLatest) {
-      const [latest] = await client.listBackups(signal);
-      const etagChanged = Boolean(latest) && (Boolean(latest.etag) !== Boolean(expectedLatest.etag) || (latest.etag && latest.etag !== expectedLatest.etag));
-      if (!latest || latest.name !== expectedLatest.name || etagChanged) {
+      const [latest] = before;
+      if (!latest || !sameBackupVersion(latest, expectedLatest)) {
         throw new Error("WebDAV 最新备份在同步期间发生变化，已停止写入以避免覆盖 Android 数据。");
       }
+    } else if (before.length) {
+      throw new Error("WebDAV 在创建备份期间出现了其他设备的数据，请重新同步。");
     }
-    return client.upload(payload, encrypted, signal);
+    const uploaded = await client.upload(payload, encrypted, signal);
+    const after = await client.listBackups(signal);
+    const previous = new Map(before.map(file => [file.name, file]));
+    if (!after[0] || !sameBackupVersion(after[0], uploaded) || after.some(file => file.name !== uploaded.name &&
+      (!previous.has(file.name) || !sameBackupVersion(file, previous.get(file.name)!)))) {
+      // Keep both immutable snapshots and the pending local mutation. A later
+      // refresh must resolve the concurrent state before a counter can sign.
+      throw new Error("其他设备同时发布了 WebDAV 备份，当前修改尚未确认，请同步并处理冲突后重试。");
+    }
+    for (let index = 0; index < items.length; index += 1) Object.assign(items[index], stagedItems[index]);
+    return uploaded;
   }
 
   private client(account: ProviderAccount): WebDavClient {
     return new WebDavClient(readConfig(account), this.fetcher);
   }
+}
+
+function sameBackupVersion(left: WebDavBackupFile, right: WebDavBackupFile): boolean {
+  // Apache's fresh-file weak-to-strong transition is a read-only comparison;
+  // no stripped validator is ever used to authorize a write.
+  return left.name === right.name && left.url === right.url &&
+    left.etag?.replace(/^W\//, "") === right.etag?.replace(/^W\//, "");
+}
+
+function portableSummary(attachment: { attachmentId: string; fileName: string; sizeBytes: number; mimeType?: string }): ProviderAttachmentSummary {
+  return { attachmentId: attachment.attachmentId, providerKind: "monica-webdav", fileName: attachment.fileName, sizeBytes: attachment.sizeBytes, protected: true, mediaType: attachment.mimeType };
 }
 
 function readConfig(account: ProviderAccount): MonicaWebDavConfig {
@@ -200,6 +311,21 @@ function readConfig(account: ProviderAccount): MonicaWebDavConfig {
     lastFileName: typeof config.lastFileName === "string" ? config.lastFileName : undefined,
     lastEtag: typeof config.lastEtag === "string" ? config.lastEtag : undefined
   };
+}
+
+// Bind the archive path to the existing local identity after a browser-created
+// item is read back. The numeric Android ID stays in the original raw record.
+function bindDocumentIdentity(document: AndroidBackupDocument, item: VaultItem, providerId: string): void {
+  if (document.records.has(item.id)) return;
+  const path = providerReference(item, providerId)?.remoteId;
+  if (!path) return;
+  const record = [...document.records.values()].find(candidate => providerReference(candidate.item, providerId)?.remoteId === path);
+  if (!record) return;
+  const previousId = record.itemId;
+  const rebound = { ...record.item, id: item.id } as VaultItem;
+  document.records.delete(previousId);
+  document.records.set(item.id, { ...record, itemId: item.id, item: rebound });
+  document.items = document.items.map(candidate => candidate.id === previousId ? rebound : candidate);
 }
 
 function emptyDocument(): AndroidBackupDocument {
@@ -231,7 +357,7 @@ function remoteIdOf(item: VaultItem, providerId: string): string {
 }
 
 function finalizeItems(items: VaultItem[], providerId: string, file: WebDavBackupFile): VaultItem[] {
-  return items.filter((item) => !item.deletedAt).map((item) => finalizeItem(item, providerId, file));
+  return items.map((item) => finalizeItem(item, providerId, file));
 }
 
 function finalizeItem(item: VaultItem, providerId: string, file: WebDavBackupFile): VaultItem {
@@ -245,6 +371,9 @@ function finalizeItem(item: VaultItem, providerId: string, file: WebDavBackupFil
   };
   return {
     ...item,
+    // This projection now represents a downloaded or verified publication,
+    // not the earlier queued reservation echoed by the snapshot merge.
+    ...(item.kind === "passkey" ? { signCountHighWaterMark: Math.max(item.signCountHighWaterMark ?? item.signCount, item.signCount) } : {}),
     providerRefs: [...item.providerRefs.filter((candidate) => candidate.providerId !== providerId), reference]
   } as VaultItem;
 }

@@ -1,4 +1,6 @@
-import { chromium, expect, test, type BrowserContext, type Locator } from "@playwright/test";
+import { dialogContent } from "./fixtures/material";
+import { expect, test, type BrowserContext, type Locator } from "@playwright/test";
+import { launchEdgeContext } from './fixtures/edge';
 import path from "node:path";
 
 const OPERATION_ID = "66666666-6666-4666-8666-666666666666";
@@ -32,9 +34,8 @@ test("MDBX2 batch transfer provides safe M3E planning progress confirmation and 
   const extensionPath = path.resolve("dist");
   let context: BrowserContext | undefined;
   try {
-    context = await chromium.launchPersistentContext(testInfo.outputPath("mdbx2-batch-transfer-profile"), {
-      channel: "chromium",
-      headless: true,
+    context = await launchEdgeContext(testInfo.outputPath("mdbx2-batch-transfer-profile"), {
+      headless: true, locale: "zh-CN",
       colorScheme: "dark",
       reducedMotion: "reduce",
       viewport: { width: 375, height: 1100 },
@@ -48,7 +49,7 @@ test("MDBX2 batch transfer provides safe M3E planning progress confirmation and 
     await manager.getByLabel("主密码", { exact: true }).fill("mdbx2 batch transfer password");
     await manager.getByLabel("确认主密码", { exact: true }).fill("mdbx2 batch transfer password");
     await manager.getByRole("button", { name: "创建并解锁" }).click();
-    await expect(manager.getByRole("heading", { name: "密码库概览" })).toBeVisible();
+    await expect(manager.getByRole("heading", { name: "全部项目", exact: true })).toBeVisible();
 
     const createdAt = "2026-08-06T12:00:00.000Z";
     const common = { favorite: false, notes: "", createdAt, updatedAt: createdAt, providerRefs: [] };
@@ -149,14 +150,16 @@ test("MDBX2 batch transfer provides safe M3E planning progress confirmation and 
     await manager.evaluate(() => { document.documentElement.style.fontSize = "200%"; });
     await manager.getByRole("button", { name: "打开导航" }).click();
     await manager.getByRole("button", { name: "密码源" }).click();
-    await manager.getByRole("button", { name: "批量传输" }).click();
+    await manager.locator('[data-home-provider-id="mdbx2-batch-target"]').getByRole("button", { name: "批量传输" }).click();
 
-    const dialog = manager.getByRole("dialog", { name: "复制或移动项目" });
+    const dialog = dialogContent(manager, { name: "复制或移动项目" });
     await expect(dialog).toBeVisible();
     await expect(dialog).toHaveCSS("border-radius", "16px");
     await expect(dialog).toHaveCSS("background-image", "none");
-    await expect(dialog.locator(".batch-panel").first()).toHaveCSS("border-radius", "8px");
+    await expect(dialog.locator(".batch-panel").first()).toHaveCSS("border-radius", "24px");
     await expect(dialog.locator(".batch-panel").first()).toHaveCSS("background-image", "none");
+    await dialog.getByRole('combobox', { name: '目标密码源' }).click();
+    await manager.getByRole('option', { name: '团队 MDBX2', exact: true }).click();
 
     await dialog.getByRole("checkbox", { name: /Work Login/ }).check();
     await dialog.getByRole("checkbox", { name: /Recovery Note/ }).check();
@@ -169,13 +172,13 @@ test("MDBX2 batch transfer provides safe M3E planning progress confirmation and 
     const planButton = dialog.getByRole("button", { name: "检查并生成计划" });
     expect((await planButton.boundingBox())?.height).toBeGreaterThanOrEqual(44);
     await planButton.click();
-    await expect(dialog.getByRole("heading", { name: "兼容性计划" })).toBeVisible();
+    await expect(dialog.getByRole("heading", { name: "传输预览" })).toBeVisible();
     await expect(dialog.getByText("2 个可传输，1 个被阻断", { exact: true })).toBeVisible();
     await expect(dialog.getByText(/Android 元数据型 Passkey 不包含浏览器可用私钥/)).toBeVisible();
 
     const moveConfirmation = dialog.getByRole("checkbox", { name: /我确认执行移动/ });
     await moveConfirmation.check();
-    await dialog.getByRole("button", { name: "确认并移动" }).click();
+    await dialog.getByRole("button", { name: "跳过受限项并继续" }).click();
     await expect(dialog.getByRole("heading", { name: "正在传输" })).toBeVisible();
     await expect(dialog.locator("progress")).toBeVisible();
     await expect(dialog.getByText("1 个成功 · 1 个阻断 · 1 个失败", { exact: true })).toBeVisible();

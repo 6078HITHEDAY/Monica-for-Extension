@@ -1,5 +1,8 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { materialSelectTag, materialOptionTag } from "../lib/material-controls";
+import { locale, tr } from '../i18n';
+
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import type { ProviderAccount, VaultItem } from "../core/model";
 import { itemIcon, itemKindLabel, itemSafeSummary, itemSearchText } from "../manager/item-metadata";
 import { presentMdbx2Collections, type Mdbx2CollectionPresentation } from "../providers/mdbx2/mdbx2-collections";
@@ -19,6 +22,9 @@ const props = defineProps<{
   providers: ProviderAccount[];
   runtimeStatuses: Record<string, Mdbx2VaultRuntimeStatus>;
   initialTargetProviderId?: string;
+  initialSelectedIds?: string[];
+  scopeItemIds?: string[];
+  scopeLabel?: string;
 }>();
 
 const emit = defineEmits<{
@@ -27,13 +33,19 @@ const emit = defineEmits<{
   notice: [message: string];
 }>();
 
-const selectedIds = ref(new Set<string>());
+const selectedIds = ref(new Set((props.initialSelectedIds || []).filter(id => props.items.some(item => item.id === id && !item.deletedAt && (!props.scopeItemIds || props.scopeItemIds.includes(id)))).slice(0, MAX_SELECTION)));
 const query = ref("");
 const targetProviderId = ref("");
 const targetCollectionId = ref("");
 const preserveCategories = ref(true);
 const action = ref<Mdbx2BatchTransferRequest["action"]>("copy");
 const collections = ref<Mdbx2CollectionSummary[]>([]);
+const localFolders = ref<Array<{ key: string; categoryName: string }>>([]);
+const remoteReady = ref(false);
+type PendingTransfer = { request: Mdbx2BatchTransferRequest; plan: Mdbx2BatchTransferPlanResult; canKeepBoth?: boolean; keptBoth?: boolean };
+const pendingTransfers = ref<PendingTransfer[]>([]);
+const keepBothOperation = ref('');
+const keepBothConfirmed = ref(false);
 const collectionsLoading = ref(false);
 const collectionsError = ref("");
 const selectionNotice = ref("");
@@ -49,16 +61,19 @@ const progress = ref<Mdbx2BatchTransferStatus | null>(null);
 let collectionRequestToken = 0;
 let progressTimer: ReturnType<typeof setTimeout> | undefined;
 
-const targetProviders = computed(() => props.providers.filter((provider) => provider.kind === "mdbx2" && provider.enabled));
+const targetProviders = computed(() => props.providers.filter((provider) => ['local', 'mdbx2', 'keepass', 'bitwarden'].includes(provider.kind) && provider.enabled));
 const targetProvider = computed(() => targetProviders.value.find((provider) => provider.id === targetProviderId.value));
 const targetRuntime = computed(() => targetProviderId.value ? props.runtimeStatuses[targetProviderId.value] : undefined);
-const targetReady = computed(() => Boolean(targetRuntime.value?.open && targetRuntime.value.available));
-const activeItems = computed(() => props.items.filter((item) => !item.deletedAt));
+const targetReady = computed(() => targetProvider.value?.kind === 'local' || (['keepass', 'bitwarden'].includes(targetProvider.value?.kind || '') ? remoteReady.value : Boolean(targetRuntime.value?.open && targetRuntime.value.available)));
+const activeItems = computed(() => {
+  const scope = props.scopeItemIds ? new Set(props.scopeItemIds) : undefined;
+  return props.items.filter(item => !item.deletedAt && (!scope || scope.has(item.id)));
+});
 const filteredItems = computed(() => {
   const needle = query.value.trim().toLocaleLowerCase();
   return activeItems.value
     .filter((item) => !needle || itemSearchText(item).toLocaleLowerCase().includes(needle))
-    .sort((left, right) => left.title.localeCompare(right.title, "zh-CN", { sensitivity: "base" }) || left.id.localeCompare(right.id));
+    .sort((left, right) => left.title.localeCompare(right.title, locale.value, { sensitivity: "base" }) || left.id.localeCompare(right.id));
 });
 const selectedCount = computed(() => selectedIds.value.size);
 const selectedSignature = computed(() => [...selectedIds.value].sort().join("\u001f"));
@@ -67,6 +82,7 @@ const collectionRows = computed<Mdbx2CollectionPresentation[]>(() => presentMdbx
 const hasPlan = computed(() => Boolean(planResult.value && preparedRequest.value));
 const planCanExecute = computed(() => Boolean(
   planResult.value
+  && !keepBothOperation.value
   && preparedRequest.value
   && planResult.value.transferableCount > 0
   && (!planResult.value.requiresMoveConfirmation || moveConfirmed.value)
@@ -87,6 +103,7 @@ watch(
     preparedRequest.value = null;
     progress.value = null;
     moveConfirmed.value = false;
+    keepBothOperation.value = ''; keepBothConfirmed.value = false;
     error.value = "";
   }
 );
@@ -98,7 +115,7 @@ watch(targetProviderId, () => {
 
 watch(() => props.initialTargetProviderId, (value) => {
   if (value && targetProviders.value.some((provider) => provider.id === value)) targetProviderId.value = value;
-});
+}, { immediate: true });
 
 watch(targetProviders, (providers) => {
   if (!providers.some((provider) => provider.id === targetProviderId.value)) {
@@ -106,25 +123,32 @@ watch(targetProviders, (providers) => {
   }
 }, { immediate: true });
 
+watch(activeItems, items => {
+  if (executing.value) return;
+  const available = new Set(items.map(item => item.id));
+  selectedIds.value = new Set([...selectedIds.value].filter(id => available.has(id)));
+});
+
 onBeforeUnmount(() => stopProgressPolling());
 
 function readyFor(providerId: string): boolean {
+  if (['local', 'keepass', 'bitwarden'].includes(targetProviders.value.find(provider => provider.id === providerId)?.kind || '')) return true;
   const status = props.runtimeStatuses[providerId];
   return Boolean(status?.open && status.available);
 }
 
 function sourceProviderLabel(item: VaultItem): string {
   const references = item.providerRefs.filter((reference) => reference.providerId !== "local");
-  if (!references.length) return "Monica 本地库";
-  const names = references.map((reference) => props.providers.find((provider) => provider.id === reference.providerId)?.name || "未知密码源");
-  return names.length > 1 ? `多个密码源（${names.join("、")}）` : names[0];
+  if (!references.length) return tr('Monica 本地库');
+  const names = references.map((reference) => props.providers.find((provider) => provider.id === reference.providerId)?.name || tr('未知密码源'));
+  return names.length > 1 ? tr('多个密码源（{0}）', { 0: names.join("、") }) : names[0];
 }
 
 function safeSummary(item: VaultItem): string {
   try {
     return itemSafeSummary(item);
   } catch {
-    return "仅显示安全摘要";
+    return tr('仅显示安全摘要');
   }
 }
 
@@ -132,7 +156,7 @@ function toggleItem(itemId: string): void {
   const next = new Set(selectedIds.value);
   if (next.has(itemId)) next.delete(itemId);
   else if (next.size < MAX_SELECTION) next.add(itemId);
-  else selectionNotice.value = `一次最多选择 ${MAX_SELECTION} 个项目。`;
+  else selectionNotice.value = tr('一次最多选择 {0} 个项目。', { 0: MAX_SELECTION });
   selectedIds.value = next;
   if (next.size < MAX_SELECTION) selectionNotice.value = "";
 }
@@ -147,7 +171,7 @@ function toggleFiltered(): void {
       next.add(item.id);
     }
     if (next.size >= MAX_SELECTION && filteredItems.value.some((item) => !selectedIds.value.has(item.id))) {
-      selectionNotice.value = `已选择 ${MAX_SELECTION} 个项目；其余项目未加入。`;
+      selectionNotice.value = tr('已选择 {0} 个项目；其余项目未加入。', { 0: MAX_SELECTION });
     }
   }
   selectedIds.value = next;
@@ -162,10 +186,40 @@ async function loadCollections(): Promise<void> {
   const providerId = targetProviderId.value;
   const token = ++collectionRequestToken;
   collections.value = [];
+  localFolders.value = [];
+  remoteReady.value = false;
+  pendingTransfers.value = [];
   collectionsError.value = "";
   if (!providerId || !readyFor(providerId)) return;
   collectionsLoading.value = true;
   try {
+    if (targetProvider.value?.kind === 'keepass' || targetProvider.value?.kind === 'bitwarden') {
+      const bitwarden = targetProvider.value.kind === 'bitwarden';
+      const pending = await (bitwarden ? vaultClient.pendingBitwardenTransfers(providerId) : vaultClient.pendingKeePassTransfers(providerId));
+      if (token !== collectionRequestToken) return;
+      pendingTransfers.value = pending;
+      const folders: Array<{ key: string; categoryName: string }> = [];
+      const seen = new Set<string>();
+      let cursor: string | undefined;
+      for (let n = 0; n < 100; n++) {
+        const page = bitwarden
+          ? await vaultClient.listBitwardenFolders(providerId, { pageSize: 100, cursor }).then(page => ({ ...page, items: page.items.map(row => ({ inRecycleBin: !row.readable, groupId: row.folderId, displayPath: row.name })) }))
+          : await vaultClient.listKeePassGroups(providerId, { includeRecycleBin: false, pageSize: 100, cursor });
+        if (token !== collectionRequestToken) return;
+        folders.push(...page.items.filter(row => !row.inRecycleBin).map(row => ({ key: row.groupId, categoryName: row.displayPath })));
+        cursor = page.nextCursor;
+        if (!cursor) break;
+        if (seen.has(cursor) || n === 99) throw new Error(tr('文件夹分页未完成，请减少目录数量后重试。'));
+        seen.add(cursor);
+      }
+      localFolders.value = folders; remoteReady.value = true;
+      return;
+    }
+    if (targetProvider.value?.kind === 'local') {
+      const folders = await vaultClient.localTransferFolders();
+      if (token === collectionRequestToken) localFolders.value = folders;
+      return;
+    }
     const loaded: Mdbx2CollectionSummary[] = [];
     const seenCursors = new Set<string>();
     let cursor: string | undefined;
@@ -174,7 +228,7 @@ async function loadCollections(): Promise<void> {
       if (token !== collectionRequestToken) return;
       loaded.push(...page.items);
       if (!page.nextCursor) break;
-      if (!page.items.length || seenCursors.has(page.nextCursor)) throw new Error("MDBX2 文件夹分页游标没有前进。");
+      if (!page.items.length || seenCursors.has(page.nextCursor)) throw new Error(tr('MDBX2 文件夹分页游标没有前进。'));
       seenCursors.add(page.nextCursor);
       cursor = page.nextCursor;
     }
@@ -186,34 +240,78 @@ async function loadCollections(): Promise<void> {
   }
 }
 
+function pendingForTarget() {
+  return targetProvider.value?.kind === 'bitwarden' ? vaultClient.pendingBitwardenTransfers(targetProviderId.value) : vaultClient.pendingKeePassTransfers(targetProviderId.value);
+}
+
+async function resumeTransfer(row: PendingTransfer) {
+  if (planning.value || executing.value) return;
+  planning.value = true;
+  selectedIds.value = new Set(row.request.itemIds);
+  action.value = row.plan.action; preserveCategories.value = row.request.preserveCategories;
+  targetCollectionId.value = row.request.targetCollectionId || '';
+  preparedRequest.value = row.request; planResult.value = row.plan; moveConfirmed.value = true;
+  await nextTick(); planning.value = false;
+  await executePlan();
+}
+
+function showKeepBoth(row: PendingTransfer) {
+  keepBothOperation.value = row.request.operationId || '';
+  keepBothConfirmed.value = false;
+}
+
+async function keepBothTransfer(row: PendingTransfer) {
+  if (planning.value || executing.value || !row.request.operationId || !keepBothConfirmed.value || !row.canKeepBoth) return;
+  planning.value = true; error.value = '';
+  let saved: PendingTransfer | undefined;
+  try {
+    saved = await vaultClient.keepBothBitwardenTransfer(row.request.targetProviderId, row.request.operationId, true);
+  } catch (cause) { error.value = errorMessage(cause); }
+  finally {
+    // A reply may be lost after the decision was saved. Discard the displayed
+    // move plan and reload the durable summary before offering another action.
+    planResult.value = null; preparedRequest.value = null; progress.value = null;
+    pendingTransfers.value = await pendingForTarget().catch(() => pendingTransfers.value);
+    keepBothOperation.value = ''; keepBothConfirmed.value = false; planning.value = false;
+  }
+  if (saved && targetReady.value) await resumeTransfer(saved);
+}
+
+async function cancelTransfer(row: { request: Mdbx2BatchTransferRequest }) {
+  if (planning.value || executing.value || !row.request.operationId) return;
+  planning.value = true; error.value = '';
+  try {
+    if (targetProvider.value?.kind === 'bitwarden') await vaultClient.cancelUnwrittenBitwardenTransfer(row.request.targetProviderId, row.request.operationId);
+    else await vaultClient.cancelUnwrittenKeePassTransfer(row.request.targetProviderId, row.request.operationId);
+    pendingTransfers.value = await pendingForTarget();
+    planResult.value = null; preparedRequest.value = null; progress.value = null;
+  } catch (cause) { error.value = errorMessage(cause); }
+  finally { planning.value = false; }
+}
+
 async function createPlan(): Promise<void> {
   if (!selectedCount.value) {
-    error.value = "请至少选择一个项目。";
+    error.value = tr('请至少选择一个项目。');
     return;
   }
   if (!targetProviderId.value || !targetReady.value) {
-    error.value = "请先解锁一个 MDBX2 目标密码源。";
+    error.value = tr('请先选择可用的目标密码库。');
     return;
   }
   planning.value = true;
+  const input: Mdbx2BatchTransferRequest = { itemIds: [...selectedIds.value], targetProviderId: targetProviderId.value,
+    targetCollectionId: targetCollectionId.value || undefined, preserveCategories: preserveCategories.value, action: action.value };
+  const signature = () => JSON.stringify([selectedSignature.value, targetProviderId.value, targetCollectionId.value, preserveCategories.value, action.value]);
+  const selection = signature();
   error.value = "";
   executeResult.value = null;
   moveConfirmed.value = false;
   try {
-    const result = await vaultClient.planMdbx2BatchTransfer({
-      itemIds: [...selectedIds.value],
-      targetProviderId: targetProviderId.value,
-      targetCollectionId: targetCollectionId.value || undefined,
-      preserveCategories: preserveCategories.value,
-      action: action.value
-    });
+    const result = await vaultClient.planMdbx2BatchTransfer(input);
+    if (selection !== signature()) return;
     planResult.value = result;
     preparedRequest.value = {
-      itemIds: [...selectedIds.value],
-      targetProviderId: targetProviderId.value,
-      targetCollectionId: targetCollectionId.value || undefined,
-      preserveCategories: preserveCategories.value,
-      action: action.value,
+      ...input,
       operationId: result.operationId,
       operationCreatedAt: result.operationCreatedAt
     };
@@ -259,13 +357,14 @@ async function executePlan(): Promise<void> {
       updatedAt: new Date().toISOString()
     };
     emit("completed", result);
-    emit("notice", result.failedCount ? `批量传输完成：${result.completedCount} 个成功，${result.failedCount} 个失败。` : `批量传输完成：${result.completedCount} 个项目。`);
+    emit("notice", result.failedCount ? tr('批量传输完成：{0} 个成功，{1} 个失败。', { 0: result.completedCount, 1: result.failedCount }) : tr('批量传输完成：{0} 个项目。', { 0: result.completedCount }));
   } catch (cause) {
     error.value = errorMessage(cause);
     const status = await vaultClient.mdbx2BatchTransferStatus(plan.operationId).catch(() => undefined);
     if (status) progress.value = status;
   } finally {
     stopProgressPolling();
+    if (['keepass', 'bitwarden'].includes(targetProvider.value?.kind || '')) pendingTransfers.value = await pendingForTarget().catch(() => pendingTransfers.value);
     executing.value = false;
   }
 }
@@ -312,11 +411,11 @@ function folderLabel(row: Mdbx2CollectionPresentation): string {
 }
 
 function pathLabel(path: string[]): string {
-  return path.length ? path.join(" / ") : "根目录（未分类）";
+  return path.length ? path.join(" / ") : tr('根目录（未分类）');
 }
 
 function phaseLabel(phase: Mdbx2BatchTransferStatus["phase"]): string {
-  return ({ preparing: "准备数据", writing: "写入 MDBX2", attachments: "传输附件", finalizing: "更新本地索引", completed: "已完成", failed: "需要重试" } as const)[phase];
+  return ({ preparing: tr('准备数据'), writing: tr('保存到目标密码库'), attachments: tr('传输附件'), finalizing: tr('更新本地索引'), completed: tr('已完成'), failed: tr('需要重试') } as const)[phase];
 }
 
 function resultIcon(status: "completed" | "blocked" | "failed"): string {
@@ -324,7 +423,7 @@ function resultIcon(status: "completed" | "blocked" | "failed"): string {
 }
 
 function errorMessage(cause: unknown): string {
-  return cause instanceof Error ? cause.message : "MDBX2 批量传输失败，请重试。";
+  return cause instanceof Error ? cause.message : tr('批量传输失败，请重试。');
 }
 </script>
 
@@ -333,94 +432,125 @@ function errorMessage(cause: unknown): string {
     <section class="editor-dialog mdbx2-batch-dialog" role="dialog" aria-modal="true" aria-labelledby="mdbx2-batch-title">
       <header class="mdbx2-batch-header">
         <div>
-          <span class="dialog-eyebrow"><m3e-icon name="database"></m3e-icon>MDBX2 批量传输</span>
-          <h2 id="mdbx2-batch-title">复制或移动项目</h2>
-          <p>只显示标题、类型和安全摘要。原始字段、附件字节和密码源凭据留在后台。</p>
+          <span class="dialog-eyebrow"><m3e-icon name="database"></m3e-icon>{{ scopeLabel ? `${scopeLabel} · ` : '' }}{{ tr('批量传输') }}</span>
+          <h2 id="mdbx2-batch-title">{{ tr('复制或移动项目') }}</h2>
+
         </div>
-        <m3e-icon-button data-dialog-close aria-label="关闭批量传输" :disabled="executing" @click="closeDialog"><m3e-icon name="close"></m3e-icon></m3e-icon-button>
+        <m3e-icon-button data-dialog-close :aria-label="tr('关闭批量传输')" :disabled="executing" @click="closeDialog"><m3e-icon name="close"></m3e-icon></m3e-icon-button>
       </header>
 
       <div class="mdbx2-batch-scroll">
         <div class="mdbx2-batch-body">
         <section class="batch-panel batch-selection-panel" aria-labelledby="batch-selection-title">
           <div class="batch-panel-heading">
-            <div><h3 id="batch-selection-title">选择项目</h3><p>{{ selectedCount }} / {{ MAX_SELECTION }} 已选择</p></div>
-            <m3e-button variant="text" type="button" :disabled="!selectedCount || planning || executing" @click="clearSelection">清除</m3e-button>
+            <div><h3 id="batch-selection-title">{{ tr('选择项目') }}</h3><p>{{ tr('{0} / {1} 已选择', { 0: selectedCount, 1: MAX_SELECTION }) }}</p></div>
+            <m3e-button variant="text" type="button" :disabled="!selectedCount || planning || executing" @click="clearSelection">{{ tr('清除') }}</m3e-button>
           </div>
-          <label class="batch-search"><m3e-icon name="search"></m3e-icon><span class="visually-hidden">筛选项目</span><input v-model="query" autofocus type="search" placeholder="按名称、类型或密码源筛选" /></label>
+          <m3e-form-field v-field-label variant="filled" hide-required-marker class="batch-search"><m3e-icon slot="prefix" name="search"></m3e-icon><label slot="label">{{ tr('筛选项目') }}</label><input v-model="query" autofocus type="search" :placeholder="tr('按名称、类型或密码源筛选')" /></m3e-form-field>
           <div class="batch-selection-toolbar">
-            <label class="batch-check batch-check-all"><input type="checkbox" :checked="allFilteredSelected" :disabled="!filteredItems.length || planning || executing" @change="toggleFiltered" /><span>{{ allFilteredSelected ? '取消选择当前结果' : '选择当前结果' }}</span></label>
-            <span class="batch-result-count">{{ filteredItems.length }} 个结果</span>
+            <label v-choice-label class="batch-check batch-check-all"><m3e-checkbox  :checked="allFilteredSelected" :disabled="!filteredItems.length || planning || executing" @change="toggleFiltered" /><span>{{ allFilteredSelected ? tr('取消选择当前结果') : tr('选择当前结果') }}</span></label>
+            <span class="batch-result-count">{{ tr('{0} 个结果', { 0: filteredItems.length }) }}</span>
           </div>
           <p v-if="selectionNotice" class="batch-inline-note" role="status">{{ selectionNotice }}</p>
-          <div v-if="filteredItems.length" class="batch-item-list" role="list" aria-label="可传输项目">
-            <label v-for="item in filteredItems" :key="item.id" class="batch-item-row" :class="{ selected: selectedIds.has(item.id) }" role="listitem">
-              <input type="checkbox" :checked="selectedIds.has(item.id)" :disabled="executing || (!selectedIds.has(item.id) && selectedCount >= MAX_SELECTION)" @change="toggleItem(item.id)" />
+          <div v-if="filteredItems.length" class="batch-item-list" role="list" :aria-label="tr('可传输项目')">
+            <label v-choice-label v-for="item in filteredItems" :key="item.id" class="batch-item-row" :class="{ selected: selectedIds.has(item.id) }" role="listitem">
+              <m3e-checkbox  :checked="selectedIds.has(item.id)" :disabled="executing || (!selectedIds.has(item.id) && selectedCount >= MAX_SELECTION)" @change="toggleItem(item.id)" />
               <span class="batch-item-icon"><m3e-icon :name="item.favorite ? 'star' : itemIcon(item.kind)"></m3e-icon></span>
-              <span class="batch-item-copy"><strong>{{ item.title || '未命名项目' }}</strong><small>{{ itemKindLabel(item.kind) }} · {{ sourceProviderLabel(item) }}</small><small class="batch-safe-summary">{{ safeSummary(item) }}</small></span>
+              <span class="batch-item-copy"><strong>{{ item.title || tr('未命名项目') }}</strong><small>{{ itemKindLabel(item.kind) }} · {{ sourceProviderLabel(item) }}</small><small class="batch-safe-summary">{{ safeSummary(item) }}</small></span>
             </label>
           </div>
-          <div v-else class="batch-empty"><m3e-icon name="search_off"></m3e-icon><p>{{ query ? '没有匹配的项目。' : '密码库中没有可传输项目。' }}</p></div>
+          <div v-else class="batch-empty"><m3e-icon name="search_off"></m3e-icon><p>{{ query ? tr('没有匹配的项目。') : tr('密码库中没有可传输项目。') }}</p></div>
         </section>
 
         <section class="batch-panel batch-target-panel" aria-labelledby="batch-target-title">
-          <div class="batch-panel-heading"><div><h3 id="batch-target-title">传输到</h3><p>目标必须是已解锁的 MDBX2 本机工作副本。</p></div></div>
-          <label class="batch-field"><span>目标密码源</span><select v-model="targetProviderId" :disabled="planning || executing"><option value="" disabled>选择 MDBX2 密码源</option><option v-for="provider in targetProviders" :key="provider.id" :value="provider.id">{{ provider.name }}{{ readyFor(provider.id) ? '' : '（已锁定）' }}</option></select></label>
-          <p v-if="targetProvider && !targetReady" class="batch-warning" role="status"><m3e-icon name="lock"></m3e-icon><span>请先在密码源页面解锁 {{ targetProvider.name }}。</span></p>
+          <div class="batch-panel-heading"><div><h3 id="batch-target-title">{{ tr('传输到') }}</h3></div></div>
+          <m3e-form-field v-field-label variant="filled" hide-required-marker class="batch-field"><label slot="label">{{ tr('目标密码源') }}</label><component :is="materialSelectTag" @input="targetProviderId = ($event.target as HTMLElement &amp; { value: string }).value"  :disabled="planning || executing"><component :is="materialOptionTag" :selected.prop="String(targetProviderId ?? '') === String('')" value="" disabled>{{ tr('选择目标密码库') }}</component><component :is="materialOptionTag" :selected.prop="String(targetProviderId ?? '') === String(provider.id)" v-for="provider in targetProviders" :key="provider.id" :value="provider.id">{{ provider.name }}{{ readyFor(provider.id) ? '' : tr('（已锁定）') }}</component></component></m3e-form-field>
+          <p v-if="targetProvider && !targetReady" class="batch-warning" role="status"><m3e-icon name="lock"></m3e-icon><span>{{ tr('请先在密码源页面解锁 {0}。', { 0: targetProvider.name }) }}</span></p>
 
-          <fieldset class="batch-action-picker"><legend>操作</legend><div class="batch-action-segments"><label><input v-model="action" type="radio" value="copy" :disabled="planning || executing" /><span><m3e-icon name="content_copy"></m3e-icon><strong>复制</strong><small>创建独立项目</small></span></label><label><input v-model="action" type="radio" value="move" :disabled="planning || executing" /><span><m3e-icon name="drive_file_move"></m3e-icon><strong>移动</strong><small>完成后移除来源绑定</small></span></label></div></fieldset>
-
-          <div class="batch-folder-section">
-            <div class="batch-subheading"><div><strong>目标文件夹</strong><small>选择根目录或 Android 兼容的 Collection。</small></div><m3e-button variant="text" type="button" :disabled="collectionsLoading || planning || executing || !targetReady" @click="loadCollections"><m3e-icon slot="icon" name="refresh"></m3e-icon>刷新</m3e-button></div>
-            <div v-if="collectionsLoading" class="batch-folder-state" role="status"><m3e-icon name="progress_activity"></m3e-icon><span>正在读取文件夹…</span></div>
-            <p v-else-if="collectionsError" class="batch-error" role="alert">{{ collectionsError }}</p>
-            <div v-else class="batch-folder-tree" role="radiogroup" aria-label="目标 MDBX2 文件夹">
-              <label class="batch-folder-row" :class="{ selected: !targetCollectionId }"><input v-model="targetCollectionId" type="radio" value="" :disabled="planning || executing" /><span class="batch-folder-icon"><m3e-icon name="folder_open"></m3e-icon></span><span><strong>根目录</strong><small>未分类项目</small></span></label>
-              <label v-for="row in collectionRows" :key="row.item.collectionId" class="batch-folder-row" :class="{ selected: targetCollectionId === row.item.collectionId, incomplete: row.hierarchyState !== 'ready' }" :style="{ '--folder-depth': row.depth }"><input v-model="targetCollectionId" type="radio" :value="row.item.collectionId" :disabled="planning || executing" /><span class="batch-folder-icon"><m3e-icon name="folder"></m3e-icon></span><span><strong>{{ folderLabel(row) }}</strong><small>{{ row.hierarchyState === 'ready' ? `${row.item.attachmentCount} 个附件` : row.parentPath }}</small></span></label>
-              <p v-if="!collectionRows.length && targetReady" class="batch-folder-state"><m3e-icon name="folder_off"></m3e-icon><span>还没有自定义文件夹；项目会写入根目录。</span></p>
+          <div v-if="pendingTransfers.length" class="batch-pending-keepass" aria-live="polite">
+            <div v-for="pending in pendingTransfers" :key="pending.request.operationId" class="batch-panel">
+              <strong>{{ tr('未完成的传输') }}</strong>
+              <p>{{ pending.plan.items.map(row => row.title).join('、') }}</p>
+              <p v-if="pending.keptBoth" class="batch-inline-note">{{ tr('已选择保留来源；继续完成预览版本的复制。') }}</p>
+              <div v-if="keepBothOperation !== pending.request.operationId" class="batch-recovery-actions">
+                <m3e-button variant="tonal" :disabled="planning || executing || !targetReady" @click="resumeTransfer(pending)"><m3e-icon slot="icon" name="refresh" />{{ pending.keptBoth ? tr('继续复制') : tr('恢复传输') }}</m3e-button>
+                <m3e-button v-if="pending.canKeepBoth && keepBothOperation !== pending.request.operationId" variant="text" :disabled="planning || executing" @click="showKeepBoth(pending)">{{ tr('保留两端，完成复制') }}</m3e-button>
+                <m3e-button variant="text" :disabled="planning || executing" @click="cancelTransfer(pending)">{{ tr('取消未写入操作') }}</m3e-button>
+              </div>
+              <div v-if="pending.canKeepBoth && keepBothOperation === pending.request.operationId" class="batch-keep-both-confirm">
+                <p>{{ tr('目标继续使用预览时的版本，保留来源当前内容；不会恢复你已删除的来源项目。确认后会先保存这个决定，再继续复制。') }}</p>
+                <label v-choice-label class="batch-check"><m3e-checkbox :checked.prop="keepBothConfirmed" :disabled="planning || executing" @input="keepBothConfirmed = ($event.target as HTMLElement &amp; { checked: boolean }).checked" /><span>{{ tr('我确认保留来源并按复制完成') }}</span></label>
+                <div class="batch-recovery-actions">
+                  <m3e-button variant="filled" :disabled="!keepBothConfirmed || planning || executing" @click="keepBothTransfer(pending)">{{ tr('确认保留并继续') }}</m3e-button>
+                  <m3e-button variant="text" :disabled="planning || executing" @click="keepBothOperation = ''; keepBothConfirmed = false">{{ tr('取消') }}</m3e-button>
+                </div>
+              </div>
             </div>
           </div>
 
-          <label class="batch-check batch-preserve"><input v-model="preserveCategories" type="checkbox" :disabled="planning || executing" /><span><strong>保留原分类层级</strong><small>按 Android 的文件夹路径创建或复用目标 Collection。</small></span></label>
-          <p v-if="action === 'move'" class="batch-warning"><m3e-icon name="warning"></m3e-icon><span>移动只会在目标项目与附件验证成功后删除来源；失败时来源保留。</span></p>
+          <fieldset class="batch-action-picker"><legend>{{ tr('操作') }}</legend><m3e-radio-group class="batch-action-segments" :aria-label="tr('操作')"><label v-choice-label><m3e-radio :checked.prop="action === 'copy'" @input="action = 'copy'"   value="copy" :disabled="planning || executing" /><span><m3e-icon name="content_copy"></m3e-icon><strong>{{ tr('复制') }}</strong><small>{{ tr('创建独立项目') }}</small></span></label><label v-choice-label><m3e-radio :checked.prop="action === 'move'" @input="action = 'move'"   value="move" :disabled="planning || executing" /><span><m3e-icon name="drive_file_move"></m3e-icon><strong>{{ tr('移动') }}</strong><small>{{ targetProvider?.kind === 'keepass' ? tr('在同一数据库中移动') : tr('完成后移除来源绑定') }}</small></span></label></m3e-radio-group></fieldset>
+
+          <p v-if="targetProvider?.kind === 'bitwarden'" class="batch-inline-note">{{ tr('本地、MDBX 及 KeePass 项目可移入 Bitwarden；其他来源请使用复制。目标和附件完整校验后才会移除来源，中断后可恢复。') }}</p>
+
+          <div class="batch-folder-section">
+            <div class="batch-subheading"><div><strong>{{ tr('目标文件夹') }}</strong></div><m3e-button variant="text" type="button" :disabled="collectionsLoading || planning || executing || !targetReady" @click="loadCollections"><m3e-icon slot="icon" name="refresh"></m3e-icon>{{ tr('刷新') }}</m3e-button></div>
+            <div v-if="collectionsLoading" class="batch-folder-state" role="status"><m3e-icon name="progress_activity"></m3e-icon><span>{{ tr('正在读取文件夹…') }}</span></div>
+            <p v-else-if="collectionsError" class="batch-error" role="alert">{{ collectionsError }}</p>
+            <m3e-radio-group v-else class="batch-folder-tree" :aria-label="tr('目标文件夹')">
+              <label v-choice-label class="batch-folder-row" :class="{ selected: !targetCollectionId }"><m3e-radio :checked.prop="targetCollectionId === ''" @input="targetCollectionId = ''"   value="" :disabled="planning || executing" /><span class="batch-folder-icon"><m3e-icon name="folder_open"></m3e-icon></span><span><strong>{{ tr('根目录') }}</strong><small>{{ tr('未分类项目') }}</small></span></label>
+              <label v-choice-label v-for="row in collectionRows" :key="row.item.collectionId" class="batch-folder-row" :class="{ selected: targetCollectionId === row.item.collectionId, incomplete: row.hierarchyState !== 'ready' }" :style="{ '--folder-depth': row.depth }"><m3e-radio :checked.prop="targetCollectionId === row.item.collectionId" @input="targetCollectionId = row.item.collectionId"   :value="row.item.collectionId" :disabled="planning || executing" /><span class="batch-folder-icon"><m3e-icon name="folder"></m3e-icon></span><span><strong>{{ folderLabel(row) }}</strong><small>{{ row.hierarchyState === 'ready' ? tr('{0} 个附件', { 0: row.item.attachmentCount }) : row.parentPath }}</small></span></label>
+              <label v-choice-label v-for="folder in localFolders" :key="folder.key" class="batch-folder-row" :class="{ selected: targetCollectionId === folder.key }"><m3e-radio :checked.prop="targetCollectionId === folder.key" @input="targetCollectionId = folder.key" :value="folder.key" :disabled="planning || executing" /><span class="batch-folder-icon"><m3e-icon name="folder"></m3e-icon></span><span><strong>{{ folder.categoryName || tr('未命名文件夹') }}</strong><small>{{ targetProvider?.kind !== 'local' ? targetProvider?.name : tr('Monica 本地库') }}</small></span></label>
+              <p v-if="!collectionRows.length && !localFolders.length && targetReady" class="batch-folder-state"><m3e-icon name="folder_off"></m3e-icon><span>{{ tr('还没有自定义文件夹；项目会写入根目录。') }}</span></p>
+            </m3e-radio-group>
+          </div>
+
+          <label v-choice-label class="batch-check batch-preserve"><m3e-checkbox :checked.prop="preserveCategories" @input="preserveCategories = ($event.target as HTMLElement &amp; { checked: boolean }).checked"   :disabled="planning || executing" /><span><strong>{{ tr('保留原分类层级') }}</strong></span></label>
+          <p v-if="action === 'move' && targetProvider?.kind !== 'keepass'" class="batch-warning"><m3e-icon name="warning"></m3e-icon><span>{{ tr('移动只会在目标项目与附件验证成功后删除来源；失败时来源保留。') }}</span></p>
         </section>
         </div>
 
         <section v-if="planResult" class="batch-panel batch-plan-panel" aria-labelledby="batch-plan-title">
-        <div class="batch-panel-heading"><div><h3 id="batch-plan-title">兼容性计划</h3><p>{{ planResult.transferableCount }} 个可传输，{{ planResult.blockedCount }} 个被阻断</p></div><span class="operation-chip">操作 {{ planResult.operationId.slice(0, 8) }}</span></div>
+        <div class="batch-panel-heading"><div><h3 id="batch-plan-title">{{ tr('传输预览') }}</h3><p>{{ tr('{0} 个可传输，{1} 个被阻断', { 0: planResult.transferableCount, 1: planResult.blockedCount }) }}</p></div></div>
         <div v-if="planResult.warnings.length" class="batch-warning-list" role="status"><p v-for="warning in planResult.warnings" :key="warning"><m3e-icon name="info"></m3e-icon><span>{{ warning }}</span></p></div>
-        <div class="batch-plan-list" role="list" aria-label="传输计划项目">
-          <div v-for="item in planResult.items" :key="item.sourceItemId" class="batch-plan-row" :class="{ blocked: item.blockedReason }" role="listitem"><m3e-icon :name="item.blockedReason ? 'block' : item.effectiveAction === 'move' ? 'drive_file_move' : 'content_copy'"></m3e-icon><span><strong>{{ item.title }}</strong><small>{{ itemKindLabel(item.kind) }} · {{ pathLabel(item.sourcePath) }} <m3e-icon name="arrow_forward"></m3e-icon> {{ pathLabel(item.targetPath) }}</small><small v-if="item.blockedReason" class="batch-error">{{ item.blockedReason }}</small><small v-else-if="item.pathIncomplete" class="batch-inline-note">原分类路径不完整，已保留可解析部分。</small></span></div>
+        <div class="batch-plan-list" role="list" :aria-label="tr('传输计划项目')">
+          <div v-for="item in planResult.items" :key="item.sourceItemId" class="batch-plan-row" :class="{ blocked: item.blockedReason }" role="listitem"><m3e-icon :name="item.blockedReason ? 'block' : item.effectiveAction === 'move' ? 'drive_file_move' : 'content_copy'"></m3e-icon><span><strong>{{ item.title }}</strong><small>{{ itemKindLabel(item.kind) }} · {{ pathLabel(item.sourcePath) }} <m3e-icon name="arrow_forward"></m3e-icon> {{ pathLabel(item.targetPath) }}</small><small v-if="!selectedIds.has(item.sourceItemId)" class="batch-dependency">{{ tr('关联项目 · 自动包含') }}</small><small v-if="item.blockedReason" class="batch-error">{{ item.blockedReason }}</small><small v-else-if="item.pathIncomplete" class="batch-inline-note">{{ tr('原分类路径不完整，已保留可解析部分。') }}</small></span></div>
         </div>
-        <label v-if="planResult.requiresMoveConfirmation" class="batch-move-confirm"><input v-model="moveConfirmed" type="checkbox" /><span><strong>我确认执行移动</strong><small>目标写入、附件校验和来源删除会按顺序执行；已完成操作可安全重试。</small></span></label>
+        <label v-choice-label v-if="planResult.requiresMoveConfirmation" class="batch-move-confirm"><m3e-checkbox :checked.prop="moveConfirmed" @input="moveConfirmed = ($event.target as HTMLElement &amp; { checked: boolean }).checked"   /><span><strong>{{ tr('我确认执行移动') }}</strong><small>{{ targetProvider?.kind === 'keepass' ? tr('在同一数据库中移动') : tr('目标写入、附件校验和来源删除会按顺序执行；已完成操作可安全重试。') }}</small></span></label>
         </section>
 
         <section v-if="executing || progress" class="batch-panel batch-progress-panel" aria-live="polite" aria-labelledby="batch-progress-title">
-        <div class="batch-progress-heading"><div><h3 id="batch-progress-title">{{ executing ? '正在传输' : progress?.phase === 'failed' ? '传输未完成' : '传输结果' }}</h3><p>{{ progress ? phaseLabel(progress.phase) : '准备中' }} · {{ progress?.processed || 0 }} / {{ progress?.total || planResult?.items.length || 0 }}</p></div><strong>{{ progressPercent }}%</strong></div>
-        <progress max="100" :value="progressPercent" aria-label="批量传输进度"></progress>
+        <div class="batch-progress-heading"><div><h3 id="batch-progress-title">{{ executing ? tr('正在传输') : progress?.phase === 'failed' ? tr('传输未完成') : tr('传输结果') }}</h3><p>{{ progress ? phaseLabel(progress.phase) : tr('准备中') }} · {{ progress?.processed || 0 }} / {{ progress?.total || planResult?.items.length || 0 }}</p></div><strong>{{ progressPercent }}%</strong></div>
+        <progress max="100" :value="progressPercent" :aria-label="tr('批量传输进度')"></progress>
         </section>
 
         <section v-if="executeResult" class="batch-panel batch-result-panel" aria-labelledby="batch-result-title">
-        <div class="batch-panel-heading"><div><h3 id="batch-result-title">处理结果</h3><p>{{ executeResult.completedCount }} 个成功 · {{ executeResult.blockedCount }} 个阻断 · {{ executeResult.failedCount }} 个失败</p></div><m3e-icon :name="executeResult.failedCount ? 'error' : 'check_circle'" :class="executeResult.failedCount ? 'result-danger' : 'result-success'"></m3e-icon></div>
-        <div class="batch-result-list" role="list" aria-label="批量传输结果">
-          <div v-for="item in executeResult.items" :key="item.sourceItemId" class="batch-result-row" :class="`result-${item.status}`" role="listitem"><m3e-icon :name="resultIcon(item.status)"></m3e-icon><span><strong>{{ item.title }}</strong><small>{{ itemKindLabel(item.kind) }} · {{ item.status === 'completed' ? '已写入目标' : item.error || '未执行' }}</small></span></div>
+        <div class="batch-panel-heading"><div><h3 id="batch-result-title">{{ tr('处理结果') }}</h3><p>{{ tr('{0} 个成功 · {1} 个阻断 · {2} 个失败', { 0: executeResult.completedCount, 1: executeResult.blockedCount, 2: executeResult.failedCount }) }}</p></div><m3e-icon :name="executeResult.failedCount ? 'error' : 'check_circle'" :class="executeResult.failedCount ? 'result-danger' : 'result-success'"></m3e-icon></div>
+        <div class="batch-result-list" role="list" :aria-label="tr('批量传输结果')">
+          <div v-for="item in executeResult.items" :key="item.sourceItemId" class="batch-result-row" :class="`result-${item.status}`" role="listitem"><m3e-icon :name="resultIcon(item.status)"></m3e-icon><span><strong>{{ item.title }}</strong><small>{{ itemKindLabel(item.kind) }} · {{ item.status === 'completed' ? tr('已写入目标') : item.error || tr('未执行') }}</small></span></div>
         </div>
-        <p v-if="retryableCount" class="batch-inline-note"><m3e-icon name="info"></m3e-icon>重试会重放同一个确定性操作；已完成项目不会重复创建。</p>
+        <p v-if="retryableCount" class="batch-inline-note"><m3e-icon name="info"></m3e-icon>{{ tr('重试会重放同一个确定性操作；已完成项目不会重复创建。') }}</p>
+        <p v-if="executeResult.completedCount && targetProvider?.kind === 'keepass' && targetProvider.config.sourceMode === 'local-file'" class="batch-inline-note"><m3e-icon name="info"></m3e-icon>{{ tr('已保存的修改会在本机加密保留。解锁仍需数据库密码或密钥文件，完成后请导出并保存 KDBX。') }}</p>
         </section>
 
         <p v-if="error" class="batch-error batch-dialog-error" role="alert">{{ error }}</p>
       </div>
       <footer class="mdbx2-batch-footer">
-        <m3e-button variant="text" type="button" :disabled="executing" @click="closeDialog">关闭</m3e-button>
-        <m3e-button v-if="retryableCount" variant="tonal" type="button" :disabled="executing" @click="retryFailed"><m3e-icon slot="icon" name="refresh"></m3e-icon>重试失败项目</m3e-button>
-        <m3e-button v-if="!hasPlan" variant="filled" type="button" :disabled="planning || executing || !selectedCount || !targetReady" @click="createPlan"><m3e-icon slot="icon" name="rule"></m3e-icon>{{ planning ? '检查兼容性…' : '检查并生成计划' }}</m3e-button>
-        <m3e-button v-else variant="filled" type="button" :disabled="planning || executing || !planCanExecute" @click="executePlan"><m3e-icon slot="icon" :name="executing ? 'progress_activity' : action === 'move' ? 'drive_file_move' : 'content_copy'"></m3e-icon>{{ executing ? '正在提交…' : planResult?.requiresMoveConfirmation ? '确认并移动' : '执行复制' }}</m3e-button>
+        <m3e-button variant="text" type="button" :disabled="executing" @click="closeDialog">{{ hasPlan && !executeResult ? tr('取消') : tr('关闭') }}</m3e-button>
+        <template v-if="!keepBothOperation">
+        <m3e-button v-if="retryableCount" variant="tonal" type="button" :disabled="executing" @click="retryFailed"><m3e-icon slot="icon" name="refresh"></m3e-icon>{{ tr('重试失败项目') }}</m3e-button>
+        <m3e-button v-if="!hasPlan" variant="filled" type="button" :disabled="planning || executing || !selectedCount || !targetReady" @click="createPlan"><m3e-icon slot="icon" name="rule"></m3e-icon>{{ planning ? tr('检查兼容性…') : tr('检查并生成计划') }}</m3e-button>
+        <m3e-button v-else variant="filled" type="button" :disabled="planning || executing || !planCanExecute" @click="executePlan"><m3e-icon slot="icon" :name="executing ? 'progress_activity' : action === 'move' ? 'drive_file_move' : 'content_copy'"></m3e-icon>{{ executing ? tr('正在提交…') : planResult?.blockedCount ? tr('跳过受限项并继续') : planResult?.requiresMoveConfirmation ? tr('确认并移动') : tr('执行复制') }}</m3e-button>
+        </template>
       </footer>
     </section>
   </div>
 </template>
 
 <style scoped>
+.batch-recovery-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.batch-pending-keepass { display: grid; gap: 8px; overflow-wrap: anywhere; }
+.batch-keep-both-confirm { margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--md-sys-color-outline-variant); }
+.batch-keep-both-confirm > p { margin: 0 0 8px; font-size: 13px; line-height: 1.5; }
 .mdbx2-batch-backdrop {
   padding: 16px;
 }
@@ -432,7 +562,7 @@ function errorMessage(cause: unknown): string {
   flex-direction: column;
   padding: 0;
   overflow: hidden;
-  border-radius: 16px;
+  border-radius: 28px;
   background: var(--md-sys-color-surface-container, var(--app-surface));
 }
 
@@ -516,13 +646,13 @@ function errorMessage(cause: unknown): string {
   display: grid;
   grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
   gap: 12px;
-  padding: 16px 24px;
+  padding: 12px;
 }
 
 .batch-panel {
   min-width: 0;
-  border: 1px solid var(--md-sys-color-outline-variant, var(--app-outline));
-  border-radius: 8px;
+  border: 0;
+  border-radius: 24px;
   padding: 16px;
   background: var(--md-sys-color-surface-container-lowest, var(--app-surface));
 }
@@ -546,36 +676,13 @@ function errorMessage(cause: unknown): string {
 }
 
 .batch-search {
-  min-height: 44px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  min-width: 0;
   margin-top: 16px;
-  border: 1px solid var(--md-sys-color-outline, var(--app-outline));
-  border-radius: 8px;
-  padding: 0 12px;
-  background: var(--md-sys-color-surface-container-lowest, var(--app-surface));
-}
-
-.batch-search:focus-within {
-  outline: 3px solid color-mix(in srgb, var(--app-primary) 38%, transparent);
-  outline-offset: 1px;
 }
 
 .batch-search m3e-icon {
   --m3e-icon-size: 20px;
   color: var(--app-muted);
-}
-
-.batch-search input {
-  min-width: 0;
-  flex: 1;
-  min-height: 42px;
-  border: 0;
-  outline: 0;
-  color: var(--app-text);
-  background: transparent;
-  font: inherit;
 }
 
 .batch-selection-toolbar {
@@ -651,8 +758,8 @@ function errorMessage(cause: unknown): string {
 
 .batch-item-row {
   min-width: 0;
-  border-radius: 8px;
-  padding: 8px;
+  border-radius: 16px;
+  padding: 12px;
 }
 
 .batch-item-row:hover,
@@ -722,30 +829,13 @@ function errorMessage(cause: unknown): string {
 }
 
 .batch-field {
-  display: grid;
-  gap: 6px;
   margin-top: 16px;
-  font-weight: 600;
 }
 
-.batch-field select {
-  box-sizing: border-box;
-  inline-size: 100%;
-  min-height: 44px;
-  border: 1px solid var(--md-sys-color-outline, var(--app-outline));
-  border-radius: 8px;
-  padding: 8px 12px;
-  color: var(--app-text);
-  background: var(--md-sys-color-surface-container-lowest, var(--app-surface));
-  font: inherit;
-}
-
-.batch-field select:focus-visible,
 .batch-check input:focus-visible,
 .batch-item-row input:focus-visible,
 .batch-folder-row input:focus-visible,
-.batch-move-confirm input:focus-visible,
-.batch-action-segments input:focus-visible + span {
+.batch-move-confirm input:focus-visible {
   outline: 3px solid color-mix(in srgb, var(--app-primary) 42%, transparent);
   outline-offset: 2px;
 }
@@ -760,7 +850,7 @@ function errorMessage(cause: unknown): string {
 }
 
 .batch-warning {
-  color: var(--md-sys-color-on-tertiary-container, var(--app-text));
+  color: var(--md-sys-color-on-surface-variant, var(--app-muted));
 }
 
 .batch-warning m3e-icon,
@@ -787,7 +877,7 @@ function errorMessage(cause: unknown): string {
 
 .batch-action-segments {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
   gap: 8px;
 }
 
@@ -795,24 +885,23 @@ function errorMessage(cause: unknown): string {
   position: relative;
   min-width: 0;
   cursor: pointer;
-}
-
-.batch-action-segments input {
-  position: absolute;
-  inline-size: 1px;
-  block-size: 1px;
-  opacity: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
 }
 
 .batch-action-segments span {
-  min-height: 72px;
+  min-width: 0;
+  min-height: 48px;
   display: grid;
   grid-template-columns: 24px minmax(0, 1fr);
   align-content: center;
   column-gap: 8px;
-  border: 1px solid var(--md-sys-color-outline, var(--app-outline));
   border-radius: 8px;
-  padding: 8px 10px;
+  padding: 0;
+  overflow-wrap: anywhere;
 }
 
 .batch-action-segments span m3e-icon {
@@ -824,12 +913,6 @@ function errorMessage(cause: unknown): string {
 .batch-action-segments span small {
   color: var(--md-sys-color-on-surface-variant, var(--app-muted));
   line-height: 1.3;
-}
-
-.batch-action-segments input:checked + span {
-  border-color: var(--md-sys-color-primary, var(--app-primary));
-  color: var(--md-sys-color-on-secondary-container, var(--app-text));
-  background: var(--md-sys-color-secondary-container, var(--app-selected));
 }
 
 .batch-folder-section {
@@ -848,10 +931,15 @@ function errorMessage(cause: unknown): string {
 }
 
 .batch-folder-tree {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+  width: 100%;
+  box-sizing: border-box;
   margin-top: 8px;
-  border: 1px solid var(--md-sys-color-outline-variant, var(--app-outline));
-  border-radius: 8px;
-  padding: 4px;
+  border: 0;
+  border-radius: 24px;
+  padding: 0;
 }
 
 .batch-folder-row {
@@ -881,7 +969,7 @@ function errorMessage(cause: unknown): string {
 .batch-plan-panel,
 .batch-progress-panel,
 .batch-result-panel {
-  margin: 0 24px 12px;
+  margin: 0 12px 12px;
 }
 
 .batch-warning-list {
@@ -906,7 +994,8 @@ function errorMessage(cause: unknown): string {
 .batch-plan-list,
 .batch-result-list {
   margin-top: 12px;
-  border-top: 1px solid var(--md-sys-color-outline-variant, var(--app-outline));
+  display: grid;
+  gap: 4px;
 }
 
 .batch-plan-row,
@@ -916,8 +1005,9 @@ function errorMessage(cause: unknown): string {
   grid-template-columns: 24px minmax(0, 1fr);
   gap: 8px;
   align-items: start;
-  border-bottom: 1px solid var(--md-sys-color-outline-variant, var(--app-outline));
-  padding: 10px 0;
+  border-radius: 4px;
+  background: var(--app-surface-low, var(--app-surface-high));
+  padding: 12px 16px;
 }
 
 .batch-plan-row > m3e-icon,
@@ -994,7 +1084,7 @@ function errorMessage(cause: unknown): string {
 }
 
 .batch-dialog-error {
-  margin: 0 24px 12px;
+  margin: 0 12px 12px;
 }
 
 @media (max-width: 900px) {
@@ -1044,10 +1134,25 @@ function errorMessage(cause: unknown): string {
   }
 }
 
+@media (max-width: 420px) {
+  .mdbx2-batch-body { padding-inline: 8px; }
+  .batch-panel { padding: 12px; }
+  .batch-item-row { padding: 8px; gap: 8px; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .mdbx2-batch-dialog,
   .mdbx2-batch-backdrop {
     animation: none;
   }
 }
+.batch-plan-row:first-child,.batch-result-row:first-child,.batch-folder-row:first-child{border-start-start-radius:24px;border-start-end-radius:24px}
+.batch-plan-row:last-child,.batch-result-row:last-child,.batch-folder-row:last-of-type{border-end-start-radius:24px;border-end-end-radius:24px}
+.batch-folder-row{border-radius:4px;min-height:64px;box-sizing:border-box}
+.batch-folder-state{min-height:64px;font-size:.875rem;padding:12px;box-sizing:border-box}
+.batch-folder-state p{margin:0}
+.batch-plan-row .batch-dependency{color:var(--app-primary)}
+.batch-action-segments label{border-radius:20px;background:var(--app-surface-high)}
+.batch-action-segments label:has(m3e-radio[checked]){background:var(--app-selected)}
+.batch-action-segments label:focus-within,.batch-folder-row:focus-within{outline:2px solid var(--app-primary);outline-offset:2px}
 </style>

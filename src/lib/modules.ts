@@ -32,7 +32,6 @@ export type SectionId =
   | "trash"
   | "security"
   | "generator"
-  | "timeline"
   | "conflicts"
   | "organizations"
   | "collections"
@@ -145,17 +144,6 @@ export const featureModules: FeatureModule[] = [
         title: item.name,
         subtitle: item.modes.map((mode) => t(`generatorModes.${mode}` as MessageKey)).join(", "),
         cells: { length: item.length, updated: formatRelative(item.updatedAt) }
-      }))
-  }),
-  tableModule("timeline", "analysis", "modules.timeline", "history", columns("time", "reverted"), {
-    rows: (context) =>
-      context.snapshot.timeline.map((item) => ({
-        id: item.id,
-        icon: "history",
-        title: `${t(`operations.${item.operationType}` as MessageKey)} · ${item.itemTitle}`,
-        subtitle: `${item.itemType} · ${item.deviceName}`,
-        cells: { time: formatRelative(item.createdAt), reverted: item.reverted ? t("common.yes") : t("common.no") },
-        state: item.state
       }))
   }),
   tableModule("conflicts", "analysis", "modules.conflicts", "sync_problem", columns("local", "remote", "detected"), {

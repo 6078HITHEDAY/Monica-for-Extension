@@ -1,4 +1,7 @@
 import * as kdbxweb from "kdbxweb";
+import { readProjectCredential } from '../../core/project-credentials';
+import { readKeePassCustomIcon } from "./keepass-custom-icon";
+import { hydrateKeePassSteam } from './keepass-steam';
 import type { LoginItem, ProviderReference, ProviderSourceRecord, VaultItem } from "../../core/model";
 import type { MonicaItemBase } from "../monica-item-data";
 import { buildKeePassCredentialCandidates, keePassInvalidCredentialMessage } from "./keepass-credentials";
@@ -162,8 +165,12 @@ export function readKeePassEntries(
       providerId,
       hasRecycleBinMeta
     });
-    if (decoded.item) items.push(decoded.item);
-    else if (decoded.reason) skipped.push({ entryUuid, groupPath: context.groupPath, reason: decoded.reason });
+    if (decoded.item) {
+      if (decoded.item.kind === 'login') hydrateKeePassSteam(decoded.item, context.entry);
+      if (decoded.item.kind === "login" || decoded.item.kind === "totp") Object.assign(decoded.item, readKeePassCustomIcon(database, context.entry));
+      items.push(decoded.item);
+    }
+    if (decoded.reason) skipped.push({ entryUuid, groupPath: context.groupPath, reason: decoded.reason });
   }
 
   return { items, skipped, entriesByUuid, hasRecycleBinMeta };
@@ -185,7 +192,7 @@ export interface KeePassDecodedEntry {
  * `analyzePasswordEntry` precedence, with the two other passes folded in at the points where Android's
  * own passes would have claimed the entry: `MonicaItemType` first, then a passkey carrying nothing else,
  * then a template, then a wholly empty entry. An entry that has passkey fields *and* a username or notes
- * still becomes a login on Android, so it does here too.
+ * may also be read by Android's independent passkey pass. Account labels alone must not hide its key.
  */
 export function decodeKeePassEntry(
   context: KeePassEntryContext,
@@ -197,9 +204,9 @@ export function decodeKeePassEntry(
   if (isKeePassSecureItemEntry(fields)) {
     if (isKeePassPasskeyEntry(fields)) return { reason: "monica-secure-item" };
     const projection = readKeePassSecureItemFields(fields);
-    if (!projection) return { reason: "unknown-item-type" };
+    if (!projection) return opaqueKeePassEntry(context, fields, base, options);
     const item = keePassSecureItemToVaultItem(projection, base);
-    return item ? { item } : { reason: "unknown-item-type" };
+    return item ? { item } : opaqueKeePassEntry(context, fields, base, options);
   }
 
   if (isKeePassPasskeyEntry(fields)) {
@@ -209,11 +216,13 @@ export function decodeKeePassEntry(
         lastUsedAt: isoOf(context.entry.times.lastModTime),
         useCount: context.entry.times.usageCount
       });
-      return projection ? { item: keePassPasskeyToVaultItem(projection, base) } : { reason: "pure-passkey" };
+      if (projection) return { item: keePassPasskeyToVaultItem(projection, base) };
+      const login = readKeePassLoginFields(fields);
+      // Incomplete third-party fields must not hide an otherwise usable account label.
+      if (login.username || login.url || login.notes) return { item: buildLoginItem(fields, base) };
+      return { reason: "pure-passkey" };
     }
-    // Carries a username or notes as well, so Android's password pass claims it and the passkey half is
-    // preserved on the entry rather than modelled. Splitting it into two items would duplicate it on
-    // write-back, since both would then patch the same entry.
+    // A real password must remain available as a login; its passkey fields remain untouched on write.
     return { item: buildLoginItem(fields, base) };
   }
 
@@ -230,6 +239,20 @@ export function decodeKeePassEntry(
   return { item: buildLoginItem(fields, base) };
 }
 
+function opaqueKeePassEntry(context: KeePassEntryContext, fields: KeePassEntryFields, base: MonicaItemBase, options: KeePassDecodeOptions): KeePassDecodedEntry {
+  return {
+    reason: "unknown-item-type",
+    item: {
+      ...base,
+      kind: "opaque",
+      nativeType: keePassFieldValue(fields, "MonicaItemType") || "unknown",
+      payloadSchemaVersion: 1,
+      originalPayload: keePassSourceRecordFor(context.entry, options.providerId).payload,
+      readOnlyReason: "未知 KeePass 项目类型；原字段及附件仍在数据库中，仅可只读查看。"
+    }
+  };
+}
+
 /** A login that also carries TOTP fields stays a login, so only a blank username and password qualify. */
 function isTotpOnlyEntry(fields: KeePassEntryFields): boolean {
   const login = readKeePassLoginFields(fields);
@@ -241,15 +264,17 @@ function isTotpOnlyEntry(fields: KeePassEntryFields): boolean {
  * the login instead of silently defaulting when the code is generated.
  */
 function keePassEntryTotpUri(fields: KeePassEntryFields): string | undefined {
+  const original = keePassFieldValue(fields, "otp");
+  if (original.includes("://")) return original;
   const totp = readKeePassEntryTotp(fields);
   if (!totp) return undefined;
   return keePassTotpFieldsFor(totp, totp.issuer || totp.accountName)[KEEPASS_TOTP_FIELDS.otp];
 }
 
-/** `analyzePasswordEntry`'s PURE_PASSKEY test: passkey fields present and all four others blank. */
+/** Android and Monica writers populate UserName, URL and Notes even for passwordless Passkeys. */
 function isPureKeePassPasskeyEntry(fields: KeePassEntryFields): boolean {
   const login = readKeePassLoginFields(fields);
-  return !login.username && !login.password && !login.url && !login.notes;
+  return !login.password;
 }
 
 function buildLoginItem(fields: KeePassEntryFields, base: MonicaItemBase): LoginItem {
@@ -261,15 +286,18 @@ function buildLoginItem(fields: KeePassEntryFields, base: MonicaItemBase): Login
     notes: projection.notes,
     username: projection.username,
     password: projection.password,
-    uris: projection.url ? [projection.url] : [],
-    uriRules: projection.url ? [{ uri: projection.url, matchType: "base-domain" }] : [],
+    uris: projection.url ? projection.url.split(/\r?\n/).filter(Boolean) : [],
+    uriRules: projection.url ? projection.url.split(/\r?\n/).filter(Boolean).map((uri) => ({ uri, matchType: "base-domain" as const })) : [],
     customFields: projection.customFields,
+    passwordGroupId: readProjectCredential(projection.customFields)?.projectId,
     // Android would have emitted a second TOTP row for this entry; here the credential rides along on
     // the login instead, since both rows would otherwise claim the same entry-derived id.
     totpSecret: keePassEntryTotpUri(fields),
     loginType: projection.loginType,
+    isGroupCover: projection.isGroupCover,
     ssoProvider: projection.ssoProvider,
     ssoRefEntryId: projection.ssoRefEntryId,
+    ssoRefLogicalId: projection.ssoRefLogicalId,
     appPackageName: projection.appPackageName,
     appName: projection.appName,
     email: projection.email,
@@ -279,6 +307,10 @@ function buildLoginItem(fields: KeePassEntryFields, base: MonicaItemBase): Login
     state: projection.state,
     zipCode: projection.zipCode,
     country: projection.country,
+    creditCardNumber: projection.creditCardNumber,
+    creditCardHolder: projection.creditCardHolder,
+    creditCardExpiry: projection.creditCardExpiry,
+    creditCardCVV: projection.creditCardCVV,
     sshKeyData: projection.sshKeyData,
     wifiMetadata: projection.wifiMetadata
   };

@@ -5,13 +5,15 @@ This document defines the browser extension's compatibility contract with the cu
 ## Authority
 
 - Repository: `Monica-Pass/Monica`
-- Audited local commit: `3666e6eb6619f8884ca330efba57c6a2b6096242`
+- Audited committed baseline: `12de90beefea7ec5df243d55fa6254e171cf8b73`
 - Backup writer/reader: `Monica for Android/app/src/main/java/takagi/ru/monica/utils/WebDavHelper.kt`
 - Wallet codecs/models: `CardWalletDataCodec.kt` and `SecureItemModels.kt`
 - Encryption: `EncryptionHelper.kt`
 - Attachment formats: `AttachmentBackupCodec.kt` and `PortableAttachmentBackup.kt`
 
 The extension treats data it does not edit as opaque Android-owned data. Compatibility does not depend on the provider-neutral extension model knowing every Android field.
+
+API keys added in extension 0.1.37 use the separate native MDBX2 `api-token` format, not Room password rows or the legacy WebDAV JSON backup. The implementation follows Android's `ApiTokenPayload.kt`, `ApiTokenMetadata.kt`, `NativeApiTokenExtrasStore.kt` and `NativeApiTokenFavorites.kt`. Native helper 0.1.1 preserves object UUIDs, payload schemas, unknown fields, field IDs, notes and favorites. Local/remote edits are compared against both object and label content; conflicts retain the unsynchronized local record. Legacy JSON, Bitwarden and KeePass destinations are excluded for this type. Extension archive state is additive metadata retained by Android, not an Android archive feature.
 
 ## Feature Parity Matrix
 
@@ -24,21 +26,22 @@ The status vocabulary is intentionally strict:
 
 | Android feature group | Browser status | Compatibility requirement | Acceptance evidence |
 | --- | --- | --- | --- |
-| Login/password records | Planned | Empty username/password, multiple URIs, SSO, custom fields, app metadata, bindings, archive/trash metadata | Model migration, URI matcher, autofill and save E2E |
+| Login/password records | Full | Empty username/password, multiple URIs, SSO, custom fields, app metadata, bindings, archive/trash metadata | Empty-credential SSO save E2E and URI-rule editing (`tests/e2e/login.spec.ts`), URI matcher and archived-exclusion units (`src/core/matching.test.ts`), login custom-field fill (`src/content/dom.test.ts`), Android trash/category/timeline sync E2E, codec retention tests |
 | TOTP/HOTP/Steam/Yandex/mOTP | Full | Preserve every algorithm/type parameter and Steam metadata | OTP vectors and Android codec round trips |
 | Steam network operations | Full | Login approvals, confirmations, inventory, market, devices and maFile metadata | Mocked Steam API E2E and boundary audit |
-| Bank cards | Planned | Full `BankCardData`, custom fields and billing-address link | Codec field matrix and card autofill E2E |
-| Documents/identities | Planned | Full `DocumentData`, aliases and custom fields | Codec field matrix and identity autofill E2E |
-| Billing addresses | Planned | Full `BillingAddressData`, defaults and custom fields | Codec field matrix and address autofill E2E |
-| Payment accounts | Planned | Full `PaymentAccountData`, embedded address and custom fields | Codec field matrix and payment autofill E2E |
-| Secure notes | Planned | Content, tags, Markdown and image references | Editor and Android codec tests |
+| Bank cards | Full | Full `BankCardData`, custom fields and billing-address link | Complete-card manager round trip with BOOLEAN custom fields and preserved `billingAddress` JSON (`tests/e2e/wallet.spec.ts`), card wallet autofill (`src/content/wallet-dom.test.ts` in the security gate), codec field matrix tests |
+| Documents/identities | Full | Full `DocumentData`, aliases and custom fields | Identity import/edit E2E (`tests/e2e/manager.spec.ts`), identity wallet autofill E2E (`tests/e2e/wallet.spec.ts`), legacy-alias and custom-field codec tests |
+| Billing addresses | Full | Full `BillingAddressData`, defaults and custom fields | Address autofill E2E (`tests/e2e/wallet.spec.ts`), `isDefault` editor/codec round trips, custom-field codec tests |
+| Payment accounts | Full | Full `PaymentAccountData`, embedded address and custom fields | Payment autofill E2E (`tests/e2e/wallet.spec.ts`), embedded `billingAddress` JSON retention and `paymentNotes` preservation tests, custom-field codec tests |
+| Secure notes | Full | Content, tags, Markdown and image references | Markdown/tags manager E2E (`tests/e2e/wallet.spec.ts`), Bitwarden `monica_note_*` carrier fields, `imagePaths` preserved in WebDAV and KeePass codecs (Android-local image references stay metadata) |
 | Passkeys | Full | Browser/Bitwarden keys are usable; Android aliases remain metadata-only | WebAuthn E2E and source-mode tests |
-| Password generator/history | Planned | Browser generator works; Android history entries remain portable | Generator unit tests and ZIP byte checks |
-| Categories/favorites/order | Planned | Shared organization fields remain stable across edits | Migration and codec tests |
+| Password generator/history | Data | Browser generator works; Android generated history can be reviewed and individually deleted while future fields remain portable | Generator unit/E2E tests and ZIP byte checks |
+| Categories/favorites/order | Data | Category IDs/names are resolved for active and trash records; new categories are appended without rewriting existing metadata | Migration and codec tests |
+| Operation timeline | Data | The unlocked manager reads operation summaries and field names; old/new values and device IDs stay in the background boundary | Codec, sender-policy and UI tests |
 | Images and attachments | Data | Opaque encrypted blobs stay intact; portable metadata is visible | Binary ZIP entry equality tests |
-| Wi-Fi records | Planned | Metadata can be viewed/edited without pretending to configure an OS network | Model/editor tests |
-| SSH key records | Planned | Public/private OpenSSH fields remain encrypted and editable | Model/editor and content-boundary tests |
-| Barcode records | Planned | Payload and format remain portable; browser can display/copy | Model/editor tests |
+| Wi-Fi records | Data | SSID, security, hidden-network, BSSID, identity and Android metadata can be viewed/edited without pretending to configure an OS network | WebDAV/Bitwarden/KeePass codec tests and manager E2E |
+| SSH key records | Full | Public/private OpenSSH fields remain encrypted and editable; QR export contains only the public key | Provider round trips, sender-policy tests and manager E2E |
+| Barcode records | Full | Password-field payload remains portable; browser can copy and render QR or Code 128 locally | Provider round trips, barcode unit tests and manager E2E |
 | Autofill blocked fields/targets | Preserved | Android package/field policies remain byte-identical | ZIP entry equality tests |
 | Bitwarden personal/organization vaults | Full | Supported cipher types, folders, collections, FIDO2, 2FA and conflict safety | Provider unit/E2E suite |
 | WebDAV backup/sync | Full | Encryption, ETag, cancellation, merge conflicts and unknown-entry retention | Provider unit/E2E suite |
@@ -79,14 +82,14 @@ The key is PBKDF2-HMAC-SHA256 with 100,000 iterations and a 256-bit output. Exte
 | `folders/<category>/payment_accounts/payment_account_<id>_<createdAt>.json` | Payment account | Parsed for filling; extra data retained |
 | `folders/<category>/notes/note_<id>_<createdAt>.json` | Secure note | Content parsed; tags/Markdown metadata retained |
 | `folders/<category>/passkeys/passkey_<credentialId>.json` | Android Passkey metadata and key alias | Metadata only; key alias and Android-only fields retained |
-| `categories.json` | Category IDs, names, order | Opaque byte preservation |
+| `categories.json` | Category IDs, names, order | Parsed for category resolution; unchanged bytes and unknown fields retained; new categories appended using Android fields |
 | `Monica_<timestamp>_password.csv` | Compatibility password CSV | Opaque byte preservation |
 | `password_history.json` | Prior passwords | Opaque byte preservation |
-| `Monica_<timestamp>_generated_history.json` | Generator history | Opaque byte preservation |
+| `Monica_<timestamp>_generated_history.json` | Generator history | Manager-only masked list and field-preserving individual deletion; unchanged bytes remain identical |
 | `steam/mafiles/*` | Steam Guard maFiles | Opaque byte preservation |
 | `images/*` | Encrypted secure-item images | Opaque byte preservation |
 | `password_icons/*` | Uploaded password icons | Opaque byte preservation |
-| `timeline_history.json` | Operation timeline | Opaque byte preservation |
+| `timeline_history.json` | Operation timeline | Read-only redacted summaries in the manager; original entry remains byte-identical |
 | `trash/trash_passwords.json` | Deleted passwords | Opaque byte preservation |
 | `trash/trash_secure_items.json` | Deleted secure items | Opaque byte preservation |
 | `monica_config/common_account.json` | Common fill identity/templates | Opaque byte preservation |
@@ -159,7 +162,29 @@ Current `itemData` fields are `content`, `tags`, and `isMarkdown`. Only `content
 
 Android currently writes `credentialId`, `rpId`, `rpName`, `userId`, `userName`, `userDisplayName`, `publicKeyAlgorithm`, `publicKey`, `privateKeyAlias`, `createdAt`, `lastUsedAt`, `useCount`, `iconUrl`, `isDiscoverable`, `isUserVerificationRequired`, `transports`, `aaguid`, `signCount`, `notes`, `boundPasswordId`, `passkeyMode`, and `categoryName`.
 
-`privateKeyAlias` is an Android key reference, not PKCS#8 key material. The extension must preserve it but cannot use it for browser WebAuthn signing.
+`privateKeyAlias` may contain either an Android device-bound reference or portable PKCS#8 private-key material. Device-bound references remain metadata and are preserved on edits. The extension validates portable keys and uses only ES256/P-256 for browser signing. Portable keys are imported/written through encrypted Android backups; a plain ZIP does not enable portable-key signing or export.
+
+Release 0.1.37 recognizes a passwordless KeePass entry as a Passkey even when Android has populated its ordinary username, URL and notes (first implemented in local development build 0.1.38). Entries with a real password remain logins and retain embedded Passkey fields. Malformed or unsupported private keys are not presented as usable ES256 credentials.
+
+Release 0.1.37 includes the counter policy from local development build 0.1.39 and its subsequent review fixes: actual provider bindings choose the policy. Independent/restored copies and file databases sign with 0, retaining imported counter metadata without advancing it. Live Bitwarden credentials keep 0 or refresh, increment and commit historical positive counters before signing, matching the official client. `useCount` and `lastUsedAt` are local statistics and do not trigger Cipher/file writes. Neither zeroing nor freezing a previously positive counter is guaranteed to pass a site's clone detection; older independent copies may require re-registration.
+
+The inspected Android `PasskeyAuthActivity.kt` still unconditionally signs and stores 0. Its encrypted full-backup restore drops live provider bindings and restores usable keys as local (`NONE`) or missing keys as references (`REFERENCE`). This is distinct from the extension's own full-vault backup, which intentionally includes provider settings. The Android historical-positive Bitwarden branch is not yet aligned with the official client; this extension update does not change Android production code. See [source policies and evidence](PASSKEY_COMPATIBILITY.md).
+
+Optional `backupEligible` and `backupState` metadata round-trips through the extension's KeePass, MDBX2 and encrypted Android codecs. Explicit imported values are retained. Older native Monica payloads default to BE/BS true, matching Monica's registration/authentication flags; KPEX-only imports use their recorded flags. Android's current `KeePassPasskeySyncCodec` ignores these additive JSON fields and continues to read the credential and key. See [0.1.38 verification](VALIDATION-0.1.38.md) for the JVM and browser test boundaries.
+
+### Generator history
+
+Android writes at most 50 entries with `password`, `timestamp`, `packageName`, `domain`, `username`, and `type`. Recognized types are `SYMBOL`, `PASSWORD`, `PASSPHRASE`, `PIN`, and `AUTOFILL`. The unlocked manager masks values until explicitly revealed. Deleting one entry retains the Android filename and every unknown member of retained entries; malformed or oversized history remains byte-identical and is not editable.
+
+### Special login records
+
+Wi-Fi, SSH key, SSO and barcode records remain password entries whose `loginType` controls interpretation. WebDAV edits update only the mapped password fields; the existing ZIP path, unknown outer members and unknown nested metadata remain unchanged.
+
+Bitwarden login ciphers use encrypted Monica carrier fields. `monica_login_type` identifies `WIFI`, `SSH_KEY`, `SSO` or `BARCODE`; `monica_wifi_data` carries the Android Wi-Fi JSON; SSO uses `monica_sso_provider` and `monica_sso_ref_entry_id`; SSH uses the `monica_ssh_*` field family and keeps the private key hidden. These carrier names are reserved system fields and are not duplicated as user custom fields.
+
+KeePass uses `MonicaLoginType`, `MonicaWifiData`, `SSID`, the SSO fields and the Monica SSH field family. A bare KeePass `SSID` remains accepted as Wi-Fi for KeePass2Android compatibility. Barcode content stays in the protected password field, with `MonicaLoginType=BARCODE` preventing it from being decoded as a normal website login.
+
+QR rendering uses the existing local QR encoder. Code 128 rendering dynamically loads the pinned `bwip-js` implementation only when selected; payloads never leave the extension and are limited to 4,096 characters.
 
 ## Write Rules
 

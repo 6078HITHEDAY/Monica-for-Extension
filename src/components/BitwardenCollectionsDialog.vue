@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { materialSelectTag, materialOptionTag } from "../lib/material-controls";
+import { tr } from '../i18n';
+
 import { computed, nextTick, onMounted, ref } from "vue";
 import type { ProviderAccount, VaultItem } from "../core/model";
 import type { BitwardenCollectionPage, BitwardenCollectionSummary } from "../providers/bitwarden/bitwarden-collections";
@@ -112,22 +115,22 @@ function toggleCollection(collection: BitwardenCollectionSummary) {
 
 async function moveCipher() {
   const selected = selectedItem.value;
-  if (!selected) return focusError("请选择要管理 Collection 的组织项目。", dialogRoot.value?.querySelector<HTMLElement>("[data-route-item]"));
+  if (!selected) return focusError(tr('请选择要管理 Collection 的组织项目。'), dialogRoot.value?.querySelector<HTMLElement>("[data-route-item]"));
   const selectedCollections = selectedCollectionIds.value.map((id) => collections.value.find((collection) => collection.collectionId === id));
-  if (selectedCollections.some((collection) => !collection || !collection.targetable)) return focusError("所选 Collection 当前不可写，请刷新权限后重试。", dialogRoot.value?.querySelector<HTMLElement>("[data-route-collections]"));
+  if (selectedCollections.some((collection) => !collection || !collection.targetable)) return focusError(tr('所选 Collection 当前不可写，请刷新权限后重试。'), dialogRoot.value?.querySelector<HTMLElement>("[data-route-collections]"));
   busy.value = "move";
   error.value = "";
   status.value = "";
   try {
     const result = await vaultClient.moveBitwardenCipherToCollections(props.provider.id, selected.item.id, selectedCollectionIds.value, selected.reference.revision);
     selectedCollectionIds.value = result.collectionIds || [];
-    status.value = result.changed ? `${selected.item.title} 的 Collection 路由已更新。` : "项目已经位于所选 Collection。";
+    status.value = result.changed ? tr('{0} 的 Collection 路由已更新。', { 0: selected.item.title }) : tr('项目已经位于所选 Collection。');
     emit("notice", status.value);
     if (result.changed) emit("changed");
     await loadCollections(true);
     selectedCollectionIds.value = result.collectionIds || [];
   } catch (cause) {
-    error.value = `${errorMessage(cause)} 请刷新权限后重试；未确认的操作不会被当作成功。`;
+    error.value = tr('{0} 请刷新权限后重试；未确认的操作不会被当作成功。', { 0: errorMessage(cause) });
   } finally {
     busy.value = "";
   }
@@ -154,11 +157,11 @@ function appendUnique(current: BitwardenCollectionSummary[], incoming: Bitwarden
 }
 
 function permissionLabel(collection: BitwardenCollectionSummary): string {
-  if (!collection.readable) return "无法读取";
-  if (!collection.permissionKnown) return "权限未知";
-  if (collection.readOnly) return "只读";
-  if (collection.manage) return "可管理";
-  return "可编辑";
+  if (!collection.readable) return tr('无法读取');
+  if (!collection.permissionKnown) return tr('权限未知');
+  if (collection.readOnly) return tr('只读');
+  if (collection.manage) return tr('可管理');
+  return tr('可编辑');
 }
 
 function closeDialog() {
@@ -176,61 +179,61 @@ function errorMessage(cause: unknown): string {
       <header>
         <div>
           <h2 id="bitwarden-collections-title">Bitwarden Collection · {{ provider.name }}</h2>
-          <p>组织项目使用 Collection 路由；个人 Cipher 仍由文件夹管理。名称和权限无法验证时保持只读。</p>
+          <p>{{ tr('组织项目使用 Collection 路由；个人 Cipher 仍由文件夹管理。名称和权限无法验证时保持只读。') }}</p>
         </div>
-        <m3e-icon-button data-dialog-close aria-label="关闭 Bitwarden Collection 管理" :disabled="interactionLocked" @click="closeDialog"><m3e-icon name="close"></m3e-icon></m3e-icon-button>
+        <m3e-icon-button data-dialog-close :aria-label="tr('关闭 Bitwarden Collection 管理')" :disabled="interactionLocked" @click="closeDialog"><m3e-icon name="close"></m3e-icon></m3e-icon-button>
       </header>
 
-      <div class="bitwarden-collections-boundary"><m3e-icon name="encrypted"></m3e-icon><span>只有管理页能读取组织名称和 Collection 权限；Popup、内容脚本和网页不会接触这些数据。</span></div>
+      <div class="bitwarden-collections-boundary"><m3e-icon name="encrypted"></m3e-icon><span>{{ tr('只有管理页能读取组织名称和 Collection 权限；Popup、内容脚本和网页不会接触这些数据。') }}</span></div>
 
-      <div v-if="warnings.length" class="bitwarden-collections-warning" role="status"><m3e-icon name="warning"></m3e-icon><div><strong>兼容性提示</strong><p v-for="warning in warnings" :key="warning">{{ warning }}</p></div></div>
+      <div v-if="warnings.length" class="bitwarden-collections-warning" role="status"><m3e-icon name="warning"></m3e-icon><div><strong>{{ tr('兼容性提示') }}</strong><p v-for="warning in warnings" :key="warning">{{ warning }}</p></div></div>
       <div v-if="error" class="bitwarden-collections-error" role="alert"><m3e-icon name="error"></m3e-icon><span>{{ error }}</span></div>
       <p class="bitwarden-collections-status" aria-live="polite">{{ status }}</p>
 
       <div class="bitwarden-collections-toolbar">
-        <label class="bitwarden-collections-search"><span class="sr-only">搜索 Collection</span><m3e-icon name="search"></m3e-icon><input v-model="search" type="search" autocomplete="off" placeholder="搜索 Collection" /></label>
-        <m3e-icon-button aria-label="刷新组织 Collection" :disabled="interactionLocked" @click="loadCollections(true)"><m3e-icon name="refresh"></m3e-icon></m3e-icon-button>
+        <m3e-form-field v-field-label variant="filled" hide-required-marker class="bitwarden-collections-search"><label slot="label">{{ tr('搜索 Collection') }}</label><m3e-icon slot="prefix" name="search"></m3e-icon><input v-model="search" type="search" autocomplete="off" :placeholder="tr('搜索 Collection')" /></m3e-form-field>
+        <m3e-icon-button :aria-label="tr('刷新组织 Collection')" :disabled="interactionLocked" @click="loadCollections(true)"><m3e-icon name="refresh"></m3e-icon></m3e-icon-button>
       </div>
 
       <div class="bitwarden-collections-layout">
         <aside class="bitwarden-organization-panel" aria-labelledby="bitwarden-organizations-title">
-          <div class="bitwarden-collections-heading"><div><strong id="bitwarden-organizations-title">组织</strong><small>{{ organizations.length }} 个组织</small></div><m3e-icon name="business"></m3e-icon></div>
-          <div v-if="busy === 'list' && !loaded" class="bitwarden-collections-empty" role="status"><m3e-icon name="progress_activity"></m3e-icon><span>正在读取…</span></div>
-          <div v-else-if="!organizations.length" class="bitwarden-collections-empty"><m3e-icon name="business_off"></m3e-icon><span>没有可用组织。</span></div>
-          <div v-else class="bitwarden-organization-list">
-            <button v-for="organization in organizations" :key="organization.organizationId" type="button" class="bitwarden-organization-row" :class="{ selected: organization.organizationId === selectedOrganizationId }" :aria-pressed="organization.organizationId === selectedOrganizationId" @click="selectOrganization(organization.organizationId)">
-              <span class="bitwarden-organization-icon"><m3e-icon name="business"></m3e-icon></span>
-              <span><strong>{{ organization.name }}</strong><small>{{ organization.fullAccess ? '完全访问' : organization.type }} · {{ organization.keyAvailable ? '密钥可用' : '密钥缺失' }}</small></span>
-              <m3e-icon name="chevron_right"></m3e-icon>
-            </button>
-          </div>
+          <div class="bitwarden-collections-heading"><div><strong id="bitwarden-organizations-title">{{ tr('组织') }}</strong><small>{{ tr('{0} 个组织', { 0: organizations.length }) }}</small></div><m3e-icon name="business"></m3e-icon></div>
+          <div v-if="busy === 'list' && !loaded" class="bitwarden-collections-empty" role="status"><m3e-icon name="progress_activity"></m3e-icon><span>{{ tr('正在读取…') }}</span></div>
+          <div v-else-if="!organizations.length" class="bitwarden-collections-empty"><m3e-icon name="business_off"></m3e-icon><span>{{ tr('没有可用组织。') }}</span></div>
+          <m3e-selection-list v-else class="bitwarden-organization-list" hide-selection-indicator :aria-label="tr('组织')" :disabled="interactionLocked" @change="selectOrganization(($event.currentTarget as HTMLElement &amp; { value: string }).value)">
+            <m3e-list-option v-for="organization in organizations" :key="organization.organizationId" class="bitwarden-organization-row" :value="organization.organizationId" :selected.prop="organization.organizationId === selectedOrganizationId">
+              <span slot="leading" class="bitwarden-organization-icon"><m3e-icon name="business" /></span>
+              <strong>{{ organization.name }}</strong>
+              <small slot="supporting-text">{{ organization.fullAccess ? tr('完全访问') : organization.type }} · {{ organization.keyAvailable ? tr('密钥可用') : tr('密钥缺失') }}</small>
+            </m3e-list-option>
+          </m3e-selection-list>
         </aside>
 
         <section class="bitwarden-collection-panel" aria-labelledby="bitwarden-collection-list-title">
-          <div class="bitwarden-collections-heading"><div><strong id="bitwarden-collection-list-title">{{ selectedOrganization?.name || 'Collection' }}</strong><small>{{ visibleCollections.length }} 个已加载<template v-if="nextCursor"> · 尚有更多</template></small></div><span class="bitwarden-collection-count">{{ targetableCount }} 个可路由</span></div>
-          <div v-if="loaded && !visibleCollections.length" class="bitwarden-collections-empty"><m3e-icon name="folder_off"></m3e-icon><span>{{ search ? '没有匹配的 Collection。' : '当前组织没有可显示的 Collection。' }}</span></div>
+          <div class="bitwarden-collections-heading"><div><strong id="bitwarden-collection-list-title">{{ selectedOrganization?.name || 'Collection' }}</strong><small>{{ tr('{0} 个已加载', { 0: visibleCollections.length }) }}<template v-if="nextCursor">{{ tr('· 尚有更多') }}</template></small></div><span class="bitwarden-collection-count">{{ tr('{0} 个可路由', { 0: targetableCount }) }}</span></div>
+          <div v-if="loaded && !visibleCollections.length" class="bitwarden-collections-empty"><m3e-icon name="folder_off"></m3e-icon><span>{{ search ? tr('没有匹配的 Collection。') : tr('当前组织没有可显示的 Collection。') }}</span></div>
           <div v-else class="bitwarden-collection-list" data-route-collections tabindex="-1">
-            <label v-for="collection in visibleCollections" :key="collection.collectionId" class="bitwarden-collection-row" :class="{ selected: selectedCollectionIds.includes(collection.collectionId), unavailable: !collection.targetable }">
-              <input type="checkbox" :checked="selectedCollectionIds.includes(collection.collectionId)" :disabled="interactionLocked || !collection.targetable" :aria-label="`选择 Collection ${collection.name}`" @change="toggleCollection(collection)" />
+            <label v-choice-label v-for="collection in visibleCollections" :key="collection.collectionId" class="bitwarden-collection-row" :class="{ selected: selectedCollectionIds.includes(collection.collectionId), unavailable: !collection.targetable }">
+              <m3e-checkbox  :checked="selectedCollectionIds.includes(collection.collectionId)" :disabled="interactionLocked || !collection.targetable" :aria-label="tr('选择 Collection {0}', { 0: collection.name })" @change="toggleCollection(collection)" />
               <span class="bitwarden-collection-icon"><m3e-icon :name="collection.targetable ? 'folder_shared' : 'lock'"></m3e-icon></span>
-              <span class="bitwarden-collection-copy"><strong>{{ collection.name }}</strong><small>{{ permissionLabel(collection) }}<template v-if="collection.hidePasswords"> · 隐藏密码</template><template v-if="collection.assigned === true"> · 已分配</template></small></span>
-              <span class="bitwarden-collection-state" :class="collection.targetable ? 'state-ok' : 'state-muted'">{{ collection.targetable ? '可写' : '不可写' }}</span>
+              <span class="bitwarden-collection-copy"><strong>{{ collection.name }}</strong><small>{{ permissionLabel(collection) }}<template v-if="collection.hidePasswords">{{ tr('· 隐藏密码') }}</template><template v-if="collection.assigned === true">{{ tr('· 已分配') }}</template></small></span>
+              <span class="bitwarden-collection-state" :class="collection.targetable ? 'state-ok' : 'state-muted'">{{ collection.targetable ? tr('可写') : tr('不可写') }}</span>
             </label>
           </div>
-          <div v-if="nextCursor" class="bitwarden-collections-more"><m3e-button variant="text" type="button" :disabled="interactionLocked" @click="loadCollections(false)">加载更多 Collection</m3e-button></div>
+          <div v-if="nextCursor" class="bitwarden-collections-more"><m3e-button variant="text" type="button" :disabled="interactionLocked" @click="loadCollections(false)">{{ tr('加载更多 Collection') }}</m3e-button></div>
         </section>
       </div>
 
       <section class="bitwarden-collection-routing" aria-labelledby="bitwarden-collection-routing-title">
-        <div class="bitwarden-collections-heading"><div><strong id="bitwarden-collection-routing-title">项目路由</strong><small>只显示已识别为组织 Cipher 的项目；空选表示清除 Collection（需组织权限）。</small></div><m3e-icon name="drive_file_move"></m3e-icon></div>
+        <div class="bitwarden-collections-heading"><div><strong id="bitwarden-collection-routing-title">{{ tr('项目路由') }}</strong><small>{{ tr('只显示已识别为组织 Cipher 的项目；空选表示清除 Collection（需组织权限）。') }}</small></div><m3e-icon name="drive_file_move"></m3e-icon></div>
         <div class="bitwarden-collection-route-form">
-          <label><span>组织项目</span><select data-route-item v-model="selectedItemId" :disabled="interactionLocked" @change="selectRouteItem(selectedItemId)"><option value="">选择项目</option><option v-for="entry in routeItems" :key="entry.item.id" :value="entry.item.id">{{ entry.item.title }}</option></select></label>
-          <div class="bitwarden-collection-selection" aria-live="polite"><span class="bitwarden-collection-selection-icon"><m3e-icon name="checklist"></m3e-icon></span><span><strong>{{ selectedCollectionIds.length }} 个 Collection 已选择</strong><small>{{ selectedItem ? `当前项目：${selectedItem.item.title}` : '选择项目后勾选右侧 Collection' }}</small></span></div>
-          <m3e-button variant="tonal" type="button" :disabled="interactionLocked || !selectedItem" @click="moveCipher"><m3e-icon slot="icon" name="save"></m3e-icon>{{ busy === 'move' ? '保存中…' : '保存路由' }}</m3e-button>
+          <m3e-form-field v-field-label variant="filled" hide-required-marker><label slot="label">{{ tr('组织项目') }}</label><component :is="materialSelectTag" @input="selectedItemId = ($event.target as HTMLElement &amp; { value: string }).value" data-route-item  :disabled="interactionLocked" @change="selectRouteItem(selectedItemId)"><component :is="materialOptionTag" :selected.prop="String(selectedItemId ?? '') === String('')" value="">{{ tr('选择项目') }}</component><component :is="materialOptionTag" :selected.prop="String(selectedItemId ?? '') === String(entry.item.id)" v-for="entry in routeItems" :key="entry.item.id" :value="entry.item.id">{{ entry.item.title }}</component></component></m3e-form-field>
+          <div class="bitwarden-collection-selection" aria-live="polite"><span class="bitwarden-collection-selection-icon"><m3e-icon name="checklist"></m3e-icon></span><span><strong>{{ tr('{0} 个 Collection 已选择', { 0: selectedCollectionIds.length }) }}</strong><small>{{ selectedItem ? tr('当前项目：{0}', { 0: selectedItem.item.title }) : tr('选择项目后勾选右侧 Collection') }}</small></span></div>
+          <m3e-button variant="tonal" type="button" :disabled="interactionLocked || !selectedItem" @click="moveCipher"><m3e-icon slot="icon" name="save"></m3e-icon>{{ busy === 'move' ? tr('保存中…') : tr('保存路由') }}</m3e-button>
         </div>
       </section>
 
-      <footer><span>服务器返回缺少新 Revision、项目不可见或权限不完整时，插件不会修改本地路由。</span><m3e-button variant="text" type="button" :disabled="interactionLocked" @click="closeDialog">关闭</m3e-button></footer>
+      <footer><span>{{ tr('服务器返回缺少新 Revision、项目不可见或权限不完整时，插件不会修改本地路由。') }}</span><m3e-button variant="text" type="button" :disabled="interactionLocked" @click="closeDialog">{{ tr('关闭') }}</m3e-button></footer>
     </section>
   </div>
 </template>
@@ -248,36 +251,28 @@ function errorMessage(cause: unknown): string {
 .bitwarden-collections-error { color: var(--md-sys-color-on-error-container, var(--app-text)); background: var(--md-sys-color-error-container, var(--app-surface-high)); border: 1px solid var(--md-sys-color-error, var(--app-primary)); }
 .bitwarden-collections-status { min-height: 24px; margin: 0 0 8px; color: var(--md-sys-color-on-surface-variant, var(--app-muted)); }
 .bitwarden-collections-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
-.bitwarden-collections-search { min-width: 0; min-height: 44px; flex: 1; display: grid; grid-template-columns: 24px minmax(0, 1fr); align-items: center; gap: 8px; padding: 0 12px; border: 1px solid var(--md-sys-color-outline, var(--app-outline)); border-radius: 8px; background: var(--md-sys-color-surface-container-lowest, var(--app-surface)); }
-.bitwarden-collections-search input { min-width: 0; min-height: 42px; border: 0; outline: 0; color: var(--app-text); background: transparent; font: inherit; }
+.bitwarden-collections-search { min-width: 0; flex: 1; }
 .bitwarden-collections-layout { display: grid; grid-template-columns: minmax(220px, .78fr) minmax(0, 1.5fr); gap: 12px; }
-.bitwarden-organization-panel, .bitwarden-collection-panel, .bitwarden-collection-routing { min-width: 0; border: 1px solid var(--md-sys-color-outline-variant, var(--app-outline)); border-radius: 8px; overflow: hidden; background: var(--md-sys-color-surface-container-lowest, var(--app-surface)); }
+.bitwarden-organization-panel, .bitwarden-collection-panel, .bitwarden-collection-routing { min-width: 0; border-radius: 20px; overflow: hidden; background: var(--md-sys-color-surface-container-lowest, var(--app-surface)); }
 .bitwarden-collections-heading { min-height: 64px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px 10px 16px; }
 .bitwarden-collections-heading > div { min-width: 0; display: grid; gap: 2px; }
 .bitwarden-collections-heading small, .bitwarden-organization-row small, .bitwarden-collection-copy small, .bitwarden-collection-selection small { color: var(--md-sys-color-on-surface-variant, var(--app-muted)); overflow-wrap: anywhere; }
 .bitwarden-collection-count { color: var(--md-sys-color-primary, var(--app-primary)); font-size: .875rem; font-weight: 650; white-space: nowrap; }
-.bitwarden-organization-list, .bitwarden-collection-list { border-top: 1px solid var(--md-sys-color-outline-variant, var(--app-outline)); }
-.bitwarden-organization-row { width: 100%; min-height: 72px; border: 0; border-bottom: 1px solid var(--md-sys-color-outline-variant, var(--app-outline)); display: grid; grid-template-columns: 36px minmax(0, 1fr) 20px; align-items: center; gap: 10px; padding: 10px 12px; color: var(--app-text); background: transparent; text-align: left; font: inherit; cursor: pointer; }
-.bitwarden-organization-row:last-child { border-bottom: 0; }
-.bitwarden-organization-row:hover, .bitwarden-organization-row.selected { background: var(--md-sys-color-secondary-container, var(--app-selected)); }
-.bitwarden-organization-row:focus-visible, .bitwarden-collection-row:focus-within { outline: 3px solid color-mix(in srgb, var(--app-primary) 45%, transparent); outline-offset: -3px; }
-.bitwarden-organization-row > span:nth-child(2), .bitwarden-collection-copy, .bitwarden-collection-selection { min-width: 0; display: grid; gap: 2px; }
+.bitwarden-organization-row { width: 100%; min-width: 0; }
+.bitwarden-organization-row strong { font-weight: 500; overflow-wrap: anywhere; }
+.bitwarden-collection-copy, .bitwarden-collection-selection { min-width: 0; display: grid; gap: 2px; }
 .bitwarden-organization-icon, .bitwarden-collection-icon, .bitwarden-collection-selection-icon { width: 36px; height: 36px; border-radius: 8px; display: grid; place-items: center; color: var(--app-primary); background: var(--md-sys-color-surface-container-high, var(--app-surface-high)); }
-.bitwarden-collection-row { min-height: 68px; display: grid; grid-template-columns: 24px 36px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 10px 12px 10px 16px; border-bottom: 1px solid var(--md-sys-color-outline-variant, var(--app-outline)); cursor: pointer; }
-.bitwarden-collection-row:last-child { border-bottom: 0; }
+.bitwarden-collection-row { min-height: 68px; display: grid; grid-template-columns: 24px 36px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 10px 12px 10px 16px; cursor: pointer; }
 .bitwarden-collection-row.selected { background: var(--md-sys-color-secondary-container, var(--app-selected)); }
 .bitwarden-collection-row.unavailable { cursor: not-allowed; opacity: .72; }
-.bitwarden-collection-row input { width: 20px; height: 20px; margin: 0; accent-color: var(--app-primary); }
 .bitwarden-collection-copy strong { overflow-wrap: anywhere; }
 .bitwarden-collection-state { min-height: 28px; display: inline-flex; align-items: center; padding: 0 8px; border-radius: 999px; font-size: .75rem; font-weight: 650; white-space: nowrap; }
 .state-ok { color: var(--md-sys-color-on-primary-container, var(--app-text)); background: var(--md-sys-color-primary-container, var(--app-selected)); }
 .state-muted { color: var(--md-sys-color-on-surface-variant, var(--app-muted)); background: var(--md-sys-color-surface-container-high, var(--app-surface-high)); }
-.bitwarden-collections-empty { min-height: 116px; border-top: 1px solid var(--md-sys-color-outline-variant, var(--app-outline)); display: flex; align-items: center; justify-content: center; gap: 8px; padding: 16px; color: var(--md-sys-color-on-surface-variant, var(--app-muted)); text-align: center; }
-.bitwarden-collections-more { border-top: 1px solid var(--md-sys-color-outline-variant, var(--app-outline)); display: flex; justify-content: center; padding: 4px 12px; }
+.bitwarden-collections-empty { min-height: 116px; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 16px; color: var(--md-sys-color-on-surface-variant, var(--app-muted)); text-align: center; }
+.bitwarden-collections-more { display: flex; justify-content: center; padding: 4px 12px; }
 .bitwarden-collection-routing { margin-top: 12px; }
 .bitwarden-collection-route-form { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(180px, .9fr) auto; align-items: end; gap: 12px; padding: 0 16px 16px; }
-.bitwarden-collection-route-form label { min-width: 0; display: grid; gap: 6px; font-weight: 600; }
-.bitwarden-collection-route-form select { width: 100%; min-width: 0; min-height: 44px; border: 1px solid var(--md-sys-color-outline, var(--app-outline)); border-radius: 8px; padding: 8px 12px; color: var(--app-text); background: var(--md-sys-color-surface-container-lowest, var(--app-surface)); font: inherit; }
 .bitwarden-collection-selection { min-height: 44px; grid-template-columns: 36px minmax(0, 1fr); align-items: center; }
 .bitwarden-collections-dialog > footer { min-height: 60px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-top: 12px; color: var(--md-sys-color-on-surface-variant, var(--app-muted)); }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
@@ -289,7 +284,7 @@ function errorMessage(cause: unknown): string {
 }
 @media (max-width: 420px) {
   .bitwarden-collections-dialog { padding: 12px; }
-  .bitwarden-collections-heading, .bitwarden-collection-row, .bitwarden-organization-row { padding-inline: 12px; }
+  .bitwarden-collections-heading, .bitwarden-collection-row { padding-inline: 12px; }
   .bitwarden-collection-row { grid-template-columns: 24px 32px minmax(0, 1fr); }
   .bitwarden-collection-state { grid-column: 3; justify-self: start; }
 }

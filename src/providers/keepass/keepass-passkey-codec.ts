@@ -1,7 +1,9 @@
+import { passkeyKeyMaterialHint } from '../../passkey/private-key-portability';
 import * as kdbxweb from "kdbxweb";
 import type { PasskeyItem } from "../../core/model";
 import { normalizeCredentialId } from "../../passkey/source-policy";
 import { normalizeRpId } from "../../passkey/webauthn-core";
+import { parsePortablePasskeyPrivateKey } from "../../passkey/private-key-portability";
 import type { MonicaItemBase } from "../monica-item-data";
 import { KEEPASSDX_PASSKEY_FIELDS, isPasskeyEntryOverlayField } from "./keepass-field-registry";
 import { createKeePassFieldPatch, type KeePassFieldPatch } from "./keepass-field-patch";
@@ -55,6 +57,7 @@ export interface KeePassPasskeyReadOptions {
 }
 
 export interface KeePassPasskeyProjection {
+  title?: string;
   credentialId: string;
   rpId: string;
   rpName: string;
@@ -64,7 +67,10 @@ export interface KeePassPasskeyProjection {
   algorithm: number;
   publicKey: string;
   privateKeyPkcs8?: string;
+  keyMaterialHint?: PasskeyItem["keyMaterialHint"];
   signCount: number;
+  backupEligible: boolean;
+  backupState: boolean;
   discoverable: boolean;
   userVerificationRequired: boolean;
   transports: string[];
@@ -110,6 +116,7 @@ function readMonicaPasskeyPayload(fields: KeePassEntryFields): KeePassPasskeyPro
   const userName = text(payload.userName);
 
   return {
+    title: stripPasskeySuffix(keePassFieldValue(fields, "Title")) || undefined,
     credentialId,
     rpId,
     rpName: text(payload.rpName) || rpId,
@@ -119,7 +126,11 @@ function readMonicaPasskeyPayload(fields: KeePassEntryFields): KeePassPasskeyPro
     algorithm: integer(payload.publicKeyAlgorithm) ?? -7,
     publicKey: text(payload.publicKey),
     privateKeyPkcs8,
+    keyMaterialHint: privateKeyPkcs8 ? undefined : passkeyKeyMaterialHint(payload.privateKeyAlias),
     signCount: integer(payload.signCount) ?? 0,
+    // Monica registrations set BE/BS; old versions did not serialize these in their payload.
+    backupEligible: payload.backupEligible !== false,
+    backupState: payload.backupEligible !== false && payload.backupState !== false,
     discoverable: payload.isDiscoverable !== false,
     userVerificationRequired: payload.isUserVerificationRequired !== false,
     transports: splitTransports(text(payload.transports)),
@@ -157,6 +168,7 @@ function readKeePassDxPasskey(
   const rpName = stripPasskeySuffix(title) || rpId;
 
   return {
+    title: stripPasskeySuffix(title) || undefined,
     credentialId: normalizeCredentialId(rawCredentialId) || rawCredentialId,
     rpId,
     rpName,
@@ -167,6 +179,8 @@ function readKeePassDxPasskey(
     publicKey: "",
     privateKeyPkcs8,
     signCount: 0,
+    backupEligible: booleanField(keePassFieldValue(fields, KEEPASSDX_PASSKEY_FIELDS.flagBe)),
+    backupState: booleanField(keePassFieldValue(fields, KEEPASSDX_PASSKEY_FIELDS.flagBe)) && booleanField(keePassFieldValue(fields, KEEPASSDX_PASSKEY_FIELDS.flagBs)),
     discoverable: true,
     userVerificationRequired: true,
     transports: ["internal"],
@@ -191,7 +205,7 @@ export function keePassPasskeyToVaultItem(
   return {
     ...base,
     kind: "passkey",
-    title: projection.rpName || projection.rpId,
+    title: projection.title || projection.rpName || projection.rpId,
     notes: projection.notes,
     createdAt: projection.createdAt ?? base.createdAt,
     credentialId: projection.credentialId,
@@ -203,7 +217,10 @@ export function keePassPasskeyToVaultItem(
     algorithm: projection.algorithm,
     publicKey: projection.publicKey,
     privateKeyPkcs8: projection.privateKeyPkcs8,
+    keyMaterialHint: projection.keyMaterialHint,
     signCount: projection.signCount,
+    backupEligible: projection.backupEligible,
+    backupState: projection.backupState,
     discoverable: projection.discoverable,
     userVerificationRequired: projection.userVerificationRequired,
     transports: projection.transports,
@@ -229,7 +246,9 @@ export interface KeePassPasskeyWriteInput {
 export function buildKeePassPasskeyFields(input: KeePassPasskeyWriteInput): Map<string, KeePassEntryFieldValue> {
   const { item } = input;
   const existing = (name: string) => (input.existingFields ? keePassFieldValue(input.existingFields, name) : "");
-  const readableTitle = item.rpName || item.rpId || "Passkey";
+  const backupEligible = item.backupEligible ?? (existing(KEEPASSDX_PASSKEY_FIELDS.flagBe) ? booleanField(existing(KEEPASSDX_PASSKEY_FIELDS.flagBe)) : true);
+  const backupState = backupEligible && (item.backupState ?? (existing(KEEPASSDX_PASSKEY_FIELDS.flagBs) ? booleanField(existing(KEEPASSDX_PASSKEY_FIELDS.flagBs)) : true));
+  const readableTitle = stripPasskeySuffix(item.title) || item.rpName || item.rpId || "Passkey";
   const fields = new Map<string, KeePassEntryFieldValue>();
 
   fields.set("Title", `${readableTitle}${PASSKEY_TITLE_SUFFIX}`);
@@ -239,7 +258,7 @@ export function buildKeePassPasskeyFields(input: KeePassPasskeyWriteInput): Map<
   fields.set("Notes", item.notes);
   fields.set(KEEPASS_PASSKEY_FIELDS.credentialId, item.credentialId);
   fields.set(KEEPASS_PASSKEY_FIELDS.mode, KEEPASS_COMPAT_MODE);
-  fields.set(KEEPASS_PASSKEY_FIELDS.data, kdbxweb.ProtectedValue.fromString(buildMonicaPasskeyPayload(item)));
+  fields.set(KEEPASS_PASSKEY_FIELDS.data, kdbxweb.ProtectedValue.fromString(buildMonicaPasskeyPayload({ ...item, backupEligible, backupState }, existing(KEEPASS_PASSKEY_FIELDS.data))));
 
   const privateKeyPem = item.privateKeyPkcs8
     ? pkcs8ToPem(item.privateKeyPkcs8)
@@ -258,10 +277,9 @@ export function buildKeePassPasskeyFields(input: KeePassPasskeyWriteInput): Map<
     KEEPASSDX_PASSKEY_FIELDS.relyingParty,
     normalizeRpId(item.rpId) || item.rpId || existing(KEEPASSDX_PASSKEY_FIELDS.relyingParty)
   );
-  // Monica has no notion of credential backup, so neither flag may be invented: whatever KeePassDX
-  // recorded is carried through, and only a fresh entry falls back to "false".
-  fields.set(KEEPASSDX_PASSKEY_FIELDS.flagBe, existing(KEEPASSDX_PASSKEY_FIELDS.flagBe) || "false");
-  fields.set(KEEPASSDX_PASSKEY_FIELDS.flagBs, existing(KEEPASSDX_PASSKEY_FIELDS.flagBs) || "false");
+  // Explicit registration flags take precedence. Legacy imports retain their existing KPEX flags.
+  fields.set(KEEPASSDX_PASSKEY_FIELDS.flagBe, String(backupEligible));
+  fields.set(KEEPASSDX_PASSKEY_FIELDS.flagBs, String(backupState));
   return fields;
 }
 
@@ -273,8 +291,14 @@ export function buildKeePassPasskeyPatch(
 }
 
 /** `KeePassPasskeySyncCodec.Payload`: Kotlin property names, `encodeDefaults = true`. */
-function buildMonicaPasskeyPayload(item: PasskeyItem): string {
+function buildMonicaPasskeyPayload(item: PasskeyItem, existing = ""): string {
+  let original: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(existing);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) original = parsed as Record<string, unknown>;
+  } catch { /* A new entry has no previous payload. */ }
   return JSON.stringify({
+    ...original,
     credentialId: item.credentialId,
     rpId: item.rpId,
     rpName: item.rpName,
@@ -283,7 +307,7 @@ function buildMonicaPasskeyPayload(item: PasskeyItem): string {
     userDisplayName: item.userDisplayName,
     publicKeyAlgorithm: item.algorithm,
     publicKey: item.publicKey,
-    privateKeyAlias: item.privateKeyPkcs8 ?? "",
+    privateKeyAlias: item.privateKeyPkcs8 ?? original.privateKeyAlias ?? "",
     createdAt: isoToEpoch(item.createdAt),
     lastUsedAt: isoToEpoch(item.lastUsedAt ?? item.createdAt),
     useCount: item.useCount ?? 0,
@@ -293,6 +317,8 @@ function buildMonicaPasskeyPayload(item: PasskeyItem): string {
     transports: (item.transports?.length ? item.transports : ["internal"]).join(","),
     aaguid: item.aaguid ?? "",
     signCount: item.signCount,
+    backupEligible: item.backupEligible !== false,
+    backupState: item.backupEligible !== false && item.backupState !== false,
     notes: item.notes,
     passkeyMode: KEEPASS_COMPAT_MODE
   });
@@ -301,6 +327,10 @@ function buildMonicaPasskeyPayload(item: PasskeyItem): string {
 function passkeyUrlFor(rpId: string): string {
   if (!rpId.trim()) return "";
   return rpId.includes("://") ? rpId : `https://${rpId}`;
+}
+
+function booleanField(value: string): boolean {
+  return /^(true|1|yes)$/i.test(value.trim());
 }
 
 export function stripPasskeySuffix(title: string): string {
@@ -313,16 +343,7 @@ export function stripPasskeySuffix(title: string): string {
  * neither yields undefined rather than a string that would fail at signing time.
  */
 function pkcs8Base64Of(keyMaterial: string): string | undefined {
-  const trimmed = keyMaterial.trim();
-  if (!trimmed) return undefined;
-  const begin = trimmed.indexOf(PEM_BEGIN);
-  const body = begin >= 0 ? trimmed.slice(begin + PEM_BEGIN.length).split(PEM_END)[0] : trimmed;
-  const compact = body.replace(/\s+/g, "");
-  if (!compact) return undefined;
-  const standard = compact.replace(/-/g, "+").replace(/_/g, "/");
-  const padded = standard.padEnd(standard.length + ((4 - (standard.length % 4)) % 4), "=");
-  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(padded)) return undefined;
-  return padded;
+  return parsePortablePasskeyPrivateKey(keyMaterial)?.pkcs8Base64;
 }
 
 /** `PasskeyPrivateKeySupport.pkcs8ToPem`: base64 in 64-character lines, no trailing newline. */
@@ -334,65 +355,10 @@ function pkcs8ToPem(pkcs8Base64: string): string {
 /**
  * `decodePkcs8Bytes` decides the COSE algorithm by asking each `KeyFactory` in turn; a browser has no
  * synchronous equivalent, so the algorithm OID is read out of the PKCS#8 `AlgorithmIdentifier`.
- * An unrecognised curve falls back to ES256, which is the only algorithm this build can sign with.
+ * The shared parser rejects malformed keys and EC curves other than P-256.
  */
 function coseAlgorithmOfPkcs8(pkcs8Base64: string): number {
-  const oid = pkcs8AlgorithmOid(pkcs8Base64);
-  if (oid === "1.2.840.113549.1.1.1") return -257;
-  if (oid === "1.3.101.112") return -8;
-  return -7;
-}
-
-function pkcs8AlgorithmOid(pkcs8Base64: string): string | undefined {
-  let bytes: Uint8Array;
-  try {
-    const binary = atob(pkcs8Base64);
-    bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-  } catch {
-    return undefined;
-  }
-
-  // PrivateKeyInfo ::= SEQUENCE { version INTEGER, privateKeyAlgorithm SEQUENCE { algorithm OID … } }
-  let offset = 0;
-  const readHeader = (expectedTag: number): number | undefined => {
-    if (bytes[offset] !== expectedTag) return undefined;
-    offset += 1;
-    let length = bytes[offset];
-    offset += 1;
-    if (length & 0x80) {
-      const count = length & 0x7f;
-      if (count === 0 || count > 4) return undefined;
-      length = 0;
-      for (let index = 0; index < count; index += 1) {
-        length = (length << 8) | bytes[offset];
-        offset += 1;
-      }
-    }
-    return length;
-  };
-
-  if (readHeader(0x30) === undefined) return undefined;
-  const versionLength = readHeader(0x02);
-  if (versionLength === undefined) return undefined;
-  offset += versionLength;
-  if (readHeader(0x30) === undefined) return undefined;
-  const oidLength = readHeader(0x06);
-  if (oidLength === undefined || offset + oidLength > bytes.length) return undefined;
-  return decodeOid(bytes.subarray(offset, offset + oidLength));
-}
-
-function decodeOid(content: Uint8Array): string | undefined {
-  if (!content.length) return undefined;
-  const parts = [Math.floor(content[0] / 40), content[0] % 40];
-  let value = 0;
-  for (let index = 1; index < content.length; index += 1) {
-    value = value * 128 + (content[index] & 0x7f);
-    if (!(content[index] & 0x80)) {
-      parts.push(value);
-      value = 0;
-    }
-  }
-  return parts.join(".");
+  return parsePortablePasskeyPrivateKey(pkcs8Base64)?.algorithm ?? 0;
 }
 
 function splitTransports(value: string): string[] {

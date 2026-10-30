@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { execFile, execFileSync } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { unzipSync } from "fflate";
 
@@ -20,8 +20,9 @@ const archiveName = `monica-mdbx2-host-windows-x64-${cargo.version}.zip`;
 const archivePath = resolve(releaseDir, archiveName);
 await verifyArchive(archivePath, resolve(releaseDir, `${archiveName}.sha256`));
 
-const first = await mkdtemp(join(tmpdir(), "monica-mdbx2-host-a-"));
-const second = await mkdtemp(join(tmpdir(), "monica-mdbx2-host-b-"));
+const verificationTempRoot = await realpath(tmpdir());
+const first = await mkdtemp(join(verificationTempRoot, "monica-mdbx2-host-a-"));
+const second = await mkdtemp(join(verificationTempRoot, "monica-mdbx2-host-b-"));
 try {
   const script = resolve(root, "scripts", "package-mdbx2-host.mjs");
   const dirtyFlag = allowDirty ? ["--allow-dirty"] : [];
@@ -36,7 +37,11 @@ try {
     assert(equalBytes(left, right) && equalBytes(left, released), `${name} is not byte-reproducible.`);
   }
 } finally {
-  await Promise.all([rm(first, { recursive: true, force: true }), rm(second, { recursive: true, force: true })]);
+  for (const directory of [first, second]) {
+    const resolvedDirectory = await realpath(directory);
+    assert(dirname(resolvedDirectory) === verificationTempRoot && /^monica-mdbx2-host-[ab]-/.test(basename(resolvedDirectory)), "Refusing to remove an unexpected verification directory.");
+    await rm(resolvedDirectory, { recursive: true, force: true });
+  }
 }
 console.log(`Verified ${archivePath}: executable, installer policy, hashes and reproducibility.`);
 
@@ -46,14 +51,19 @@ async function verifyArchive(path, checksumPath) {
   assert(checksum === `${sha256(bytes)}  ${archiveName}\n`, "MDBX2 Host checksum does not match the ZIP bytes.");
   verifyZipTimestamps(bytes);
   const entries = unzipSync(bytes);
-  for (const required of ["monica-mdbx2-host.exe", "install-host.ps1", "uninstall-host.ps1", "host-manifest.template.json", "README.md", "Cargo.lock", "LICENSE", "HOST-METADATA.json"]) {
+  for (const required of ["monica-mdbx2-host.exe", "install-host.ps1", "uninstall-host.ps1", "host-manifest.template.json", "README.md", "Cargo.lock", "ENGINE-PROVENANCE.json", "LAN-PROVENANCE.json", "LAN-SOURCE-LICENSE", "LICENSE", "HOST-METADATA.json"]) {
     assert(entries[required], `MDBX2 Host package is missing ${required}.`);
   }
   const builtExecutable = await readFile(resolve(hostRoot, "target", "release", "monica-mdbx2-host.exe"));
   assert(equalBytes(builtExecutable, entries["monica-mdbx2-host.exe"]), "Packaged MDBX2 Host differs from the verified release build.");
   const metadata = JSON.parse(new TextDecoder().decode(entries["HOST-METADATA.json"]));
   assert(metadata.hostName === "com.monica_pass.mdbx2" && metadata.protocolVersion === 2, "MDBX2 Host metadata identity mismatch.");
-  assert(metadata.coreRevision === "974c517465e7b6cac0947d2d59875aa4211fa16b", "MDBX2 Host metadata core revision mismatch.");
+  assert(metadata.coreRevision === "90005c8c608c952093a4522ffa507a562e2e39a4", "MDBX2 Host metadata core revision mismatch.");
+  assert(metadata.runtimeProfile === "android-1.0.315-90005c8-four-overlays", "MDBX2 Host runtime profile mismatch.");
+  assert(metadata.runtimeProvenanceSha256 === sha256(entries["ENGINE-PROVENANCE.json"]), "MDBX2 Host runtime provenance hash mismatch.");
+  assert(metadata.nearbyTransportVersion === 2 && metadata.nearbyProvenanceSha256 === sha256(entries["LAN-PROVENANCE.json"]), "Nearby Host provenance hash mismatch.");
+  assert(equalBytes(await readFile(resolve(hostRoot, "LAN-PROVENANCE.json")), entries["LAN-PROVENANCE.json"]), "Packaged nearby provenance differs from source.");
+  assert(equalBytes(await readFile(resolve(hostRoot, "vendor", "monica-lan-sync", "LICENSE")), entries["LAN-SOURCE-LICENSE"]), "Packaged nearby source license differs.");
   assert(metadata.source?.trackedWorktreeClean === sourceTreeClean && metadata.source?.commit === git("rev-parse", "HEAD"), "MDBX2 Host source evidence mismatch.");
   assert(metadata.executable?.size === builtExecutable.length && metadata.executable?.sha256 === sha256(builtExecutable), "MDBX2 Host executable metadata mismatch.");
   const installer = new TextDecoder().decode(entries["install-host.ps1"]);

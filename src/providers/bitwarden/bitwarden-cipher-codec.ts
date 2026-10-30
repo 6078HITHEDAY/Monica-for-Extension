@@ -1,19 +1,46 @@
-import type { CardItem, IdentityItem, LoginItem, LoginUriMatchType, LoginUriRule, PasskeyItem, ProviderReference, SecureCustomField, SecureNoteItem, VaultItem } from "../../core/model";
+import type { CardItem, IdentityItem, LoginItem, LoginUriMatchType, LoginUriRule, PasskeyItem, ProviderReference, SecureCustomField, SecureNoteItem, TotpItem, VaultItem } from "../../core/model";
+import { hasAndroidUrlRules, readAndroidUrlRules, writeAndroidUrlRules } from '../../core/url-rules';
 import { decryptBitwardenString, decryptBitwardenSymmetricKey, encryptBitwardenString, type BitwardenSymmetricKey } from "./bitwarden-crypto";
+import { parseTotpParameters } from "../../core/totp";
+import { parsePortablePasskeyPrivateKey } from "../../passkey/private-key-portability";
+import { decodeBitwardenCredentialId, normalizeCredentialId, toBitwardenCredentialId } from "../../passkey/source-policy";
+import { normalizeRpId } from "../../passkey/webauthn-core";
+import { jsonScalarText, parseLosslessJson } from "../../core/lossless-json";
+import { assertWritableSshKeyData } from "../../core/ssh-key-data";
+import { PROJECT_CREDENTIAL_FIELD, readProjectCredential } from "../../core/project-credentials";
+import { parsePasswordCoverField } from "../../core/password-cover";
+import { walletFieldsToItem, walletItemToFields, walletManagedNames, type WalletItem } from "./bitwarden-wallet-fields";
 
 export const BITWARDEN_CUSTOM_FIELDS_VERSION = 1 as const;
 
 const BITWARDEN_TEXT_FIELD = 0;
 const BITWARDEN_HIDDEN_FIELD = 1;
+// Extension transport metadata. Android's current Bitwarden mapper does not consume these yet.
+const CUSTOM_ICON_FIELD_NAMES = new Set(["monica_custom_icon_type", "monica_custom_icon_value", "monica_custom_icon_updated_at"]);
+const GROUP_COVER_FIELD = "monica_group_cover";
+const PASSWORD_METADATA_ALIASES: readonly (readonly string[])[] = [
+  ["monica_app_package", "appPackageName"], ["monica_app_name", "appName"],
+  ["monica_email", "email"], ["monica_phone", "phone"],
+  ["monica_address_line", "addressLine", "address"], ["monica_city", "city"],
+  ["monica_state", "state"], ["monica_zip_code", "zipCode"], ["monica_country", "country"],
+  ["monica_passkey_bindings"]
+];
+const PASSWORD_METADATA_NAMES = new Set(PASSWORD_METADATA_ALIASES.flat());
+const SSH_METADATA_NAMES = new Set(['algorithm', 'key_size', 'public_key', 'private_key', 'fingerprint', 'comment', 'format'].map(name => `monica_ssh_${name}`));
+const PASSWORD_METADATA_KEYS = ["appPackageName", "appName", "email", "phone", "addressLine", "city", "state", "zipCode", "country", "passkeyBindings"] as const;
 const RESERVED_PASSWORD_FIELD_NAMES = new Set([
+  ...CUSTOM_ICON_FIELD_NAMES,
   "monica_app_package", "appPackageName", "monica_app_name", "appName",
   "monica_email", "email", "monica_phone", "phone",
   "monica_address_line", "addressLine", "address", "monica_city", "city",
   "monica_state", "state", "monica_zip_code", "zipCode", "monica_country", "country",
   "monica_passkey_bindings", "monica_login_type",
+  "monica_wifi_data", "MonicaWifiData",
+  "monica_sso_provider", "monica_sso_ref_entry_id", "monica_sso_ref_logical_id",
   "monica_ssh_algorithm", "monica_ssh_key_size", "monica_ssh_public_key",
   "monica_ssh_private_key", "monica_ssh_fingerprint", "monica_ssh_comment", "monica_ssh_format"
 ]);
+const RESERVED_NOTE_FIELD_NAMES = new Set(["monica_note_markdown", "monica_note_tags"]);
 
 interface PlainBitwardenCustomField {
   raw: unknown;
@@ -21,15 +48,21 @@ interface PlainBitwardenCustomField {
   value: string;
   type: number;
   linked: boolean;
+  readable: boolean;
 }
 
 export interface DecodedBitwardenCipher {
+  /** Missing legacy key is distinct from an explicitly encrypted empty name. */
+  legacyIdentityFullName?: boolean;
   items: VaultItem[];
   warning?: string;
+  /** The login is usable; unreadable historical rows remain in its source envelope. */
+  historyWarning?: string;
   unsupported?: boolean;
 }
 
-export async function decodeBitwardenCipher(raw: Record<string, unknown>, providerId: string, vaultKey: BitwardenSymmetricKey): Promise<DecodedBitwardenCipher> {
+export async function decodeBitwardenCipher(raw: Record<string, unknown>, providerId: string, vaultKey: BitwardenSymmetricKey, remoteFolderName?: string,
+  options: { requireReadableProjectMembership?: boolean } = {}): Promise<DecodedBitwardenCipher> {
   const cipherId = stringValue(raw, "Id", "id");
   if (!cipherId) return { items: [], warning: "Bitwarden Cipher 缺少 ID，已跳过。" };
   const key = await resolveBitwardenCipherKey(raw, vaultKey);
@@ -57,7 +90,8 @@ export async function decodeBitwardenCipher(raw: Record<string, unknown>, provid
     updatedAt: revision,
     deletedAt: optionalDateValue(value(raw, "DeletedDate", "deletedDate")),
     archivedAt: optionalDateValue(value(raw, "ArchivedDate", "archivedDate")),
-    providerRefs: [reference]
+    providerRefs: [reference],
+    ...(remoteFolderName ? { categoryName: remoteFolderName } : {})
   };
 
   if (type === 1) {
@@ -78,18 +112,32 @@ export async function decodeBitwardenCipher(raw: Record<string, unknown>, provid
     const customFields = decodedFields
       .filter(isEditableBitwardenUserField)
       .map((field) => ({ name: field.name, value: field.value, protected: field.type === BITWARDEN_HIDDEN_FIELD }));
+    if (options.requireReadableProjectMembership && (decodedFields.some(field => !field.readable)
+      || decodedFields.some(field => field.name === PROJECT_CREDENTIAL_FIELD && !isEditableBitwardenUserField(field))
+      || decodedFields.some(field => field.name === PROJECT_CREDENTIAL_FIELD) && !readProjectCredential(customFields)))
+      throw new Error('Bitwarden 凭据项目元数据无法完整读取，不能据此判断成员移除范围。');
     const sshKeyData = bitwardenSshKeyData(systemFields);
     const loginType = bitwardenLoginType(systemFields, sshKeyData);
+    const wifiMetadata = bitwardenSystemValue(systemFields, "monica_wifi_data", "MonicaWifiData") || undefined;
+    const ssoRefEntryId = optionalPositiveOrZeroInteger(bitwardenSystemValue(systemFields, "monica_sso_ref_entry_id"));
+    const history = await decodePasswordHistory(value(raw, 'PasswordHistory', 'passwordHistory'), key);
     const loginItem: LoginItem = {
       ...base,
       kind: "login",
       username,
       password,
+      ...(history.rows.length ? { passwordHistory: history.rows.flatMap(row => row.plain ? [row.plain] : []) } : {}),
+      ...(history.unreadable ? { passwordHistoryIncomplete: true } : {}),
       uris: [...new Set(uris.filter(Boolean))],
-      uriRules: uriRules.filter((rule) => Boolean(rule.uri)),
+      uriRules: readAndroidUrlRules(customFields) ?? uriRules.filter((rule) => Boolean(rule.uri)),
       totpSecret: totpSecret || undefined,
       customFields,
+      // Android CipherSyncProcessor uses this explicit, versioned identity. Titles,
+      // accounts and URLs never establish membership; provider scope is separate.
+      passwordGroupId: readProjectCredential(customFields)?.projectId,
+      isGroupCover: readBitwardenGroupCover(decodedFields),
       bitwardenCustomFieldsVersion: BITWARDEN_CUSTOM_FIELDS_VERSION,
+      bitwardenCipherId: cipherId,
       bitwardenSshKeyMode: sshKeyData ? "fallback" : undefined,
       appPackageName: bitwardenSystemValue(systemFields, "monica_app_package", "appPackageName") || undefined,
       appName: bitwardenSystemValue(systemFields, "monica_app_name", "appName") || undefined,
@@ -102,14 +150,44 @@ export async function decodeBitwardenCipher(raw: Record<string, unknown>, provid
       country: bitwardenSystemValue(systemFields, "monica_country", "country") || undefined,
       passkeyBindings: bitwardenSystemValue(systemFields, "monica_passkey_bindings") || undefined,
       loginType,
+      ssoProvider: bitwardenSystemValue(systemFields, "monica_sso_provider") || undefined,
+      ssoRefEntryId,
+      ssoRefLogicalId: bitwardenSystemValue(systemFields, "monica_sso_ref_logical_id") || undefined,
+      ...readBitwardenCustomIcon(decodedFields),
+      wifiMetadata,
       sshKeyData
     };
-    const passkeys = await decodeFido2Credentials(login, base, reference, key);
-    return { items: [loginItem, ...passkeys] };
+    const hasAndroidPasskeyMetadata = notes.includes("[Monica Passkey Metadata]");
+    // Older Monica Android builds represented a passwordless item only by appending
+    // " [Passkey]" to the Cipher name. There is no FIDO2 array in that format, so
+    // keep the parent Login and project a metadata-only child below.
+    const hasLegacyPasskeyName = isLegacyPasskeyName(name);
+    const passkeys = await decodeFido2Credentials(login, base, reference, key, hasAndroidPasskeyMetadata);
+    if (!passkeys.length && (hasAndroidPasskeyMetadata || hasLegacyPasskeyName)) {
+      const metadataPasskey = decodeAndroidPasskeyMetadata(base, reference, notes, {
+        legacyName: hasLegacyPasskeyName,
+        fallbackRpId: extractRpIdFromUriRules(uriRules),
+        fallbackUserName: username
+      });
+      if (metadataPasskey) passkeys.push(metadataPasskey);
+    }
+    // Bitwarden stores authenticators on Login.Totp for both ordinary credentials
+    // and Monica Android's passwordless standalone validator carriers. Keep the
+    // parent Login for lossless write-back, and always project a parseable value
+    // into the validator list so the manager and autofill UI can discover it.
+    const projectedTotp = totpSecret ? decodeStandaloneTotp(loginItem, totpSecret, reference) : undefined;
+    return { items: [loginItem, ...(projectedTotp ? [projectedTotp] : []), ...passkeys],
+      ...(history.unreadable ? { historyWarning: '部分 Bitwarden 密码历史无法读取，原始加密记录已保留。' } : {}) };
   }
 
   if (type === 2) {
-    return { items: [{ ...base, kind: "secure-note", content: notes } satisfies SecureNoteItem] };
+    const decodedFields = await decodeBitwardenCustomFields(arrayValue(raw, "Fields", "fields"), key);
+    const noteSystem = bitwardenSystemFieldMap(decodedFields);
+    const tags = parseNoteTags(noteSystem.get("monica_note_tags"));
+    const customFields = decodedFields
+      .filter((field) => isEditableBitwardenSecureField(field) && !RESERVED_NOTE_FIELD_NAMES.has(field.name))
+      .map((field) => ({ name: field.name, value: field.value, protected: field.type === BITWARDEN_HIDDEN_FIELD, ...(field.type === 2 ? { fieldType: "BOOLEAN" as const } : {}) }));
+    return { items: [{ ...base, kind: "secure-note", content: notes, customFields, ...(["true", "false"].includes(noteSystem.get("monica_note_markdown") || "") ? { isMarkdown: noteSystem.get("monica_note_markdown") === "true" } : {}), ...(tags ? { tags } : {}) } satisfies SecureNoteItem] };
   }
 
   if (type === 3) {
@@ -122,26 +200,36 @@ export async function decodeBitwardenCipher(raw: Record<string, unknown>, provid
       decryptField(card, key, "Code", "code"),
       decryptField(card, key, "Brand", "brand")
     ]);
-    return { items: [{ ...base, kind: "card", cardholderName, number, expiryMonth, expiryYear, securityCode, brand: brand || undefined } satisfies CardItem] };
+    const wallet = walletFieldsToItem("card", await decodeBitwardenCustomFields(arrayValue(raw, "Fields", "fields"), key)) as Partial<CardItem>;
+    return { items: [{ ...base, ...wallet, kind: "card", cardholderName, number, expiryMonth, expiryYear, securityCode, brand: brand || undefined } satisfies CardItem] };
   }
 
   if (type === 4) {
     const identity = recordValue(raw, "Identity", "identity") || {};
     const fields = await decryptRecordFields(identity, key, [
-      "Title", "FirstName", "MiddleName", "LastName", "Address1", "Address2", "City", "State", "PostalCode", "Country", "Company", "Email", "Phone", "Ssn", "PassportNumber", "LicenseNumber"
+      "Title", "FirstName", "MiddleName", "LastName", "Address1", "Address2", "Address3", "City", "State", "PostalCode", "Country", "Company", "Username", "Email", "Phone", "Ssn", "PassportNumber", "LicenseNumber"
     ]);
-    const fullName = [fields.Title, fields.FirstName, fields.MiddleName, fields.LastName].filter(Boolean).join(" ");
+    const wallet = walletFieldsToItem("identity", await decodeBitwardenCustomFields(arrayValue(raw, "Fields", "fields"), key)) as Partial<IdentityItem>;
     const documentType: IdentityItem["documentType"] = fields.PassportNumber ? "PASSPORT" : fields.LicenseNumber ? "DRIVER_LICENSE" : fields.Ssn ? "SOCIAL_SECURITY" : "OTHER";
     return {
+      legacyIdentityFullName: wallet.fullName === undefined,
       items: [{
         ...base,
         kind: "identity",
-        documentType,
-        documentNumber: fields.PassportNumber || fields.LicenseNumber || fields.Ssn,
+        ...wallet,
+        documentType: wallet.documentType || documentType,
+        documentNumber: wallet.documentNumber ?? (fields.PassportNumber || fields.LicenseNumber || fields.Ssn),
         firstName: fields.FirstName,
         middleName: fields.MiddleName,
         lastName: fields.LastName,
-        fullName,
+        fullName: wallet.fullName ?? "",
+        documentTitle: fields.Title,
+        company: fields.Company,
+        username: fields.Username,
+        address3: fields.Address3,
+        ssn: fields.Ssn,
+        passportNumber: fields.PassportNumber,
+        licenseNumber: fields.LicenseNumber,
         email: fields.Email || undefined,
         phone: fields.Phone || undefined,
         address: { streetAddress: fields.Address1, apartment: fields.Address2, city: fields.City, stateProvince: fields.State, postalCode: fields.PostalCode, country: fields.Country }
@@ -183,14 +271,31 @@ export async function decodeBitwardenCipher(raw: Record<string, unknown>, provid
         uriRules: [],
         customFields,
         bitwardenCustomFieldsVersion: BITWARDEN_CUSTOM_FIELDS_VERSION,
+        isGroupCover: readBitwardenGroupCover(decodedFields),
+        bitwardenCipherId: cipherId,
         bitwardenSshKeyMode: "native",
+        ...readBitwardenCustomIcon(decodedFields),
         loginType: "SSH_KEY",
         sshKeyData
       } satisfies LoginItem]
     };
   }
 
-  return { items: [], warning: `Bitwarden Cipher ${cipherId} 的类型 ${type} 暂不支持。`, unsupported: true };
+  const nativeType = jsonScalarText(value(raw, "Type", "type")) || "unknown";
+  const fields = await decodeBitwardenCustomFields(arrayValue(raw, "Fields", "fields"), key);
+  return {
+    items: [{
+      ...base,
+      id: `${base.id}:opaque`,
+      kind: "opaque",
+      nativeType: `bitwarden:${nativeType}`,
+      payloadSchemaVersion: 1,
+      originalPayload: JSON.stringify({ cipher: raw, readableFields: fields.filter(field => field.readable).map(field => ({ name: field.name, value: field.value, protected: field.type === BITWARDEN_HIDDEN_FIELD, type: field.type })) }),
+      readOnlyReason: "未知 Bitwarden 类型；可读的公共字段已显示，未来加密字段仍按原样保留，不猜测其格式。"
+    }],
+    warning: `Bitwarden Cipher ${cipherId} 的类型 ${nativeType} 暂不支持编辑，已提供只读查看。`,
+    unsupported: true
+  };
 }
 
 export async function resolveBitwardenCipherKey(raw: Record<string, unknown>, vaultKey: BitwardenSymmetricKey): Promise<BitwardenSymmetricKey> {
@@ -199,6 +304,11 @@ export async function resolveBitwardenCipherKey(raw: Record<string, unknown>, va
 }
 
 export async function encodeBitwardenCipher(item: VaultItem, encryptionKey: BitwardenSymmetricKey, preservedRaw?: Record<string, unknown>): Promise<Record<string, unknown>> {
+  if (item.kind === 'login' && !hasAndroidUrlRules(item.customFields) && item.uriRules?.some(rule => rule.matchType === 'host'))
+    item = { ...item, customFields: writeAndroidUrlRules(item.customFields, effectiveLoginUriRules(item)) };
+  if (item.kind === 'login') assertWritableSshKeyData(item.sshKeyData);
+  if (item.kind === "opaque") throw new Error("未知 Bitwarden 类型仅可只读查看，不能编辑或新建。");
+  if (preservedRaw) assertKnownBitwardenCipher(preservedRaw);
   const preserved = preservedRaw || {};
   const base = cipherRequestBody(preserved);
   const nativeSsh = isNativeBitwardenSshCipher(item, preserved);
@@ -218,6 +328,9 @@ export async function encodeBitwardenCipher(item: VaultItem, encryptionKey: Bitw
   base.archivedDate = item.archivedAt || null;
 
   if (item.kind === "login") {
+    if (item.passwordHistoryIncomplete && !(await decodePasswordHistory(value(preserved, 'PasswordHistory', 'passwordHistory'), encryptionKey)).unreadable)
+      throw new Error('部分密码历史无法读取，不能完整转移到此密码源，请保留原密码源。');
+    if (item.passwordHistory !== undefined) base.passwordHistory = await encodePasswordHistory(item.passwordHistory, value(preserved, 'PasswordHistory', 'passwordHistory'), encryptionKey);
     if (nativeSsh) {
       const sshData = parseSshKeyData(item.sshKeyData) || {};
       const sshKey = cipherRequestBody(recordValue(preserved, "SshKey", "SSHKey", "sshKey", "ssh_key") || {});
@@ -231,10 +344,16 @@ export async function encodeBitwardenCipher(item: VaultItem, encryptionKey: Bitw
       login.username = await encryptOptional(item.username, encryptionKey);
       login.password = await encryptOptional(item.password, encryptionKey);
       login.totp = await encryptOptional(item.totpSecret || "", encryptionKey);
-      login.uris = await Promise.all(effectiveLoginUriRules(item).map(async (rule) => ({
-        uri: await encryptBitwardenString(rule.uri, encryptionKey),
-        match: bitwardenMatchCode(rule.matchType)
-      })));
+      const previousUris = await Promise.all(arrayValue(recordValue(preserved, "Login", "login") || {}, "Uris", "uris").map(async (entry) => ({ raw: record(entry), uri: await decryptField(record(entry), encryptionKey, "Uri", "uri") })));
+      login.uris = await Promise.all(effectiveLoginUriRules(item).map(async (rule) => {
+        const index = previousUris.findIndex((entry) => entry.uri === rule.uri);
+        const previous = index < 0 ? undefined : previousUris.splice(index, 1)[0];
+        const raw = { ...previous?.raw };
+        delete raw.Uri; delete raw.Match;
+        const match = hasAndroidUrlRules(item.customFields) ? previous ? value(previous.raw, 'Match', 'match') ?? null : null
+          : previous && bitwardenMatchType(value(previous.raw, 'Match', 'match')) === rule.matchType ? value(previous.raw, 'Match', 'match') : bitwardenMatchCode(rule.matchType);
+        return { ...raw, uri: previous ? value(previous.raw, "Uri", "uri") : await encryptBitwardenString(rule.uri, encryptionKey), match };
+      }));
       login.fido2Credentials = login.fido2Credentials ?? null;
       base.login = login;
       base.fields = await mergeCipherFieldsPreservingUnknown(item, arrayValue(preserved, "Fields", "fields"), encryptionKey);
@@ -248,40 +367,78 @@ export async function encodeBitwardenCipher(item: VaultItem, encryptionKey: Bitw
     card.code = await encryptOptional(item.securityCode, encryptionKey);
     card.brand = await encryptOptional(item.brand || "", encryptionKey);
     base.card = card;
+    base.fields = await mergeWalletFields(item, arrayValue(preserved, "Fields", "fields"), encryptionKey);
   } else if (item.kind === "identity") {
     const identity = cipherRequestBody(recordValue(preserved, "Identity", "identity") || {});
-    identity.title = identity.title ?? null;
+    identity.title = item.documentTitle === undefined ? identity.title ?? null : await encryptOptional(item.documentTitle, encryptionKey);
     identity.firstName = await encryptOptional(item.firstName, encryptionKey);
     identity.middleName = await encryptOptional(item.middleName, encryptionKey);
     identity.lastName = await encryptOptional(item.lastName, encryptionKey);
     identity.address1 = await encryptOptional(item.address?.streetAddress || "", encryptionKey);
     identity.address2 = await encryptOptional(item.address?.apartment || "", encryptionKey);
-    identity.address3 = identity.address3 ?? null;
+    identity.address3 = item.address3 === undefined ? identity.address3 ?? null : await encryptOptional(item.address3, encryptionKey);
     identity.city = await encryptOptional(item.address?.city || "", encryptionKey);
     identity.state = await encryptOptional(item.address?.stateProvince || "", encryptionKey);
     identity.postalCode = await encryptOptional(item.address?.postalCode || "", encryptionKey);
     identity.country = await encryptOptional(item.address?.country || "", encryptionKey);
-    identity.company = identity.company ?? null;
+    identity.company = item.company === undefined ? identity.company ?? null : await encryptOptional(item.company, encryptionKey);
+    identity.username = item.username === undefined ? identity.username ?? null : await encryptOptional(item.username, encryptionKey);
     identity.email = await encryptOptional(item.email || "", encryptionKey);
     identity.phone = await encryptOptional(item.phone || "", encryptionKey);
-    identity.ssn = item.documentType === "SOCIAL_SECURITY" ? await encryptOptional(item.documentNumber, encryptionKey) : null;
-    identity.passportNumber = item.documentType === "PASSPORT" ? await encryptOptional(item.documentNumber, encryptionKey) : null;
-    identity.licenseNumber = item.documentType === "DRIVER_LICENSE" ? await encryptOptional(item.documentNumber, encryptionKey) : null;
+    identity.ssn = await encryptOptional(!item.walletTemplate?.trim() && (item.documentType === "SOCIAL_SECURITY" || item.documentType === "ID_CARD") ? item.documentNumber : item.ssn || "", encryptionKey);
+    identity.passportNumber = await encryptOptional(!item.walletTemplate?.trim() && item.documentType === "PASSPORT" ? item.documentNumber : item.passportNumber || "", encryptionKey);
+    identity.licenseNumber = await encryptOptional(!item.walletTemplate?.trim() && item.documentType === "DRIVER_LICENSE" ? item.documentNumber : item.licenseNumber || "", encryptionKey);
     base.identity = identity;
+    base.fields = await mergeWalletFields(item, arrayValue(preserved, "Fields", "fields"), encryptionKey);
   } else if (item.kind === "secure-note") {
     base.notes = await encryptOptional(item.content, encryptionKey);
     base.secureNote = recordValue(preserved, "SecureNote", "secureNote") || { type: 0 };
+    base.fields = await mergeSecureNoteFieldsPreservingUnknown(item, arrayValue(preserved, "Fields", "fields"), encryptionKey);
   }
+  if (preservedRaw) await restoreUnchangedCipherScalars(base, preservedRaw, encryptionKey);
   return base;
 }
 
 /**
  * Bitwarden answers `/sync` in PascalCase but binds write requests in camelCase, so every preserved
- * key — including ones this codec has no model for, such as attachments or passwordHistory — has to
+ * key — including ones this codec has no model for, such as attachments — has to
  * be carried across under the request casing or the server drops it.
  */
 function cipherRequestBody(preserved: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(Object.entries(preserved).map(([name, entry]) => [lowerFirst(name), entry]));
+}
+
+async function decodePasswordHistory(raw: unknown, key: BitwardenSymmetricKey): Promise<{
+  rows: { raw: unknown; plain?: { password: string; lastUsedAt: string } }[]; unreadable: boolean;
+}> {
+  if (raw == null) return { rows: [], unreadable: false };
+  if (!Array.isArray(raw)) return { rows: [], unreadable: true };
+  const rows = await Promise.all(raw.map(async rawRow => {
+    const row = record(rawRow);
+    const password = value(row, 'Password', 'password');
+    const date = value(row, 'LastUsedDate', 'lastUsedDate');
+    if (typeof password !== 'string' || !password || typeof date !== 'string' || !Number.isFinite(Date.parse(date))) return { raw: rawRow };
+    try {
+      return { raw: rawRow, plain: { password: await decryptBitwardenString(password, key), lastUsedAt: new Date(date).toISOString() } };
+    } catch { return { raw: rawRow }; }
+  }));
+  return { rows, unreadable: rows.some(row => !('plain' in row)) };
+}
+
+async function encodePasswordHistory(history: NonNullable<LoginItem['passwordHistory']>, raw: unknown, key: BitwardenSymmetricKey): Promise<unknown> {
+  const decoded = await decodePasswordHistory(raw, key);
+  const previous = decoded.rows.flatMap(row => row.plain ? [row.plain] : []);
+  if (JSON.stringify(history) === JSON.stringify(previous)) return raw ?? [];
+  // An unknown whole-container format cannot be merged safely.
+  if (raw != null && !Array.isArray(raw)) throw new Error('Bitwarden 密码历史格式无法安全修改，原始记录已保留。');
+  const pool = [...decoded.rows];
+  const result = await Promise.all(history.map(async entry => {
+    const index = pool.findIndex(row => row.plain?.password === entry.password && row.plain.lastUsedAt === entry.lastUsedAt);
+    if (index >= 0) return pool.splice(index, 1)[0].raw;
+    if (!Number.isFinite(Date.parse(entry.lastUsedAt))) throw new Error('密码历史时间无效，原始记录已保留。');
+    return { password: await encryptBitwardenString(entry.password, key), lastUsedDate: entry.lastUsedAt };
+  }));
+  return [...result, ...pool.filter(row => !row.plain).map(row => row.raw)];
 }
 
 /**
@@ -362,23 +519,88 @@ async function mergeCipherFieldsPreservingUnknown(
   encryptionKey: BitwardenSymmetricKey,
   includeSystemFields = true
 ): Promise<unknown[] | null> {
-  const systemFields = includeSystemFields ? buildBitwardenSystemFields(item) : [];
-  const localFields = item.customFields.filter((field) => field.name.trim());
-  const outgoing = [...systemFields, ...localFields];
-  const encoded = await Promise.all(outgoing.map(async (field) => ({
-    type: field.protected ? BITWARDEN_HIDDEN_FIELD : BITWARDEN_TEXT_FIELD,
-    name: await encryptOptional(field.name, encryptionKey),
-    value: await encryptOptional(field.value, encryptionKey),
-    linkedId: null
-  })));
-  if (!remoteFields.length) return encoded.length ? encoded : null;
-  const remotePlain = await decodeBitwardenCustomFields(remoteFields, encryptionKey);
+  let systemFields = [...(includeSystemFields ? buildBitwardenSystemFields(item) : []), ...buildBitwardenCustomIconFields(item)];
   const initialized = item.bitwardenCustomFieldsVersion === BITWARDEN_CUSTOM_FIELDS_VERSION;
+  const remotePlain = await decodeBitwardenCustomFields(remoteFields, encryptionKey);
+  const coverFields = await encodeBitwardenGroupCover(item, remotePlain, encryptionKey);
+  const managesSsh = includeSystemFields && initialized && (!item.sshKeyData?.trim() || Boolean(parseSshKeyData(item.sshKeyData)));
+  if (includeSystemFields) {
+    const previousSsh = bitwardenSystemFieldMap(remotePlain);
+    for (const name of SSH_METADATA_NAMES) {
+      const originals = remotePlain.filter(field => field.name === name && isManagedSshField(field));
+      const current = systemFields.find(field => field.name === name);
+      if (current && current.value === previousSsh.get(name)) {
+        systemFields = systemFields.filter(field => field.name !== name);
+        systemFields.push(...originals.map(field => ({ name, value: field.value, protected: current.protected || field.type === BITWARDEN_HIDDEN_FIELD })));
+      } else if (current && originals.some(field => field.type === BITWARDEN_HIDDEN_FIELD)) {
+        current.protected = true;
+      }
+    }
+  }
+  const hiddenMetadataNames = new Set(PASSWORD_METADATA_ALIASES.filter(aliases =>
+    remotePlain.some(source => aliases.includes(source.name) && isReadableTextField(source) && source.type === BITWARDEN_HIDDEN_FIELD)).flat());
+  // The compatibility address contains every address component, so it inherits
+  // protection even when only a city, region, postal code, or country was hidden.
+  if (["monica_city", "monica_state", "monica_zip_code", "monica_country"].some(name => hiddenMetadataNames.has(name))) hiddenMetadataNames.add("address");
+  if (includeSystemFields && initialized) {
+    const previous = bitwardenSystemFieldMap(remotePlain);
+    const unchanged = PASSWORD_METADATA_KEYS.map((property, index) =>
+      bitwardenSystemValue(previous, ...PASSWORD_METADATA_ALIASES[index]) === (item[property] ?? ""));
+    for (const [index, aliases] of PASSWORD_METADATA_ALIASES.entries()) {
+      const originals = remotePlain.filter(field => aliases.includes(field.name) && isReadableTextField(field));
+      if (unchanged[index] && (index !== 4 || unchanged.slice(4, 9).every(Boolean))) {
+        // Keep spelling, duplicate values and extension properties on unrelated edits.
+        systemFields = systemFields.filter(field => !aliases.includes(field.name));
+        systemFields.push(...originals.map(field => ({ name: field.name, value: field.value, protected: field.type === BITWARDEN_HIDDEN_FIELD })));
+      } else {
+        const current = systemFields.find(field => aliases.includes(field.name));
+        if (!current) continue; // Explicit deletion removes every supported alias.
+        const generated = new Map(systemFields.map(field => [field.name, field]));
+        const seen = new Set<string>();
+        for (const field of originals) {
+          const target = generated.get(field.name);
+          if (!target || seen.has(field.name)) systemFields.push({ name: field.name, value: target?.value ?? current.value, protected: field.type === BITWARDEN_HIDDEN_FIELD });
+          seen.add(field.name);
+        }
+      }
+    }
+  }
   const generatedSystemNames = new Set(systemFields.map((field) => field.name));
+  const localFields = item.customFields.filter((field) => field.name.trim() && !generatedSystemNames.has(field.name)
+    && !(field.name === GROUP_COVER_FIELD && parsePasswordCoverField(field.value) !== undefined)
+    && !(managesSsh && SSH_METADATA_NAMES.has(field.name))
+    && !(includeSystemFields && initialized && PASSWORD_METADATA_NAMES.has(field.name)));
+  const outgoing = [...systemFields.map(field => hiddenMetadataNames.has(field.name)
+    ? { ...field, protected: true } : field), ...localFields];
+  const encoded = await encodeFieldsRetainingMetadata(outgoing, remotePlain.filter(field =>
+    !isManagedGroupCoverField(field) &&
+    (!SSH_METADATA_NAMES.has(field.name) || isManagedSshField(field)) &&
+    (!CUSTOM_ICON_FIELD_NAMES.has(field.name) || isManagedCustomIconField(field))
+    && (!PASSWORD_METADATA_NAMES.has(field.name) || isReadableTextField(field))), encryptionKey);
+  if (!remoteFields.length) return encoded.length || coverFields.length ? [...encoded, ...coverFields] : null;
   const remainingLocalOccurrences = occurrenceCounts(localFields);
   const preserved: unknown[] = [];
   for (const field of remotePlain) {
-    if (field.name && generatedSystemNames.has(field.name)) continue;
+    if (isManagedGroupCoverField(field)) continue;
+    if (includeSystemFields && SSH_METADATA_NAMES.has(field.name)) {
+      if (!isManagedSshField(field) || (!managesSsh && !generatedSystemNames.has(field.name))) preserved.push(field.raw);
+      continue;
+    }
+    if (includeSystemFields && PASSWORD_METADATA_NAMES.has(field.name)) {
+      if (!isReadableTextField(field) || (!initialized && !generatedSystemNames.has(field.name))) preserved.push(field.raw);
+      continue;
+    }
+    if (CUSTOM_ICON_FIELD_NAMES.has(field.name)) {
+      if (!isManagedCustomIconField(field)) preserved.push(field.raw);
+      continue;
+    }
+    // Relation fields have authoritative model projections. Choosing a stable
+    // account or unlinking must also remove the previous Android Room reference.
+    if (includeSystemFields && field.readable && !field.linked &&
+      (field.type === BITWARDEN_TEXT_FIELD || field.type === BITWARDEN_HIDDEN_FIELD) &&
+      (field.name === "monica_sso_ref_logical_id" ||
+        field.name === "monica_sso_ref_entry_id" && optionalPositiveOrZeroInteger(field.value) !== undefined)) continue;
+    if (field.readable && field.name && generatedSystemNames.has(field.name)) continue;
     if (!isEditableBitwardenUserField(field)) {
       preserved.push(field.raw);
       continue;
@@ -397,8 +619,73 @@ async function mergeCipherFieldsPreservingUnknown(
       preserved.push(field.raw);
     }
   }
-  const merged = [...preserved, ...encoded];
+  const merged = [...preserved, ...encoded, ...coverFields];
   return merged.length ? merged : null;
+}
+
+async function mergeSecureNoteFieldsPreservingUnknown(
+  item: SecureNoteItem,
+  remoteFields: unknown[],
+  encryptionKey: BitwardenSymmetricKey
+): Promise<unknown[] | null> {
+  const remotePlain = await decodeBitwardenCustomFields(remoteFields, encryptionKey);
+  const outgoing: SecureCustomField[] = (item.customFields || [])
+    .filter((field) => field.name.trim())
+    .filter((field) => !RESERVED_NOTE_FIELD_NAMES.has(field.name));
+  if (item.isMarkdown !== undefined) outgoing.push({ name: "monica_note_markdown", value: String(item.isMarkdown), protected: false });
+  if (item.tags !== undefined) {
+    const originalTags = remotePlain.find((field) => field.name === "monica_note_tags");
+    const unchanged = JSON.stringify(parseNoteTags(originalTags?.value)) === JSON.stringify(item.tags);
+    outgoing.push({ name: "monica_note_tags", value: unchanged ? originalTags!.value : JSON.stringify(item.tags), protected: false });
+  }
+  const generatedNames = new Set(outgoing.map((field) => field.name));
+  const preserved = remotePlain
+    .filter((field) => !isEditableBitwardenSecureField(field) || (RESERVED_NOTE_FIELD_NAMES.has(field.name) && !generatedNames.has(field.name)) || item.customFields === undefined && !generatedNames.has(field.name))
+    .map((field) => field.raw);
+  const merged = [...preserved, ...await encodeFieldsRetainingMetadata(outgoing, remotePlain, encryptionKey)];
+  return merged.length ? merged : null;
+}
+
+async function encodeFieldsRetainingMetadata(fields: SecureCustomField[], original: PlainBitwardenCustomField[], key: BitwardenSymmetricKey): Promise<unknown[]> {
+  const available = [...original];
+  return Promise.all(fields.map(async (field) => {
+    const type = field.fieldType === "BOOLEAN" ? 2 : field.protected || field.fieldType === "HIDDEN" ? 1 : 0;
+    let index = available.findIndex((source) => source.readable && !source.linked && source.name === field.name && source.value === field.value && source.type === type);
+    if (index < 0) index = available.findIndex((source) => source.readable && !source.linked && source.name === field.name);
+    const source = index < 0 ? undefined : available.splice(index, 1)[0];
+    const raw = { ...record(source?.raw) };
+    if (source?.type === type && source.value === field.value) {
+      for (const name of ["Name", "Value", "Type", "LinkedId"]) if (name in raw) { raw[lowerFirst(name)] = raw[name]; delete raw[name]; }
+      return raw;
+    }
+    for (const known of ["Name", "Value", "Type", "LinkedId"]) delete raw[known];
+    return { ...raw, type, name: source ? value(record(source.raw), "Name", "name") : await encryptBitwardenString(field.name, key), value: await encryptBitwardenString(field.value, key), linkedId: null };
+  }));
+}
+
+async function mergeWalletFields(item: WalletItem, remoteFields: unknown[], key: BitwardenSymmetricKey): Promise<unknown[] | null> {
+  const original = await decodeBitwardenCustomFields(remoteFields, key);
+  const managed = walletManagedNames(item.kind);
+  const outgoing = walletItemToFields(item, original);
+  const generatedNames = new Set(outgoing.map((field) => field.name.toLowerCase()));
+  const preserved = original.filter((field) => {
+    if (!field.readable || field.linked || ![0, 1, 2].includes(field.type)) return true;
+    if (!managed.has(field.name.toLowerCase())) return item.customFields === undefined;
+    // Unknown card-face/version/enums stay read-only until understood; absence does not delete them.
+    if ((field.name === "Monica Card Face" || field.name === "monica_card_face") && item.cardFace === undefined) return true;
+    return !generatedNames.has(field.name.toLowerCase());
+  }).map((field) => field.raw);
+  const merged = [...preserved, ...await encodeFieldsRetainingMetadata(outgoing, original, key)];
+  return merged.length ? merged : null;
+}
+
+function parseNoteTags(value: string | undefined): string[] | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed)) return undefined;
+    return parsed.every((tag) => typeof tag === "string") ? parsed as string[] : undefined;
+  } catch { return undefined; }
 }
 
 /** Android-compatible remote-first merge by complete value and exact occurrence count. */
@@ -426,20 +713,32 @@ async function decodeBitwardenCustomFields(entries: unknown[], key: BitwardenSym
   return Promise.all(entries.map(async (entry) => {
     const field = record(entry);
     const linkedId = value(field, "LinkedId", "linkedId");
+    let readable = true;
+    const decode = async (names: string[]) => {
+      try { return await decryptBitwardenString(stringValue(field, ...names), key); }
+      catch { readable = false; return ""; }
+    };
+    const name = (await decode(["Name", "name"])).trim();
+    const fieldValue = await decode(["Value", "value"]);
     return {
       raw: entry,
-      name: (await decryptBitwardenString(stringValue(field, "Name", "name"), key).catch(() => "")).trim(),
-      value: await decryptBitwardenString(stringValue(field, "Value", "value"), key).catch(() => ""),
+      name,
+      value: fieldValue,
       type: numberValue(field, "Type", "type"),
-      linked: linkedId !== null && linkedId !== undefined
+      linked: linkedId !== null && linkedId !== undefined,
+      readable
     };
   }));
 }
 
 function isEditableBitwardenUserField(field: PlainBitwardenCustomField): boolean {
-  return Boolean(field.name) && !field.linked &&
+  return field.readable && Boolean(field.name) && !field.linked &&
     (field.type === BITWARDEN_TEXT_FIELD || field.type === BITWARDEN_HIDDEN_FIELD) &&
-    !RESERVED_PASSWORD_FIELD_NAMES.has(field.name);
+    !RESERVED_PASSWORD_FIELD_NAMES.has(field.name) && !isManagedGroupCoverField(field);
+}
+
+function isEditableBitwardenSecureField(field: PlainBitwardenCustomField): boolean {
+  return field.readable && Boolean(field.name) && !field.linked && [0, 1, 2].includes(field.type);
 }
 
 function occurrenceCounts(fields: SecureCustomField[]): Map<string, number> {
@@ -457,8 +756,38 @@ function secureFieldOccurrenceKey(field: Pick<SecureCustomField, "name" | "value
 
 function bitwardenSystemFieldMap(fields: PlainBitwardenCustomField[]): Map<string, string> {
   const mapped = new Map<string, string>();
-  for (const field of fields) if (field.name) mapped.set(field.name, field.value);
+  for (const field of fields) if (field.name && (!PASSWORD_METADATA_NAMES.has(field.name) || isReadableTextField(field))
+    && (!SSH_METADATA_NAMES.has(field.name) || isManagedSshField(field))) mapped.set(field.name, field.value);
   return mapped;
+}
+
+function isReadableTextField(field: PlainBitwardenCustomField): boolean {
+  return field.readable && !field.linked && (field.type === BITWARDEN_TEXT_FIELD || field.type === BITWARDEN_HIDDEN_FIELD);
+}
+
+function isManagedGroupCoverField(field: PlainBitwardenCustomField): boolean {
+  return field.name === GROUP_COVER_FIELD && isReadableTextField(field) && parsePasswordCoverField(field.value) !== undefined;
+}
+
+function readBitwardenGroupCover(fields: PlainBitwardenCustomField[]): boolean | undefined {
+  const managed = fields.filter(isManagedGroupCoverField);
+  return parsePasswordCoverField(managed[managed.length - 1]?.value);
+}
+
+async function encodeBitwardenGroupCover(item: LoginItem, remote: PlainBitwardenCustomField[], key: BitwardenSymmetricKey): Promise<unknown[]> {
+  const original = remote.filter(isManagedGroupCoverField);
+  // Older cached items have no projection; do not erase their remote metadata.
+  if (!Object.prototype.hasOwnProperty.call(item, "isGroupCover")
+    || item.isGroupCover === undefined && item.bitwardenCustomFieldsVersion !== BITWARDEN_CUSTOM_FIELDS_VERSION
+    || item.isGroupCover === readBitwardenGroupCover(original)) return original.map(field => field.raw);
+  if (item.isGroupCover === undefined) return [];
+  const fields = original.length ? original.map(field => ({ name: GROUP_COVER_FIELD, value: String(item.isGroupCover), protected: field.type === BITWARDEN_HIDDEN_FIELD }))
+    : [{ name: GROUP_COVER_FIELD, value: String(item.isGroupCover), protected: false }];
+  return encodeFieldsRetainingMetadata(fields, original, key);
+}
+
+function isManagedSshField(field: PlainBitwardenCustomField): boolean {
+  return isReadableTextField(field) && (field.name !== 'monica_ssh_key_size' || optionalPositiveOrZeroInteger(field.value) !== undefined);
 }
 
 function bitwardenSystemValue(fields: Map<string, string>, ...names: string[]): string {
@@ -467,8 +796,11 @@ function bitwardenSystemValue(fields: Map<string, string>, ...names: string[]): 
 }
 
 function bitwardenLoginType(fields: Map<string, string>, sshKeyData?: string): LoginItem["loginType"] {
+  if (fields.get("monica_api_key_type") === "API_KEY") return "API_KEY";
+  if (fields.get("monica_gpg_type") === "GPG_KEY") return "GPG_KEY";
   if (sshKeyData) return "SSH_KEY";
   const value = bitwardenSystemValue(fields, "monica_login_type").trim().toUpperCase();
+  if (value === "STEAM_MAFILE") return value;
   return value === "PASSWORD" || value === "SSO" || value === "WIFI" || value === "SSH_KEY" || value === "BARCODE"
     ? value
     : undefined;
@@ -479,11 +811,11 @@ function bitwardenSshKeyData(fields: Map<string, string>): string | undefined {
   const publicKeyOpenSsh = bitwardenSystemValue(fields, "monica_ssh_public_key");
   const privateKeyOpenSsh = bitwardenSystemValue(fields, "monica_ssh_private_key");
   const fingerprintSha256 = bitwardenSystemValue(fields, "monica_ssh_fingerprint");
-  if (!algorithm && !publicKeyOpenSsh && !privateKeyOpenSsh && !fingerprintSha256) return undefined;
-  const parsedSize = Number.parseInt(bitwardenSystemValue(fields, "monica_ssh_key_size"), 10);
+  if (![...SSH_METADATA_NAMES].some(name => fields.has(name)) && fields.get('monica_login_type') !== 'SSH_KEY') return undefined;
+  const parsedSize = optionalPositiveOrZeroInteger(bitwardenSystemValue(fields, "monica_ssh_key_size"));
   return JSON.stringify({
     algorithm,
-    keySize: Number.isInteger(parsedSize) && parsedSize > 0 ? parsedSize : 0,
+    keySize: parsedSize ?? 0,
     publicKeyOpenSsh,
     privateKeyOpenSsh,
     fingerprintSha256,
@@ -538,12 +870,39 @@ function inferSshAlgorithm(publicKey: string): string {
   return "";
 }
 
+function isManagedCustomIconField(field: PlainBitwardenCustomField): boolean {
+  return CUSTOM_ICON_FIELD_NAMES.has(field.name) && field.readable && !field.linked
+    && (field.type === BITWARDEN_TEXT_FIELD || field.type === BITWARDEN_HIDDEN_FIELD)
+    && (field.name !== "monica_custom_icon_updated_at" || optionalPositiveOrZeroInteger(field.value) !== undefined);
+}
+
+function readBitwardenCustomIcon(raw: PlainBitwardenCustomField[]): Pick<LoginItem, "customIconType" | "customIconValue" | "customIconUpdatedAt"> {
+  const fields = bitwardenSystemFieldMap(raw.filter(isManagedCustomIconField));
+  return {
+    customIconType: fields.get("monica_custom_icon_type"),
+    customIconValue: fields.get("monica_custom_icon_value"),
+    customIconUpdatedAt: optionalPositiveOrZeroInteger(fields.get("monica_custom_icon_updated_at") || "")
+  };
+}
+
+function buildBitwardenCustomIconFields(item: LoginItem): SecureCustomField[] {
+  const fields: SecureCustomField[] = [];
+  if (item.customIconType !== undefined) fields.push({ name: "monica_custom_icon_type", value: item.customIconType, protected: false });
+  if (item.customIconValue !== undefined) fields.push({ name: "monica_custom_icon_value", value: item.customIconValue, protected: false });
+  if (item.customIconUpdatedAt !== undefined) fields.push({ name: "monica_custom_icon_updated_at", value: String(item.customIconUpdatedAt), protected: false });
+  return fields;
+}
+
 function buildBitwardenSystemFields(item: LoginItem): SecureCustomField[] {
   const fields: SecureCustomField[] = [];
   const add = (name: string, value: string | undefined, protectedField = false) => {
     if (value?.trim()) fields.push({ name, value, protected: protectedField });
   };
   const ssh = parseSshKeyData(item.sshKeyData);
+  // Keep an existing valid marker in the custom-field sequence, including its
+  // protection and source attributes. Generate one only when it is absent.
+  if (item.loginType === "GPG_KEY" && !item.customFields.some(field => field.name === "monica_gpg_type" && field.value === "GPG_KEY")) add("monica_gpg_type", "GPG_KEY");
+  if (item.loginType === "API_KEY" && !item.customFields.some(field => field.name === "monica_api_key_type" && field.value === "API_KEY")) add("monica_api_key_type", "API_KEY");
   const addSsh = (privateProtected: boolean) => {
     if (!ssh) return;
     add("monica_ssh_algorithm", stringProperty(ssh, "algorithm"));
@@ -576,15 +935,27 @@ function buildBitwardenSystemFields(item: LoginItem): SecureCustomField[] {
   add("monica_zip_code", item.zipCode);
   add("monica_country", item.country);
   add("monica_passkey_bindings", item.passkeyBindings);
+  if (item.loginType === "SSO") {
+    add("monica_login_type", "SSO");
+    add("monica_sso_provider", item.ssoProvider);
+    add("monica_sso_ref_entry_id", item.ssoRefEntryId === undefined ? undefined : String(item.ssoRefEntryId));
+    add("monica_sso_ref_logical_id", item.ssoRefLogicalId);
+  } else if (item.loginType === "WIFI") {
+    add("monica_login_type", "WIFI");
+    add("monica_wifi_data", item.wifiMetadata);
+  } else if (item.loginType === "BARCODE") {
+    add("monica_login_type", "BARCODE");
+  }
   addSsh(false);
-  add("address", [item.addressLine, item.city, item.state, item.zipCode, item.country].filter(Boolean).join(", "));
+  // A legacy composite must not become a new street after the street is cleared.
+  if (item.addressLine) add("address", [item.addressLine, item.city, item.state, item.zipCode, item.country].filter(Boolean).join(", "));
   return fields;
 }
 
 function parseSshKeyData(raw: string | undefined): Record<string, unknown> | undefined {
   if (!raw) return undefined;
   try {
-    const parsed = JSON.parse(raw);
+    const parsed = parseLosslessJson(raw);
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined;
   } catch {
     return undefined;
@@ -599,6 +970,22 @@ function numberProperty(raw: Record<string, unknown>, name: string): number {
   return typeof raw[name] === "number" && Number.isFinite(raw[name]) ? Math.floor(raw[name] as number) : 0;
 }
 
+function optionalPositiveOrZeroInteger(value: string): number | undefined {
+  if (!value.trim()) return undefined;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+
+/** Bitwarden's native FIDO2 format has implicit BE=true and no field for BE=false. */
+export function assertWritableBitwardenPasskey(item: PasskeyItem): void {
+  if (item.backupEligible === false) throw new Error('此 Passkey 注册时不允许备份，Bitwarden 无法保留该注册标志；请保留在当前密码库。');
+  if (item.algorithm !== -7) throw new Error('当前只能把 ES256 Passkey 保存到 Bitwarden。');
+  if (!Number.isInteger(item.signCount) || item.signCount < 0 || item.signCount > 0xffffffff)
+    throw new Error('Bitwarden Passkey 签名计数无效，原始数据已保留。');
+  if (parsePortablePasskeyPrivateKey(item.privateKeyPkcs8)?.algorithm !== -7)
+    throw new Error('Bitwarden Passkey 私钥不是有效的 ES256 PKCS#8。');
+}
 
 export async function encodeBitwardenPasskeyCipher(
   item: PasskeyItem,
@@ -606,19 +993,19 @@ export async function encodeBitwardenPasskeyCipher(
   preservedRaw?: Record<string, unknown>,
   operation: "upsert" | "delete" = "upsert"
 ): Promise<Record<string, unknown>> {
-  if (item.algorithm !== -7) throw new Error("当前只能把 ES256 Passkey 保存到 Bitwarden。");
-  if (operation === "upsert" && !item.privateKeyPkcs8) throw new Error("Bitwarden Passkey 缺少可同步的 PKCS#8 私钥。");
+  if (operation === 'upsert') assertWritableBitwardenPasskey(item);
   if (preservedRaw && numberValue(preservedRaw, "Type", "type") !== 1) throw new Error("Bitwarden Passkey 的父项目不是登录 Cipher。");
 
   const preservedLogin = recordValue(preservedRaw || {}, "Login", "login") || {};
   const existingCredentials = arrayValue(preservedLogin, "Fido2Credentials", "fido2Credentials").map(record);
   const matched = await Promise.all(existingCredentials.map(async (credential) => ({
     credential,
-    credentialId: await decryptBitwardenString(stringValue(credential, "CredentialId", "credentialId"), encryptionKey)
+    credentialId: normalizeCredentialId(decodeBitwardenCredentialId(await decryptBitwardenString(stringValue(credential, "CredentialId", "credentialId"), encryptionKey)))
   })));
-  const replacement = operation === "upsert" ? await encodeFido2Credential(item, encryptionKey, matched.find((entry) => entry.credentialId === item.credentialId)?.credential) : undefined;
-  const fido2Credentials = matched.flatMap((entry) => entry.credentialId === item.credentialId ? (replacement ? [replacement] : []) : [entry.credential]);
-  if (replacement && !matched.some((entry) => entry.credentialId === item.credentialId)) fido2Credentials.push(replacement);
+  const itemCredentialId = normalizeCredentialId(item.credentialId);
+  const replacement = operation === "upsert" ? await encodeFido2Credential(item, encryptionKey, matched.find((entry) => entry.credentialId === itemCredentialId)?.credential) : undefined;
+  const fido2Credentials = matched.flatMap((entry) => entry.credentialId === itemCredentialId ? (replacement ? [replacement] : []) : [entry.credential]);
+  if (replacement && !matched.some((entry) => entry.credentialId === itemCredentialId)) fido2Credentials.push(replacement);
 
   if (!preservedRaw) {
     return {
@@ -665,16 +1052,46 @@ export async function encodeBitwardenPasskeyCipher(
   return base;
 }
 
+export function assertKnownBitwardenCipher(raw: Record<string, unknown>): void {
+  if (value(raw, "Type", "type") !== undefined && ![1, 2, 3, 4, 5].includes(numberValue(raw, "Type", "type"))) throw new Error("未知 Bitwarden 类型仅可只读查看，不能编辑、转换或删除。");
+}
+
+/** Preserve null, absence, empty ciphertext and unchanged encrypted bytes while patching owned fields. */
+async function restoreUnchangedCipherScalars(output: Record<string, unknown>, original: Record<string, unknown>, key: BitwardenSymmetricKey): Promise<void> {
+  const restore = async (target: Record<string, unknown>, source: Record<string, unknown>, names: string[]) => {
+    for (const name of names) {
+      if (!(name in target)) continue;
+      const pascal = name[0].toUpperCase() + name.slice(1);
+      const before = value(source, pascal, name);
+      const after = target[name];
+      if ((before != null && typeof before !== "string") || (after != null && typeof after !== "string")) continue;
+      if (await decryptBitwardenString(before as string | undefined, key) === await decryptBitwardenString(after as string | undefined, key)) {
+        if (pascal in source || name in source) target[name] = before;
+        else delete target[name];
+      }
+    }
+  };
+  await restore(output, original, ["name", "notes"]);
+  for (const [nested, names] of Object.entries({ login: ["username", "password", "totp"], card: ["cardholderName", "number", "expMonth", "expYear", "code", "brand"], identity: ["title", "firstName", "middleName", "lastName", "address1", "address2", "address3", "city", "state", "postalCode", "country", "company", "username", "email", "phone", "ssn", "passportNumber", "licenseNumber"], sshKey: ["privateKey", "publicKey", "keyFingerprint"] })) {
+    const target = recordValue(output, nested);
+    if (target) await restore(target, recordValue(original, nested, nested[0].toUpperCase() + nested.slice(1)) || {}, names);
+  }
+}
+
 async function encodeFido2Credential(item: PasskeyItem, key: BitwardenSymmetricKey, preserved?: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const privateKey = parsePortablePasskeyPrivateKey(item.privateKeyPkcs8);
+  if (!privateKey || privateKey.algorithm !== -7) throw new Error("Bitwarden Passkey 私钥不是有效的 ES256 PKCS#8。");
   const unknown = Object.fromEntries(Object.entries(preserved || {}).filter(([name]) => !FIDO2_FIELD_NAMES.has(name.toLowerCase())));
   return {
     ...unknown,
-    credentialId: await encryptBitwardenString(item.credentialId, key),
-    keyAlgorithm: await encryptBitwardenString(item.keyAlgorithm || "ECDSA", key),
-    keyValue: await encryptBitwardenString(item.privateKeyPkcs8 || "", key),
+    credentialId: await encryptBitwardenString(toBitwardenCredentialId(item.credentialId), key),
+    keyType: await encryptBitwardenString("public-key", key),
+    keyAlgorithm: await encryptBitwardenString("ECDSA", key),
+    keyCurve: await encryptBitwardenString("P-256", key),
+    keyValue: await encryptBitwardenString(toBase64UrlText(privateKey.pkcs8Base64), key),
     rpId: await encryptBitwardenString(item.rpId, key),
     rpName: await encryptBitwardenString(item.rpName || item.title, key),
-    counter: await encryptBitwardenString(String(Math.max(0, Math.floor(item.signCount))), key),
+    counter: await encryptBitwardenString(String(item.signCount), key),
     userHandle: await encryptBitwardenString(item.userHandle, key),
     userName: await encryptBitwardenString(item.userName, key),
     userDisplayName: await encryptBitwardenString(item.userDisplayName, key),
@@ -684,7 +1101,7 @@ async function encodeFido2Credential(item: PasskeyItem, key: BitwardenSymmetricK
 }
 
 const FIDO2_FIELD_NAMES = new Set([
-  "credentialid", "keyalgorithm", "keyvalue", "rpid", "rpname", "counter", "userhandle", "username", "userdisplayname", "discoverable", "creationdate"
+  "credentialid", "keytype", "keyalgorithm", "keycurve", "keyvalue", "rpid", "rpname", "counter", "userhandle", "username", "userdisplayname", "discoverable", "creationdate"
 ]);
 
 function bitwardenType(item: VaultItem): number {
@@ -699,32 +1116,50 @@ async function decodeFido2Credentials(
   login: Record<string, unknown>,
   base: { id: string; title: string; favorite: boolean; notes: string; createdAt: string; updatedAt: string },
   cipherReference: ProviderReference,
-  key: BitwardenSymmetricKey
+  key: BitwardenSymmetricKey,
+  androidMetadata: boolean
 ): Promise<PasskeyItem[]> {
+  const metadata = parseAndroidPasskeyMetadata(base.notes);
   return Promise.all(arrayValue(login, "Fido2Credentials", "fido2Credentials").map(async (entry, index) => {
     const fido = record(entry);
-    const decrypted = await decryptRecordFields(fido, key, ["CredentialId", "KeyAlgorithm", "KeyValue", "RpId", "RpName", "Counter", "UserHandle", "UserName", "UserDisplayName", "Discoverable", "CreationDate"]);
-    const credentialId = decrypted.CredentialId || `unknown-${index}`;
-    const algorithm = normalizePasskeyAlgorithm(decrypted.KeyAlgorithm);
+    const decrypted = await decryptFidoRecordFields(fido, key, ["CredentialId", "KeyType", "KeyAlgorithm", "KeyCurve", "KeyValue", "RpId", "RpName", "Counter", "UserHandle", "UserName", "UserDisplayName", "Discoverable", "CreationDate"]);
+    const metadataCredential = metadata.get("credentialId") || "";
+    const rawCredentialId = decrypted.CredentialId || metadataCredential || `${cipherReference.remoteId}#metadata-${index}`;
+    const credentialId = decodeBitwardenCredentialId(rawCredentialId) || rawCredentialId;
+    const algorithm = normalizePasskeyAlgorithm(decrypted.KeyAlgorithm || metadata.get("publicKeyAlgorithm") || "");
+    const portableKey = parsePortablePasskeyPrivateKey(decrypted.KeyValue);
+    const keyMetadataSupported = (!decrypted.KeyType || decrypted.KeyType === "public-key")
+      && (!decrypted.KeyCurve || decrypted.KeyCurve.toUpperCase() === "P-256");
+    const privateKeyPkcs8 = algorithm === -7 && keyMetadataSupported && portableKey?.algorithm === -7
+      ? portableKey.pkcs8Base64
+      : undefined;
+    const rpId = decrypted.RpId || metadata.get("rpId") || "";
+    const rpName = decrypted.RpName || metadata.get("rpName") || base.title.replace(/\s*\[Passkey\]\s*$/i, "");
+    const userHandle = decrypted.UserHandle || metadata.get("userId") || "";
+    const userName = decrypted.UserName || metadata.get("userName") || "";
+    const userDisplayName = decrypted.UserDisplayName || metadata.get("userDisplayName") || userName;
     return {
       ...base,
       id: `${base.id}:passkey:${credentialId}`,
       kind: "passkey",
-      title: decrypted.RpName || base.title,
+      title: rpName || base.title,
       credentialId,
-      rpId: decrypted.RpId,
-      rpName: decrypted.RpName,
-      userHandle: decrypted.UserHandle,
-      userName: decrypted.UserName,
-      userDisplayName: decrypted.UserDisplayName,
+      rpId,
+      rpName,
+      userHandle,
+      userName,
+      userDisplayName,
       algorithm,
       keyAlgorithm: decrypted.KeyAlgorithm || undefined,
       publicKey: "",
-      privateKeyPkcs8: decrypted.KeyValue || undefined,
-      signCount: Number(decrypted.Counter) || 0,
+      privateKeyPkcs8,
+      signCount: Number(decrypted.Counter || metadata.get("signCount")) || 0,
       discoverable: decrypted.Discoverable.toLowerCase() !== "false",
-      sourceMode: "bitwarden",
-      createdAt: dateValue(decrypted.CreationDate, base.createdAt),
+      // Bitwarden has no per-credential UV preference. Match Monica Android's
+      // native import policy so a fresh client cannot weaken a required check.
+      userVerificationRequired: true,
+      sourceMode: privateKeyPkcs8 ? "bitwarden" : androidMetadata ? "android-metadata-only" : "bitwarden",
+      createdAt: dateValue(decrypted.CreationDate || metadata.get("createdAt"), base.createdAt),
       providerRefs: [{ ...cipherReference, remoteId: `${cipherReference.remoteId}#fido2:${credentialId}` }]
     } satisfies PasskeyItem;
   }));
@@ -768,6 +1203,10 @@ function lowerFirst(value: string): string {
   return value.slice(0, 1).toLowerCase() + value.slice(1);
 }
 
+function toBase64UrlText(value: string): string {
+  return value.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
 function value(raw: Record<string, unknown>, ...names: string[]): unknown {
   for (const name of names) if (name in raw) return raw[name];
   return undefined;
@@ -783,8 +1222,8 @@ function bitwardenMatchType(value: unknown): LoginUriMatchType {
   return ({ 0: "base-domain", 1: "domain", 2: "starts-with", 3: "exact", 4: "regex", 5: "never" } as Record<number, LoginUriMatchType>)[Number(value)] || "base-domain";
 }
 
-function bitwardenMatchCode(value: LoginUriMatchType): number {
-  return ({ "base-domain": 0, domain: 1, "starts-with": 2, exact: 3, regex: 4, never: 5 } as const)[value];
+function bitwardenMatchCode(value: LoginUriMatchType): number | null {
+  return ({ default: null, "base-domain": 0, host: 1, domain: 1, "starts-with": 2, exact: 3, regex: 4, never: 5 } as const)[value];
 }
 
 function stringValue(raw: Record<string, unknown>, ...names: string[]): string {
@@ -809,6 +1248,127 @@ function recordValue(raw: Record<string, unknown>, ...names: string[]): Record<s
 function arrayValue(raw: Record<string, unknown>, ...names: string[]): unknown[] {
   const result = value(raw, ...names);
   return Array.isArray(result) ? result : [];
+}
+
+function decodeAndroidPasskeyMetadata(
+  base: { id: string; title: string; favorite: boolean; notes: string; createdAt: string; updatedAt: string },
+  reference: ProviderReference,
+  notes: string,
+  fallback: { legacyName?: boolean; fallbackRpId?: string; fallbackUserName?: string } = {}
+): PasskeyItem | undefined {
+  const marker = notes.indexOf("[Monica Passkey Metadata]");
+  if (marker < 0 && !fallback.legacyName) return undefined;
+  const values = parseAndroidPasskeyMetadata(notes);
+  const credentialId = values.get("credentialId") || (fallback.legacyName ? `bw_ref_${reference.remoteId}` : `${reference.remoteId}#metadata`);
+  const rpId = values.get("rpId") || fallback.fallbackRpId || "";
+  const rpName = values.get("rpName") || base.title.replace(/\s*\[Passkey\]\s*$/i, "");
+  const userName = values.get("userName") || fallback.fallbackUserName || "";
+  const userDisplayName = values.get("userDisplayName") || userName;
+  const userHandle = values.get("userId") || "";
+  const algorithm = Number(values.get("publicKeyAlgorithm"));
+  return {
+    ...base,
+    id: `${base.id}:passkey:${credentialId}`,
+    kind: "passkey",
+    title: rpName || base.title,
+    credentialId,
+    rpId,
+    rpName,
+    userHandle,
+    userName,
+    userDisplayName,
+    algorithm: Number.isSafeInteger(algorithm) ? algorithm : -7,
+    keyAlgorithm: "ANDROID_METADATA",
+    publicKey: "",
+    signCount: Number(values.get("signCount")) || 0,
+    discoverable: true,
+    sourceMode: "android-metadata-only",
+    providerRefs: [{ ...reference, remoteId: `${reference.remoteId}#fido2:${credentialId}` }]
+  };
+}
+
+function isLegacyPasskeyName(name: string): boolean {
+  return /\s\[Passkey\]$/.test(name);
+}
+
+/** Extract a WebAuthn RP ID from Android's Login URI projection. */
+function extractRpIdFromUriRules(uriRules: LoginUriRule[]): string {
+  for (const rule of uriRules) {
+    const candidate = rule.uri.trim();
+    if (!candidate || rule.matchType === "regex" || rule.matchType === "never") continue;
+    try {
+      const parsed = new URL(candidate.includes("://") ? candidate : `https://${candidate}`);
+      if (parsed.username || parsed.password || parsed.port) continue;
+      const normalized = normalizeRpId(parsed.hostname);
+      if (normalized) return normalized;
+    } catch {
+      // URI fields are user-controlled and may contain non-URL app identifiers.
+    }
+  }
+  return "";
+}
+
+function parseAndroidPasskeyMetadata(notes: string): Map<string, string> {
+  const marker = notes.indexOf("[Monica Passkey Metadata]");
+  const values = new Map<string, string>();
+  if (marker < 0) return values;
+  for (const line of notes.slice(marker).split(/\r?\n/).slice(1)) {
+    const separator = line.indexOf(": ");
+    if (separator > 0) values.set(line.slice(0, separator).trim(), line.slice(separator + 2).trim());
+  }
+  return values;
+}
+
+function decodeStandaloneTotp(login: LoginItem, rawSecret: string, reference: ProviderReference): TotpItem | undefined {
+  let parameters;
+  try {
+    parameters = parseTotpParameters(rawSecret);
+  } catch {
+    // Keep the parent Login usable even when a legacy/custom OTP payload is not
+    // understood by this build; it remains available through login.totpSecret.
+    return undefined;
+  }
+  const secret = parameters.secret || rawSecret;
+  const otpType = parameters.otpType || "TOTP";
+  return {
+    id: `${login.id}:totp`,
+    kind: "totp",
+    title: login.title,
+    favorite: login.favorite,
+    notes: login.notes,
+    ...(login.categoryName ? { categoryName: login.categoryName } : {}),
+    createdAt: login.createdAt,
+    updatedAt: login.updatedAt,
+    ...(login.deletedAt ? { deletedAt: login.deletedAt } : {}),
+    ...(login.archivedAt ? { archivedAt: login.archivedAt } : {}),
+    providerRefs: [{ ...reference, remoteId: `${reference.remoteId}#totp` }],
+    secret,
+    issuer: parameters.issuer || login.title,
+    accountName: parameters.accountName || login.username,
+    otpType,
+    counter: parameters.counter,
+    pin: parameters.pin,
+    pinLength: parameters.pinLength,
+    algorithm: parameters.algorithm,
+    digits: parameters.digits,
+    period: parameters.period,
+    steamSharedSecretBase64: parameters.secretEncoding === "base64" ? parameters.secret : undefined
+  };
+}
+
+/** Some self-hosted Bitwarden versions return FIDO2 enum/scalar fields in plaintext. */
+async function decryptFidoRecordFields(raw: Record<string, unknown>, key: BitwardenSymmetricKey, names: string[]): Promise<Record<string, string>> {
+  const pairs = await Promise.all(names.map(async (name) => {
+    const value = stringValue(raw, name, lowerFirst(name));
+    if (!value) return [name, ""] as const;
+    if (!looksLikeCipherString(value)) return [name, value] as const;
+    return [name, await decryptBitwardenString(value, key)] as const;
+  }));
+  return Object.fromEntries(pairs);
+}
+
+function looksLikeCipherString(value: string): boolean {
+  return /^(?:0|2)\.[^|]+\|[^|]+(?:\|[^|]+)?$/.test(value) || /^\.[^|]+\|[^|]+$/.test(value);
 }
 
 function stringArrayValue(raw: Record<string, unknown>, ...names: string[]): string[] | undefined {

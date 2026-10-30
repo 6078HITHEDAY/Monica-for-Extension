@@ -1,13 +1,17 @@
 import { createSHA256 } from "hash-wasm";
 import type { PendingMutation, ProviderAccount, ProviderMutationReceipt, VaultItem, VaultState } from "../../core/model";
-import type { ProviderAcknowledgedMutation, ProviderSyncResult } from "../../core/provider";
+import type { ProviderAcknowledgedMutation, ProviderSyncContext, ProviderSyncGuard, ProviderSyncResult } from "../../core/provider";
 import type { BitwardenProvider } from "./bitwarden-provider";
 import { bitwardenSshComparableData } from "./bitwarden-cipher-codec";
+import { assertPasswordProjectRemovalSyncSafe } from "../../core/password-project-removal-sync";
+import { passwordGroupKey } from "../../core/password-groups";
+import { decodeBitwardenCredentialId, normalizeCredentialId } from '../../passkey/source-policy';
+import { parsePortablePasskeyPrivateKey } from '../../passkey/private-key-portability';
 
 export const BITWARDEN_ITEM_SYNC_BATCH_LIMIT = 100;
 
 export interface BitwardenDurableSyncVault {
-  readState(): Promise<Pick<VaultState, "items" | "mutationQueue" | "providerMutationReceipts">>;
+  readState(activity?: boolean): Promise<Pick<VaultState, "items" | "mutationQueue" | "providerMutationReceipts" | "passwordProjectRemovals"> & Partial<Pick<VaultState, "providerConflicts" | "bitwardenBatchTransfers">>>;
   prepareProviderMutationReceipts(receipts: ProviderMutationReceipt[]): Promise<void>;
   markProviderMutationReceiptsAttempted(providerId: string, mutationIds: string[]): Promise<void>;
   commitProviderMutationReceipts(providerId: string, acknowledgements: ProviderAcknowledgedMutation[]): Promise<void>;
@@ -21,7 +25,9 @@ export interface BitwardenDurableSyncVault {
     syncSnapshot?: VaultItem[],
     acknowledgedMutations?: ProviderAcknowledgedMutation[],
     requestedMutations?: ProviderSyncResult["requestedMutations"],
-    adoptRemoteRemovals?: boolean
+    adoptRemoteRemovals?: boolean,
+    deferredMutationIds?: string[],
+    guard?: ProviderSyncGuard
   ): Promise<unknown>;
 }
 
@@ -31,26 +37,27 @@ export interface BitwardenDurableSyncVault {
  * so a response received after a Service Worker restart can be recognized
  * without persisting plaintext in the durable receipt.
  */
-export async function bitwardenMutationFingerprint(item: VaultItem): Promise<string> {
+export async function bitwardenMutationFingerprint(item: VaultItem, version: 1 | 2 = 1): Promise<string> {
   const hasher = await createSHA256();
   hasher.init();
-  hasher.update(stableJson(bitwardenComparablePayload(item)));
+  hasher.update(stableJson(bitwardenComparablePayload(item, version)));
   return hasher.digest("hex");
 }
 
-export function bitwardenComparablePayload(item: VaultItem): Record<string, unknown> {
+export function bitwardenComparablePayload(item: VaultItem, version: 1 | 2 = 2): Record<string, unknown> {
   if (item.kind === "passkey") {
     return stableValue({
       kind: item.kind,
-      credentialId: item.credentialId,
+      credentialId: version === 1 ? item.credentialId : normalizeCredentialId(decodeBitwardenCredentialId(item.credentialId)),
       rpId: item.rpId,
       rpName: item.rpName || item.title,
       userHandle: item.userHandle,
       userName: item.userName,
       userDisplayName: item.userDisplayName,
       algorithm: item.algorithm,
-      keyAlgorithm: item.keyAlgorithm || (item.algorithm === -7 ? "ECDSA" : undefined),
-      privateKeyPkcs8: item.privateKeyPkcs8,
+      keyAlgorithm: version === 2 && item.algorithm === -7 ? 'ECDSA' : item.keyAlgorithm || (item.algorithm === -7 ? "ECDSA" : undefined),
+      privateKeyPkcs8: version === 1 ? item.privateKeyPkcs8 : parsePortablePasskeyPrivateKey(item.privateKeyPkcs8)?.pkcs8Base64 || item.privateKeyPkcs8,
+      ...(version === 2 ? { backupEligible: item.backupEligible !== false } : {}),
       signCount: Math.max(0, Math.floor(item.signCount)),
       discoverable: item.discoverable,
       archivedAt: item.archivedAt
@@ -67,7 +74,10 @@ export function bitwardenComparablePayload(item: VaultItem): Record<string, unkn
     "updatedAt",
     "deletedAt",
     "bitwardenCustomFieldsVersion",
-    "bitwardenSshKeyMode"
+    "bitwardenCipherId",
+    "bitwardenSshKeyMode",
+    "editorSectionOrder", // Device-local wallet layout is not part of the Cipher.
+    "passwordGroupId" // Derived from the credential custom field, which is already fingerprinted.
   ])) as Record<string, unknown>;
 }
 
@@ -77,16 +87,32 @@ export class BitwardenDurableSyncCoordinator {
     private readonly vault: BitwardenDurableSyncVault
   ) {}
 
-  async synchronize(account: ProviderAccount, signal?: AbortSignal, options: { allowEmptyRemote?: boolean } = {}): Promise<ProviderSyncResult> {
+  async synchronize(account: ProviderAccount, signal?: AbortSignal, options: { allowEmptyRemote?: boolean; readOnly?: boolean; itemIds?: string[]; syncHint?: ProviderSyncContext["syncHint"] } = {}): Promise<ProviderSyncResult> {
     if (account.kind !== "bitwarden") throw new Error("所选密码源不是 Bitwarden。");
     signal?.throwIfAborted();
 
-    let state = await this.vault.readState();
+    let state = await this.vault.readState(false);
+    if (state.bitwardenBatchTransfers?.some(row => row.target.id === account.id && row.status === 'writing'))
+      throw new Error('Bitwarden 还有未完成的整批传输，请先恢复。');
+    if (state.providerConflicts?.some(row => row.providerId === account.id && row.requiresExplicitResolution))
+      throw new Error('Bitwarden 恢复保留了需要明确选择的凭据冲突，请先处理后再同步。');
+    const passwordProjectRemovals = structuredClone(state.passwordProjectRemovals);
+    assertPasswordProjectRemovalSyncSafe(account, { now: new Date().toISOString(), localItems: state.items,
+      pendingMutations: state.mutationQueue, passwordProjectRemovals });
     const allPending = state.mutationQueue
       .filter((mutation) => mutation.providerId === account.id)
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
     const allPendingById = new Map(allPending.map((mutation) => [mutation.id, mutation]));
-    const pending = allPending.slice(0, BITWARDEN_ITEM_SYNC_BATCH_LIMIT);
+    const selectedIds = options.itemIds ? new Set(options.itemIds) : undefined;
+    const selectedProjects = new Set(state.items.flatMap(item => selectedIds?.has(item.id) && item.kind === 'login' ? [passwordGroupKey(item)] : []));
+    const itemById = new Map(state.items.map(item => [item.id, item]));
+    const eligiblePending = options.readOnly ? [] : allPending.filter(mutation => {
+      const item = itemById.get(mutation.itemId);
+      return !selectedIds || selectedIds.has(mutation.itemId) || item?.kind === 'login' && selectedProjects.has(passwordGroupKey(item));
+    });
+    const pending = selectProjectBatch(eligiblePending, itemById);
+    const processedIds = new Set(pending.map(mutation => mutation.id));
+    const deferredMutationIds = allPending.filter(mutation => !processedIds.has(mutation.id)).map(mutation => mutation.id);
     const snapshot = structuredClone(state.items);
     const providerReceipts = state.providerMutationReceipts
       .filter((receipt) => receipt.providerId === account.id)
@@ -99,7 +125,7 @@ export class BitwardenDurableSyncCoordinator {
     const staleSafeReceipts = providerReceipts.filter((receipt) => receipt.stage !== "attempted" && !allPendingById.has(receipt.mutationId));
     if (staleSafeReceipts.length) {
       await this.vault.clearProviderMutationReceipts(account.id, staleSafeReceipts.map((receipt) => receipt.mutationId));
-      state = await this.vault.readState();
+      state = await this.vault.readState(false);
     }
 
     const currentReceipts = state.providerMutationReceipts
@@ -114,12 +140,12 @@ export class BitwardenDurableSyncCoordinator {
       const item = snapshotById.get(mutation.itemId);
       if (!item) throw new Error("Bitwarden 持久同步批次引用的项目不存在。");
       const existing = receiptByMutationId.get(mutation.id);
-      const intentFingerprint = await bitwardenMutationFingerprint(item);
+      const intentFingerprint = await bitwardenMutationFingerprint(item, 2);
       if (existing) {
         if (existing.itemId !== mutation.itemId || existing.operation !== mutation.operation) {
           throw new Error("Bitwarden 持久同步回执与排队操作不一致。");
         }
-        if (existing.stage !== "prepared" || existing.intentFingerprint === intentFingerprint) continue;
+        if (existing.stage !== "prepared" || existing.intentFingerprint === intentFingerprint && existing.fingerprintVersion === 2) continue;
         refreshedPreparedIds.push(existing.mutationId);
       }
       newReceipts.push({
@@ -130,6 +156,7 @@ export class BitwardenDurableSyncCoordinator {
         operation: mutation.operation,
         stage: "prepared",
         intentFingerprint,
+        fingerprintVersion: 2,
         remoteId: item.providerRefs.find((reference) => reference.providerId === account.id)?.remoteId,
         baseRevision: item.providerRefs.find((reference) => reference.providerId === account.id)?.revision,
         attemptCount: 0,
@@ -140,7 +167,7 @@ export class BitwardenDurableSyncCoordinator {
     if (refreshedPreparedIds.length) await this.vault.clearProviderMutationReceipts(account.id, refreshedPreparedIds);
     if (newReceipts.length) {
       await this.vault.prepareProviderMutationReceipts(newReceipts);
-      state = await this.vault.readState();
+      state = await this.vault.readState(false);
     }
 
     const currentByMutationId = new Map(state.providerMutationReceipts
@@ -162,12 +189,18 @@ export class BitwardenDurableSyncCoordinator {
       signal,
       now: new Date().toISOString(),
       localItems: structuredClone(snapshot),
+      passwordProjectRemovals,
       pendingMutations: structuredClone(activePending),
       acknowledgedMutations: committed,
       mutationReceipts: structuredClone(receipts),
       markMutationsAttempted: (mutationIds) => this.vault.markProviderMutationReceiptsAttempted(account.id, mutationIds),
-      allowEmptyRemote: options.allowEmptyRemote === true
+      allowEmptyRemote: options.allowEmptyRemote === true,
+      readOnly: options.readOnly === true,
+      syncHint: options.syncHint
     });
+
+    signal?.throwIfAborted();
+    if (result.unchanged) return result;
 
     const acknowledgements = uniqueAcknowledgements([...committed, ...(result.acknowledgedMutations || [])]);
     if (acknowledgements.length) await this.vault.commitProviderMutationReceipts(account.id, acknowledgements);
@@ -180,15 +213,39 @@ export class BitwardenDurableSyncCoordinator {
       snapshot,
       acknowledgements,
       result.requestedMutations,
-      result.adoptRemoteRemovals
+      result.adoptRemoteRemovals,
+      deferredMutationIds,
+      { expectedAccount: account, confirmedRemovedItemIds: result.confirmedRemovedItemIds }
     );
     if (acknowledgements.length) await this.vault.clearProviderMutationReceipts(account.id, acknowledgements.map((acknowledgement) => acknowledgement.mutationId));
 
-    if (allPending.length > BITWARDEN_ITEM_SYNC_BATCH_LIMIT) {
-      result.warnings = [...result.warnings, `本轮按持久同步上限处理了 ${BITWARDEN_ITEM_SYNC_BATCH_LIMIT} 条 Bitwarden 修改，其余修改将在下次同步继续。`];
+    if (eligiblePending.length > pending.length) {
+      result.warnings = [...result.warnings, `本轮处理了 ${pending.length} 条 Bitwarden 修改，其余修改将在下次同步继续；同一密码项目的修改会一起处理。`];
     }
     return result;
   }
+}
+
+/** The queue is ordered, but one project's mutations may not be adjacent.
+ * Keep its complete pending unit in a batch; do not skip it for later work.
+ * Bitwarden still writes individual Ciphers, with per-Cipher durable recovery.
+ */
+function selectProjectBatch(pending: PendingMutation[], items: Map<string, VaultItem>): PendingMutation[] {
+  const units = new Map<string, PendingMutation[]>();
+  for (const mutation of pending) {
+    const item = items.get(mutation.itemId);
+    const key = item?.kind === 'login' ? passwordGroupKey(item) : `item:${mutation.itemId}`;
+    const unit = units.get(key) || [];
+    unit.push(mutation); units.set(key, unit);
+  }
+  const selected: PendingMutation[] = [];
+  for (const unit of units.values()) {
+    if (unit.length > BITWARDEN_ITEM_SYNC_BATCH_LIMIT)
+      throw new Error('单个 Bitwarden 密码项目待同步的修改超过 100 条，无法安全拆分；本地修改已保留。');
+    if (selected.length + unit.length > BITWARDEN_ITEM_SYNC_BATCH_LIMIT) break;
+    selected.push(...unit);
+  }
+  return selected;
 }
 
 function uniqueAcknowledgements(input: ProviderAcknowledgedMutation[]): ProviderAcknowledgedMutation[] {

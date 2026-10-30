@@ -1,4 +1,5 @@
-import { chromium, expect, test, type BrowserContext, type Page, type TestInfo } from "@playwright/test";
+import { expect, test, type BrowserContext, type Page, type TestInfo } from "@playwright/test";
+import { launchTestContext } from './fixtures/edge';
 import path from "node:path";
 
 interface ListedLogin {
@@ -10,9 +11,9 @@ interface ListedLogin {
 
 async function launchExtension(testInfo: TestInfo, profileName: string, viewport = { width: 1280, height: 720 }): Promise<{ context: BrowserContext; manager: Page }> {
   const extensionPath = path.resolve("dist");
-  const context = await chromium.launchPersistentContext(testInfo.outputPath(profileName), {
+  const context = await launchTestContext(testInfo.outputPath(profileName), {
     channel: "chromium",
-    headless: true,
+    headless: true, locale: "zh-CN",
     viewport,
     args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
   });
@@ -116,6 +117,124 @@ test("save prompt updates the matching login with a submitted replacement passwo
     const items = await listItems(launched.manager);
     expect(items).toEqual([expect.objectContaining({ id: existing.id, password: "replacement-secret" })]);
     expect(items[0].password).not.toBe("old-secret");
+  } finally {
+    await context?.close();
+  }
+});
+
+test("an unchanged autofilled login stays silent, but an edited password can still be updated", async ({}, testInfo) => {
+  let context: BrowserContext | undefined;
+  try {
+    const launched = await launchExtension(testInfo, "unchanged-autofill-profile");
+    context = launched.context;
+    const now = new Date().toISOString();
+    const existing = {
+      id: "unchanged-autofill-login", kind: "login", title: "Saved account", favorite: false,
+      notes: "", createdAt: now, updatedAt: now, providerRefs: [], customFields: [],
+      username: "joy@example.com", password: " Original-secret ", uris: ["https://save.example.test"]
+    };
+    expect(await launched.manager.evaluate(item => chrome.runtime.sendMessage({ type: "VAULT_UPSERT_ITEM", item }), existing)).toMatchObject({ ok: true });
+    const before = await listItems(launched.manager);
+    await routeLoginPage(context);
+    const page = await context.newPage();
+    await page.goto("https://save.example.test/login");
+    const tabId = await launched.manager.evaluate(async () => {
+      const tabs = await chrome.tabs.query({ url: "https://save.example.test/*" });
+      return tabs[0].id!;
+    });
+    expect(await launched.manager.evaluate(({ itemId, tabId }) => chrome.runtime.sendMessage({ type: "VAULT_FILL_LOGIN", itemId, tabId }), { itemId: existing.id, tabId })).toMatchObject({ ok: true });
+    await expect(page.locator("#username")).toHaveValue(existing.username);
+    await expect(page.locator("#password")).toHaveValue(existing.password);
+    await triggerLogin(page);
+    // Allow the asynchronous capture/reply and UI rendering to finish before asserting absence.
+    await page.waitForTimeout(1500);
+    await expect(page.locator("#monica-save-prompt-host")).toHaveCount(0);
+    expect(await listItems(launched.manager)).toEqual(before);
+    await page.reload();
+    await page.waitForTimeout(1000);
+    await expect(page.locator("#monica-save-prompt-host")).toHaveCount(0);
+
+    await page.locator("#username").fill(existing.username);
+    await page.locator("#password").fill(" Original-secret"); // A trailing space is a real password change.
+    await triggerLogin(page);
+    await confirmSavePrompt(page);
+    await expect.poll(async () => (await listItems(launched.manager))[0]?.password).toBe(" Original-secret");
+  } finally {
+    await context?.close();
+  }
+});
+
+for (const mode of ["manual", "inline"] as const) {
+  test(`unchanged ${mode} credentials do not prompt even among same-username records`, async ({}, testInfo) => {
+    let context: BrowserContext | undefined;
+    try {
+      const launched = await launchExtension(testInfo, `unchanged-${mode}-copies`);
+      context = launched.context;
+      const now = new Date().toISOString();
+      for (const [id, password] of [["older-copy", "older-secret"], ["current-copy", "unchanged-secret"]]) {
+        expect(await launched.manager.evaluate(item => chrome.runtime.sendMessage({ type: "VAULT_UPSERT_ITEM", item }), {
+          id, kind: "login", title: id, username: "joy@example.com", password,
+          notes: "", favorite: false, createdAt: now, updatedAt: now, providerRefs: [], customFields: [], uris: ["https://save.example.test"]
+        })).toMatchObject({ ok: true });
+      }
+      const before = await listItems(launched.manager);
+      await routeLoginPage(context);
+      const page = await context.newPage();
+      await page.goto("https://save.example.test/login");
+      if (mode === "manual") {
+        await page.locator("#username").fill("joy@example.com");
+        await page.locator("#password").fill("unchanged-secret");
+      } else {
+        await page.locator("#username").click();
+        const menu = page.locator("#monica-inline-autofill-host");
+        await expect(menu).toBeVisible();
+        // current-copy sorts ahead of older-copy; select the actual inline suggestion.
+        await page.keyboard.press("ArrowDown");
+        await page.keyboard.press("Enter");
+        await expect(page.locator("#password")).toHaveValue("unchanged-secret");
+      }
+      await triggerLogin(page);
+      await page.waitForTimeout(1500);
+      await expect(page.locator("#monica-save-prompt-host")).toHaveCount(0);
+      expect(await listItems(launched.manager)).toEqual(before);
+
+      // Reusing that password under a different account must still offer saving.
+      await page.locator("#username").fill("another@example.com");
+      await triggerLogin(page);
+      await confirmSavePrompt(page);
+      await expect.poll(async () => (await listItems(launched.manager)).length).toBe(3);
+      expect((await listItems(launched.manager)).find(item => item.username === "another@example.com")?.password).toBe("unchanged-secret");
+    } finally {
+      await context?.close();
+    }
+  });
+}
+
+test("reverting a submitted password discards the stale prompt and navigation candidate", async ({}, testInfo) => {
+  let context: BrowserContext | undefined;
+  try {
+    const launched = await launchExtension(testInfo, "reverted-update-profile");
+    context = launched.context;
+    const now = new Date().toISOString();
+    expect(await launched.manager.evaluate(item => chrome.runtime.sendMessage({ type: "VAULT_UPSERT_ITEM", item }), {
+      id: "reverted-login", kind: "login", title: "Saved account", username: "joy@example.com", password: "original",
+      notes: "", favorite: false, createdAt: now, updatedAt: now, providerRefs: [], customFields: [], uris: ["https://save.example.test"]
+    })).toMatchObject({ ok: true });
+    const before = await listItems(launched.manager);
+    await routeLoginPage(context);
+    const page = await context.newPage();
+    await page.goto("https://save.example.test/login");
+    await page.locator("#username").fill("joy@example.com");
+    await page.locator("#password").fill("temporary-edit");
+    await triggerLogin(page);
+    await expect(page.locator("#monica-save-prompt-host")).toHaveCount(1);
+    await page.locator("#password").fill("original");
+    await triggerLogin(page);
+    await expect(page.locator("#monica-save-prompt-host")).toHaveCount(0);
+    await page.reload();
+    await page.waitForTimeout(1000);
+    await expect(page.locator("#monica-save-prompt-host")).toHaveCount(0);
+    expect(await listItems(launched.manager)).toEqual(before);
   } finally {
     await context?.close();
   }

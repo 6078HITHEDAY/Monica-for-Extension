@@ -1,13 +1,14 @@
+import { chooseOption, dialogContent } from "./fixtures/material";
 import { chromium, expect, test, type BrowserContext } from "@playwright/test";
 import path from "node:path";
+import { launchEdgeContext } from './fixtures/edge';
 
 test("wallet popup explicitly fills identity address card and payment fields while leaving generic fields untouched", async ({}, testInfo) => {
   const extensionPath = path.resolve("dist");
   let context: BrowserContext | undefined;
   try {
-    context = await chromium.launchPersistentContext(testInfo.outputPath("wallet-profile"), {
-      channel: "chromium",
-      headless: true,
+    context = await launchEdgeContext(testInfo.outputPath("wallet-profile"), {
+      locale: "zh-CN",
       args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
     });
     const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
@@ -64,18 +65,21 @@ test("wallet popup explicitly fills identity address card and payment fields whi
     for (const title of ["Joy Passport", "Shanghai Home", "Test Visa", "Euro Bank"]) await expect(popup.getByText(title, { exact: true })).toBeVisible();
 
     await checkout.bringToFront();
+    await checkout.locator('#first-name').click();
     await popup.getByRole("button", { name: /Joy Passport/ }).click();
     await expect(checkout.locator("#first-name")).toHaveValue("Joy");
     await expect(checkout.locator("#last-name")).toHaveValue("Lin");
     await expect(checkout.locator("#passport")).toHaveValue("P12345678");
 
     await checkout.bringToFront();
+    await checkout.locator('#street').click();
     await popup.getByRole("button", { name: /Shanghai Home/ }).click();
-    await expect(checkout.locator("#street")).toHaveValue("1 Monica Road");
+    await expect(checkout.locator("#street")).toHaveValue("1 Monica Road, Room 1507");
     await expect(checkout.locator("#city")).toHaveValue("Shanghai");
     await expect(checkout.locator("#postal")).toHaveValue("200000");
 
     await checkout.bringToFront();
+    await checkout.locator('#cc-name').click();
     await popup.getByRole("button", { name: /Test Visa/ }).click();
     await expect(checkout.locator("#cc-name")).toHaveValue("JOY LIN");
     await expect(checkout.locator("#cc-number")).toHaveValue("4111111111111111");
@@ -92,6 +96,7 @@ test("wallet popup explicitly fills identity address card and payment fields whi
     await expect(checkout.locator("#generic-pin")).toHaveValue("");
 
     await checkout.bringToFront();
+    await checkout.locator('#iban').click();
     await popup.getByRole("button", { name: /Euro Bank/ }).click();
     await expect(checkout.locator("#iban")).toHaveValue("DE89370400440532013000");
     await expect(checkout.locator("#routing")).toHaveValue("021000021");
@@ -107,9 +112,8 @@ test("manager preserves complete Android card fields and Markdown note metadata"
   const extensionPath = path.resolve("dist");
   let context: BrowserContext | undefined;
   try {
-    context = await chromium.launchPersistentContext(testInfo.outputPath("wallet-editor-profile"), {
-      channel: "chromium",
-      headless: true,
+    context = await launchEdgeContext(testInfo.outputPath("wallet-editor-profile"), {
+      locale: "zh-CN",
       args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
     });
     const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
@@ -127,6 +131,7 @@ test("manager preserves complete Android card fields and Markdown note metadata"
     await manager.getByLabel("到期月").fill("12");
     await manager.getByLabel("到期年").fill("2030");
     await manager.getByLabel("安全码").fill("123");
+    await manager.getByRole('button', { name: '编辑更多银行卡信息', exact: true }).click();
     await manager.getByLabel("银行", { exact: true }).fill("Monica Bank");
     await manager.getByLabel("昵称", { exact: true }).fill("Travel");
     await manager.getByLabel("PIN", { exact: true }).fill("7890");
@@ -139,13 +144,20 @@ test("manager preserves complete Android card fields and Markdown note metadata"
     await manager.getByLabel("分行代码", { exact: true }).fill("001");
     await manager.getByLabel("币种", { exact: true }).fill("eur");
     await manager.getByLabel("客服电话", { exact: true }).fill("+4912345");
+    await manager.getByRole('button', { name: '完成', exact: true }).click();
+    await manager.getByRole('button', { name: '编辑账单地址', exact: true }).click();
+    await manager.locator(".billing-address-fields [slot=header]").click();
     await manager.getByLabel("账单地址 JSON", { exact: true }).fill('{"city":"Berlin","future":true}');
+    await manager.getByRole('button', { name: '完成', exact: true }).click();
+    await manager.getByRole('button', { name: '编辑自定义字段', exact: true }).click();
     await manager.getByRole("button", { name: "添加字段" }).click();
     await manager.getByLabel("自定义字段 1 名称").fill("virtual");
     await manager.getByLabel("自定义字段 1 值").fill("true");
-    await manager.getByLabel("自定义字段 1 类型").selectOption("BOOLEAN");
+    await chooseOption(manager.getByLabel("自定义字段 1 类型"), "BOOLEAN");
+    await manager.getByRole('button', { name: '完成', exact: true }).click();
     await manager.getByRole("button", { name: "加密保存" }).click();
-    await expect(manager.getByText("Android Complete Card", { exact: true })).toBeVisible();
+    await expect(dialogContent(manager)).toHaveCount(0);
+    await expect(manager.locator(".vault-tile-open").getByText("Android Complete Card", { exact: true })).toBeVisible();
 
     await manager.getByRole("button", { name: /安全笔记/ }).click();
     await manager.getByRole("button", { name: "添加安全笔记" }).click();
@@ -154,6 +166,7 @@ test("manager preserves complete Android card fields and Markdown note metadata"
     await manager.getByLabel("使用 Markdown").check();
     await manager.getByLabel("笔记内容 *").fill("# Recovery\n\n- Keep future fields");
     await manager.getByRole("button", { name: "加密保存" }).click();
+    await expect(dialogContent(manager)).toHaveCount(0);
     await expect(manager.getByText("Markdown Runbook", { exact: true })).toBeVisible();
 
     const response = await manager.evaluate(async () => chrome.runtime.sendMessage({ type: "VAULT_LIST_ITEMS" })) as { ok: boolean; data: Array<Record<string, unknown>> };

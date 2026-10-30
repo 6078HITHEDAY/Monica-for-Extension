@@ -8,7 +8,31 @@ import { MemoryVaultStorage } from "./vault-storage";
 import { MemoryVaultDeviceKeyStore } from "./vault-device-key";
 import { MonicaWebDavProvider } from "../providers/webdav/monica-webdav-provider";
 
+const REVISION_FOR_PASSKEY_TEST = "2026-08-31T00:00:00.000Z";
+const P256_PKCS8_FOR_PASSKEY_TEST = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgsloK6aKNvj0CZMYdBdSZs+AUAsFy1t66q4tq5SvyeJahRANCAASlCTbHlIcaKQ2lzoEFhtjkLEO++f3cYq6FMYG7eH3BmuLQPz71FAtWq4z+tIb7oequwhUJL3xos1nA8jFqpkDs";
+
 describe("encrypted vault", () => {
+  it("keeps WebDAV and Bitwarden copies of the same Passkey as typed provider-owned records", async () => {
+    const service = new SecureVaultService(new MemoryVaultStorage(), new MemoryVaultSessionStore());
+    await service.setup("dual provider Passkey password");
+    await service.upsertProvider({ id: "webdav-passkey", kind: "monica-webdav", name: "Android WebDAV", enabled: true, isDefaultSaveTarget: false, config: {} });
+    await service.upsertProvider({ id: "bw-passkey", kind: "bitwarden", name: "Bitwarden", enabled: true, isDefaultSaveTarget: false, config: {} });
+    const shared = {
+      kind: "passkey" as const, title: "Example", favorite: false, notes: "", createdAt: REVISION_FOR_PASSKEY_TEST,
+      updatedAt: REVISION_FOR_PASSKEY_TEST, credentialId: "00112233-4455-6677-8899-aabbccddeeff", rpId: "example.com",
+      rpName: "Example", userHandle: "dXNlcg", userName: "joy", userDisplayName: "Joy", algorithm: -7,
+      publicKey: "", privateKeyPkcs8: P256_PKCS8_FOR_PASSKEY_TEST, signCount: 0, discoverable: true
+    };
+    const webdav: PasskeyItem = { ...shared, id: "webdav-copy", sourceMode: "browser-local", providerRefs: [{ providerId: "webdav-passkey", remoteId: "folders/_root/passkeys/passkey_shared.json" }] };
+    const bitwarden: PasskeyItem = { ...shared, id: "bitwarden-copy", sourceMode: "bitwarden", providerRefs: [{ providerId: "bw-passkey", remoteId: "cipher-1#fido2:00112233-4455-6677-8899-aabbccddeeff" }] };
+
+    await service.applyProviderSync("webdav-passkey", [webdav]);
+    await service.applyProviderSync("bw-passkey", [...await service.listItems(), bitwarden]);
+
+    const passkeys = (await service.listItems()).filter((item): item is PasskeyItem => item.kind === "passkey");
+    expect(passkeys).toHaveLength(2);
+    expect(passkeys.map((item) => item.providerRefs[0].providerId).sort()).toEqual(["bw-passkey", "webdav-passkey"]);
+  });
   it("keeps a durable mutation successful when only session activity refresh fails", async () => {
     class FailingRefreshSessionStore extends MemoryVaultSessionStore {
       private writes = 0;
@@ -217,13 +241,19 @@ describe("encrypted vault", () => {
       isDefaultSaveTarget: false,
       config: {
         fileName: "personal.kdbx",
+        databaseId: "7",
         protectionMode: "password-and-key-file",
         password: "keepass-password-secret",
         keyFile: "keepass-key-secret"
       }
     });
-    expect(keePass.config).toEqual({ fileName: "personal.kdbx", protectionMode: "password-and-key-file" });
+    expect(keePass.config).toEqual({ fileName: "personal.kdbx", databaseId: 7, protectionMode: "password-and-key-file" });
     expect(JSON.stringify(await service.listProviders())).not.toMatch(/keepass-password-secret|keepass-key-secret/);
+
+    const localKeePass = await service.upsertProvider({ ...keePass, config: { ...keePass.config,
+      sourceMode: 'local-file', localFileSourceSha256: 'a'.repeat(64), cacheEncryptionKey: 'local-receipt-secret' } });
+    expect(localKeePass.config.localFileSourceSha256).toBe('a'.repeat(64));
+    expect(JSON.stringify(await service.listProviders())).not.toContain('local-receipt-secret');
 
     const remoteKeePass = await service.upsertProvider({
       id: "keepass-remote",
@@ -287,6 +317,7 @@ describe("encrypted vault", () => {
     });
     expect(mdbx2.config).toEqual({
       formatVersion: "MDBX-2",
+      runtimeBackend: "native",
       vaultHandle: "11111111-1111-4111-8111-111111111111",
       schemaVersion: 17,
       webDavBaseUrl: "https://vault.example/dav",
@@ -448,6 +479,8 @@ describe("encrypted vault", () => {
     await service.setup("keep local conflict password");
     await service.upsertProvider({ id: "webdav", kind: "monica-webdav", name: "WebDAV", enabled: true, isDefaultSaveTarget: false, config: {} });
     const baseline = createLoginItem({ title: "Conflict", password: "baseline", uris: ["example.com"], providerRefs: [{ providerId: "webdav", remoteId: "42", revision: "2026-07-15T01:00:00.000Z" }] });
+    // Remote identity is adopted by authenticated sync, not supplied by a new UI draft.
+    await service.applyProviderSync("webdav", [baseline]);
     const local = await service.upsertItem({ ...baseline, password: "local-newer" });
     const remote = { ...local, password: "remote-newer", updatedAt: "2026-07-15T02:00:00.000Z" };
     await service.applyProviderSync("webdav", [local], { lastError: "发现冲突" }, [{ itemId: local.id, reason: "双方均已修改", local, remote }]);
@@ -826,19 +859,21 @@ describe("encrypted vault", () => {
     await service.upsertProvider(account);
     const local = await service.upsertItem(createLoginItem({ title: "First WebDAV item", password: "secret", uris: ["webdav.example"], providerRefs: [{ providerId: account.id }] }));
     const snapshot = structuredClone((await service.readState()).items);
-    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    let uploaded: Uint8Array | undefined, uploadedPath = "";
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const method = init?.method || "GET";
       const headers = new Headers(init?.headers);
-      if (method === "PROPFIND" && headers.get("Depth") === "1") return new Response(`<?xml version="1.0"?><d:multistatus xmlns:d="DAV:"/>`, { status: 207 });
+      if (method === "PROPFIND" && headers.get("Depth") === "1") return new Response(`<?xml version="1.0"?><d:multistatus xmlns:d="DAV:">${uploaded ? `<d:response><d:href>${uploadedPath}</d:href><d:propstat><d:prop><d:getetag>"created"</d:getetag></d:prop></d:propstat></d:response>` : ""}</d:multistatus>`, { status: 207 });
       if (method === "PROPFIND") return new Response(null, { status: 207 });
-      if (method === "PUT") return new Response(null, { status: 201, headers: { etag: '"created"' } });
+      if (method === "PUT") { uploaded = new Uint8Array(await new Response(init?.body).arrayBuffer()); uploadedPath = new URL(String(input)).pathname; return new Response(null, { status: 201, headers: { etag: '"created"' } }); }
+      if (method === "GET" && uploaded) return new Response(Uint8Array.from(uploaded), { headers: { etag: '"created"' } });
       throw new Error(`Unexpected ${method}`);
     }) as unknown as typeof fetch;
 
     const result = await new MonicaWebDavProvider(fetcher).sync(account, { now: "2026-07-26T00:00:00.000Z", localItems: structuredClone(snapshot) });
     expect(snapshot.find((item) => item.id === local.id)?.providerRefs[0]?.remoteId).toBeUndefined();
     await service.applyProviderSync(account.id, result.items, result.accountPatch, result.conflicts, result.sourceRecords, snapshot);
-    expect((await service.readState()).items.find((item) => item.id === local.id)?.providerRefs[0]).toMatchObject({ remoteId: local.id, etag: '"created"' });
+    expect((await service.readState()).items.find((item) => item.id === local.id)?.providerRefs[0]).toMatchObject({ remoteId: expect.stringMatching(/^folders\/_root\/passwords\/password_/), etag: '"created"' });
   });
 
   it("reports the persisted merge conflict count and retains a non-deleted local item missing remotely", async () => {
@@ -1082,6 +1117,37 @@ describe("encrypted vault", () => {
 
     await expect(service.applyProviderSync("big-source", [], undefined, [], [oversized])).rejects.toThrow("超过单条");
     expect(await service.getProviderSourceRecords("big-source")).toEqual([]);
+  });
+
+  it("keeps autofill site exclusions encrypted and unavailable while locked", async () => {
+    const storage = new MemoryVaultStorage();
+    const service = new SecureVaultService(storage, new MemoryVaultSessionStore());
+    await service.setup("site policy password");
+    await expect(service.setAutofillSitePolicy({ blockedHosts: ["Private.Example.com"], saveBlockedHosts: ["save.example.net"] }))
+      .resolves.toEqual({ blockedHosts: ["private.example.com"], saveBlockedHosts: ["save.example.net"] });
+    expect(JSON.stringify(storage.envelope)).not.toContain("private.example.com");
+    expect(JSON.stringify(storage.envelope)).not.toContain("save.example.net");
+    expect(await service.getAutofillSitePolicy()).toEqual({ blockedHosts: ["private.example.com"], saveBlockedHosts: ["save.example.net"] });
+    await service.lock();
+    await expect(service.getAutofillSitePolicy()).rejects.toBeInstanceOf(VaultLockedError);
+  });
+
+  it("keeps field exclusions encrypted, bounded and unavailable while locked", async () => {
+    const storage = new MemoryVaultStorage();
+    const service = new SecureVaultService(storage, new MemoryVaultSessionStore());
+    await service.setup("field policy password");
+    const blocked = await service.addAutofillBlockedFieldSignature({
+      signature: "a".repeat(64), hostname: "Login.Example.com.", frameScope: "top-level", role: "username",
+      hints: ["username"], blockedAt: "2026-08-23T00:00:00.000Z"
+    });
+    expect(blocked).toEqual(expect.objectContaining({ hostname: "login.example.com", signature: "a".repeat(64) }));
+    expect(await service.isAutofillFieldSignatureBlocked("a".repeat(64))).toBe(true);
+    expect(JSON.stringify(storage.envelope)).not.toContain("login.example.com");
+    expect(JSON.stringify(storage.envelope)).not.toContain("a".repeat(64));
+    await service.removeAutofillBlockedFieldSignature("a".repeat(64));
+    expect(await service.listAutofillBlockedFieldSignatures()).toEqual([]);
+    await service.lock();
+    await expect(service.listAutofillBlockedFieldSignatures()).rejects.toBeInstanceOf(VaultLockedError);
   });
 });
 

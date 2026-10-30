@@ -1,8 +1,10 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import type { PasskeyItem } from "../../core/model";
-import { readAndroidBackup, writeAndroidBackup } from "./android-backup-codec";
+import type { LoginItem, PasskeyItem, SecureNoteItem, TotpItem, VaultItem } from "../../core/model";
+import { createAssertion } from "../../passkey/webauthn-core";
+const P256_PKCS8 = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgsloK6aKNvj0CZMYdBdSZs+AUAsFy1t66q4tq5SvyeJahRANCAASlCTbHlIcaKQ2lzoEFhtjkLEO++f3cYq6FMYG7eH3BmuLQPz71FAtWq4z+tIb7oequwhUJL3xos1nA8jFqpkDs";
+import { androidFolderKey, androidRecordToItem, deleteAndroidBackupItem, deleteAndroidGeneratorHistoryEntry, deleteAndroidPortableAttachment, listAndroidGeneratorHistory, listAndroidPortableAttachments, readAndroidBackup, readAndroidPortableAttachment, upsertAndroidPortableAttachment, writeAndroidBackup } from "./android-backup-codec";
 
 function fixtureZip() {
   const password = {
@@ -280,7 +282,16 @@ function currentAndroidRecordsFixture() {
     isDefault: true,
     customFields: [{ label: "branch", value: "001", type: "TEXT" }]
   };
-  const noteData = { content: "old content", tags: ["android", "work"], isMarkdown: true };
+  const noteData = {
+    content: "old content",
+    tags: ["android", "work"],
+    isMarkdown: true,
+    customFields: [
+      { label: "Recovery code", value: "ABCD", type: "HIDDEN" },
+      { label: "Pinned", value: "true", type: "BOOLEAN" }
+    ],
+    futureNoteField: { preserve: true }
+  };
   const passkey = {
     credentialId: "current-passkey",
     rpId: "example.com",
@@ -330,6 +341,139 @@ function currentAndroidRecordsFixture() {
 }
 
 describe("Android backup ZIP codec", () => {
+  it("imports legacy top-level passkeys accepted by Android restore", () => {
+    const item = androidRecordToItem("passkeys/passkey_legacy.json", {
+      credentialId: "legacy-credential",
+      rpId: "example.com",
+      rpName: "Example",
+      userId: "user",
+      userName: "joy",
+      userDisplayName: "Joy",
+      publicKeyAlgorithm: -7,
+      publicKey: "public",
+      createdAt: 1_700_000_000_000
+    }, "webdav");
+    expect(item).toMatchObject({ kind: "passkey", credentialId: "legacy-credential", sourceMode: "android-metadata-only" });
+  });
+
+  it("indexes and verifies portable attachments for the matching Android password", async () => {
+    const payload = new TextEncoder().encode("hello attachment");
+    const digest = await crypto.subtle.digest("SHA-256", payload);
+    const sha256Hex = [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
+    const zip = zipSync({
+      "folders/_root/passwords/password_42_0.json": strToU8(JSON.stringify({ id: 42, title: "Test", username: "u" })),
+      "attachments_portable/attachments_portable.json": strToU8(JSON.stringify({ version: 2, entries: [{ parentPasswordId: 42, fileName: "a.txt", mimeType: "text/plain", sizeBytes: payload.byteLength, sha256Hex, payloadPath: "attachments_portable/abc.bin" }] })),
+      "attachments_portable/abc.bin": payload
+    });
+    const document = readAndroidBackup(zip, "webdav");
+    const [item] = document.items;
+    const [attachment] = listAndroidPortableAttachments(document, item);
+    expect(attachment.fileName).toBe("a.txt");
+    await expect(readAndroidPortableAttachment(document, attachment)).resolves.toEqual(payload);
+  });
+
+  it("preserves but does not expose portable payloads when the caller disallows plaintext attachments", () => {
+    const zip = zipSync({
+      "folders/_root/passwords/password_42_0.json": strToU8(JSON.stringify({ id: 42, title: "Test" })),
+      "attachments_portable/attachments_portable.json": strToU8(JSON.stringify({ version: 2, entries: [{ parentPasswordId: 42, fileName: "secret.bin", mimeType: "application/octet-stream", sizeBytes: 1, sha256Hex: "0".repeat(64), payloadPath: "attachments_portable/secret.bin", createdAt: 1, updatedAt: 1 }] })),
+      "attachments_portable/secret.bin": Uint8Array.of(1)
+    });
+    const document = readAndroidBackup(zip, "webdav", { allowPortableAttachments: false });
+    expect(listAndroidPortableAttachments(document, document.items[0])).toEqual([]);
+    expect(document.entries["attachments_portable/secret.bin"]).toEqual(Uint8Array.of(1));
+    expect(document.warnings.join(" ")).toContain("未加密");
+  });
+
+  it("ignores path traversal entries and rejects digest mismatches", async () => {
+    const payload = new TextEncoder().encode("bad");
+    const zip = zipSync({
+      "attachments_portable/attachments_portable.json": strToU8(JSON.stringify({ version: 2, entries: [{ parentSecureItemId: 42, fileName: "x", sizeBytes: payload.byteLength, sha256Hex: "0".repeat(64), payloadPath: "attachments_portable/../secret.bin" }] })),
+      "attachments_portable/secret.bin": payload
+    });
+    const document = readAndroidBackup(zip, "webdav");
+    expect(listAndroidPortableAttachments(document, { id: "item", providerRefs: [] } as never)).toEqual([]);
+  });
+
+  it("writes and removes portable payloads without dropping unknown manifest entries", async () => {
+    const zip = zipSync({
+      "folders/_root/passwords/password_42_0.json": strToU8(JSON.stringify({ id: 42, title: "Test" })),
+      "attachments_portable/attachments_portable.json": strToU8(JSON.stringify({ version: 2, future: { keep: true }, entries: [{ futureField: "preserve", payloadPath: "attachments_portable/future.bin" }] })),
+      "attachments_portable/future.bin": Uint8Array.of(1)
+    });
+    const document = readAndroidBackup(zip, "webdav");
+    const item = document.items[0];
+    const payload = new TextEncoder().encode("new");
+    const digest = await crypto.subtle.digest("SHA-256", payload);
+    const entry = upsertAndroidPortableAttachment(document, item, { fileName: "new.txt", sizeBytes: payload.byteLength, sha256Hex: [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("") }, payload);
+    const manifest = JSON.parse(strFromU8(document.entries["attachments_portable/attachments_portable.json"]));
+    expect(manifest.future).toEqual({ keep: true });
+    expect(manifest.entries).toEqual(expect.arrayContaining([expect.objectContaining({ payloadPath: "attachments_portable/future.bin" }), expect.objectContaining({ fileName: "new.txt" })]));
+    expect(deleteAndroidPortableAttachment(document, item, entry.attachmentId)).toBe(true);
+    expect(document.entries[entry.payloadPath]).toBeUndefined();
+    expect(JSON.parse(strFromU8(document.entries["attachments_portable/attachments_portable.json"])).entries).toEqual([expect.objectContaining({ payloadPath: "attachments_portable/future.bin" })]);
+  });
+
+  it("rejects replacing another item's portable attachment", async () => {
+    const payload = new TextEncoder().encode("secret");
+    const digest = await crypto.subtle.digest("SHA-256", payload);
+    const sha256Hex = [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
+    const zip = zipSync({
+      "folders/_root/passwords/password_42_0.json": strToU8(JSON.stringify({ id: 42, title: "One" })),
+      "folders/_root/passwords/password_43_0.json": strToU8(JSON.stringify({ id: 43, title: "Two" })),
+      "attachments_portable/attachments_portable.json": strToU8(JSON.stringify({ version: 2, entries: [{ parentPasswordId: 42, fileName: "one.txt", mimeType: "text/plain", sizeBytes: payload.byteLength, sha256Hex, payloadPath: "attachments_portable/one.bin", createdAt: 1, updatedAt: 1 }] })),
+      "attachments_portable/one.bin": payload
+    });
+    const document = readAndroidBackup(zip, "webdav");
+    const otherItem = document.items.find((item) => item.title === "Two")!;
+    expect(() => upsertAndroidPortableAttachment(document, otherItem, { attachmentId: "android-portable:attachments_portable/one.bin", fileName: "attack.txt", sizeBytes: payload.byteLength, sha256Hex }, payload)).toThrow("不属于当前项目");
+  });
+
+  it("removes owned portable payloads when deleting an Android item", async () => {
+    const payload = Uint8Array.of(1, 2, 3);
+    const digest = await crypto.subtle.digest("SHA-256", payload);
+    const sha256Hex = [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
+    const zip = zipSync({
+      "folders/_root/passwords/password_42_0.json": strToU8(JSON.stringify({ id: 42, title: "Delete" })),
+      "attachments_portable/attachments_portable.json": strToU8(JSON.stringify({ version: 2, entries: [{ parentPasswordId: 42, fileName: "delete.bin", mimeType: "application/octet-stream", sizeBytes: payload.byteLength, sha256Hex, payloadPath: "attachments_portable/delete.bin", createdAt: 1, updatedAt: 1 }] })),
+      "attachments_portable/delete.bin": payload
+    });
+    const document = readAndroidBackup(zip, "webdav");
+    deleteAndroidBackupItem(document, document.items[0].id);
+    expect(document.entries["attachments_portable/delete.bin"]).toBeUndefined();
+    expect(JSON.parse(strFromU8(document.entries["attachments_portable/attachments_portable.json"])).entries).toEqual([]);
+  });
+
+  it("imports Android trash arrays as deleted vault items", () => {
+    const zip = zipSync({
+      "trash/trash_passwords.json": strToU8(JSON.stringify([{ id: 42, title: "Deleted login", username: "joy", password: "secret", website: "https://example.com", createdAt: 1_700_000_000_000, updatedAt: 1_700_000_001_000, deletedAt: 1_700_000_002_000, future: true }])),
+      "trash/trash_secure_items.json": strToU8(JSON.stringify([{ id: 43, title: "Deleted note", itemType: "NOTE", itemData: JSON.stringify({ content: "body" }), createdAt: 1_700_000_000_000, updatedAt: 1_700_000_001_000, deletedAt: 1_700_000_002_000 }]))
+    });
+    const document = readAndroidBackup(zip, "webdav");
+    expect(document.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "login", title: "Deleted login", deletedAt: "2023-11-14T22:13:22.000Z" }),
+      expect.objectContaining({ kind: "secure-note", title: "Deleted note", content: "body", deletedAt: "2023-11-14T22:13:22.000Z" })
+    ]));
+  });
+
+  it("moves an active Android item to trash and restores it without dropping unknown fields", () => {
+    const zip = zipSync({
+      "folders/_root/passwords/password_42_0.json": strToU8(JSON.stringify({ id: 42, title: "Login", username: "joy", password: "secret", future: { keep: true }, createdAt: 1_700_000_000_000, updatedAt: 1_700_000_001_000 }))
+    });
+    const document = readAndroidBackup(zip, "webdav");
+    const deleted = { ...document.items[0], deletedAt: "2026-08-24T00:00:00.000Z", updatedAt: "2026-08-24T00:00:00.000Z" } as VaultItem;
+    const deletedZip = writeAndroidBackup(document, [deleted], "webdav");
+    const deletedEntries = unzipSync(deletedZip);
+    expect(deletedEntries["folders/_root/passwords/password_42_0.json"]).toBeUndefined();
+    const trash = JSON.parse(strFromU8(deletedEntries["trash/trash_passwords.json"]));
+    expect(trash).toEqual([expect.objectContaining({ id: 42, future: { keep: true }, deletedAt: Date.parse(deleted.deletedAt!) })]);
+
+    const trashedDocument = readAndroidBackup(deletedZip, "webdav");
+    const restored = { ...trashedDocument.items[0], deletedAt: undefined, updatedAt: "2026-08-24T00:01:00.000Z" } as VaultItem;
+    const restoredEntries = unzipSync(writeAndroidBackup(trashedDocument, [restored], "webdav"));
+    expect(JSON.parse(strFromU8(restoredEntries["trash/trash_passwords.json"]))).toEqual([]);
+    const activePath = Object.keys(restoredEntries).find((path) => /\/passwords\//.test(path))!;
+    expect(JSON.parse(strFromU8(restoredEntries[activePath]))).toEqual(expect.objectContaining({ id: 42, future: { keep: true }, isDeleted: false }));
+  });
   it("round-trips the checked-in forward-compatible Android fixture", () => {
     const fixture = JSON.parse(readFileSync(new URL("../../../tests/fixtures/android/forward-compatible-record.json", import.meta.url), "utf8")) as {
       path: string;
@@ -355,6 +499,45 @@ describe("Android backup ZIP codec", () => {
     expect(document.items[0]).toMatchObject({ kind: "totp", otpType: "STEAM", steamId: "76561198000000000", steamAccessToken: "access-token", steamRefreshToken: "refresh-token", steamLoginSecure: "76561198000000000||access-token" });
     const output = unzipSync(writeAndroidBackup(document, document.items, "provider-steam"));
     expect(JSON.parse(strFromU8(output[path]))).toEqual(raw);
+  });
+
+  it("repairs authenticator secrets and parameters the way Monica Android does at read time", () => {
+    const path = "folders/_root/authenticators/totp_repair_1700000000000.json";
+    const decode = (itemData: Record<string, unknown>) => androidRecordToItem(path, { id: 940, itemType: "TOTP", title: "Repair", itemData: JSON.stringify(itemData), createdAt: 1_700_000_000_000, updatedAt: 1_700_000_000_000 }, "provider-repair") as TotpItem;
+
+    const fromUri = decode({ secret: "otpauth://totp/GitHub:joy?secret=gezd%20gnbvgy3tqojqgezdgnbvgy3tqojq&issuer=GitHub&digits=8&period=60" });
+    expect(fromUri).toMatchObject({ secret: "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", issuer: "GitHub", accountName: "joy", digits: 8, period: 60 });
+
+    const sharedSecret = Buffer.from("1234567890123456").toString("base64");
+    const fromSteamUri = decode({ secret: `steam://${sharedSecret}`, otpType: "TOTP" });
+    expect(fromSteamUri).toMatchObject({ otpType: "STEAM", secret: sharedSecret, steamSharedSecretBase64: sharedSecret, digits: 5, period: 30, algorithm: "SHA1" });
+
+    const unsafeParameters = decode({ secret: "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", period: 0, digits: 12 });
+    expect(unsafeParameters).toMatchObject({ period: 30, digits: 10 });
+
+    const contextSteam = decode({ secret: "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", issuer: "Steam Community", otpType: "TOTP" });
+    expect(contextSteam).toMatchObject({ otpType: "STEAM", digits: 5, period: 30 });
+
+    const messySecret = decode({ secret: "gezd gnbv-gy3tqojqgezdgnbvgy3tqojq" });
+    expect(messySecret.secret).toBe("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ");
+
+    const bareSharedSecret = decode({ secret: sharedSecret, otpType: "STEAM" });
+    expect(bareSharedSecret.secret).toBe(sharedSecret);
+  });
+
+  it("applies Kotlin's absent-field defaults and legacy aliases the way Android reads them", () => {
+    const path = "folders/_root/authenticators/totp_alias_1700000000000.json";
+    const decode = (itemData: Record<string, unknown>) => androidRecordToItem(path, { id: 941, itemType: "TOTP", title: "Alias", itemData: JSON.stringify(itemData), createdAt: 1_700_000_000_000, updatedAt: 1_700_000_000_000 }, "provider-repair") as TotpItem;
+
+    // The bare Kotlin writer drops every `TotpData` default, so absent digits/period decode back to 6 / 30.
+    const defaults = decode({ key: "gezd gnbv-gy3tqojq", serviceName: "GitHub", account: "joy" });
+    expect(defaults).toMatchObject({ kind: "totp", secret: "GEZDGNBVGY3TQOJQ", issuer: "GitHub", accountName: "joy", digits: 6, period: 30, algorithm: "SHA1" });
+
+    expect(decode({ secret: "GEZDGNBVGY3TQOJQ", otpType: " totp " }).otpType).toBe("TOTP");
+    expect(decode({ secret: "GEZDGNBVGY3TQOJQ", otpType: "HOTP", counter: -5 }).counter).toBeUndefined();
+    expect(decode({ secret: "GEZDGNBVGY3TQOJQ", otpType: "FUTURE_OTP" }).kind).toBe("opaque");
+    // `normalizeTotpData` falls back to 30 s for non-positive periods but never clamps a large one.
+    expect(decode({ secret: "GEZDGNBVGY3TQOJQ", period: 5000 }).period).toBe(5000);
   });
 
   it("maps all Android vault record kinds and legacy field aliases", () => {
@@ -466,6 +649,21 @@ describe("Android backup ZIP codec", () => {
     });
   });
 
+  it("keeps an authenticator's raw itemData untouched when only the outer record changed", () => {
+    const originalItemData = '{"secret":"GEZDGNBVGY3TQOJQ","period":0,"digits":12,"otpType":"HOTP","counter":4,"future":{"keep":true}}';
+    const path = "folders/_root/authenticators/totp_943_1700000000000.json";
+    const raw = { id: 943, itemType: "TOTP", title: "Stable OTP", itemData: originalItemData, notes: "", isFavorite: false, createdAt: 1_700_000_000_000, updatedAt: 1_700_000_000_000 };
+    const document = readAndroidBackup(zipSync({ [path]: strToU8(JSON.stringify(raw)) }), "provider-1");
+
+    expect(document.items[0]).toMatchObject({ kind: "totp", period: 30, digits: 10, counter: 4 });
+
+    const writtenZip = writeAndroidBackup(document, document.items.map((item) => ({ ...item, title: "Renamed OTP" })), "provider-1");
+    const written = JSON.parse(strFromU8(unzipSync(writtenZip)[path]));
+    expect(written.title).toBe("Renamed OTP");
+    expect(written.itemData).toBe(originalItemData);
+    expect(readAndroidBackup(writtenZip, "provider-1").items[0]).toMatchObject({ title: "Renamed OTP", period: 30, digits: 10, counter: 4 });
+  });
+
   it("writes new Passkey metadata with Android's current filename and JSON shape", () => {
     const passkey: PasskeyItem = {
       id: "browser-passkey",
@@ -491,7 +689,7 @@ describe("Android backup ZIP codec", () => {
     };
     const document = { entries: {}, items: [], records: new Map(), warnings: [] };
 
-    const output = unzipSync(writeAndroidBackup(document, [passkey], "provider-1"));
+    const output = unzipSync(writeAndroidBackup(document, [passkey], "provider-1", { allowMetadataOnlyPasskeys: true }));
     const path = "folders/_root/passkeys/passkey_abc_def.json";
     const raw = JSON.parse(strFromU8(output[path]));
 
@@ -505,6 +703,115 @@ describe("Android backup ZIP codec", () => {
     expect(raw).not.toHaveProperty("title");
     expect(raw).not.toHaveProperty("updatedAt");
     expect(raw).not.toHaveProperty("privateKeyPkcs8");
+  });
+
+  it("imports signs and writes portable ES256 keys only inside an encrypted backup boundary", async () => {
+    const path = "folders/_root/passkeys/passkey_portable.json";
+    const raw = {
+      credentialId: "portable", rpId: "example.com", rpName: "Example", userId: "user", userName: "joy", userDisplayName: "Joy",
+      publicKeyAlgorithm: -7, publicKey: "public", privateKeyAlias: P256_PKCS8, signCount: 0, isDiscoverable: true, createdAt: 1_700_000_000_000
+    };
+    const zip = zipSync({ [path]: strToU8(JSON.stringify(raw)) });
+    const plain = readAndroidBackup(zip, "plain").items[0];
+    expect(plain).toMatchObject({ sourceMode: "android-metadata-only" });
+    expect(plain).not.toHaveProperty("privateKeyPkcs8");
+    const encrypted = readAndroidBackup(zip, "encrypted", { allowPortablePasskeys: true });
+    expect(encrypted.items[0]).toMatchObject({ sourceMode: "browser-local", privateKeyPkcs8: P256_PKCS8 });
+    const imported = encrypted.items[0] as PasskeyItem;
+    await expect(createAssertion({
+      origin: "https://example.com",
+      challenge: "AAECAwQFBgcICQoLDA0ODw",
+      rpId: imported.rpId,
+      credentialId: imported.credentialId,
+      userHandle: imported.userHandle,
+      privateKeyPkcs8: imported.privateKeyPkcs8!,
+      signCount: imported.signCount
+    })).resolves.toMatchObject({ response: { signature: expect.any(String) } });
+
+    const output = unzipSync(writeAndroidBackup({ entries: {}, items: [], records: new Map(), warnings: [] }, encrypted.items, "encrypted", { allowPortablePasskeys: true }));
+    expect(JSON.parse(strFromU8(output[path])).privateKeyAlias).toBe(P256_PKCS8);
+  });
+
+  it("preserves Android overview settings byte for byte while editing favorites and consuming bound HOTP", () => {
+    const fixture = currentAndroidRecordsFixture();
+    const configPath = "monica_config/page_adjustment_settings.json";
+    const configBytes = strToU8(JSON.stringify({
+      vaultOverviewEnabled: true,
+      vaultOverviewConfig: JSON.stringify({
+        order: ["FAVORITES", "CARDS", "ITEMS", "TYPES", "FOLDERS", "DATABASES", "ARCHIVE", "TRASH"],
+        hidden: ["ITEMS"], collapsed: ["DATABASES"], pinnedCards: ["card:103"], pinnedItems: ["password:101"],
+        recommendCards: false, recommendItems: false, scope: "local", futureAndroidPreference: { keep: true }
+      }),
+      authenticatorLayoutMode: "STANDARD", futurePagePreference: [1, "preserve", null]
+    }, null, 2) + "\n");
+    const document = readAndroidBackup(zipSync({ ...unzipSync(fixture.zip), [configPath]: configBytes }), "overview-interop");
+    const login = document.items.find(item => item.kind === "login")!;
+    const otp = document.items.find(item => item.kind === "totp")!;
+    expect(login).toMatchObject({ boundTotpItemId: otp.id });
+    const changed = document.items.map(item => item.kind === "login" ? { ...item, favorite: false }
+      : item.kind === "totp" ? { ...item, counter: 18 } : item);
+    const bytes = writeAndroidBackup(document, changed, "overview-interop");
+    const output = unzipSync(bytes);
+    expect(output[configPath]).toEqual(configBytes);
+    expect(JSON.parse(strFromU8(output[fixture.paths.password]))).toEqual({ ...fixture.raws.password, isFavorite: false });
+    expect(JSON.parse(JSON.parse(strFromU8(output[fixture.paths.totp])).itemData)).toEqual({ ...fixture.nested.totpData, counter: 18 });
+    const reopened = readAndroidBackup(bytes, "overview-interop");
+    expect(reopened.items.find(item => item.kind === "login")).toMatchObject({ favorite: false, boundTotpItemId: otp.id });
+    expect(reopened.items.find(item => item.kind === "totp")).toMatchObject({ counter: 18, boundPasswordId: 101 });
+  });
+
+  it.each(["bind", "replace", "unlink"] as const)("round-trips an extension OTP binding edit (%s) through Android's reverse reference", action => {
+    const fixture = currentAndroidRecordsFixture();
+    const entries = unzipSync(fixture.zip);
+    const extraPath = "folders/Work/authenticators/totp_202_1700000000000.json";
+    entries[extraPath] = strToU8(JSON.stringify({ ...fixture.raws.totp, id: 202, title: "Another OTP", itemData: JSON.stringify({ ...fixture.nested.totpData, boundPasswordId: null }) }));
+    if (action === "bind") entries[fixture.paths.totp] = strToU8(JSON.stringify({ ...fixture.raws.totp, itemData: JSON.stringify({ ...fixture.nested.totpData, boundPasswordId: null }) }));
+    const document = readAndroidBackup(zipSync(entries), "otp-edit-interop");
+    const oldOtp = document.items.find(item => item.kind === "totp" && item.title === "Current OTP")!;
+    const newOtp = document.items.find(item => item.kind === "totp" && item.title === "Another OTP")!;
+    const targetId = action === "unlink" ? "" : action === "replace" ? newOtp.id : oldOtp.id;
+    const changed = document.items.map(item => item.kind === "login" ? { ...item, boundTotpItemId: targetId, totpSecret: undefined, updatedAt: "2026-09-13T07:00:00.000Z" } : item);
+    const reopened = readAndroidBackup(writeAndroidBackup(document, changed, "otp-edit-interop"), "otp-edit-interop");
+    expect(reopened.items.find(item => item.kind === "login")?.boundTotpItemId).toBe(targetId || undefined);
+    expect(reopened.items.find((item): item is TotpItem => item.kind === "totp" && item.id === oldOtp.id)?.boundPasswordId).toBe(action === "bind" ? 101 : undefined);
+    expect(reopened.items.find((item): item is TotpItem => item.kind === "totp" && item.id === newOtp.id)?.boundPasswordId).toBe(action === "replace" ? 101 : undefined);
+  });
+
+  it("preserves legacy reverse bindings when a login without a forward reference changes", () => {
+    const fixture = currentAndroidRecordsFixture();
+    const document = readAndroidBackup(fixture.zip, "legacy-binding");
+    const changed = document.items.map(item => item.kind === "login" ? { ...item, boundTotpItemId: undefined, favorite: false } : item);
+    const output = writeAndroidBackup(document, changed, "legacy-binding");
+    expect(unzipSync(output)[fixture.paths.totp]).toEqual(unzipSync(fixture.zip)[fixture.paths.totp]);
+    const reopened = readAndroidBackup(output, "legacy-binding");
+    expect(reopened.items.find(item => item.kind === "login")?.boundTotpItemId).toBe(document.items.find(item => item.kind === "totp")?.id);
+  });
+
+  it("assigns an Android reverse binding for a newly created login and authenticator", () => {
+    const document = readAndroidBackup(currentAndroidRecordsFixture().zip, "new-binding");
+    const otp = { ...document.items.find(item => item.kind === "totp")!, id: "new-otp", title: "New OTP", providerRefs: [], boundPasswordId: undefined };
+    const login = { ...document.items.find(item => item.kind === "login")!, id: "new-login", title: "New login", providerRefs: [], boundTotpItemId: otp.id };
+    const output = writeAndroidBackup(document, [...document.items, login, otp], "new-binding");
+    const reopened = readAndroidBackup(output, "new-binding");
+    const restoredOtp = reopened.items.find(item => item.kind === "totp" && item.title === "New OTP")!;
+    expect(reopened.items.find((item): item is LoginItem => item.kind === "login" && item.title === "New login")?.boundTotpItemId).toBe(restoredOtp.id);
+    expect(otp.boundPasswordId).toBeTypeOf("number");
+  });
+
+  it.each(["missing-target", "duplicate-owner", "duplicate-id"] as const)("refuses an unrepresentable OTP relationship (%s) without changing companion records", issue => {
+    const document = readAndroidBackup(currentAndroidRecordsFixture().zip, "invalid-binding");
+    const originalLogin = document.items.find(item => item.kind === "login")!;
+    const otp = document.items.find(item => item.kind === "totp")!;
+    const items = structuredClone(document.items);
+    if (issue === "missing-target") items.find(item => item.kind === "login")!.boundTotpItemId = "another-database-otp";
+    else items.push({ ...originalLogin, id: "another-login", providerRefs: [], boundTotpItemId: otp.id });
+    if (issue === "duplicate-id") {
+      const record = document.records.get(originalLogin.id)!;
+      document.records.set("another-login", { ...record, itemId: "another-login", item: { ...originalLogin, id: "another-login", boundTotpItemId: undefined } });
+    }
+    const snapshot = structuredClone(items);
+    expect(() => writeAndroidBackup(document, items, "invalid-binding")).toThrow(/无法同步|重复绑定/);
+    expect(items).toEqual(snapshot);
   });
 
   it("round-trips every current Android record shape while preserving Android-only fields", () => {
@@ -527,7 +834,14 @@ describe("Android backup ZIP codec", () => {
     expect(document.items.find((item) => item.kind === "identity")).toMatchObject({ additionalInfo: "info", company: "Monica", ssn: "SSN", passportNumber: "P1234567", licenseNumber: "DL123", address3: "Building A", customFields: [{ name: "visa", value: "valid", fieldType: "HIDDEN" }] });
     expect(document.items.find((item) => item.kind === "billing-address")).toMatchObject({ isDefault: true, customFields: [{ name: "gate", value: "east", fieldType: "TEXT" }] });
     expect(document.items.find((item) => item.kind === "payment-account")).toMatchObject({ linkedCardLast4: "1111", billingAddress: '{"streetAddress":"1 Main St"}', paymentNotes: "payment-only-note", isDefault: true, customFields: [{ name: "branch", value: "001", fieldType: "TEXT" }] });
-    expect(document.items.find((item) => item.kind === "secure-note")).toMatchObject({ tags: ["android", "work"], isMarkdown: true });
+    expect(document.items.find((item) => item.kind === "secure-note")).toMatchObject({
+      tags: ["android", "work"],
+      isMarkdown: true,
+      customFields: [
+        { name: "Recovery code", value: "ABCD", protected: true, fieldType: "HIDDEN" },
+        { name: "Pinned", value: "true", protected: false, fieldType: "BOOLEAN" }
+      ]
+    });
     expect(document.items.find((item) => item.kind === "passkey")).toMatchObject({
       lastUsedAt: new Date(1_700_000_001_000).toISOString(),
       useCount: 9,
@@ -545,7 +859,14 @@ describe("Android backup ZIP codec", () => {
       if (item.kind === "identity") return { ...item, documentNumber: "P7654321" };
       if (item.kind === "billing-address") return { ...item, city: "Hangzhou" };
       if (item.kind === "payment-account") return { ...item, provider: "New Monica Bank" };
-      if (item.kind === "secure-note") return { ...item, content: "new content" };
+      if (item.kind === "secure-note") return {
+        ...item,
+        content: "new content",
+        customFields: [
+          { name: "Recovery code", value: "WXYZ", protected: true, fieldType: "HIDDEN" as const },
+          { name: "Pinned", value: "false", protected: false, fieldType: "BOOLEAN" as const }
+        ]
+      };
       return { ...item, notes: "new passkey note" };
     });
     const output = unzipSync(writeAndroidBackup(document, changed, "provider-current"));
@@ -563,7 +884,14 @@ describe("Android backup ZIP codec", () => {
     expect({ ...written.payment, itemData: undefined }).toEqual({ ...fixture.raws.payment, itemData: undefined });
     expect(JSON.parse(written.payment.itemData)).toEqual({ ...fixture.nested.paymentData, provider: "New Monica Bank" });
     expect({ ...written.note, itemData: undefined }).toEqual({ ...fixture.raws.note, itemData: undefined });
-    expect(JSON.parse(written.note.itemData)).toEqual({ ...fixture.nested.noteData, content: "new content" });
+    expect(JSON.parse(written.note.itemData)).toEqual({
+      ...fixture.nested.noteData,
+      content: "new content",
+      customFields: [
+        { label: "Recovery code", value: "WXYZ", type: "HIDDEN" },
+        { label: "Pinned", value: "false", type: "BOOLEAN" }
+      ]
+    });
     expect(written.passkey).toEqual({ ...fixture.raws.passkey, notes: "new passkey note" });
   });
 
@@ -580,8 +908,9 @@ describe("Android backup ZIP codec", () => {
       [malformedPath]: strToU8(malformed)
     }), "provider-duplicates");
 
-    expect(document.items).toHaveLength(2);
-    expect(new Set(document.items.map((item) => item.id)).size).toBe(2);
+    expect(document.items).toHaveLength(3);
+    expect(document.items.filter((item) => item.kind === "opaque")).toHaveLength(1);
+    expect(new Set(document.items.map((item) => item.id)).size).toBe(3);
     expect(document.warnings).toHaveLength(1);
 
     const output = unzipSync(writeAndroidBackup(document, document.items, "provider-duplicates"));
@@ -601,5 +930,215 @@ describe("Android backup ZIP codec", () => {
 
     expect(raw.password).toBe("in-place-secret");
     expect(raw.futureAndroidField).toEqual({ preserve: true });
+  });
+
+  it("uses Monica Android category folder keys for new records", () => {
+    expect(androidFolderKey("  工作 / 重要  ")).toBe("工作___重要");
+    expect(androidFolderKey("___")).toBe("_root");
+    const document = readAndroidBackup(zipSync({ "future/keep.bin": Uint8Array.of(1) }), "provider-category");
+    const now = "2026-08-24T00:00:00.000Z";
+    const note = {
+      id: "new-note", kind: "secure-note", title: "分类笔记", content: "正文", favorite: false, notes: "",
+      categoryName: "工作 / 重要", createdAt: now, updatedAt: now, providerRefs: [{ providerId: "provider-category" }]
+    } satisfies SecureNoteItem;
+    const output = unzipSync(writeAndroidBackup(document, [note], "provider-category"));
+    expect(Object.keys(output).some((path) => /^folders\/工作___重要\/notes\/note_[^/]+_1787529600000\.json$/.test(path))).toBe(true);
+    expect(JSON.parse(strFromU8(output["categories.json"]))).toEqual([
+      { id: expect.any(Number), name: "工作 / 重要", sortOrder: 0 }
+    ]);
+    expect(output["future/keep.bin"]).toEqual(Uint8Array.of(1));
+  });
+
+  it("hydrates Android trash categories from categories.json", () => {
+    const categories = [
+      { id: 8, name: "工作", sortOrder: 2, futureCategoryField: { keep: true } },
+      { id: 9, name: "个人", sortOrder: 4 }
+    ];
+    const trash = [{
+      id: 55,
+      itemType: "NOTE",
+      title: "已删除笔记",
+      itemData: JSON.stringify({ content: "正文" }),
+      categoryId: 8,
+      deletedAt: 1_700_000_100_000,
+      createdAt: 1_700_000_000_000,
+      updatedAt: 1_700_000_050_000
+    }];
+    const document = readAndroidBackup(zipSync({
+      "categories.json": strToU8(JSON.stringify(categories)),
+      "trash/trash_secure_items.json": strToU8(JSON.stringify(trash))
+    }), "provider-trash-category");
+
+    expect(document.items[0]).toMatchObject({ categoryId: 8, categoryName: "工作", deletedAt: new Date(1_700_000_100_000).toISOString() });
+    const output = unzipSync(writeAndroidBackup(document, document.items, "provider-trash-category"));
+    expect(output["categories.json"]).toEqual(strToU8(JSON.stringify(categories)));
+  });
+
+  it("appends new Android categories without rewriting existing category objects", () => {
+    const originalCategories = [
+      { id: 8, name: "Work", sortOrder: 7, color: "future-color", future: { keep: true } },
+      { id: 21, name: "Archive", sortOrder: 11 }
+    ];
+    const fixture = currentAndroidRecordsFixture();
+    const archive = unzipSync(fixture.zip);
+    archive["categories.json"] = strToU8(JSON.stringify(originalCategories));
+    const document = readAndroidBackup(zipSync(archive), "provider-new-category");
+    const changed = document.items.map((item) => item.kind === "login" ? { ...item, categoryName: "Personal", categoryId: 8 } : item);
+
+    const output = unzipSync(writeAndroidBackup(document, changed, "provider-new-category"));
+    const categories = JSON.parse(strFromU8(output["categories.json"]));
+    expect(categories.slice(0, 2)).toEqual(originalCategories);
+    expect(categories[2]).toEqual({ id: 22, name: "Personal", sortOrder: 12 });
+    const movedPath = fixture.paths.password.replace("folders/Work/", "folders/Personal/");
+    expect(JSON.parse(strFromU8(output[movedPath]))).toMatchObject({ categoryId: 22, categoryName: "Personal" });
+  });
+
+  it("does not overwrite a malformed category manifest", () => {
+    const malformed = strToU8('{"future":true');
+    const document = readAndroidBackup(zipSync({
+      "categories.json": malformed,
+      "folders/_root/passwords/password_1_0.json": strToU8(JSON.stringify({ id: 1, title: "Login", createdAt: 1, updatedAt: 1 }))
+    }), "provider-malformed-category");
+    expect(document.warnings.join(" ")).toContain("categories.json");
+
+    expect(() => writeAndroidBackup(document, [{ ...document.items[0], categoryName: "New" }], "provider-malformed-category"))
+      .toThrow(/categories\.json 无法安全更新/);
+    const unchanged = unzipSync(writeAndroidBackup(document, document.items, "provider-malformed-category"));
+    expect(unchanged["categories.json"]).toEqual(malformed);
+  });
+
+  it("moves an edited record between Android category folders without duplicating it", () => {
+    const fixture = currentAndroidRecordsFixture();
+    const document = readAndroidBackup(fixture.zip, "provider-category-move");
+    const changed = document.items.map((item) => item.kind === "login" ? { ...item, categoryName: "Personal Vault" } : item);
+    const output = unzipSync(writeAndroidBackup(document, changed, "provider-category-move"));
+    const oldPath = fixture.paths.password;
+    const newPath = oldPath.replace("folders/Work/", "folders/Personal_Vault/");
+    expect(output[oldPath]).toBeUndefined();
+    expect(output[newPath]).toBeDefined();
+    expect(JSON.parse(strFromU8(output[newPath]))).toMatchObject({ categoryName: "Personal Vault", password: "old-password" });
+  });
+
+  it("reads Android password history and appends the previous password on change", () => {
+    const loginPath = "folders/_root/passwords/password_42_1700000000000.json";
+    const loginRaw = { id: 42, title: "Account", username: "joy", password: "current", website: "https://example.com", notes: "", isFavorite: false, createdAt: 1_700_000_000_000, updatedAt: 1_700_000_001_000 };
+    const historyRaw = [
+      { entryId: 42, password: "older", lastUsedAt: 1_699_000_000_000, future: { keep: true } },
+      { entryId: 999, password: "unmatched", lastUsedAt: 1_698_000_000_000, unknownOwner: true }
+    ];
+    const originalHistoryBytes = strToU8(JSON.stringify(historyRaw));
+    const document = readAndroidBackup(zipSync({ [loginPath]: strToU8(JSON.stringify(loginRaw)), "password_history.json": originalHistoryBytes }), "provider-history");
+    const login = document.items[0];
+    expect(login).toMatchObject({ kind: "login", passwordHistory: [{ password: "older", lastUsedAt: new Date(1_699_000_000_000).toISOString() }] });
+    const unchanged = unzipSync(writeAndroidBackup(document, document.items, "provider-history"));
+    expect(unchanged["password_history.json"]).toEqual(originalHistoryBytes);
+
+    const changed = document.items.map((item) => item.kind === "login" ? { ...item, password: "new-password", updatedAt: "2026-08-24T00:00:00.000Z" } : item);
+    const output = unzipSync(writeAndroidBackup(document, changed, "provider-history"));
+    const history = JSON.parse(strFromU8(output["password_history.json"])) as Array<Record<string, unknown>>;
+    expect(history).toEqual(expect.arrayContaining([
+      expect.objectContaining({ entryId: 42, password: "older", future: { keep: true } }),
+      expect.objectContaining({ entryId: 42, password: "current", lastUsedAt: Date.parse('2026-08-24T00:00:00.000Z') }),
+      expect.objectContaining({ entryId: 999, password: "unmatched", unknownOwner: true })
+    ]));
+  });
+
+  it("preserves original Android timeline bytes without exposing them as vault items", () => {
+    const timeline = [{
+      id: 7,
+      itemType: "PASSWORD",
+      itemId: 42,
+      itemTitle: "PASSWORD#42",
+      operationType: "UPDATE",
+      changesJson: JSON.stringify([{ fieldName: "密码", oldValue: "old-secret", newValue: "new-secret" }]),
+      deviceId: "private-device-id",
+      deviceName: "Android Phone",
+      timestamp: 1_700_000_002_000,
+      isReverted: true,
+      future: { keep: true }
+    }];
+    const document = readAndroidBackup(zipSync({ "timeline_history.json": strToU8(JSON.stringify(timeline)) }), "provider-timeline");
+    expect(document.items).toEqual([]);
+    const output = unzipSync(writeAndroidBackup(document, [], "provider-timeline"));
+    expect(output["timeline_history.json"]).toEqual(strToU8(JSON.stringify(timeline)));
+  });
+
+  it("reads Android generator history and preserves unchanged bytes", () => {
+    const path = "Monica_20260824_120000_generated_history.json";
+    const history = [
+      { password: "generated-secret", timestamp: 1_700_000_003_000, packageName: "com.example.app", domain: "example.com", username: "joy", type: "AUTOFILL", future: { keep: true } },
+      { password: "246810", timestamp: 1_700_000_002_000, type: "PIN" }
+    ];
+    const bytes = strToU8(JSON.stringify(history));
+    const document = readAndroidBackup(zipSync({ [path]: bytes }), "provider-generator-history");
+
+    expect(listAndroidGeneratorHistory(document)).toEqual([
+      { id: `${path}:0:1700000003000`, password: "generated-secret", timestamp: 1_700_000_003_000, packageName: "com.example.app", domain: "example.com", username: "joy", type: "AUTOFILL" },
+      { id: `${path}:1:1700000002000`, password: "246810", timestamp: 1_700_000_002_000, packageName: "", domain: "", username: "", type: "PIN" }
+    ]);
+    const output = unzipSync(writeAndroidBackup(document, [], "provider-generator-history"));
+    expect(output[path]).toEqual(bytes);
+  });
+
+  it("deletes one Android generator history entry without normalizing retained fields", () => {
+    const path = "Monica_20260824_120000_generated_history.json";
+    const history = [
+      { password: "remove-me", timestamp: 1_700_000_003_000, type: "SYMBOL" },
+      { password: "keep-me", timestamp: 1_700_000_002_000, type: "PASSWORD", packageName: null, future: ["unchanged"] }
+    ];
+    const document = readAndroidBackup(zipSync({ [path]: strToU8(JSON.stringify(history)) }), "provider-generator-delete");
+
+    expect(deleteAndroidGeneratorHistoryEntry(document, `${path}:0:1700000003000`)).toBe(true);
+    expect(deleteAndroidGeneratorHistoryEntry(document, "missing")).toBe(false);
+    const output = unzipSync(writeAndroidBackup(document, [], "provider-generator-delete"));
+    expect(JSON.parse(strFromU8(output[path]))).toEqual([history[1]]);
+  });
+
+  it("preserves malformed Android generator history and refuses to edit it", () => {
+    const path = "Monica_20260824_120000_generated_history.json";
+    const bytes = strToU8('{"future":true');
+    const document = readAndroidBackup(zipSync({ [path]: bytes }), "provider-generator-malformed");
+
+    expect(document.warnings.join(" ")).toContain("generated_history.json");
+    expect(listAndroidGeneratorHistory(document)).toEqual([]);
+    expect(deleteAndroidGeneratorHistoryEntry(document, `${path}:0:1`)).toBe(false);
+    const output = unzipSync(writeAndroidBackup(document, [], "provider-generator-malformed"));
+    expect(output[path]).toEqual(bytes);
+  });
+
+  it("preserves oversized Android generator history without exposing it", () => {
+    const path = "Monica_20260824_120000_generated_history.json";
+    const bytes = strToU8(JSON.stringify(Array.from({ length: 1_001 }, () => null)));
+    const document = readAndroidBackup(zipSync({ [path]: bytes }, { level: 0 }), "provider-generator-oversized");
+
+    expect(document.warnings.join(" ")).toContain("过大");
+    expect(listAndroidGeneratorHistory(document)).toEqual([]);
+    expect(document.entries[path]).toEqual(bytes);
+    expect(unzipSync(writeAndroidBackup(document, [], "provider-generator-oversized"))[path]).toEqual(bytes);
+  });
+
+  it("round-trips edited Android Wi-Fi SSH and barcode records without losing future fields", () => {
+    const base = { username: "", website: "", notes: "", isFavorite: false, createdAt: 1_700_000_000_000, updatedAt: 1_700_000_001_000, future: { keep: true } };
+    const wifiPath = "folders/_root/passwords/password_1_1700000000000.json";
+    const sshPath = "folders/_root/passwords/password_2_1700000000000.json";
+    const barcodePath = "folders/_root/passwords/password_3_1700000000000.json";
+    const document = readAndroidBackup(zipSync({
+      [wifiPath]: strToU8(JSON.stringify({ ...base, id: 1, title: "Lab Wi-Fi", password: "wifi-secret", loginType: "WIFI", wifiMetadata: '{"ssid":"Lab","security":"WPA3","futureWifi":7}' })),
+      [sshPath]: strToU8(JSON.stringify({ ...base, id: 2, title: "SSH", password: "", loginType: "SSH_KEY", sshKeyData: '{"algorithm":"ED25519","publicKeyOpenSsh":"ssh-ed25519 AAAA","privateKeyOpenSsh":"PRIVATE","fingerprintSha256":"SHA256:x","futureSsh":8}' })),
+      [barcodePath]: strToU8(JSON.stringify({ ...base, id: 3, title: "Member", password: "OLD-CODE", loginType: "BARCODE" }))
+    }), "provider-special-roundtrip");
+
+    const changed = document.items.map((item) => {
+      if (item.kind !== "login") return item;
+      if (item.loginType === "WIFI") return { ...item, wifiMetadata: '{"ssid":"Lab","security":"WPA3","hiddenNetwork":true,"futureWifi":7}' };
+      if (item.loginType === "SSH_KEY") return { ...item, sshKeyData: '{"algorithm":"ED25519","publicKeyOpenSsh":"ssh-ed25519 AAAA","privateKeyOpenSsh":"PRIVATE","fingerprintSha256":"SHA256:x","comment":"edited","futureSsh":8}' };
+      if (item.loginType === "BARCODE") return { ...item, password: "NEW-CODE" };
+      return item;
+    });
+    const output = unzipSync(writeAndroidBackup(document, changed, "provider-special-roundtrip"));
+
+    expect(JSON.parse(strFromU8(output[wifiPath]))).toMatchObject({ loginType: "WIFI", password: "wifi-secret", future: { keep: true }, wifiMetadata: expect.stringContaining('"futureWifi":7') });
+    expect(JSON.parse(strFromU8(output[sshPath]))).toMatchObject({ loginType: "SSH_KEY", future: { keep: true }, sshKeyData: expect.stringContaining('"futureSsh":8') });
+    expect(JSON.parse(strFromU8(output[barcodePath]))).toMatchObject({ loginType: "BARCODE", password: "NEW-CODE", future: { keep: true } });
   });
 });

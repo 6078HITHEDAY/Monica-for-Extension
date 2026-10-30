@@ -85,7 +85,13 @@ import {
   type Mdbx2ObjectSummaryPage,
   type Mdbx2ObjectUpsertInput,
   type Mdbx2ObjectWriteResult,
+  type Mdbx2ObjectRestoreInput,
+  type Mdbx2ObjectRestoreResult,
+  type Mdbx2ObjectsRestoreInput,
+  type Mdbx2ObjectsRestoreResult,
   type Mdbx2OutputFileDescriptor,
+  type Mdbx2CompleteBackupDescriptor,
+  type Mdbx2CompleteBackupChunk,
   type Mdbx2RemoteStreamSummary,
   type Mdbx2SnapshotCreateResult,
   type Mdbx2SnapshotDeleteResult,
@@ -111,6 +117,7 @@ import {
   type Mdbx2VaultHealthSummary,
   type Mdbx2VaultInspection,
   type Mdbx2VaultRuntimeStatus,
+  type Mdbx2WriteRevision,
   type Mdbx2VaultSessionSummary,
   type Mdbx2VaultSource,
   type Mdbx2VaultTigaPosture,
@@ -122,6 +129,9 @@ import {
   type Mdbx2TigaUnlockMethod
 } from "./native-contract";
 import { base64ToBytes, bytesToBase64 } from "../../security/encoding";
+import { readMdbx2ContentMetadata, type Mdbx2ContentMetadataInput, type Mdbx2ContentMetadata } from "./content-metadata";
+import { readMdbx2ContentProfiles, type Mdbx2ContentProfilesInput, type Mdbx2ContentProfiles } from "./content-profiles";
+import { readMdbx2ContentAttachments, readMdbx2ContentAttachmentBytes, type Mdbx2ContentAttachmentsInput, type Mdbx2ContentAttachments, type Mdbx2ContentAttachment } from "./content-attachments";
 
 const MAX_JAVASCRIPT_DATE_UNIX_SECONDS = 8_640_000_000;
 const MAX_UINT32 = 0xffff_ffff;
@@ -156,11 +166,17 @@ export class Mdbx2NativeClient {
 
   constructor(
     private readonly runtime: Mdbx2NativeRuntime,
-    private readonly createRequestId: () => string = () => crypto.randomUUID()
+    private readonly createRequestId: () => string = () => crypto.randomUUID(),
+    private readonly hostName: string = MDBX2_NATIVE_HOST_NAME,
+    private readonly hostLabel = "Monica MDBX2"
   ) {}
 
-  async hello(timeoutMs = 5_000): Promise<Mdbx2HostCapabilities> {
-    return validateMdbx2HostCapabilities(await this.request("host.hello", {}, timeoutMs));
+  async hello(timeoutMs = 5_000, ownerVaultHandle?: string): Promise<Mdbx2HostCapabilities> {
+    return validateMdbx2HostCapabilities(await this.request("host.hello", {}, timeoutMs, ownerVaultHandle));
+  }
+
+  private async requireApiTokenSupport(vaultHandle: string): Promise<void> {
+    if (!(await this.hello(5_000, vaultHandle)).supportsApiTokenMetadata) throw new Mdbx2NativeHostError("api-token-host-update-required", "本机助手不支持 API 密钥，请更新本机助手。", false);
   }
 
   async windowsHelloStatus(bindingId?: string, timeoutMs = 15_000): Promise<Mdbx2WindowsHelloStatus> {
@@ -191,7 +207,8 @@ export class Mdbx2NativeClient {
     sizeBytes: number,
     sha256?: string,
     purpose: Mdbx2InboundTransferPurpose = "vault-bootstrap",
-    timeoutMs = 15_000
+    timeoutMs = 15_000,
+    ownerVaultHandle?: string
   ): Promise<Mdbx2TransferBeginResult> {
     if (!Number.isSafeInteger(sizeBytes) || sizeBytes < 1 || sizeBytes > MDBX2_MAX_INBOUND_FILE_BYTES) {
       throw new Mdbx2NativeHostError("transfer-size-invalid", "MDBX2 文件大小超出允许范围。", false);
@@ -203,7 +220,11 @@ export class Mdbx2NativeClient {
       purpose,
       sizeBytes,
       sha256: sha256 || null
-    }, timeoutMs));
+    }, timeoutMs, ownerVaultHandle));
+  }
+
+  async beginInboundTransferForVault(vaultHandle: string, sizeBytes: number, sha256?: string, purpose: Mdbx2InboundTransferPurpose = 'vault-bootstrap'): Promise<Mdbx2TransferBeginResult> {
+    return this.beginInboundTransfer(sizeBytes, sha256, purpose, 15_000, opaqueHandle(vaultHandle, '保险库'));
   }
 
   async sendInboundChunk(transferId: string, offset: number, bytes: Uint8Array, timeoutMs = 30_000): Promise<Mdbx2TransferChunkResult> {
@@ -234,9 +255,17 @@ export class Mdbx2NativeClient {
     return vaultSessionSummary(await this.request("vault.open", { source: vaultSource(source), credential }, timeoutMs));
   }
 
+  async createVault(password: string, mode: Mdbx2TigaProfile = 'sky'): Promise<Mdbx2VaultSessionSummary> {
+    if (typeof password !== 'string' || !password || new TextEncoder().encode(password).length > 64 * 1024 || !['sky', 'multi', 'power'].includes(mode)) {
+      throw new Mdbx2NativeHostError('params-invalid', 'MDBX 新建参数无效。', false);
+    }
+    return vaultSessionSummary(await this.request('vault.create', { password, mode }, 5 * 60_000));
+  }
+
   async vaultStatus(vaultHandle: string, timeoutMs = 15_000): Promise<Mdbx2VaultRuntimeStatus> {
     const result = objectResult(await this.request("vault.status", { vaultHandle: opaqueHandle(vaultHandle, "保险库") }, timeoutMs), "Native Host 保险库状态响应无效。");
     return {
+      ...(result.vaultId == null ? {} : { vaultId: stringResult(result.vaultId, 128, "Native Host vault ID 无效。") }),
       vaultHandle: opaqueHandle(result.vaultHandle, "保险库"),
       open: booleanResult(result.open, "Native Host 保险库打开状态无效。"),
       available: booleanResult(result.available, "Native Host 保险库可用状态无效。")
@@ -247,6 +276,32 @@ export class Mdbx2NativeClient {
     return vaultDiagnosticsReport(await this.request("vault.diagnostics", {
       vaultHandle: opaqueHandle(vaultHandle, "保险库")
     }, timeoutMs));
+  }
+
+  async readWriteRevision(vaultHandle: string, timeoutMs = 15_000): Promise<Mdbx2WriteRevision> {
+    await this.requireWriteRevisionSupport(vaultHandle);
+    return writeRevisionResult(await this.request('vault.writeRevision', { vaultHandle: opaqueHandle(vaultHandle, '保险库') }, timeoutMs));
+  }
+
+  readContentMetadata(vaultHandle: string, input: Mdbx2ContentMetadataInput, signal?: AbortSignal): Promise<Mdbx2ContentMetadata> {
+    return readMdbx2ContentMetadata(this, vaultHandle, input, signal);
+  }
+
+  readContentProfiles(vaultHandle: string, input: Mdbx2ContentProfilesInput, signal?: AbortSignal): Promise<Mdbx2ContentProfiles> {
+    return readMdbx2ContentProfiles(this, vaultHandle, input, signal);
+  }
+
+  readContentAttachments(vaultHandle: string, input: Mdbx2ContentAttachmentsInput, signal?: AbortSignal): Promise<Mdbx2ContentAttachments> {
+    return readMdbx2ContentAttachments(this, vaultHandle, input, signal);
+  }
+
+  readContentAttachmentBytes(vaultHandle: string, input: { writeRevision: Mdbx2WriteRevision; attachment: Mdbx2ContentAttachment }, signal?: AbortSignal): Promise<Uint8Array<ArrayBuffer>> {
+    return readMdbx2ContentAttachmentBytes(this, vaultHandle, input, signal);
+  }
+
+  private async requireWriteRevisionSupport(vaultHandle: string): Promise<void> {
+    if (!(await this.hello(5_000, vaultHandle)).supportsVaultWriteRevision) throw new Mdbx2NativeHostError(
+      'vault-revision-host-update-required', '本机助手不支持附件校验后的原子删除，请更新本机助手。', false);
   }
 
   async vaultTiga(vaultHandle: string, timeoutMs = 60_000): Promise<Mdbx2VaultTigaPosture> {
@@ -312,7 +367,7 @@ export class Mdbx2NativeClient {
   ): Promise<Mdbx2CollectionMutationResult> {
     return this.collectionMutation("collection.create", vaultHandle, operationId, collectionId, {
       title: collectionTitleValue(title),
-      parentCollectionId: parentCollectionId ? opaqueHandle(parentCollectionId, "父 Collection") : null
+      parentCollectionId: parentCollectionId ? domainIdentity(parentCollectionId, "父 Collection") : null
     }, timeoutMs);
   }
 
@@ -336,7 +391,7 @@ export class Mdbx2NativeClient {
     timeoutMs = 60_000
   ): Promise<Mdbx2CollectionMutationResult> {
     return this.collectionMutation("collection.move", vaultHandle, operationId, collectionId, {
-      parentCollectionId: parentCollectionId ? opaqueHandle(parentCollectionId, "父 Collection") : null
+      parentCollectionId: parentCollectionId ? domainIdentity(parentCollectionId, "父 Collection") : null
     }, timeoutMs);
   }
 
@@ -357,7 +412,7 @@ export class Mdbx2NativeClient {
     timeoutMs = 60_000
   ): Promise<Mdbx2CollectionMutationResult> {
     return this.collectionMutation("collection.restore", vaultHandle, operationId, collectionId, {
-      parentCollectionId: parentCollectionId ? opaqueHandle(parentCollectionId, "父 Collection") : null
+      parentCollectionId: parentCollectionId ? domainIdentity(parentCollectionId, "父 Collection") : null
     }, timeoutMs);
   }
 
@@ -370,7 +425,7 @@ export class Mdbx2NativeClient {
     timeoutMs: number
   ): Promise<Mdbx2CollectionMutationResult> {
     const normalizedOperationId = opaqueHandle(operationId, "Collection 操作");
-    const normalizedCollectionId = opaqueHandle(collectionId, "Collection");
+    const normalizedCollectionId = domainIdentity(collectionId, "Collection");
     const result = collectionMutationResult(await this.request(method, {
       vaultHandle: opaqueHandle(vaultHandle, "保险库"),
       operationId: normalizedOperationId,
@@ -387,7 +442,7 @@ export class Mdbx2NativeClient {
     const pageSize = pageSizeValue(input.pageSize);
     return objectSummaryPage(await this.request("object.list", {
       vaultHandle: opaqueHandle(vaultHandle, "保险库"),
-      collectionId: opaqueHandle(collectionId, "Collection"),
+      collectionId: domainIdentity(collectionId, "Collection"),
       objectTypeId: input.objectTypeId || null,
       deleted: Boolean(input.deleted),
       pageSize,
@@ -395,14 +450,17 @@ export class Mdbx2NativeClient {
     }, timeoutMs));
   }
 
-  async revealObject(vaultHandle: string, objectId: string, timeoutMs = 30_000): Promise<Mdbx2ObjectRecord> {
+  async revealObject(vaultHandle: string, objectId: string, timeoutMs = 30_000, syncRetained = false): Promise<Mdbx2ObjectRecord> {
     return objectRecord(await this.request("object.reveal", {
       vaultHandle: opaqueHandle(vaultHandle, "保险库"),
-      objectId: opaqueHandle(objectId, "Object")
+      objectId: domainIdentity(objectId, "Object"), ...(syncRetained ? { syncRetained: true } : {})
     }, timeoutMs));
   }
 
   async upsertObject(vaultHandle: string, operationId: string, input: Mdbx2ObjectUpsertInput, timeoutMs = 60_000): Promise<Mdbx2ObjectWriteResult> {
+    if (input.logicalObjectId.startsWith("native:") || input.expectedHeadCommitId) await this.requireInterop315Support(vaultHandle);
+    await this.requireAtomicMoveSupport(vaultHandle, input);
+    if (input.objectTypeId === "api-token") await this.requireApiTokenSupport(vaultHandle);
     const logicalObjectId = textResult(input.logicalObjectId, 4096, false, "逻辑 Object ID 无效。");
     const objectTypeId = textResult(input.objectTypeId, 512, false, "Object 类型无效。");
     const title = textResult(input.title, 64 * 1024, true, "Object 标题无效。");
@@ -411,36 +469,106 @@ export class Mdbx2NativeClient {
       vaultHandle: opaqueHandle(vaultHandle, "保险库"),
       operationId: opaqueHandle(operationId, "操作"),
       logicalObjectId,
-      collectionId: input.collectionId ? opaqueHandle(input.collectionId, "Collection") : null,
+      collectionId: input.collectionId ? domainIdentity(input.collectionId, "Collection") : null,
       objectTypeId,
       title,
-      payloadJson
+      payloadJson,
+      expectedHeadCommitId: input.expectedHeadCommitId,
+      payloadSchemaVersion: input.payloadSchemaVersion,
+      ...apiTokenWriteFields(input)
     }, timeoutMs));
   }
 
-  async deleteObject(vaultHandle: string, operationId: string, logicalObjectId: string, timeoutMs = 60_000): Promise<Mdbx2ObjectDeleteResult> {
+  private async requireInterop315Support(vaultHandle: string): Promise<void> {
+    const capabilities = await this.hello(5_000, vaultHandle);
+    if (!capabilities.supportsNativeObjectIdentity || !capabilities.supportsObjectRevisionPreconditions || !capabilities.supportsLosslessJson) throw new Mdbx2NativeHostError("interop-host-update-required", "本机助手需要更新，才能安全保留原生身份与数字精度。", false);
+  }
+
+  private async requireAtomicMoveSupport(vaultHandle: string, input: Mdbx2ObjectUpsertInput): Promise<void> {
+    if (!input.collectionId || !(input.logicalObjectId.startsWith("native:") || input.expectedHeadCommitId)) return;
+    if (!(await this.hello(5_000, vaultHandle)).supportsAtomicObjectAttachmentMove) throw new Mdbx2NativeHostError(
+      "attachment-move-host-update-required", "请更新本机助手，以确保项目和附件一起移动。", false);
+  }
+
+  async deleteObject(vaultHandle: string, operationId: string, logicalObjectId: string, expectedHeadCommitId?: string, timeoutMs = 60_000): Promise<Mdbx2ObjectDeleteResult> {
+    if (logicalObjectId.startsWith("native:") || expectedHeadCommitId) await this.requireInterop315Support(vaultHandle);
+    if (logicalObjectId.startsWith("api-token:")) await this.requireApiTokenSupport(vaultHandle);
     return objectDeleteResult(await this.request("object.delete", {
       vaultHandle: opaqueHandle(vaultHandle, "保险库"),
       operationId: opaqueHandle(operationId, "操作"),
-      logicalObjectId: textResult(logicalObjectId, 4096, false, "逻辑 Object ID 无效。")
+      logicalObjectId: textResult(logicalObjectId, 4096, false, "逻辑 Object ID 无效。"),
+      expectedHeadCommitId
     }, timeoutMs));
   }
 
-  async mutateObjects(vaultHandle: string, operationScope: string, mutations: Mdbx2ObjectMutationInput[], timeoutMs = 120_000): Promise<Mdbx2ObjectBatchResult> {
+  async restoreObject(vaultHandle: string, operationScope: string, input: Mdbx2ObjectRestoreInput, timeoutMs = 120_000): Promise<Mdbx2ObjectRestoreResult> {
+    const capabilities = await this.hello(5_000, vaultHandle);
+    if (!capabilities.supportsObjectRestore || !capabilities.supportsVaultWriteRevision) throw new Mdbx2NativeHostError(
+      'object-restore-host-update-required', '本机助手不支持保留原始内容的恢复，请更新本机助手。', false);
+    const result = await this.request('object.restore', {
+      vaultHandle: opaqueHandle(vaultHandle, '保险库'), operationScope: sha256Value(operationScope, '操作范围'),
+      objectId: domainIdentity(input.objectId, 'Object'), collectionId: domainIdentity(input.collectionId, 'Collection'),
+      objectTypeId: textResult(input.objectTypeId, 512, false, 'Object 类型无效。'),
+      expectedHeadCommitId: opaqueHandle(input.expectedHeadCommitId, '提交'), writeRevision: writeRevisionResult(input.writeRevision)
+    }, timeoutMs);
+    const restored = objectWriteResult(result);
+    const operationId = opaqueHandle((result as Record<string, unknown>).operationId, '操作');
+    if (restored.objectId !== input.objectId || restored.collectionId !== input.collectionId || restored.objectTypeId !== input.objectTypeId
+      || restored.logicalObjectId !== `native:${input.objectId}`) throw new Mdbx2NativeHostError('object-restore-invalid', '原生恢复响应与项目不一致。', false);
+    return { ...restored, operationId };
+  }
+
+  async restoreObjects(vaultHandle: string, operationScope: string, input: Mdbx2ObjectsRestoreInput, timeoutMs = 120_000): Promise<Mdbx2ObjectsRestoreResult> {
+    const invalid = () => new Mdbx2NativeHostError('object-restore-invalid', '批量恢复的项目或响应不一致。', false);
+    if (!input || !Array.isArray(input.objects) || !input.objects.length || input.objects.length > MDBX2_MAX_OBJECT_BATCH_MUTATIONS) throw invalid();
+    const objects = input.objects.map(row => ({ objectId: domainIdentity(row.objectId, 'Object'),
+      collectionId: domainIdentity(row.collectionId, 'Collection'), objectTypeId: textResult(row.objectTypeId, 512, false, 'Object 类型无效。'),
+      expectedHeadCommitId: opaqueHandle(row.expectedHeadCommitId, '提交') }));
+    if (new Set(objects.map(row => row.objectId)).size !== objects.length) throw invalid();
+    const params = { vaultHandle: opaqueHandle(vaultHandle, '保险库'), operationScope: sha256Value(operationScope, '操作范围'),
+      objects, writeRevision: writeRevisionResult(input.writeRevision) };
+    const capabilities = await this.hello(5_000, vaultHandle);
+    if (!capabilities.supportsObjectBatchRestore || !capabilities.supportsVaultWriteRevision) throw new Mdbx2NativeHostError(
+      'object-restore-host-update-required', '本机助手不支持整组恢复，请更新本机助手。', false);
+    const value = objectResult(await this.request('object.restoreBatch', params, timeoutMs), '批量恢复响应无效。');
+    if (value.changed !== true || !Array.isArray(value.items) || value.items.length !== objects.length) throw invalid();
+    const items = value.items.map((candidate, index) => {
+      const item = objectResult(candidate, '批量恢复项目响应无效。'), expected = objects[index];
+      if (item.kind !== 'restore' || item.changed !== true || item.objectId !== expected.objectId || item.collectionId !== expected.collectionId
+        || item.objectTypeId !== expected.objectTypeId || item.logicalObjectId !== `native:${expected.objectId}`) throw invalid();
+      return { kind: 'restore' as const, changed: true as const, logicalObjectId: `native:${expected.objectId}`,
+        objectId: expected.objectId, collectionId: expected.collectionId, objectTypeId: expected.objectTypeId };
+    });
+    return { changed: true, operationId: opaqueHandle(value.operationId, '操作'), commitId: opaqueHandle(value.commitId, '提交'),
+      alreadyCommitted: booleanResult(value.alreadyCommitted, '恢复幂等状态无效。'), items };
+  }
+
+  async mutateObjects(vaultHandle: string, operationScope: string, mutations: Mdbx2ObjectMutationInput[], timeoutMs = 120_000, writeRevision?: Mdbx2WriteRevision): Promise<Mdbx2ObjectBatchResult> {
     if (!Array.isArray(mutations) || mutations.length < 1 || mutations.length > MDBX2_MAX_OBJECT_BATCH_MUTATIONS) {
       throw new Mdbx2NativeHostError("object-batch-invalid", "MDBX2 Object 批量数量无效。", false);
     }
+    const revision = writeRevision === undefined ? undefined : writeRevisionResult(writeRevision);
+    if (revision) {
+      if (mutations.some(mutation => mutation.kind !== 'delete')) throw new Mdbx2NativeHostError('object-batch-invalid', '数据库提交校验当前仅支持删除操作。', false);
+      await this.requireWriteRevisionSupport(vaultHandle);
+    }
+    if (mutations.some(mutation => mutation.logicalObjectId?.startsWith("api-token:") || (mutation.kind === "upsert" && mutation.objectTypeId === "api-token"))) await this.requireApiTokenSupport(vaultHandle);
+    if (mutations.some(mutation => mutation.logicalObjectId?.startsWith("native:") || mutation.expectedHeadCommitId)) await this.requireInterop315Support(vaultHandle);
+    for (const mutation of mutations) if (mutation.kind === "upsert") await this.requireAtomicMoveSupport(vaultHandle, mutation);
     const normalized = mutations.map((mutation): Mdbx2ObjectMutationInput => {
       const logicalObjectId = textResult(mutation.logicalObjectId, 4096, false, "逻辑 Object ID 无效。");
-      if (mutation.kind === "delete") return { kind: "delete", logicalObjectId };
+      if (mutation.kind === "delete") return { kind: "delete", logicalObjectId, expectedHeadCommitId: mutation.expectedHeadCommitId };
       if (mutation.kind !== "upsert") throw new Mdbx2NativeHostError("object-batch-invalid", "MDBX2 Object 批量操作无效。", false);
       return {
         kind: "upsert",
         logicalObjectId,
-        collectionId: mutation.collectionId ? opaqueHandle(mutation.collectionId, "Collection") : undefined,
+        collectionId: mutation.collectionId ? domainIdentity(mutation.collectionId, "Collection") : undefined,
         objectTypeId: textResult(mutation.objectTypeId, 512, false, "Object 类型无效。"),
         title: textResult(mutation.title, 64 * 1024, true, "Object 标题无效。"),
-        payloadJson: textResult(mutation.payloadJson, MDBX2_MAX_OBJECT_PAYLOAD_BYTES, false, "Object 载荷无效。")
+        payloadJson: textResult(mutation.payloadJson, MDBX2_MAX_OBJECT_PAYLOAD_BYTES, false, "Object 载荷无效。"),
+        expectedHeadCommitId: mutation.expectedHeadCommitId,
+        payloadSchemaVersion: mutation.payloadSchemaVersion,
+        ...apiTokenWriteFields(mutation)
       };
     });
     if (normalized.length > 1 && new TextEncoder().encode(JSON.stringify(normalized)).byteLength > MDBX2_MAX_OBJECT_BATCH_INTENT_BYTES) {
@@ -450,6 +578,7 @@ export class Mdbx2NativeClient {
       vaultHandle: opaqueHandle(vaultHandle, "保险库"),
       operationId: null,
       operationScope: sha256Value(operationScope, "操作范围"),
+      ...(revision ? { writeRevision: revision } : {}),
       mutations: normalized.map((mutation) => mutation.kind === "upsert"
         ? { ...mutation, collectionId: mutation.collectionId || null }
         : mutation)
@@ -670,8 +799,8 @@ export class Mdbx2NativeClient {
   ): Promise<Mdbx2AttachmentSummaryPage> {
     return attachmentSummaryPage(await this.request("attachment.list", {
       vaultHandle: opaqueHandle(vaultHandle, "保险库"),
-      collectionId: opaqueHandle(collectionId, "Collection"),
-      objectId: opaqueHandle(objectId, "Object"),
+      collectionId: domainIdentity(collectionId, "Collection"),
+      objectId: domainIdentity(objectId, "Object"),
       pageSize: attachmentPageSizeValue(input.pageSize),
       cursor: input.cursor ? textResult(input.cursor, 4096, false, "MDBX2 附件游标无效。") : null
     }, timeoutMs));
@@ -820,6 +949,30 @@ export class Mdbx2NativeClient {
       fileHandle: opaqueHandle(fileHandle, "文件")
     }, timeoutMs), "Native Host 文件释放响应无效。");
     return booleanResult(result.released, "Native Host 文件释放状态无效。");
+  }
+
+  async prepareCompleteBackup(vaultHandle: string): Promise<Mdbx2CompleteBackupDescriptor> {
+    if (!(await this.hello(5_000, vaultHandle)).supportsCompleteBackup) throw new Mdbx2NativeHostError(
+      "complete-backup-host-update-required", "请更新本机助手后使用 MDBX2 完整备份。", false);
+    return completeBackupDescriptor(await this.request("vault.export.begin", {
+      vaultHandle: opaqueHandle(vaultHandle, "保险库")
+    }, 5 * 60_000));
+  }
+
+  async readCompleteBackup(vaultHandle: string, fileHandle: string, offset: number, maxBytes: number): Promise<Mdbx2CompleteBackupChunk> {
+    const value = objectResult(await this.request("vault.export.read", {
+      vaultHandle: opaqueHandle(vaultHandle, "保险库"), fileHandle: opaqueHandle(fileHandle, "文件"),
+      offset: safeInteger(offset, "文件偏移"), maxBytes: safeInteger(maxBytes, "分段大小")
+    }, 30_000), "完整备份分段响应无效。");
+    return { ...completeBackupDescriptor(value),
+      offset: safeInteger(value.offset, "文件偏移"), nextOffset: safeInteger(value.nextOffset, "后续偏移"),
+      eof: booleanResult(value.eof, "文件结束标记无效。"),
+      dataBase64: textResult(value.dataBase64, 349528, false, "备份分段无效。") };
+  }
+
+  async releaseCompleteBackup(fileHandle: string): Promise<boolean> {
+    const value = objectResult(await this.request("vault.export.release", { fileHandle: opaqueHandle(fileHandle, "文件") }, 15_000), "备份释放响应无效。");
+    return booleanResult(value.released, "备份释放状态无效。");
   }
 
   async registerSyncState(vaultHandle: string, remoteBinding: string, stateHandle?: string, timeoutMs = 30_000): Promise<Mdbx2SyncStateStatus> {
@@ -1010,17 +1163,18 @@ export class Mdbx2NativeClient {
     return booleanResult(value.aborted, "Native Host MDBX2 Blob 中止状态无效。");
   }
 
-  async probe(timeoutMs = 5_000): Promise<Mdbx2HostStatus> {
+  /** Read capabilities without retiring a shared browser Worker lease. */
+  async status(timeoutMs = 5_000, ownerVaultHandle?: string): Promise<Mdbx2HostStatus> {
     try {
-      const capabilities = await this.hello(timeoutMs);
+      const capabilities = await this.hello(timeoutMs, ownerVaultHandle);
       return {
         availability: "ready",
         hostName: MDBX2_NATIVE_HOST_NAME,
-        message: "Monica MDBX2 Native Host 已安装并通过版本检查。",
+        message: "Monica MDBX2 连接已就绪并通过版本检查。",
         capabilities
       };
     } catch (error) {
-      const nativeError = error instanceof Mdbx2NativeHostError ? error : mdbx2NativeConnectionError(error);
+      const nativeError = error instanceof Mdbx2NativeHostError ? error : mdbx2NativeConnectionError(error, this.hostLabel);
       return {
         availability: nativeError.code === "native-host-not-installed"
           ? "not-installed"
@@ -1030,12 +1184,17 @@ export class Mdbx2NativeClient {
         hostName: MDBX2_NATIVE_HOST_NAME,
         message: nativeError.message
       };
-    } finally {
-      this.close();
     }
   }
 
-  async request(method: Mdbx2NativeMethod, params: Record<string, unknown>, timeoutMs = 15_000): Promise<unknown> {
+  /** Only for a disposable client. Shared application clients use status(). */
+  async probe(timeoutMs = 5_000): Promise<Mdbx2HostStatus> {
+    try { return await this.status(timeoutMs); } finally { this.close(); }
+  }
+
+  // ownerVaultHandle is local routing context for unbound operations. The
+  // native implementation deliberately never includes it in the wire request.
+  async request(method: Mdbx2NativeMethod, params: Record<string, unknown>, timeoutMs = 15_000, _ownerVaultHandle?: string): Promise<unknown> {
     if (!Number.isFinite(timeoutMs) || timeoutMs < 100 || timeoutMs > 5 * 60_000) {
       throw new Mdbx2NativeHostError("native-timeout-invalid", "Native Host 请求超时设置无效。", false);
     }
@@ -1054,7 +1213,7 @@ export class Mdbx2NativeClient {
       } catch (error) {
         clearTimeout(timeoutId);
         this.pending.delete(requestId);
-        reject(mdbx2NativeConnectionError(error));
+        reject(mdbx2NativeConnectionError(error, this.hostLabel));
         this.close();
       }
     });
@@ -1074,13 +1233,13 @@ export class Mdbx2NativeClient {
   private ensurePort(): Mdbx2NativePort {
     if (this.port) return this.port;
     try {
-      const port = this.runtime.connectNative(MDBX2_NATIVE_HOST_NAME);
+      const port = this.runtime.connectNative(this.hostName);
       port.onMessage.addListener(this.onMessage);
       port.onDisconnect.addListener(this.onDisconnect);
       this.port = port;
       return port;
     } catch (error) {
-      throw mdbx2NativeConnectionError(error);
+      throw mdbx2NativeConnectionError(error, this.hostLabel);
     }
   }
 
@@ -1109,7 +1268,7 @@ export class Mdbx2NativeClient {
       port.onMessage.removeListener(this.onMessage);
       port.onDisconnect.removeListener(this.onDisconnect);
     }
-    this.rejectPending(mdbx2NativeConnectionError(message || "Native Host 连接已断开。"));
+    this.rejectPending(mdbx2NativeConnectionError(message || "Native Host 连接已断开。", this.hostLabel));
   };
 
   private rejectPending(error: Error): void {
@@ -1171,6 +1330,18 @@ function transferReadResult(input: unknown): Mdbx2TransferReadResult {
   const eof = booleanResult(value.eof, "Native Host 文件结束状态无效。");
   if (eof !== (nextOffset === descriptor.sizeBytes)) throw incompatibleResult("Native Host 文件结束边界无效。");
   return { ...descriptor, offset, dataBase64, nextOffset, eof };
+}
+
+function completeBackupDescriptor(input: unknown): Mdbx2CompleteBackupDescriptor {
+  const value = objectResult(input, "完整备份描述无效。");
+  const sizeBytes = safeInteger(value.sizeBytes, "备份大小");
+  const blobCount = safeInteger(value.blobCount, "附件块数量");
+  if (value.purpose !== "vault-backup" || (value.format !== "mdbx" && value.format !== "zip") ||
+    sizeBytes < 1 || sizeBytes > 512 * 1024 * 1024 || (value.format === "mdbx") !== (blobCount === 0)) {
+    throw incompatibleResult("完整备份格式或大小无效，请更新本机组件。");
+  }
+  return { fileHandle: opaqueHandle(value.fileHandle, "备份"), purpose: "vault-backup", format: value.format,
+    blobCount, sizeBytes, sha256: sha256Value(textResult(value.sha256, 64, false, "备份摘要无效。"), "备份摘要") };
 }
 
 function outputFileDescriptor(input: unknown, expectedPurpose?: Mdbx2OutputFileDescriptor["purpose"]): Mdbx2OutputFileDescriptor {
@@ -1830,11 +2001,11 @@ function collectionSummaryResult(input: unknown): Mdbx2CollectionSummaryPage["it
     "favorite", "archived", "attachmentCount", "headCommitId", "deleted", "updatedAt"
   ], "Native Host Collection 摘要无效。");
   return {
-    collectionId: opaqueHandle(item.collectionId, "Collection"),
+    collectionId: domainIdentity(item.collectionId, "Collection"),
     title: textResult(item.title, 64 * 1024, true, "Collection 标题无效。"),
     collectionTypeId: optionalString(item.collectionTypeId, 512, "Collection 类型"),
     profileSchemaVersion: optionalInteger(item.profileSchemaVersion, "Collection Profile Schema 版本"),
-    groupId: optionalOpaqueHandle(item.groupId, "Collection 分组"),
+    groupId: optionalDomainIdentity(item.groupId, "Collection 分组"),
     iconRef: optionalString(item.iconRef, 4096, "Collection 图标引用"),
     favorite: booleanResult(item.favorite, "Collection 收藏状态无效。"),
     archived: booleanResult(item.archived, "Collection 归档状态无效。"),
@@ -1866,8 +2037,8 @@ function objectSummaryPage(input: unknown): Mdbx2ObjectSummaryPage {
     items: value.items.map((candidate) => {
       const item = objectResult(candidate, "Native Host Object 摘要无效。");
       return {
-        objectId: opaqueHandle(item.objectId, "Object"),
-        collectionId: opaqueHandle(item.collectionId, "Collection"),
+        objectId: domainIdentity(item.objectId, "Object"),
+        collectionId: domainIdentity(item.collectionId, "Collection"),
         objectTypeId: textResult(item.objectTypeId, 512, false, "Object 类型无效。"),
         title: textResult(item.title, 64 * 1024, true, "Object 标题无效。"),
         payloadSchemaVersion: safeInteger(item.payloadSchemaVersion, "Object 载荷 Schema 版本"),
@@ -1883,20 +2054,29 @@ function objectSummaryPage(input: unknown): Mdbx2ObjectSummaryPage {
 function objectRecord(input: unknown): Mdbx2ObjectRecord {
   const value = objectResult(input, "Native Host Object 披露响应无效。");
   const payloadJson = textResult(value.payloadJson, MDBX2_MAX_OBJECT_PAYLOAD_BYTES, false, "Object 载荷无效。");
-  try {
-    const payload = JSON.parse(payloadJson);
-    if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new Error();
-  } catch {
-    throw incompatibleResult("Native Host Object 载荷不是 JSON 对象。");
-  }
+  // Generic disclosures may contain arrays/scalars or future encodings. The
+  // read-only adapter displays original text; this boundary must not hide it.
   return {
-    objectId: opaqueHandle(value.objectId, "Object"),
-    collectionId: opaqueHandle(value.collectionId, "Collection"),
+    objectId: domainIdentity(value.objectId, "Object"),
+    collectionId: domainIdentity(value.collectionId, "Collection"),
     objectTypeId: textResult(value.objectTypeId, 512, false, "Object 类型无效。"),
     title: textResult(value.title, 64 * 1024, true, "Object 标题无效。"),
     payloadJson,
     payloadSchemaVersion: safeInteger(value.payloadSchemaVersion, "Object 载荷 Schema 版本"),
-    deleted: booleanResult(value.deleted, "Object 删除状态无效。")
+    headCommitId: optionalString(value.headCommitId, 128, "Object 提交身份"),
+    deleted: booleanResult(value.deleted, "Object 删除状态无效。"),
+    ...(value.objectTypeId === "api-token" ? {
+      apiTokenMetadataJson: optionalString(value.apiTokenMetadataJson, 64 * 1024, "API 密钥补充信息"),
+      apiTokenFavorite: value.apiTokenFavorite === undefined ? undefined : booleanResult(value.apiTokenFavorite, "API 密钥收藏状态无效。")
+    } : {})
+  };
+}
+
+function apiTokenWriteFields(input: Mdbx2ObjectUpsertInput): Pick<Mdbx2ObjectUpsertInput, "apiTokenMetadataJson" | "apiTokenFavorite"> {
+  if (input.objectTypeId !== "api-token") return {};
+  return {
+    apiTokenMetadataJson: textResult(input.apiTokenMetadataJson, 64 * 1024, false, "API 密钥补充信息无效。"),
+    apiTokenFavorite: booleanResult(input.apiTokenFavorite, "API 密钥收藏状态无效。")
   };
 }
 
@@ -1906,8 +2086,8 @@ function objectWriteResult(input: unknown): Mdbx2ObjectWriteResult {
     commitId: textResult(value.commitId, 128, false, "Object Commit ID 无效。"),
     alreadyCommitted: booleanResult(value.alreadyCommitted, "Object 幂等状态无效。"),
     logicalObjectId: textResult(value.logicalObjectId, 4096, false, "逻辑 Object ID 无效。"),
-    objectId: opaqueHandle(value.objectId, "Object"),
-    collectionId: opaqueHandle(value.collectionId, "Collection"),
+    objectId: domainIdentity(value.objectId, "Object"),
+    collectionId: domainIdentity(value.collectionId, "Collection"),
     objectTypeId: textResult(value.objectTypeId, 512, false, "Object 类型无效。")
   };
 }
@@ -1920,7 +2100,7 @@ function objectDeleteResult(input: unknown): Mdbx2ObjectDeleteResult {
     commitId: changed ? textResult(value.commitId, 128, false, "Object 删除 Commit ID 无效。") : undefined,
     alreadyCommitted: changed ? booleanResult(value.alreadyCommitted, "Object 删除幂等状态无效。") : undefined,
     logicalObjectId: textResult(value.logicalObjectId, 4096, false, "逻辑 Object ID 无效。"),
-    objectId: opaqueHandle(value.objectId, "Object")
+    objectId: domainIdentity(value.objectId, "Object")
   };
 }
 
@@ -2087,7 +2267,7 @@ function commitDiffResult(input: unknown): Mdbx2CommitDiffResult {
         commitId: opaqueHandle(item.commitId, "Commit"),
         objectType: textResult(item.objectType, 512, false, "MDBX2 Commit Object 类型无效。"),
         objectId: textResult(item.objectId, 128, false, "MDBX2 Commit Object ID 无效。"),
-        collectionId: optionalOpaqueHandle(item.collectionId, "Collection"),
+        collectionId: optionalDomainIdentity(item.collectionId, "Collection"),
         previousTitle: optionalTextResult(item.previousTitle, 64 * 1024, true, "MDBX2 Commit 原标题无效。"),
         currentTitle: optionalTextResult(item.currentTitle, 64 * 1024, true, "MDBX2 Commit 新标题无效。"),
         previousDeleted: optionalBooleanResult(item.previousDeleted, "MDBX2 Commit 原删除状态无效。"),
@@ -2255,7 +2435,7 @@ function conflictSummaryPage(input: unknown): Mdbx2ConflictSummaryPage {
       return {
         conflictId: opaqueHandle(item.conflictId, "冲突"),
         objectType: textResult(item.objectType, 128, false, "MDBX2 冲突 Object 类型无效。"),
-        objectId: opaqueHandle(item.objectId, "冲突 Object"),
+        objectId: domainIdentity(item.objectId, "冲突 Object"),
         displayTitle: optionalTextResult(item.displayTitle, 64 * 1024, true, "MDBX2 冲突标题无效。"),
         contentType: optionalString(item.contentType, 512, "MDBX2 冲突内容类型"),
         conflictingFields: boundedTextArray(item.conflictingFields, 256, 4096, "MDBX2 冲突字段"),
@@ -2274,10 +2454,15 @@ function conflictResolutionResult(input: unknown): Mdbx2ConflictResolutionResult
     alreadyResolved: booleanResult(value.alreadyResolved, "MDBX2 冲突重试状态无效。"),
     conflictId: opaqueHandle(value.conflictId, "冲突"),
     objectType: textResult(value.objectType, 128, false, "MDBX2 冲突 Object 类型无效。"),
-    objectId: opaqueHandle(value.objectId, "冲突 Object"),
+    objectId: domainIdentity(value.objectId, "冲突 Object"),
     choice: conflictResolutionChoiceResult(value.choice),
     resolvedAt: optionalString(value.resolvedAt, 128, "MDBX2 冲突解决时间")
   };
+}
+
+function writeRevisionResult(input: unknown): Mdbx2WriteRevision {
+  const value = objectResult(input, 'Native Host 数据库提交校验响应无效。');
+  return { vaultId: opaqueHandle(value.vaultId, '数据库身份'), revisionSha256: sha256Value(stringResult(value.revisionSha256, 64, '数据库提交摘要无效。'), '数据库提交摘要') };
 }
 
 function objectBatchResult(input: unknown): Mdbx2ObjectBatchResult {
@@ -2301,8 +2486,8 @@ function objectBatchResult(input: unknown): Mdbx2ObjectBatchResult {
         kind,
         changed: booleanResult(item.changed, "Object 批量项目状态无效。"),
         logicalObjectId: textResult(item.logicalObjectId, 4096, false, "逻辑 Object ID 无效。"),
-        objectId: opaqueHandle(item.objectId, "Object"),
-        collectionId: optionalOpaqueHandle(item.collectionId, "Collection"),
+        objectId: domainIdentity(item.objectId, "Object"),
+        collectionId: optionalDomainIdentity(item.collectionId, "Collection"),
         objectTypeId: optionalString(item.objectTypeId, 512, "Object 类型")
       };
     })
@@ -2432,6 +2617,17 @@ function boundedEncodedResultBytes(value: unknown, maximum: number, label: strin
     throw incompatibleResult(`Native Host MDBX2 ${label}超过安全上限。`);
   }
   return encodedBytes;
+}
+
+/** Native logical IDs also contain legacy hash-derived 128-bit UUIDs. Their
+ * version/variant bits are not session-handle authority. Preserve every bit. */
+function domainIdentity(value: unknown, label: string): string {
+  const id = stringResult(value, 36, `${label}身份无效。`);
+  if (!/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(id)) throw incompatibleResult(`${label}身份无效。`);
+  return id;
+}
+function optionalDomainIdentity(value: unknown, label: string): string | undefined {
+  return value === null || value === undefined ? undefined : domainIdentity(value, label);
 }
 
 function opaqueHandle(value: unknown, label: string): string {
@@ -2621,8 +2817,8 @@ function attachmentUploadInput(input: Mdbx2AttachmentUploadBeginInput): Mdbx2Att
   return {
     operationId: opaqueHandle(input.operationId, "附件操作"),
     attachmentId: opaqueHandle(input.attachmentId, "附件"),
-    collectionId: opaqueHandle(input.collectionId, "Collection"),
-    objectId: opaqueHandle(input.objectId, "Object"),
+    collectionId: domainIdentity(input.collectionId, "Collection"),
+    objectId: domainIdentity(input.objectId, "Object"),
     fileName: input.fileName,
     mediaType,
     mode: input.mode,

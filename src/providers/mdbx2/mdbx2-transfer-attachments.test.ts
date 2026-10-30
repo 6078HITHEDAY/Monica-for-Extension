@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { bytesToBase64 } from "../../security/encoding";
-import type { ProviderAccount, ProviderSourceRecord, VaultItem } from "../../core/model";
+import type { ProviderAccount, VaultItem } from "../../core/model";
 import type { ProviderAttachmentSummary } from "../attachments/attachment-contract";
 import { Mdbx2TransferAttachmentService } from "./mdbx2-transfer-attachments";
 import type {
@@ -20,6 +20,12 @@ const ITEM: VaultItem = {
 } as VaultItem;
 
 class AttachmentNativeFake implements Mdbx2BatchTransferNativeClient {
+  async readWriteRevision(): Promise<never> { throw new Error('Unexpected revision read by attachment-only tests'); }
+  corruptTarget = false;
+  hideTarget = false;
+  extraTarget = false;
+  private readingId = "source-attachment";
+  async mutateObjects(): Promise<never> { throw new Error("Unexpected object batch in attachment-only test"); }
   readonly uploadChunks: Uint8Array[] = [];
   readonly begins: Array<Record<string, unknown>> = [];
   readonly released: string[] = [];
@@ -36,17 +42,22 @@ class AttachmentNativeFake implements Mdbx2BatchTransferNativeClient {
   async deleteObject(..._args: unknown[]): Promise<any> { throw new Error("not used"); }
   async resolveObjectOperation(..._args: unknown[]): Promise<any> { return { known: false, committed: false }; }
   async listAttachments(vaultHandle: string, collectionId: string, objectId: string) {
+    if (vaultHandle === TARGET.config.vaultHandle && this.uploadInput && !this.hideTarget) {
+      const item = { attachmentId: this.uploadInput.attachmentId, fileName: "evidence.bin", sizeBytes: 3, mediaType: "application/octet-stream", protected: true };
+      return { items: this.extraTarget ? [item, { ...item, attachmentId: "unexpected" }] : [item] };
+    }
     if (vaultHandle === SOURCE_MDBX.config.vaultHandle && collectionId === "source-folder" && objectId === "source-object") {
       return { items: [{ attachmentId: "source-attachment", fileName: "evidence.bin", sizeBytes: 3, mediaType: "application/octet-stream", protected: true }] };
     }
     return { items: [] };
   }
   async beginAttachmentRead(_vaultHandle: string, attachmentId: string) {
+    this.readingId = attachmentId;
     return { readHandle: "read-handle", attachmentId, fileName: "evidence.bin", sizeBytes: 3, maxChunkBytes: 2 };
   }
   async readAttachmentChunk(_readHandle: string, offset: number) {
-    const bytes = offset === 0 ? new Uint8Array([1, 2]) : new Uint8Array([3]);
-    return { readHandle: "read-handle", attachmentId: "source-attachment", fileName: "evidence.bin", sizeBytes: 3, offset, nextOffset: offset + bytes.length, dataBase64: bytesToBase64(bytes), eof: offset + bytes.length === 3 };
+    const bytes = offset === 0 ? new Uint8Array([1, 2]) : new Uint8Array([this.corruptTarget && this.readingId !== "source-attachment" ? 4 : 3]);
+    return { readHandle: "read-handle", attachmentId: this.readingId, fileName: "evidence.bin", sizeBytes: 3, offset, nextOffset: offset + bytes.length, dataBase64: bytesToBase64(bytes), eof: offset + bytes.length === 3 };
   }
   async releaseAttachmentRead(readHandle: string) { this.released.push(readHandle); return true; }
   async beginAttachmentUpload(_vaultHandle: string, input: { operationId: string; attachmentId: string; collectionId: string; objectId: string; fileName: string; mediaType?: string; mode: "create" | "replace"; sizeBytes: number; sha256?: string }) {
@@ -68,7 +79,7 @@ class AttachmentNativeFake implements Mdbx2BatchTransferNativeClient {
   }
   async finishAttachmentUpload(transferId: string) {
     const input = this.uploadInput!;
-    return { transferId, operationId: input.operationId, changed: true, alreadyCommitted: false, commitId: "commit-attachment", attachment: { attachmentId: input.attachmentId, fileName: input.fileName, sizeBytes: input.sizeBytes, mediaType: "application/octet-stream", storageMode: "embedded-chunked" as const, protected: true as const, deleted: false } };
+    return { transferId, changed: true, alreadyCommitted: false, commitId: "commit-attachment", attachment: { attachmentId: input.attachmentId, fileName: input.fileName, sizeBytes: input.sizeBytes, mediaType: "application/octet-stream", storageMode: "embedded-chunked" as const, protected: true as const, deleted: false } };
   }
   async abortAttachmentUpload(transferId: string) { this.aborted.push(transferId); return true; }
 }
@@ -84,6 +95,24 @@ class KeePassFake {
 }
 
 describe("MDBX2 transfer attachments", () => {
+  it("captures verified content proofs and detects same-size replacement, missing and extra targets", async () => {
+    const native = new AttachmentNativeFake();
+    const service = new Mdbx2TransferAttachmentService(native, new KeePassFake() as never);
+    const targetItem = { ...ITEM, providerRefs: [{ providerId: TARGET.id, remoteId: "target-object", remoteFolderId: "target-folder" }] } as VaultItem;
+    const operationId = "44444444-4444-4444-8444-444444444444";
+    await service.transferAttachments(SOURCE_MDBX, ITEM, TARGET, targetItem, operationId);
+    const proofs = await service.captureMoveAttachmentProofs(SOURCE_MDBX, ITEM, TARGET, targetItem, operationId);
+    expect(proofs).toEqual([expect.objectContaining({ itemId: targetItem.id, sizeBytes: 3, sha256: "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81" })]);
+    const restarted = new Mdbx2TransferAttachmentService(native, new KeePassFake() as never);
+    await restarted.verifyMoveAttachmentProofs(TARGET, targetItem, proofs);
+    native.corruptTarget = true;
+    await expect(restarted.verifyMoveAttachmentProofs(TARGET, targetItem, proofs)).rejects.toThrow("附件校验");
+    await expect(service.captureMoveAttachmentProofs(SOURCE_MDBX, ITEM, TARGET, targetItem, operationId)).rejects.toThrow("附件校验");
+    native.corruptTarget = false; native.hideTarget = true;
+    await expect(restarted.verifyMoveAttachmentProofs(TARGET, targetItem, proofs)).rejects.toThrow("附件校验");
+    native.hideTarget = false; native.extraTarget = true;
+    await expect(restarted.verifyMoveAttachmentProofs(TARGET, targetItem, proofs)).rejects.toThrow("附件校验");
+  });
   it("copies KeePass bytes with a verified digest and retries a lost chunk response", async () => {
     const native = new AttachmentNativeFake();
     native.loseNextChunk = true;
@@ -95,7 +124,7 @@ describe("MDBX2 transfer attachments", () => {
     expect(native.begins[0].sha256).toBe("039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81");
     // The exact digest assertion below is generated from the bytes rather than trusting metadata.
     expect(native.uploadChunks.reduce<number[]>((all, chunk) => [...all, ...chunk], [])).toEqual([1, 2, 3]);
-    expect(native.aborted).toEqual([]);
+    expect(native.aborted).toHaveLength(1);
   });
 
   it("reads MDBX2 source chunks and releases the read handle", async () => {
@@ -103,15 +132,52 @@ describe("MDBX2 transfer attachments", () => {
     const service = new Mdbx2TransferAttachmentService(native, new KeePassFake() as never);
     const targetItem = { ...ITEM, providerRefs: [{ providerId: TARGET.id, remoteId: "target-object", remoteFolderId: "target-folder" }] } as VaultItem;
     await expect(service.transferAttachments(SOURCE_MDBX, ITEM, TARGET, targetItem, "44444444-4444-4444-8444-444444444444")).resolves.toBe(1);
-    expect(native.released).toEqual(["read-handle"]);
+    expect(native.released).toEqual(["read-handle", "read-handle"]);
   });
 
-  it("blocks Bitwarden Cipher attachments before writing a target", async () => {
+  it("requires an authoritative Bitwarden reader, including when cached metadata is missing", async () => {
     const native = new AttachmentNativeFake();
-    const records: ProviderSourceRecord[] = [{ providerId: SOURCE_BITWARDEN.id, remoteId: "cipher", format: "bitwarden-cipher", encoding: "json", payload: JSON.stringify({ Id: "cipher", Attachments: [{ Id: "file", FileName: "secret.txt", Size: "3" }] }), contentHash: "hash" }];
-    const service = new Mdbx2TransferAttachmentService(native, new KeePassFake() as never, async () => records);
+    const service = new Mdbx2TransferAttachmentService(native, new KeePassFake() as never);
     const sourceItem = { ...ITEM, providerRefs: [{ providerId: SOURCE_BITWARDEN.id, remoteId: "cipher" }] } as VaultItem;
     await expect(service.listSourceAttachments(SOURCE_BITWARDEN, sourceItem)).rejects.toThrow("Bitwarden 附件");
     expect(native.begins).toEqual([]);
+  });
+
+  it.each([0, 999])('copies Bitwarden plaintext without mistaking encrypted listing size %s for file size', async sizeBytes => {
+    const native = new AttachmentNativeFake(), plaintext = new Uint8Array([1, 2, 3]);
+    const list = async () => [{ attachmentId: 'bw-file', providerKind: 'bitwarden' as const,
+      fileName: 'evidence.bin', sizeBytes, protected: true, mediaType: 'application/octet-stream' }];
+    const service = new Mdbx2TransferAttachmentService(native, new KeePassFake() as never, { list, read: async () => plaintext });
+    const source = { ...ITEM, providerRefs: [{ providerId: SOURCE_BITWARDEN.id, remoteId: 'cipher#fido2:key' }] };
+    const target = { ...ITEM, providerRefs: [{ providerId: TARGET.id, remoteId: 'target-object', remoteFolderId: 'target-folder' }] };
+    await expect(service.transferAttachments(SOURCE_BITWARDEN, source, TARGET, target, '44444444-4444-4444-8444-444444444444')).resolves.toBe(1);
+    expect(native.begins[0].sizeBytes).toBe(3);
+    expect(plaintext).toEqual(new Uint8Array(3));
+    expect(native.uploadChunks.flatMap(chunk => [...chunk])).toEqual([1, 2, 3]);
+  });
+
+  it('does not report a successful copy when target readback differs', async () => {
+    const native = new AttachmentNativeFake(); native.corruptTarget = true;
+    const service = new Mdbx2TransferAttachmentService(native, new KeePassFake() as never);
+    const target = { ...ITEM, providerRefs: [{ providerId: TARGET.id, remoteId: 'target-object', remoteFolderId: 'target-folder' }] };
+    await expect(service.transferAttachments(SOURCE_MDBX, ITEM, TARGET, target, '44444444-4444-4444-8444-444444444444')).rejects.toThrow('附件校验');
+    expect(native.aborted).toHaveLength(1);
+    expect(native.released).toHaveLength(2);
+  });
+
+  it.each(['bad-offset', 'bad-session', 'no-progress'])('rejects %s upload responses and clears source plaintext', async mode => {
+    const native = new AttachmentNativeFake(), plaintext = new Uint8Array([1, 2, 3]);
+    const original = native.beginAttachmentUpload.bind(native);
+    vi.spyOn(native, 'beginAttachmentUpload').mockImplementation(async (...args) => ({ ...await original(...args),
+      ...(mode === 'bad-offset' ? { nextOffset: 4 } : mode === 'bad-session' ? { operationId: 'other-operation' } : { maxChunkBytes: 0 }) }));
+    const service = new Mdbx2TransferAttachmentService(native, new KeePassFake() as never, {
+      list: async () => [{ attachmentId: 'file', providerKind: 'bitwarden', fileName: 'evidence.bin', sizeBytes: 0, protected: true }],
+      read: async () => plaintext
+    });
+    const target = { ...ITEM, providerRefs: [{ providerId: TARGET.id, remoteId: 'target-object', remoteFolderId: 'target-folder' }] };
+    await expect(service.transferAttachments(SOURCE_BITWARDEN, ITEM, TARGET, target, '44444444-4444-4444-8444-444444444444')).rejects.toThrow('会话');
+    expect(plaintext).toEqual(new Uint8Array(3));
+    expect(native.uploadChunks).toEqual([]);
+    expect(native.aborted).toHaveLength(1);
   });
 });

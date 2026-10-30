@@ -1,7 +1,39 @@
 import { describe, expect, it } from "vitest";
 import { normalizeImportedVaultItem } from "./import-items";
+import { importPlainBitwardenJson, isPlainBitwardenExport } from "./bitwarden-json-import";
 
 describe("manager vault import", () => {
+  it("converts every standard unencrypted Bitwarden type into local editable items", () => {
+    const source = {
+      encrypted: false,
+      folders: [{ id: "folder-1", name: "Personal" }],
+      items: [
+        { type: 1, name: "Login", notes: "note", folderId: "folder-1", login: { username: "alice", password: "secret", uris: [{ uri: "https://example.test", match: 3 }], totp: "JBSWY3DPEHPK3PXP" }, fields: [{ name: "PIN", type: 1, value: "1234" }] },
+        { type: 2, name: "Note", notes: "body", secureNote: { type: 0 }, fields: [] },
+        { type: 3, name: "Card", card: { cardholderName: "Alice", number: "4111111111111111", expMonth: "12", expYear: "2030", code: "123", brand: "Visa" }, fields: [] },
+        { type: 4, name: "Identity", identity: { firstName: "Alice", lastName: "Example", email: "alice@example.test", address1: "1 Main St" }, fields: [] },
+        { type: 5, name: "SSH", sshKey: { publicKey: "ssh-ed25519 AAAA", privateKey: "private", keyFingerprint: "SHA256:abc" }, fields: [] }
+      ]
+    };
+    expect(isPlainBitwardenExport(source)).toBe(true);
+    const items = importPlainBitwardenJson(source);
+    expect(items.map(item => item.kind)).toEqual(["login", "secure-note", "card", "identity", "login"]);
+    expect(items.every(item => item.kind !== "opaque" && item.providerRefs.length === 0)).toBe(true);
+    expect(items[0]).toMatchObject({ title: "Login", categoryName: "Personal", username: "alice", password: "secret", totpSecret: "JBSWY3DPEHPK3PXP", uriRules: [{ matchType: "exact" }], customFields: [{ name: "PIN", protected: true }] });
+    expect(items[1]).toMatchObject({ kind: "secure-note", content: "body" });
+    expect(items[2]).toMatchObject({ kind: "card", number: "4111111111111111", expiryMonth: "12", expiryYear: "2030" });
+    expect(items[3]).toMatchObject({ kind: "identity", firstName: "Alice", lastName: "Example", address: { streetAddress: "1 Main St" } });
+    expect(items[4]).toMatchObject({ kind: "login", loginType: "SSH_KEY" });
+  });
+
+  it("retains stable SSO account identity in extension snapshots", () => {
+    expect(normalizeImportedVaultItem({ kind: "login", id: "sso", ssoRefLogicalId: "password:account" })).toMatchObject({ ssoRefLogicalId: "password:account" });
+  });
+  it("preserves an explicit OTP unlink through extension JSON without changing legacy records", () => {
+    expect(normalizeImportedVaultItem({ kind: "login", id: "unlinked", boundTotpItemId: "" })).toMatchObject({ boundTotpItemId: "" });
+    expect(normalizeImportedVaultItem({ kind: "login", id: "legacy" })).toMatchObject({ boundTotpItemId: undefined });
+  });
+
   it("accepts and normalizes non-login records", () => {
     expect(normalizeImportedVaultItem({ kind: "card", id: "card", title: "Visa", number: 4111, securityCode: 123 })).toMatchObject({ kind: "card", number: "4111", securityCode: "123", providerRefs: [] });
     expect(normalizeImportedVaultItem({ kind: "passkey", id: "pk", title: "Example", rpId: "example.com", sourceMode: "android-metadata-only", algorithm: -7 })).toMatchObject({ kind: "passkey", rpId: "example.com", sourceMode: "android-metadata-only" });
@@ -24,8 +56,44 @@ describe("manager vault import", () => {
     })).toMatchObject({ loginType: "SSH_KEY", uris: ["example.com"], uriRules: [{ uri: "example.com", matchType: "domain" }], ssoProvider: "GOOGLE", ssoRefEntryId: 42, wifiMetadata: '{"ssid":"Lab"}', sshKeyData: '{"algorithm":"ED25519"}', customFields: [{ name: "mode", value: "x", protected: true, fieldType: "HIDDEN" }] });
   });
 
-  it("rejects unknown kinds and malformed roots", () => {
-    expect(normalizeImportedVaultItem({ kind: "unknown" })).toBeNull();
+  it("shows unknown kinds readonly and rejects malformed roots", () => {
+    expect(normalizeImportedVaultItem({ kind: "future-key", payloadSchemaVersion: 31501 })).toMatchObject({ kind: "opaque", payloadSchemaVersion: 31501 });
+    expect(normalizeImportedVaultItem({ kind: "unknown" })).toMatchObject({ kind: "opaque", nativeType: "unknown", originalPayload: '{"kind":"unknown"}' });
     expect(normalizeImportedVaultItem(null)).toBeNull();
+  });
+
+  it.each(["GPG_KEY", "API_KEY", "STEAM_MAFILE"])("preserves the %s login subtype and all known extended fields", (loginType) => {
+    const fields = { loginType, creditCardNumber: "000123", creditCardHolder: "合成", creditCardExpiry: "01/30", creditCardCVV: "007", steamAccountName: "account", steamDisplayName: "display", steamDeviceId: "device", steamSharedSecretBase64: " AQID== ", steamId: "76561198000000001", steamAccessToken: " token ", steamRefreshToken: "refresh", steamLoginSecure: "cookie", steamRevocationCode: "recovery", steamIdentitySecret: "identity", steamTokenGid: "gid", steamRawJson: ' {"future":null} ', passwordHistory: [{ password: " old ", lastUsedAt: "2026-09-29T00:00:00Z", future: true }] };
+    expect(normalizeImportedVaultItem({ kind: "login", ...fields })).toMatchObject(fields);
+  });
+
+  it("retains notes fields, complete card faces, document title, optional nulls and ordinary unknown data", () => {
+    const cardFace = { imageAttachmentName: "wallet-test", displayMode: "HIDDEN", showBrandIcon: false, future: { enabled: false, value: null } };
+    const customFields = [{ name: "Boolean", value: "false", protected: false, fieldType: "BOOLEAN", future: "preserved" }];
+    expect(normalizeImportedVaultItem({ kind: "secure-note", content: "body", customFields, future: [null, 0, false, ""] })).toMatchObject({ customFields, future: [null, 0, false, ""] });
+    expect(normalizeImportedVaultItem({ kind: "card", cardFace, iban: null })).toMatchObject({ cardFace, iban: null });
+    expect(normalizeImportedVaultItem({ kind: "identity", cardFace, documentTitle: "Dr.", address: { future: "kept" } })).toMatchObject({ cardFace, documentTitle: "Dr.", address: { future: "kept" } });
+    expect(normalizeImportedVaultItem({ kind: "billing-address", cardFace: null })).toMatchObject({ cardFace: null });
+    expect(normalizeImportedVaultItem({ kind: "passkey", signCountHighWaterMark: 27 })).toMatchObject({ signCountHighWaterMark: 27 });
+  });
+
+  it("retains unfamiliar login subtypes and incompatible shapes as readonly instead of PASSWORD", () => {
+    for (const raw of [{ kind: "login", loginType: "FUTURE_KEY" }, { kind: "login", sshKeyData: { future: true } }, { kind: "totp", otpType: "FUTURE_OTP" },
+      { kind: "login", uris: [{ uri: "unsupported shape" }] }, { kind: "login", uriRules: [{ uri: "example.invalid", matchType: "future-rule" }] },
+      { kind: "passkey", signCount: "9007199254740993" }]) {
+      expect(normalizeImportedVaultItem(raw)).toMatchObject({ kind: "opaque", originalPayload: JSON.stringify(raw) });
+    }
+  });
+
+  it("does not convert unknown exact numbers into rounded cache values", async () => {
+    const { parseLosslessJson } = await import("../core/lossless-json");
+    const raw = parseLosslessJson('{"kind":"login","future":{"counter":9007199254740993,"precise":0.1234567890123456789}}');
+    const item = normalizeImportedVaultItem(raw);
+    expect(item?.kind).toBe("opaque");
+    if (item?.kind !== "opaque") throw new Error("Expected readonly item");
+    expect(item.originalPayload).toContain('"counter":9007199254740993');
+    expect(item.originalPayload).toContain('"precise":0.1234567890123456789');
+    const hotp = normalizeImportedVaultItem(parseLosslessJson('{"kind":"totp","otpType":"HOTP","counter":9007199254740993}'));
+    expect(hotp).toMatchObject({ kind: "totp", counter: "9007199254740993" });
   });
 });

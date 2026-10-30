@@ -1,0 +1,623 @@
+{
+  "title": "Monica · 数据库与文件夹",
+  "brief": "沿用青绿 M3E 和系统字体。数据库与文件夹连续列表，12px边距、24px外圆角、4px相邻圆角；完整路径与选中状态可见。Passkey/Steam页面的传输入口继承当前搜索与数据库/文件夹范围（包含分页外匹配项），后台预览再展开必要关联项目。复制保留源记录，受限项列出原因并允许取消或跳过。传输目标统一选择本地库或已解锁MDBX，其他后端仍在接入。本地保存与MDBX使用相同连续分组布局；单选文件夹、复制/移动和预览位置保持一致。附件沿用现有管理弹窗，显示文件名、大小与下载/替换/删除。保留分类时按来源数据库分别解析文件夹，不能跨库混用同名/同ID目录。 复制/移动选项在窄屏或大字号下排列为两条完整行，图标与标题同排、说明自然换行，避免两列挤压。 320–420px传输弹窗减少叠加留白：正文8px、分组12px、条目8px，保留复选框触控面积和图标，让项目名称与来源有足够行宽。",
+  "frame": "phone",
+  "platform": "web",
+  "paletteKey": "teal",
+  "theme": {
+    "dark": true,
+    "bothModes": true,
+    "contrast": "standard",
+    "shape": "rounded",
+    "font": "system",
+    "emphasized": true,
+    "motion": "standard"
+  },
+  "frames": [
+    {
+      "id": "transferentry318",
+      "name": "Passkey",
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 850
+    },
+    {
+      "id": "folderfilter318",
+      "name": "Steam · 筛选",
+      "x": 430,
+      "y": 0,
+      "w": 390,
+      "h": 850
+    },
+    {
+      "id": "foldertransfer318",
+      "name": "Passkey · 复制",
+      "x": 860,
+      "y": 0,
+      "w": 390,
+      "h": 850
+    },
+    {
+      "id": "localsource318",
+      "name": "密码源 · 本地库",
+      "x": 1290,
+      "y": 0,
+      "w": 390,
+      "h": 850
+    },
+    {
+      "id": "localtransfer318",
+      "name": "复制或移动项目",
+      "x": 1720,
+      "y": 0,
+      "w": 390,
+      "h": 850
+    },
+    {
+      "id": "localfiles318",
+      "name": "附件",
+      "x": 2150,
+      "y": 0,
+      "w": 390,
+      "h": 850
+    }
+  ],
+  "groups": [
+    {
+      "id": "transferentry318header",
+      "frameId": "transferentry318",
+      "x": 12,
+      "y": 12,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "transferentry318bar",
+          "kind": "topAppBar",
+          "label": "Passkey",
+          "icon": "arrow_back",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled"
+        }
+      ]
+    },
+    {
+      "id": "transferentry318rows",
+      "frameId": "transferentry318",
+      "x": 12,
+      "y": 100,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "transferentry3180",
+          "size": 366,
+          "icon": "search",
+          "radius": 24,
+          "variant": "filled",
+          "kind": "searchBar",
+          "label": "搜索当前分类"
+        },
+        {
+          "id": "transferentry3181",
+          "size": 366,
+          "icon": null,
+          "radius": 4,
+          "variant": "filled",
+          "kind": "select",
+          "label": "数据库",
+          "tabs": [
+            {
+              "label": "工作密码库",
+              "icon": null
+            }
+          ],
+          "selected": 0
+        },
+        {
+          "id": "transferentry3182",
+          "size": 366,
+          "icon": "folder",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "工作 / 登录",
+          "supporting": "当前文件夹"
+        },
+        {
+          "id": "transferentry3183",
+          "size": 366,
+          "icon": "drive_file_move",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "button",
+          "label": "批量传输"
+        },
+        {
+          "id": "transferentry3184",
+          "size": 366,
+          "icon": "key",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "GitHub",
+          "supporting": "可跨端使用"
+        },
+        {
+          "id": "transferentry3185",
+          "size": 366,
+          "icon": "key",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "设备密钥",
+          "supporting": "仅原设备可用"
+        },
+        {
+          "id": "transferentry3186",
+          "size": 366,
+          "icon": "chevron_right",
+          "radius": 24,
+          "variant": "filled",
+          "kind": "button",
+          "label": "下一页"
+        }
+      ]
+    },
+    {
+      "id": "folderfilter318header",
+      "frameId": "folderfilter318",
+      "x": 442,
+      "y": 12,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "folderfilter318bar",
+          "kind": "topAppBar",
+          "label": "Steam · 筛选",
+          "icon": "arrow_back",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled"
+        }
+      ]
+    },
+    {
+      "id": "folderfilter318rows",
+      "frameId": "folderfilter318",
+      "x": 442,
+      "y": 100,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "folderfilter3180",
+          "size": 366,
+          "icon": null,
+          "radius": 24,
+          "variant": "filled",
+          "kind": "select",
+          "label": "数据库",
+          "tabs": [
+            {
+              "label": "游戏密码库",
+              "icon": null
+            }
+          ],
+          "selected": 0
+        },
+        {
+          "id": "folderfilter3181",
+          "size": 366,
+          "icon": "list",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "全部文件夹",
+          "supporting": "包含根目录与子文件夹"
+        },
+        {
+          "id": "folderfilter3182",
+          "size": 366,
+          "icon": "folder_off",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "根目录",
+          "supporting": "未放入文件夹"
+        },
+        {
+          "id": "folderfilter3183",
+          "size": 366,
+          "icon": "check",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "游戏 / Steam",
+          "supporting": "已选择 · 2 个项目"
+        },
+        {
+          "id": "folderfilter3184",
+          "size": 366,
+          "icon": "folder",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "游戏 / 其他",
+          "supporting": "1 个项目"
+        },
+        {
+          "id": "folderfilter3185",
+          "size": 366,
+          "icon": "check",
+          "radius": 24,
+          "variant": "filled",
+          "kind": "button",
+          "label": "完成"
+        }
+      ]
+    },
+    {
+      "id": "foldertransfer318header",
+      "frameId": "foldertransfer318",
+      "x": 872,
+      "y": 12,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "foldertransfer318bar",
+          "kind": "topAppBar",
+          "label": "Passkey · 复制",
+          "icon": "arrow_back",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled"
+        }
+      ]
+    },
+    {
+      "id": "foldertransfer318rows",
+      "frameId": "foldertransfer318",
+      "x": 872,
+      "y": 100,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "foldertransfer3180",
+          "size": 366,
+          "icon": null,
+          "radius": 24,
+          "variant": "filled",
+          "kind": "select",
+          "label": "目标数据库",
+          "tabs": [
+            {
+              "label": "家庭 MDBX",
+              "icon": null
+            }
+          ],
+          "selected": 0
+        },
+        {
+          "id": "foldertransfer3181",
+          "size": 366,
+          "icon": "folder",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "家庭 / 登录",
+          "supporting": "目标文件夹"
+        },
+        {
+          "id": "foldertransfer3182",
+          "size": 366,
+          "icon": "key",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "GitHub",
+          "supporting": "可复制 · 保留源记录"
+        },
+        {
+          "id": "foldertransfer3183",
+          "size": 366,
+          "icon": "warning",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "设备密钥",
+          "supporting": "不能导出私钥 · 将跳过"
+        },
+        {
+          "id": "foldertransfer3184",
+          "size": 366,
+          "icon": "close",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "button",
+          "label": "取消"
+        },
+        {
+          "id": "foldertransfer3185",
+          "size": 366,
+          "icon": "content_copy",
+          "radius": 24,
+          "variant": "filled",
+          "kind": "button",
+          "label": "跳过受限项并继续"
+        }
+      ]
+    },
+    {
+      "id": "localsource318header",
+      "frameId": "localsource318",
+      "x": 1302,
+      "y": 12,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "localsource318bar",
+          "kind": "topAppBar",
+          "label": "密码源 · 本地库",
+          "icon": "arrow_back",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled"
+        }
+      ]
+    },
+    {
+      "id": "localsource318rows",
+      "frameId": "localsource318",
+      "x": 1302,
+      "y": 100,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "localsource3180",
+          "size": 366,
+          "icon": "database",
+          "radius": 24,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "Monica 本地库",
+          "supporting": "已连接 · 加密保存"
+        },
+        {
+          "id": "localsource3181",
+          "size": 366,
+          "icon": "drive_file_move",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "button",
+          "label": "批量传输"
+        },
+        {
+          "id": "localsource3182",
+          "size": 366,
+          "icon": "download",
+          "radius": 4,
+          "variant": "text",
+          "kind": "button",
+          "label": "导出脱敏诊断"
+        },
+        {
+          "id": "localsource3183",
+          "size": 366,
+          "icon": "fact_check",
+          "radius": 24,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "传输预览",
+          "supporting": "选择项目、目标库与文件夹"
+        }
+      ]
+    },
+    {
+      "id": "localtransfer318header",
+      "frameId": "localtransfer318",
+      "x": 1732,
+      "y": 12,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "localtransfer318bar",
+          "kind": "topAppBar",
+          "label": "复制或移动项目",
+          "icon": "arrow_back",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled"
+        }
+      ]
+    },
+    {
+      "id": "localtransfer318rows",
+      "frameId": "localtransfer318",
+      "x": 1732,
+      "y": 100,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "localtransfer3180",
+          "size": 366,
+          "icon": null,
+          "radius": 24,
+          "variant": "filled",
+          "kind": "select",
+          "label": "目标密码库",
+          "tabs": [
+            {
+              "label": "Monica 本地库",
+              "icon": null
+            }
+          ],
+          "selected": 0
+        },
+        {
+          "id": "localtransfer3181",
+          "size": 366,
+          "icon": "content_copy",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "复制",
+          "supporting": "保留来源项目"
+        },
+        {
+          "id": "localtransfer3182",
+          "size": 366,
+          "icon": "folder_off",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "根目录",
+          "supporting": "未分类项目"
+        },
+        {
+          "id": "localtransfer3183",
+          "size": 366,
+          "icon": "check",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "游戏",
+          "supporting": "已选择 · 本地文件夹"
+        },
+        {
+          "id": "localtransfer3184",
+          "size": 366,
+          "icon": "folder_copy",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "保留原分类层级",
+          "supporting": "包含关联项目与附件"
+        },
+        {
+          "id": "localtransfer3185",
+          "size": 366,
+          "icon": "link",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "Steam · 2 个项目",
+          "supporting": "关联笔记与验证码自动包含"
+        },
+        {
+          "id": "localtransfer3186",
+          "size": 366,
+          "icon": "rule",
+          "radius": 24,
+          "variant": "filled",
+          "kind": "button",
+          "label": "检查并生成计划"
+        }
+      ]
+    },
+    {
+      "id": "localfiles318header",
+      "frameId": "localfiles318",
+      "x": 2162,
+      "y": 12,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "localfiles318bar",
+          "kind": "topAppBar",
+          "label": "附件",
+          "icon": "arrow_back",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled"
+        }
+      ]
+    },
+    {
+      "id": "localfiles318rows",
+      "frameId": "localfiles318",
+      "x": 2162,
+      "y": 100,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "localfiles3180",
+          "size": 366,
+          "icon": "database",
+          "radius": 24,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "Monica 本地库",
+          "supporting": "附件随本地密码库加密保存"
+        },
+        {
+          "id": "localfiles3181",
+          "size": 366,
+          "icon": "description",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "listItem",
+          "label": "steam.maFile",
+          "supporting": "197 B · 可下载"
+        },
+        {
+          "id": "localfiles3182",
+          "size": 366,
+          "icon": "download",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "button",
+          "label": "下载"
+        },
+        {
+          "id": "localfiles3183",
+          "size": 366,
+          "icon": "upload_file",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "button",
+          "label": "替换文件"
+        },
+        {
+          "id": "localfiles3184",
+          "size": 366,
+          "icon": "delete",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "button",
+          "label": "删除附件"
+        },
+        {
+          "id": "localfiles3185",
+          "size": 366,
+          "icon": "add",
+          "radius": 4,
+          "variant": "filled",
+          "kind": "button",
+          "label": "上传文件"
+        },
+        {
+          "id": "localfiles3186",
+          "size": 366,
+          "icon": "check",
+          "radius": 24,
+          "variant": "filled",
+          "kind": "button",
+          "label": "完成"
+        }
+      ]
+    }
+  ],
+  "dynamicColor": false
+}

@@ -1,3 +1,4 @@
+import { dialogContent } from "./fixtures/material";
 import { chromium, expect, test, type BrowserContext, type Download, type Locator, type Page, type TestInfo } from "@playwright/test";
 import * as kdbxweb from "kdbxweb";
 import path from "node:path";
@@ -17,7 +18,7 @@ async function launchExtension(testInfo: TestInfo): Promise<{ context: BrowserCo
   const extensionPath = path.resolve("dist");
   const context = await chromium.launchPersistentContext(testInfo.outputPath("keepass-history-profile"), {
     channel: "chromium",
-    headless: true,
+    headless: true, locale: "zh-CN",
     acceptDownloads: true,
     colorScheme: "dark",
     reducedMotion: "reduce",
@@ -46,7 +47,7 @@ test("KeePass history reveals one field at a time and restores a complete KDBX4.
     await page.getByRole("button", { name: "打开导航" }).click();
     await page.getByRole("button", { name: "密码源" }).click();
     await page.getByRole("button", { name: "连接 KeePass" }).click();
-    const sourceDialog = page.getByRole("dialog", { name: "连接 KeePass" });
+    const sourceDialog = dialogContent(page, { name: "连接 KeePass" });
     await sourceDialog.getByLabel("显示名称").fill("KeePass History Source");
     await sourceDialog.getByLabel("KeePass 数据库文件").setInputFiles({
       name: "history-fixture.kdbx",
@@ -55,6 +56,8 @@ test("KeePass history reveals one field at a time and restores a complete KDBX4.
     });
     await sourceDialog.getByLabel("数据库密码（可留空）").fill(DATABASE_PASSWORD);
     await sourceDialog.getByRole("button", { name: "解锁并连接" }).click();
+    // The dialog closes once the source is connected and saved.
+    await expect(sourceDialog).toHaveCount(0);
 
     const providerResponse = await page.evaluate(async () => chrome.runtime.sendMessage({ type: "PROVIDER_LIST" })) as RuntimeResponse<Array<{ id: string; name: string }>>;
     expect(providerResponse, providerResponse.error).toMatchObject({ ok: true });
@@ -65,12 +68,12 @@ test("KeePass history reveals one field at a time and restores a complete KDBX4.
     await expect.poll(async () => (await listItems(page)).some((item) => item.title === "KeePass history account")).toBe(true);
 
     await page.getByRole("button", { name: "打开导航" }).click();
-    await page.getByRole("button", { name: /^登录项/ }).click();
+    await page.getByRole("navigation", { name: "主导航" }).getByRole("button", { name: /^登录项/ }).click();
     const historyButton = page.getByRole("button", { name: "查看 KeePass history account 的 KeePass 历史" });
     await expectMinimumTarget(historyButton);
     await historyButton.click();
 
-    const dialog = page.getByRole("dialog", { name: "KeePass 历史 · KeePass history account" });
+    const dialog = dialogContent(page, { name: "KeePass 历史 · KeePass history account" });
     await expect(dialog).toBeVisible();
     await expect(dialog).toHaveCSS("border-radius", "16px");
     await expect(dialog).toHaveCSS("background-image", "none");
@@ -91,6 +94,13 @@ test("KeePass history reveals one field at a time and restores a complete KDBX4.
     await expect(dialog.getByRole("heading", { name: "字段" })).toBeVisible();
     await expect(dialog.getByText("old.bin", { exact: true })).toBeVisible();
     await expect(dialog.getByText("自定义元数据").locator("xpath=following-sibling::dd")).toHaveText("1 项");
+
+    await page.evaluate(() => { document.documentElement.style.fontSize = "100%"; });
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await expectNoHorizontalOverflow(dialog);
+    await page.screenshot({ path: testInfo.outputPath("keepass-history-detail-desktop.png") });
+    await page.setViewportSize({ width: 375, height: 1000 });
+    await page.evaluate(() => { document.documentElement.style.fontSize = "200%"; });
 
     const passwordRow = dialog.locator(".keepass-history-fields li").filter({ has: page.getByText("Password", { exact: true }) });
     await expect(passwordRow).toContainText("受保护字段");
@@ -123,9 +133,9 @@ test("KeePass history reveals one field at a time and restores a complete KDBX4.
     await page.evaluate(() => { document.documentElement.style.fontSize = "200%"; });
     await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
     await page.getByRole("button", { name: "打开导航" }).click();
-    await page.getByRole("button", { name: /^登录项/ }).click();
+    await page.getByRole("navigation", { name: "主导航" }).getByRole("button", { name: /^登录项/ }).click();
     await page.getByRole("button", { name: "查看 KeePass history account 的 KeePass 历史" }).click();
-    const lightDialog = page.getByRole("dialog", { name: "KeePass 历史 · KeePass history account" });
+    const lightDialog = dialogContent(page, { name: "KeePass 历史 · KeePass history account" });
     await expect(lightDialog).toHaveCSS("background-image", "none");
     await expectNoGradients(lightDialog);
     await expectNoHorizontalOverflow(lightDialog);

@@ -1,6 +1,7 @@
 import safeRegex from "safe-regex2";
 import { getDomain } from "tldts";
 import type { LoginItem, LoginUriRule } from "./model";
+import { effectiveLoginUriRules, hasAndroidUrlRules } from './url-rules';
 
 const MAX_REGEX_LENGTH = 512;
 
@@ -19,8 +20,8 @@ export function loginMatchScore(item: LoginItem, pageUrl: string): number {
   if (item.loginType && item.loginType !== "PASSWORD" && item.loginType !== "SSO") return 0;
   const page = parsePageUrl(pageUrl);
   if (!page) return 0;
-  const rules = effectiveUriRules(item);
-  return rules.reduce((score, rule) => Math.max(score, uriRuleMatchScore(rule, page)), 0);
+  const rules = effectiveLoginUriRules(item), android = hasAndroidUrlRules(item.customFields);
+  return rules.reduce((score, rule) => Math.max(score, uriRuleMatchScore(rule, page, android)), 0);
 }
 
 export function matchingLogins(items: LoginItem[], pageUrl: string): LoginItem[] {
@@ -31,17 +32,23 @@ export function matchingLogins(items: LoginItem[], pageUrl: string): LoginItem[]
     .map(({ item }) => item);
 }
 
-function effectiveUriRules(item: LoginItem): LoginUriRule[] {
-  if (item.uriRules?.length) return item.uriRules;
-  return item.uris.map((uri) => ({ uri, matchType: "base-domain" }));
-}
-
-function uriRuleMatchScore(rule: LoginUriRule, page: URL): number {
+function uriRuleMatchScore(rule: LoginUriRule, page: URL, android: boolean): number {
   const stored = rule.uri.trim();
   if (!stored || rule.matchType === "never") return 0;
   if (rule.matchType === "exact") return comparableUrl(stored) === page.href ? 140 : 0;
-  if (rule.matchType === "starts-with") return page.href.startsWith(comparableUrl(stored, false)) ? 120 : 0;
-  if (rule.matchType === "regex") return matchesSafeRegex(stored, page.href) ? 115 : 0;
+  if (rule.matchType === "starts-with") {
+    try {
+      const saved = new URL(stored.includes('://') ? stored : `https://${stored}`);
+      if (!stored.includes('://')) return saved.hostname === stored.toLowerCase() && saved.hostname === page.hostname ? 120 : 0;
+      return saved.origin === page.origin && page.href.startsWith(comparableUrl(stored, false)) ? 120 : 0;
+    } catch { return 0; }
+  }
+  if (rule.matchType === "regex") return matchesSafeRegex(stored, page.href, android) ? 115 : 0;
+  if (rule.matchType === 'host') {
+    try { return new URL(stored.includes('://') ? stored : `https://${stored}`).hostname === page.hostname ? 110 : 0; }
+    catch { return 0; }
+  }
+  if (!['default', 'base-domain', 'domain'].includes(rule.matchType)) return 0;
 
   const storedHost = normalizeHost(stored);
   const pageHost = normalizeHostname(page.hostname);
@@ -76,10 +83,12 @@ function comparableUrl(value: string, ensureTrailingSlash = true): string {
   }
 }
 
-function matchesSafeRegex(pattern: string, value: string): boolean {
-  if (pattern.length > MAX_REGEX_LENGTH || !safeRegex(pattern)) return false;
+function matchesSafeRegex(pattern: string, value: string, android: boolean): boolean {
+  // Android uses RE2J: unsupported lookarounds/backreferences fail closed here.
+  if (pattern.length > MAX_REGEX_LENGTH || value.length > 8192 || !safeRegex(pattern)
+    || android && (/\(\?[=!<]/.test(pattern) || /\\[1-9]/.test(pattern))) return false;
   try {
-    return new RegExp(pattern, "i").test(value);
+    return new RegExp(pattern, android ? '' : 'i').test(value);
   } catch {
     return false;
   }

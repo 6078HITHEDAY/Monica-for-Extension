@@ -1,0 +1,83 @@
+{
+  "date": "2026-10-23",
+  "version": "1.0.101",
+  "build": {
+    "buildId": "7d0ac6f978602f414647"
+  },
+  "regression": {
+    "files": 118,
+    "tests": 1704,
+    "passed": true
+  },
+  "edge": {
+    "tests": 3,
+    "passed": true,
+    "desktop": true,
+    "widths": [
+      390,
+      320
+    ],
+    "largeText": "200%"
+  },
+  "securityAudit": {
+    "passed": true,
+    "runtimeCommands": 224,
+    "managerOnlyCommands": 24
+  },
+  "android": {
+    "zipImported": 3,
+    "zipExported": 3,
+    "kdbxImported": 3,
+    "csvImported": 1,
+    "aegisImported": 1,
+    "stratumImported": 1,
+    "otpImported": 1,
+    "steamImported": 1,
+    "sensitiveWhitespacePreserved": true
+  },
+  "extensionReadback": [
+    {
+      "file": "android-return.zip",
+      "count": 3,
+      "passwordsAndNotesExact": true,
+      "otpParametersExact": true
+    },
+    {
+      "file": "android-return.kdbx",
+      "count": 3,
+      "passwordsAndNotesExact": true,
+      "otpParametersExact": true
+    },
+    {
+      "file": "android-kdbx-return.kdbx",
+      "count": 3,
+      "passwordsAndNotesExact": true,
+      "otpParametersExact": true
+    }
+  ],
+  "canvas": {
+    "local": true,
+    "project": "extension-import-export",
+    "title": "Monica · 导入与导出",
+    "frames": 3,
+    "groups": 19,
+    "browser": "155.0.4283.62"
+  },
+  "limits": {
+    "attachments": false,
+    "trash": false,
+    "connectionSettings": false,
+    "encryptedAegisStratum": "synthetic independent crypto fixtures",
+    "otherLocales": "English fallback for new messages"
+  },
+  "publication": {
+    "released": false
+  },
+  "androidRunner": {
+    "passed": true,
+    "powershellMinimum": "7.4",
+    "reusedAvd": "Monica_Issue136_API_32",
+    "user": 10,
+    "restartAndUserStartVerified": true
+  }
+}

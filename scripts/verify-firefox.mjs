@@ -1,0 +1,22 @@
+import assert from 'node:assert/strict';
+import { readFile, readdir, access } from 'node:fs/promises';
+import path from 'node:path';
+const root=path.resolve(import.meta.dirname,'..'),output=path.join(root,'dist-firefox');
+const m=JSON.parse(await readFile(path.join(output,'manifest.json'),'utf8'));
+const chrome=JSON.parse(await readFile(path.join(root,'public/manifest.json'),'utf8'));
+const pkg=JSON.parse(await readFile(path.join(root,'package.json'),'utf8'));
+assert.equal(m.version,pkg.version);assert.equal(m.manifest_version,3);
+assert.deepEqual(m.background,{scripts:['background.js']});
+assert.deepEqual(m.browser_specific_settings.gecko,{id:'monica@monica-pass.github.io',strict_min_version:'153.0'});
+assert.equal(m.sidebar_action.default_panel,'index.html?surface=sidepanel');
+assert.equal(m.action.default_popup,'popup.html');
+for(const key of ['key','minimum_chrome_version','side_panel','externally_connectable'])assert.equal(m[key],undefined);
+assert.deepEqual(m.permissions,chrome.permissions.filter(p=>!['offscreen','sidePanel','favicon'].includes(p)));
+assert.deepEqual(m.optional_permissions,chrome.optional_permissions);assert.deepEqual(m.host_permissions,chrome.host_permissions);
+assert.deepEqual(m.content_scripts,chrome.content_scripts);
+assert.deepEqual(m.web_accessible_resources,chrome.web_accessible_resources.map(({use_dynamic_url,...entry})=>entry));
+assert.equal(m.content_security_policy.extension_pages,chrome.content_security_policy.extension_pages.replace("frame-ancestors 'none'","frame-ancestors 'self'"));
+for(const file of ['index.html','popup.html','background.js','content.js','main-world.js','passkey-verify.html','mdbx-offscreen.html','mdbx-browser/offscreen.js','mdbx-browser/engine-worker.js','mdbx-browser/engine.js','mdbx-browser/monica_mdbx2_browser.wasm','mdbx-browser/BROWSER-BUILD.json','mdbx-browser/THIRD-PARTY-NOTICES.json'])await access(path.join(output,file));
+const files=await readdir(output,{recursive:true});assert.equal(files.some(x=>x.endsWith('.map')),false);
+for(const file of files.filter(x=>x.endsWith('.html'))){const html=await readFile(path.join(output,file),'utf8');for(const [,resource]of html.matchAll(/(?:src|href)="([^"#]+)"/g))if(!/^(https?:|data:)/.test(resource))await access(path.resolve(output,path.dirname(file),resource));}
+console.log(`Verified Firefox ${m.version}: exact permissions, private engine, MAIN bridge, sidebar and local assets.`);

@@ -2,7 +2,7 @@
 
 ## Security claim
 
-Monica Extension is designed so that vault plaintext and private keys are available only while the user has explicitly unlocked the extension. Web pages do not receive vault listings or provider credentials. Autofill and Passkey operations require an extension-controlled user decision and are bound to the requesting page context.
+Monica Extension mediates full-vault and private-key access through the trusted background service. Master-password mode requires unlocking; optional device-key mode can unlock automatically and relies on browser/OS profile protection. A user may grant individual password logins permission to fill while locked; only those usernames/passwords are retained in a separately encrypted, device-local cache. Web pages do not receive vault listings or provider credentials. Autofill and Passkey operations require an extension-controlled user decision and are bound to the requesting page context.
 
 This is an engineering security claim, not a claim of formal verification. The repository has automated security gates but has not yet completed an independent third-party audit. See **Assurance status** below.
 
@@ -22,27 +22,38 @@ This is an engineering security claim, not a claim of formal verification. The r
 | Component | Trust level | May receive |
 | --- | --- | --- |
 | Extension manager/popup | Trusted UI | User-selected vault data and management operations |
+| Passkey verification window | Trusted extension page | One expiring request context and a freshly entered master password |
 | Background service worker | Trusted cryptographic boundary | Unlocked vault state, provider secrets and private keys |
 | Isolated-world content script | Restricted extension code | Field metadata and one explicitly selected fill payload |
 | Main-world Passkey bridge | Hostile page boundary | Public WebAuthn request/result messages only |
 | Web page and frames | Untrusted | No vault listing, provider credential, TOTP seed or private key |
 | WebDAV/Bitwarden/Steam server | Untrusted remote peer | Protocol-required requests; encrypted backup bytes where configured |
-| Browser profile/OS | Platform trust | Encrypted vault and short-lived trusted session material |
+| Browser profile/OS | Platform trust | Encrypted vault, persistent keys for device-key/locked-autofill modes, and trusted session material |
 | Build dependencies/CI | Supply-chain boundary | Source and test fixtures, never production user secrets |
+
+## Website icons
+
+The manager and popup first read Chromium's local favicon cache using the `favicon` permission. The `_favicon` endpoint is not web-accessible. Cache misses may request only the selected website origin's `/favicon.ico`, without credentials, referrers or redirects; no third-party icon service is used. The website can observe this request and the client's IP address. Login URI userinfo, paths, queries and fragments are stripped before icon lookup. Non-web URIs and regex match rules do not become image requests. Wi-Fi, SSH and barcode records retain type icons.
+
+Direct requests require HTTPS, a public suffix and the default port. IP literals, local/special-use names (including `.onion`), HTTP and other ports use browser cache only. This name-based restriction is not a DNS-resolution guarantee: a public domain can resolve to a private address, subject to the browser's network policy. Responses are capped at 256 KiB with a three-second timeout and validated as image data. Images are rendered through inert `<img>` elements, never as document markup. Lists load icons near the viewport with at most four lookups at once, deduplicate concurrent requests, and cancel obsolete work. The bounded in-memory cache is cleared with the vault view/session; it is not serialized into vaults, backups, sync data or extension storage.
 
 ## Security invariants
 
 1. Full-vault and provider commands require an extension-page sender.
 2. Page-originated save and Passkey requests are bound to the sender's tab, frame and origin and expire.
 3. Password, card, identity, payment and TOTP values are sent to content scripts only after explicit selection.
-4. Android `privateKeyAlias` is metadata, never treated as browser signing material.
-5. Browser PKCS#8 Passkey keys remain inside the encrypted vault and are never serialized into Android backups.
+4. Android device-bound key aliases remain metadata. A `privateKeyAlias` value is usable only if it passes portable PKCS#8 validation and the algorithm is supported.
+5. Portable Passkey keys remain behind the unlocked encrypted vault/provider boundary. Android WebDAV transfer of portable keys requires the encrypted backup mode; ordinary ZIP backup handling does not enable it.
 6. Provider diagnostics contain classifications and redacted identifiers, not response bodies, credentials or tokens.
 7. No remote JavaScript, source maps, fixture secrets or plaintext vault snapshots ship in the release.
 8. Provider data and backup archives are untrusted inputs and must pass size, origin, path and format limits.
 9. WebDAV credentials must not cross an insecure transport, redirect, origin boundary or attacker-controlled path boundary.
 10. Release artifacts must be reproducible from the committed lockfile and accompanied by verifiable inventory and dependency evidence.
 11. Steam confirmation/login messages accept only an item ID and selected request identifiers; secrets and session tokens are loaded from the unlocked vault by the service worker.
+12. Locked autofill grants are manager-only, opt-in and limited to active ordinary password logins. They never authorize OTP, custom fields, private keys, general vault reads or secret-copy APIs.
+13. Grants live in extension settings, never in provider item fields. Imports cannot grant access, and restoring a portable full-vault backup clears all grants.
+14. Passkey user verification requires a fresh master-password check in `passkey-verify.html` or a verified Windows Hello result. An unlocked device-key vault alone never sets the UV flag. Verification messages are extension-only; the page/content bridge never receives the password.
+15. A verification request has a random single-use ID, an exact extension page URL, a top-level-frame check, an expiry and a five-attempt limit. Closing, aborting, locking or navigating cancels the request. Before signing, the background rechecks the original document and credential material.
 
 ## Threat analysis
 
@@ -80,27 +91,47 @@ Repository Actions are restricted to GitHub-owned actions plus the explicitly us
 ## Cryptography
 
 - Vault: AES-256-GCM with 128-bit tag and fixed versioned AAD.
-- Vault protection: master-password mode uses Argon2id v1.3 with 64 MiB memory, 3 iterations, parallelism 1 and a 32-byte salt. Optional device-key mode uses a random 256-bit key stored in extension-local browser storage and is accurately presented as lower offline protection. Imported KDF parameters are bounded; legacy PBKDF2 envelopes migrate after successful unlock/restore.
+- Vault protection: master-password mode uses Argon2id v1.3 with 64 MiB memory, 3 iterations, parallelism 1 and a 32-byte salt. Optional device-key mode uses a random 256-bit key stored in extension-origin IndexedDB (`monica-extension-device-keys`), inaccessible to page/content-script origins but still within the browser profile. It provides lower offline protection. Imported KDF parameters are bounded; legacy PBKDF2 envelopes migrate after successful unlock/restore.
 - Android backup: AES-256-GCM with Android's `MONICA_ENC_V1` envelope and PBKDF2-HMAC-SHA256 at 100,000 iterations.
 - Randomness: Web Crypto random values.
-- Passkeys: ES256 browser-local credentials; Android aliases are non-exportable metadata.
+- Passkeys: independent and file-backed ES256 credentials sign with zero; live Bitwarden bindings follow its official zero/positive branches. Positive counters require a fresh sync, optimistic server revision check and confirmed durable write before signing. Usage statistics neither enqueue writes nor change file-provider fingerprints; interrupted prepared assertions cannot be returned as committed. Android device-bound aliases remain non-exportable metadata. Explicit backup flags are preserved. Neither zeroing nor freezing a historical positive counter resets the relying party's state; such independent copies may require re-registration.
 - Steam Guard: HMAC-SHA1 30-second codes; confirmation hashes use HMAC-SHA1 and mobile login approval signatures use HMAC-SHA256, matching Monica Android.
 
 AES-GCM, legacy PBKDF2 and ECDSA use platform Web Crypto. Argon2id uses the bundled `hash-wasm` implementation under the extension CSP; no cryptographic code is downloaded at runtime. Argon2id output is covered by an independent Python vector.
 
 ## Data lifecycle
 
-- At rest: one authenticated encrypted vault envelope in IndexedDB. Device-key mode stores a separate random key in extension-local browser storage; master-password mode stores no derived key there.
+- At rest: an authenticated encrypted vault envelope in IndexedDB. Device-key mode stores its random key in a separate extension-origin IndexedDB; master-password mode stores no derived key there. Opted-in logins have a separate authenticated encrypted projection described below.
+- Legacy device-key storage: startup migrates all legacy `chrome.storage.local` key entries, including orphaned entries, and removes each legacy copy only after the IndexedDB transaction commits. Retry never overwrites an existing private copy from legacy storage. Key bytes and vault ciphertext remain unchanged. Old builds cannot read the new key location; direct downgrade of a migrated device-key profile is unsupported.
 - Unlocked: plaintext exists in the trusted background process memory.
 - Legacy unlock/restore: authentication completes with the bounded legacy KDF, then a fresh Argon2id envelope is committed before the new session key is used; a failed best-effort migration leaves the authenticated legacy envelope usable for retry.
 - Session continuity: only trusted extension contexts may access session key material.
-- Lock: cached vault state, pending captures, pending Passkey requests and provider synchronization are cleared/cancelled.
+- Lock: full-vault session access, pending captures, pending Passkey requests and provider synchronization are cleared/cancelled. Explicitly granted username/password projections remain available for selected fills.
 - Export: vault exports are authenticated encrypted envelopes; Android WebDAV backups preserve the source encryption mode/configuration.
-- Diagnostics: response bodies and credentials are excluded; identifiers are redacted before export.
+- Diagnostics: response bodies are excluded; structured credentials, quoted secret fields and identifiers are redacted before export. Invalid decrypted JSON reports a generic parse error without source snippets. Text redaction is defense in depth, not permission to log arbitrary decrypted input.
+- Plaintext buffers: vault encryption clears encoded plaintext bytes on success/failure; decryption clears plaintext bytes after parsing. JavaScript strings/objects and browser-managed copies cannot be guaranteed erased.
+
+The current master-password policy accepts four characters for compatibility. This minimum is not a security recommendation: offline protection still depends on password entropy. Prefer a long, unique, randomly generated master password or a random multiword passphrase; Argon2id cannot compensate for a guessable password.
+
+## Filling selected passwords while locked
+
+`monica-extension-locked-autofill` contains a minimal encrypted projection of selected login identifiers, display summaries, username/password pairs, URI matching rules and autofill exclusions. A non-exportable AES-256-GCM CryptoKey is stored in the same extension-only IndexedDB. It cannot unlock the main vault. Notes, OTP seeds, custom fields, provider tokens and Passkey keys are excluded.
+
+The record is bound to a SHA-256 digest of the complete current encrypted vault envelope. Mutations prepare a replacement projection before committing the vault. A failed preparation cannot enable a grant; ordinary vault writes can still succeed, but the old projection then fails its envelope binding. Deletion, archival, grant revocation, password changes, provider disabling and backup replacement cannot silently reuse a stale copy.
+
+After asynchronous page inspection and OTP generation, the service rechecks the vault version and lock state immediately before dispatch. This rejects fills authorized before a lock or revocation. The exclusive queue is released after starting message delivery, so a stalled webpage cannot prevent the user from locking the vault.
+
+This feature deliberately changes the protection of selected passwords: anyone using the browser profile can fill them while Monica is locked. The key being non-exportable does not protect against a compromised browser process or malicious extension update capable of asking Web Crypto to decrypt. The editor explains this tradeoff before opt-in. Disabling a grant is logical revocation, not a guarantee of forensic erasure from storage hardware or historical filesystem backups.
 
 ## Assurance status
 
+Firefox 153+ preserves native document identity: sensitive operations query the current tab/frame first, compare its native `documentId`, and target delivery to that document. Firefox omits Chromium's `documentLifecycle`; explicit non-active values remain rejected, while Chromium still requires `active`. Origin, active-tab and secure-context checks remain enforced.
+
+Firefox's private MDBX iframe lives only in the generated background page. Authorization binds the exact owned random-fragment URL, native document ID, runtime ID, absence of a tab, connected owned frame and official BACKGROUND context. The Firefox-only CSP allows same-extension framing; privileged pages remain absent from web-accessible resources. Normal visible tabs and forged ports are rejected. Chromium retains its offscreen path and stricter no-framing CSP. See [Firefox acceptance](verification/firefox-20261021.md).
+
 Automated evidence currently includes unit tests, security-boundary tests, Chromium MV3 end-to-end tests, production dependency audit, release secret/source-map scan and deterministic package verification.
+
+The [2026-10-10 extension security review](security-review-2026-10-10.md) records reproduced findings, fixes, actual Edge isolation/migration evidence, dependency results and the scope of this review. Historical CI/release controls above are not proof that every external repository setting was rechecked in that review.
 
 Not yet complete:
 
@@ -110,3 +141,13 @@ Not yet complete:
 - formal verification of the cryptographic state machine.
 
 These limitations must remain visible until evidence exists. Security issues should be reported according to [SECURITY.md](../SECURITY.md).
+
+## Export, clipboard and recovery hardening (2026-10-21)
+
+The manager-only authenticated export operation verifies the current master password or bound Windows Hello identity on every plaintext/full-backup export. It captures the envelope, session and verifier binding before authentication and checks them again before producing data. Authentication and backup key derivation run outside the mutation queue so lock can cancel a pending request. The legacy runtime encrypted-export command is denied. The four-character minimum remains unchanged by user decision. An accessible manager can still reveal and copy individual fields; this is fresh authentication for export, not a new boundary against a compromised trusted extension page.
+
+Clipboard expiry is optional and off by default. Only enabling it requests optional clipboardRead/clipboardWrite. Foreground copy passes a SHA-256 digest to the background, never clipboard plaintext. A session-storage deadline and alarm survive worker suspension and copying-page closure. The authenticated shared offscreen document compares current text, hashes it, reads again synchronously and clears only matching text. Revoked permission, browser exit, OS sleep and clipboard contention may prevent cleanup. Windows clipboard history, cloud clipboard and copies on other devices remain outside this guarantee. No permission is requested on installation solely for this feature.
+
+IndexedDB stores the primary encrypted envelope and encrypted recovery history atomically. At most three modification-before checkpoints are retained, no more frequently than every 15 minutes, with total ciphertext capped at 64 MiB. Protection/KDF changes remove incompatible history. Quota failure retries without history to prioritize primary data. History can contain deleted data and previous passwords; it shares the browser profile and protection key, and is not an independent backup. Recovery export requires current authentication and reencrypts under a backup password. It does not automatically restore a damaged primary while locked or revert remote changes. Users can explicitly clear history.
+
+The runtime build identifier hashes source, public assets, package/lock metadata and bundling configuration. Both UI and worker bundle the same generated identifier; startup and credential-bearing export/unlock checks reject a mismatch even if both versions are 0.1.48. This detects stale installation state and is not a signature or tamper-proof attestation. Runtime diagnostic reports use explicit fields, excluding raw errors, provider URLs, local paths, item content and device/binding identifiers.

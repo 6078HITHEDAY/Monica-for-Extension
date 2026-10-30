@@ -1,14 +1,19 @@
 import { createHash } from "node:crypto";
 import { execFile, execFileSync } from "node:child_process";
-import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, posix, relative, resolve } from "node:path";
+import { basename, dirname, join, posix, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { unzipSync } from "fflate";
 
 const execFileAsync = promisify(execFile);
 const root = resolve(import.meta.dirname, "..");
-const releaseDir = resolve(root, "release");
+const outputArg = process.argv.indexOf("--output-dir");
+if (outputArg >= 0 && (!process.argv[outputArg + 1] || process.argv[outputArg + 1].startsWith("--"))) throw new Error("--output-dir requires a directory.");
+const releaseDir = resolve(outputArg >= 0 ? process.argv[outputArg + 1] : resolve(root, "release"));
+const allowDirty = process.argv.includes("--allow-dirty");
+const sourceTreeClean = git("status", "--porcelain", "--untracked-files=no") === "";
+if (!sourceTreeClean && !allowDirty) throw new Error("Refusing to verify a trusted release from a dirty tracked worktree. Use --allow-dirty only for a local development package.");
 const packageJson = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
 const packageLockBytes = await readFile(resolve(root, "package-lock.json"));
 const packageLock = JSON.parse(packageLockBytes.toString("utf8"));
@@ -18,17 +23,23 @@ const archivePath = resolve(releaseDir, archiveName);
 const unpackedName = "monica-extension-unpacked";
 
 await verifyArtifacts(releaseDir);
-const first = await mkdtemp(join(tmpdir(), "monica-release-a-"));
-const second = await mkdtemp(join(tmpdir(), "monica-release-b-"));
+const verificationTempRoot = await realpath(tmpdir());
+const first = await mkdtemp(join(verificationTempRoot, "monica-release-a-"));
+const second = await mkdtemp(join(verificationTempRoot, "monica-release-b-"));
 try {
-  await execFileAsync(process.execPath, [resolve(root, "scripts/package-release.mjs"), "--output-dir", first], { cwd: root });
-  await execFileAsync(process.execPath, [resolve(root, "scripts/package-release.mjs"), "--output-dir", second], { cwd: root });
+  const dirtyFlag = allowDirty ? ["--allow-dirty"] : [];
+  await execFileAsync(process.execPath, [resolve(root, "scripts/package-release.mjs"), "--output-dir", first, ...dirtyFlag], { cwd: root });
+  await execFileAsync(process.execPath, [resolve(root, "scripts/package-release.mjs"), "--output-dir", second, ...dirtyFlag], { cwd: root });
   await compareArtifactSets(releaseDir, first);
   await compareArtifactSets(first, second);
 } finally {
-  await Promise.all([rm(first, { recursive: true, force: true }), rm(second, { recursive: true, force: true })]);
+  for (const directory of [first, second]) {
+    const resolvedDirectory = await realpath(directory);
+    assert(dirname(resolvedDirectory) === verificationTempRoot && /^monica-release-[ab]-/.test(basename(resolvedDirectory)), "Refusing to remove an unexpected verification directory.");
+    await rm(resolvedDirectory, { recursive: true, force: true });
+  }
 }
-console.log(`Verified ${archivePath}: hashes, inventory, contents and two independent packages are byte-identical.`);
+console.log(`Verified ${sourceTreeClean ? "release" : "local development package"} ${archivePath}: hashes, inventory, contents and two independent packages are byte-identical.`);
 
 async function verifyArtifacts(directory) {
   const archiveBytes = await readFile(resolve(directory, archiveName));
@@ -39,7 +50,7 @@ async function verifyArtifacts(directory) {
 
   const entries = unzipSync(archiveBytes);
   for (const path of Object.keys(entries)) assert(!path.includes("\\") && !path.startsWith("/") && !path.split("/").includes(".."), `Unsafe ZIP path: ${path}`);
-  for (const required of ["manifest.json", "background.js", "content.js", "main-world.js", "index.html", "popup.html", "LICENSE", "RELEASE-METADATA.json", "SBOM.cdx.json", "THIRD-PARTY-LICENSES.json", "SECURITY-EVIDENCE.json"]) {
+  for (const required of ["manifest.json", "background.js", "content.js", "main-world.js", "index.html", "popup.html", "passkey-verify.html", "mdbx-offscreen.html", "mdbx-browser/offscreen.js", "mdbx-browser/engine-worker.js", "mdbx-browser/engine.js", "mdbx-browser/monica_mdbx2_browser.wasm", "mdbx-browser/BROWSER-BUILD.json", "mdbx-browser/THIRD-PARTY-NOTICES.json", "LICENSE", "RELEASE-METADATA.json", "SBOM.cdx.json", "THIRD-PARTY-LICENSES.json", "SECURITY-EVIDENCE.json"]) {
     assert(entries[required], `ZIP is missing ${required}.`);
   }
   verifyExtensionPages(entries);
@@ -78,7 +89,8 @@ async function verifyArtifacts(directory) {
   const evidence = parseJson(evidenceSidecar, "security evidence");
   assert(sbom.bomFormat === "CycloneDX" && sbom.specVersion === "1.5", "SBOM format mismatch.");
   assert(licenses.packageLockSha256 === sha256(packageLockBytes), "License inventory lockfile hash mismatch.");
-  assert(evidence.source?.trackedWorktreeClean === true, "Trusted release evidence reports a dirty source tree.");
+  assert(evidence.source?.trackedWorktreeClean === sourceTreeClean, "Security evidence source tree state mismatch.");
+  if (!allowDirty) assert(evidence.source?.trackedWorktreeClean === true, "Trusted release evidence reports a dirty source tree.");
   assert(evidence.source?.commit === git("rev-parse", "HEAD"), "Security evidence source commit mismatch.");
   assert(evidence.inputs?.packageLockSha256 === sha256(packageLockBytes), "Security evidence lockfile hash mismatch.");
   assert(evidence.embeddedEvidence?.sbomSha256 === sha256(sbomSidecar) && evidence.embeddedEvidence?.thirdPartyLicensesSha256 === sha256(licensesSidecar), "Security evidence embedded hashes mismatch.");
@@ -107,7 +119,7 @@ async function compareArtifactSets(leftDirectory, rightDirectory) {
 }
 
 function verifyExtensionPages(entries) {
-  for (const pageName of ["index.html", "popup.html"]) {
+  for (const pageName of ["index.html", "popup.html", "passkey-verify.html", "mdbx-offscreen.html"]) {
     const html = new TextDecoder().decode(entries[pageName]);
     const linkTags = html.match(/<link\b[^>]*>/gi) || [];
     assert(!linkTags.some((tag) => /\brel\s*=\s*["']modulepreload["']/i.test(tag)), `${pageName} contains a modulepreload link.`);

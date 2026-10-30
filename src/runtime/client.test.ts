@@ -1,393 +1,142 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { vaultClient } from "./client";
-import type { Mdbx2HealthRepairDecision } from "./messages";
+import { version } from "../../package.json";
+import { runtimeInfo } from './version';
 
-describe("extension runtime client", () => {
-  afterEach(() => vi.unstubAllGlobals());
+const compatible = { ok: true, data: runtimeInfo };
+const unsupported = { ok: false, error: "不支持的 Monica 运行时命令。" };
 
-  it("keeps archive, recycle-bin, restore, and empty-vault confirmation manager messages explicit", async () => {
-    const sendMessage = vi.fn().mockResolvedValue({ ok: true, data: {} });
-    vi.stubGlobal("chrome", { runtime: { sendMessage } });
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.resetModules(); });
 
-    await vaultClient.listArchivedItems();
-    await vaultClient.listDeletedItems();
-    await vaultClient.restoreItem("item-1");
-    await vaultClient.syncProvider("provider-1", true);
-
-    expect(sendMessage.mock.calls.map(([message]) => message)).toEqual([
-      { type: "VAULT_LIST_ARCHIVED_ITEMS" },
-      { type: "VAULT_LIST_DELETED_ITEMS" },
-      { type: "VAULT_RESTORE_ITEM", itemId: "item-1" },
-      { type: "PROVIDER_SYNC", providerId: "provider-1", allowEmptyRemote: true }
-    ]);
-  });
-
-  it("preserves a bounded background error code for MDBX2 safety recovery", async () => {
-    const sendMessage = vi.fn().mockResolvedValue({
-      ok: false,
-      error: "Native Host 在冲突写入后异常中断。",
-      code: "conflict-resolution-state-unknown"
-    });
-    vi.stubGlobal("chrome", { runtime: { sendMessage } });
-
-    await expect(vaultClient.resolveMdbx2Conflict(
-      "provider-1",
-      "11111111-1111-4111-8111-111111111111",
-      "22222222-2222-4222-8222-222222222222",
-      "incoming-wins"
-    )).rejects.toMatchObject({
-      name: "ExtensionRuntimeError",
-      code: "conflict-resolution-state-unknown"
-    });
-  });
-
-  it("sends every MDBX2 snapshot command through the typed manager contract", async () => {
-    const sendMessage = vi.fn().mockResolvedValue({ ok: true, data: {} });
-    vi.stubGlobal("chrome", { runtime: { sendMessage } });
-    const providerId = "provider-1";
-    const operationId = "11111111-1111-4111-8111-111111111111";
-    const snapshotId = "22222222-2222-4222-8222-222222222222";
-    const planToken = "a".repeat(64);
-
-    await vaultClient.listMdbx2Snapshots(providerId, { pageSize: 20, cursor: "next" });
-    await vaultClient.listMdbx2SnapshotStructure(providerId, snapshotId, "snapshot", { pageSize: 100 });
-    await vaultClient.planMdbx2AutomaticSnapshotPrune(providerId, 0);
-    await vaultClient.pruneMdbx2AutomaticSnapshots(providerId, planToken, 0);
-    await vaultClient.createMdbx2Snapshot(providerId, operationId, "升级前");
-    await vaultClient.deleteMdbx2Snapshot(providerId, operationId, snapshotId);
-    await vaultClient.restoreMdbx2Snapshot(providerId, operationId, snapshotId);
-
-    expect(sendMessage.mock.calls.map(([message]) => message)).toEqual([
-      { type: "MDBX2_SNAPSHOT_LIST", providerId, pageSize: 20, cursor: "next" },
-      { type: "MDBX2_SNAPSHOT_STRUCTURE", providerId, snapshotId, side: "snapshot", pageSize: 100 },
-      { type: "MDBX2_SNAPSHOT_PRUNE_PLAN", providerId, keepLatest: 0 },
-      { type: "MDBX2_SNAPSHOT_PRUNE_EXECUTE", providerId, planToken, keepLatest: 0 },
-      { type: "MDBX2_SNAPSHOT_CREATE", providerId, operationId, name: "升级前" },
-      { type: "MDBX2_SNAPSHOT_DELETE", providerId, operationId, snapshotId },
-      { type: "MDBX2_SNAPSHOT_RESTORE", providerId, operationId, snapshotId }
-    ]);
-  });
-
-  it("sends MDBX2 history recovery through the manager contract with caller operation identity", async () => {
-    const sendMessage = vi.fn().mockResolvedValue({ ok: true, data: {} });
-    vi.stubGlobal("chrome", { runtime: { sendMessage } });
-    const providerId = "provider-1";
-    const operationId = "11111111-1111-4111-8111-111111111111";
-    const commitId = "22222222-2222-4222-8222-222222222222";
-
-    await vaultClient.revertMdbx2Commit(providerId, operationId, commitId);
-
-    expect(sendMessage).toHaveBeenCalledWith({ type: "MDBX2_HISTORY_REVERT", providerId, operationId, commitId });
-  });
-
-  it("sends every MDBX2 Collection command with retained operation identity", async () => {
-    const sendMessage = vi.fn().mockResolvedValue({ ok: true, data: {} });
-    vi.stubGlobal("chrome", { runtime: { sendMessage } });
-    const providerId = "provider-1";
-    const operationId = "11111111-1111-4111-8111-111111111111";
-    const collectionId = "22222222-2222-4222-8222-222222222222";
-    const parentCollectionId = "33333333-3333-4333-8333-333333333333";
-
-    await vaultClient.listMdbx2Collections(providerId, { deleted: true, excludeRoot: true, pageSize: 50, cursor: "next" });
-    await vaultClient.createMdbx2Collection(providerId, operationId, collectionId, "Accounts", parentCollectionId);
-    await vaultClient.renameMdbx2Collection(providerId, operationId, collectionId, "Work");
-    await vaultClient.moveMdbx2Collection(providerId, operationId, collectionId);
-    await vaultClient.deleteMdbx2Collection(providerId, operationId, collectionId);
-    await vaultClient.restoreMdbx2Collection(providerId, operationId, collectionId, parentCollectionId);
-
-    expect(sendMessage.mock.calls.map(([message]) => message)).toEqual([
-      { type: "MDBX2_COLLECTION_LIST", providerId, deleted: true, excludeRoot: true, pageSize: 50, cursor: "next" },
-      { type: "MDBX2_COLLECTION_CREATE", providerId, operationId, collectionId, title: "Accounts", parentCollectionId },
-      { type: "MDBX2_COLLECTION_RENAME", providerId, operationId, collectionId, title: "Work" },
-      { type: "MDBX2_COLLECTION_MOVE", providerId, operationId, collectionId, parentCollectionId: undefined },
-      { type: "MDBX2_COLLECTION_DELETE", providerId, operationId, collectionId, confirmed: true },
-      { type: "MDBX2_COLLECTION_RESTORE", providerId, operationId, collectionId, parentCollectionId }
-    ]);
-  });
-
-  it("sends MDBX2 batch planning and execution with a reusable operation identity", async () => {
-    const sendMessage = vi.fn().mockResolvedValue({ ok: true, data: {} });
-    vi.stubGlobal("chrome", { runtime: { sendMessage } });
-    const input = {
-      operationId: "11111111-1111-4111-8111-111111111111",
-      operationCreatedAt: "2026-08-06T12:00:00.000Z",
-      itemIds: ["item-1", "item-2"],
-      targetProviderId: "mdbx-target",
-      targetCollectionId: "22222222-2222-4222-8222-222222222222",
-      preserveCategories: true,
-      action: "move" as const
-    };
-
-    await vaultClient.planMdbx2BatchTransfer(input);
-    await vaultClient.executeMdbx2BatchTransfer(input, true);
-    await vaultClient.mdbx2BatchTransferStatus(input.operationId);
-
-    expect(sendMessage.mock.calls.map(([message]) => message)).toEqual([
-      { type: "MDBX2_BATCH_TRANSFER_PLAN", input },
-      { type: "MDBX2_BATCH_TRANSFER_EXECUTE", input, confirmed: true },
-      { type: "MDBX2_BATCH_TRANSFER_STATUS", operationId: input.operationId }
-    ]);
-  });
-
-  it("sends MDBX2 diagnostics refresh through the typed manager contract", async () => {
-    const sendMessage = vi.fn().mockResolvedValue({ ok: true, data: {} });
-    vi.stubGlobal("chrome", { runtime: { sendMessage } });
-
-    await vaultClient.mdbx2VaultDiagnostics("provider-1");
-
-    expect(sendMessage).toHaveBeenCalledWith({ type: "MDBX2_VAULT_DIAGNOSTICS", providerId: "provider-1" });
-  });
-
-  it("sends MDBX2 health repair planning and confirmed destructive choices through the manager contract", async () => {
-    const sendMessage = vi.fn().mockResolvedValue({ ok: true, data: {} });
-    vi.stubGlobal("chrome", { runtime: { sendMessage } });
-    const providerId = "provider-1";
-    const planHandle = "11111111-1111-4111-8111-111111111111";
-    const operationId = "22222222-2222-4222-8222-222222222222";
-    const keepDecision = {
-      itemHandle: "33333333-3333-4333-8333-333333333333",
-      choice: "keep-content" as const
-    };
-    const deleteDecision = {
-      itemHandle: "44444444-4444-4444-8444-444444444444",
-      choice: "delete-object" as const
-    };
-
-    await vaultClient.planMdbx2HealthRepair(providerId);
-    await vaultClient.applyMdbx2HealthRepair(providerId, planHandle, operationId, [keepDecision]);
-    await vaultClient.applyMdbx2HealthRepair(providerId, planHandle, operationId, [deleteDecision], true);
-
-    expect(sendMessage.mock.calls.map(([message]) => message)).toEqual([
-      { type: "MDBX2_HEALTH_REPAIR_PLAN", providerId },
-      {
-        type: "MDBX2_HEALTH_REPAIR_APPLY",
-        providerId,
-        planHandle,
-        operationId,
-        decisions: [keepDecision]
-      },
-      {
-        type: "MDBX2_HEALTH_REPAIR_APPLY",
-        providerId,
-        planHandle,
-        operationId,
-        decisions: [deleteDecision],
-        confirmedDelete: true
+describe("UI and background compatibility", () => {
+  it('recovers a temporarily missing receiver during shared startup without replaying a password', async () => {
+    vi.useFakeTimers();
+    let probes = 0;
+    const sendMessage = vi.fn(async (request: { type: string }) => {
+      if (request.type === 'RUNTIME_INFO') {
+        if (++probes < 3) throw new Error('Could not establish connection. Receiving end does not exist.');
+        return compatible;
       }
-    ]);
-  });
-
-  it("preserves the health repair unknown-outcome code for fail-closed recovery", async () => {
-    const sendMessage = vi.fn().mockResolvedValue({
-      ok: false,
-      error: "无法证明健康修复是否已提交。",
-      code: "health-repair-outcome-unknown"
+      return { ok: true, data: 'locked' };
     });
-    vi.stubGlobal("chrome", { runtime: { sendMessage } });
+    vi.stubGlobal('chrome', { runtime: { sendMessage } });
+    const { vaultClient } = await import('./client');
+    const result = expect(Promise.all([vaultClient.status(), vaultClient.unlock('synthetic secret')])).resolves.toEqual(['locked', 'locked']);
+    void result.catch(() => undefined);
+    await vi.runAllTimersAsync();
+    await result;
+    expect(probes).toBe(3);
+    expect(sendMessage.mock.calls.filter(([r]) => r.type === 'VAULT_UNLOCK')).toHaveLength(1);
+  });
 
-    await expect(vaultClient.applyMdbx2HealthRepair(
-      "provider-1",
-      "11111111-1111-4111-8111-111111111111",
-      "22222222-2222-4222-8222-222222222222",
-      []
-    )).rejects.toMatchObject({
-      name: "ExtensionRuntimeError",
-      code: "health-repair-outcome-unknown"
+  it('bounds startup recovery and allows a later fresh attempt', async () => {
+    vi.useFakeTimers();
+    const sendMessage = vi.fn().mockRejectedValue(new Error('Could not establish connection. Receiving end does not exist.'));
+    vi.stubGlobal('chrome', { runtime: { sendMessage } });
+    const { vaultClient } = await import('./client');
+    const result = expect(vaultClient.status()).rejects.toMatchObject({ code: 'RUNTIME_UNAVAILABLE' });
+    await vi.runAllTimersAsync();
+    await result;
+    expect(sendMessage).toHaveBeenCalledTimes(6);
+    expect(sendMessage.mock.calls.every(([r]) => r.type === 'RUNTIME_INFO')).toBe(true);
+    sendMessage.mockResolvedValueOnce(compatible).mockResolvedValueOnce({ ok: true, data: 'locked' });
+    await expect(vaultClient.status()).resolves.toBe('locked');
+  });
+
+  it('rechecks compatibility when a status read loses its receiver', async () => {
+    let reads = 0;
+    const sendMessage = vi.fn(async (request: { type: string }) => {
+      if (request.type === 'RUNTIME_INFO') return compatible;
+      if (++reads === 1) throw new Error('The message port closed before a response was received.');
+      return { ok: true, data: 'locked' };
     });
+    vi.stubGlobal('chrome', { runtime: { sendMessage } });
+    const { vaultClient } = await import('./client');
+    await expect(vaultClient.status()).resolves.toBe('locked');
+    expect(sendMessage.mock.calls.map(([r]) => r.type)).toEqual(['RUNTIME_INFO', 'VAULT_STATUS', 'RUNTIME_INFO', 'VAULT_STATUS']);
   });
 
-  it("copies reactive health repair decisions into clone-safe message data", async () => {
-    const decision = new Proxy({
-      itemHandle: "33333333-3333-4333-8333-333333333333",
-      choice: "keep-content" as const
-    }, {});
-    const decisions = new Proxy([decision], {});
-    const sendMessage = vi.fn().mockImplementation(async (message: unknown) => {
-      structuredClone(message);
-      return { ok: true, data: {} };
+  it.each(['unlock', 'setup', 'lock'] as const)('does not replay %s when its response is lost', async method => {
+    const sendMessage = vi.fn(async (request: { type: string }) => {
+      if (request.type === 'RUNTIME_INFO') return compatible;
+      throw new Error('The message port closed before a response was received.');
     });
-    vi.stubGlobal("chrome", { runtime: { sendMessage } });
-
-    await vaultClient.applyMdbx2HealthRepair(
-      "provider-1",
-      "11111111-1111-4111-8111-111111111111",
-      "22222222-2222-4222-8222-222222222222",
-      decisions
-    );
-
-    const message = sendMessage.mock.calls[0]?.[0] as { decisions: Mdbx2HealthRepairDecision[] };
-    expect(message.decisions).toEqual([{ itemHandle: decision.itemHandle, choice: decision.choice }]);
-    expect(message.decisions).not.toBe(decisions);
-    expect(message.decisions[0]).not.toBe(decision);
+    vi.stubGlobal('chrome', { runtime: { sendMessage } });
+    const { vaultClient } = await import('./client');
+    await expect(vaultClient[method]('synthetic secret')).rejects.toMatchObject({ code: 'RUNTIME_UNAVAILABLE' });
+    expect(sendMessage).toHaveBeenCalledTimes(2);
   });
 
-  it("sends MDBX2 Tiga posture through the typed manager contract", async () => {
-    const sendMessage = vi.fn().mockResolvedValue({ ok: true, data: {} });
-    vi.stubGlobal("chrome", { runtime: { sendMessage } });
-
-    await vaultClient.mdbx2VaultTiga("provider-1");
-
-    expect(sendMessage).toHaveBeenCalledWith({ type: "MDBX2_VAULT_TIGA", providerId: "provider-1" });
+  it('requires reload for an invalidated extension context without retrying', async () => {
+    const sendMessage = vi.fn().mockRejectedValue(new Error('Extension context invalidated.'));
+    vi.stubGlobal('chrome', { runtime: { sendMessage } });
+    const { vaultClient } = await import('./client');
+    await expect(vaultClient.status()).rejects.toMatchObject({ code: 'RUNTIME_RELOAD_REQUIRED' });
+    expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("preserves the snapshot unknown-outcome code for safe manager recovery", async () => {
-    const sendMessage = vi.fn().mockResolvedValue({
-      ok: false,
-      error: "无法证明快照恢复结果。",
-      code: "snapshot-operation-state-unknown"
-    });
-    vi.stubGlobal("chrome", { runtime: { sendMessage } });
-
-    await expect(vaultClient.restoreMdbx2Snapshot(
-      "provider-1",
-      "11111111-1111-4111-8111-111111111111",
-      "22222222-2222-4222-8222-222222222222"
-    )).rejects.toMatchObject({
-      name: "ExtensionRuntimeError",
-      code: "snapshot-operation-state-unknown"
-    });
+  it('never sends a password if the recovered worker has a different version', async () => {
+    vi.useFakeTimers();
+    const sendMessage = vi.fn().mockRejectedValueOnce(new Error('Could not establish connection. Receiving end does not exist.')).mockResolvedValue({ ok: true, data: { version: 'old', protocolVersion: 1 } });
+    vi.stubGlobal('chrome', { runtime: { sendMessage } });
+    const { vaultClient } = await import('./client');
+    const result = expect(vaultClient.unlock('synthetic secret')).rejects.toMatchObject({ code: 'RUNTIME_RELOAD_REQUIRED' });
+    await vi.runAllTimersAsync();
+    await result;
+    expect(sendMessage.mock.calls.every(([r]) => r.type === 'RUNTIME_INFO')).toBe(true);
   });
 
-  it("sends bounded provider attachment commands through the manager contract", async () => {
-    const sendMessage = vi.fn().mockResolvedValue({ ok: true, data: {} });
+  it("checks compatibility before sending a password to an older background", async () => {
+    const sendMessage = vi.fn(async (request: { type: string }) => request.type === "RUNTIME_INFO" ? unsupported : { ok: true, data: [] });
     vi.stubGlobal("chrome", { runtime: { sendMessage } });
-    const providerId = "keepass-1";
-    const itemId = "item-1";
-    const attachmentId = "11111111-1111-4111-8111-111111111111";
-    const transferId = "22222222-2222-4222-8222-222222222222";
-    const readHandle = "33333333-3333-4333-8333-333333333333";
-    const operationId = "44444444-4444-4444-8444-444444444444";
-
-    await vaultClient.listProviderAttachments(providerId, itemId, { pageSize: 20, cursor: "next" });
-    await vaultClient.beginProviderAttachmentRead(providerId, itemId, attachmentId);
-    await vaultClient.readProviderAttachmentChunk(providerId, readHandle, 0, 1024);
-    await vaultClient.releaseProviderAttachmentRead(providerId, readHandle);
-    await vaultClient.beginProviderAttachmentUpload(providerId, itemId, { fileName: "a.txt", mediaType: "text/plain", sizeBytes: 2, sha256: "a".repeat(64), replaceExisting: true });
-    await vaultClient.sendProviderAttachmentChunk(providerId, transferId, 0, new Uint8Array([1, 2]));
-    await vaultClient.finishProviderAttachmentUpload(providerId, itemId, transferId, operationId);
-    await vaultClient.abortProviderAttachmentUpload(providerId, transferId);
-    await vaultClient.deleteProviderAttachment(providerId, itemId, attachmentId, operationId);
-    await vaultClient.transferProviderAttachment({
-      operationId,
-      sourceProviderId: providerId,
-      sourceItemId: itemId,
-      sourceAttachmentId: attachmentId,
-      targetProviderId: "mdbx2-2",
-      targetItemId: itemId,
-      mode: "move",
-      confirmedMove: true
-    });
-
-    expect(sendMessage.mock.calls.map(([message]) => message)).toEqual([
-      { type: "PROVIDER_ATTACHMENT_LIST", providerId, itemId, pageSize: 20, cursor: "next" },
-      { type: "PROVIDER_ATTACHMENT_READ_BEGIN", providerId, itemId, attachmentId },
-      { type: "PROVIDER_ATTACHMENT_READ_CHUNK", providerId, readHandle, offset: 0, maxBytes: 1024 },
-      { type: "PROVIDER_ATTACHMENT_READ_RELEASE", providerId, readHandle },
-      { type: "PROVIDER_ATTACHMENT_UPLOAD_BEGIN", providerId, itemId, fileName: "a.txt", mediaType: "text/plain", sizeBytes: 2, sha256: "a".repeat(64), replaceExisting: true },
-      { type: "PROVIDER_ATTACHMENT_UPLOAD_CHUNK", providerId, transferId, offset: 0, dataBase64: "AQI=" },
-      { type: "PROVIDER_ATTACHMENT_UPLOAD_FINISH", providerId, itemId, transferId, operationId },
-      { type: "PROVIDER_ATTACHMENT_UPLOAD_ABORT", providerId, transferId },
-      { type: "PROVIDER_ATTACHMENT_DELETE", providerId, itemId, attachmentId, operationId, confirmed: true },
-      { type: "PROVIDER_ATTACHMENT_TRANSFER", operationId, sourceProviderId: providerId, sourceItemId: itemId, sourceAttachmentId: attachmentId, targetProviderId: "mdbx2-2", targetItemId: itemId, mode: "move", confirmedMove: true }
-    ]);
+    const { vaultClient } = await import("./client");
+    await expect(vaultClient.unlock("synthetic secret")).rejects.toMatchObject({ code: "RUNTIME_RELOAD_REQUIRED" });
+    expect(sendMessage.mock.calls.map(([request]) => request)).toEqual([{ type: "RUNTIME_INFO" }]);
   });
 
-  it("preserves provider attachment error codes for manager recovery", async () => {
-    const sendMessage = vi.fn().mockResolvedValue({
-      ok: false,
-      error: "附件 SHA-256 校验失败。",
-      code: "attachment-upload-digest-mismatch"
-    });
+  it.each([
+    { ...runtimeInfo, buildId: 'stale-same-version-build' },
+    { version: "0.0.0", protocolVersion: 1 },
+    { version, protocolVersion: 99 },
+    null
+  ])("rejects incompatible or malformed runtime information: %j", async data => {
+    const sendMessage = vi.fn(async () => ({ ok: true, data }));
     vi.stubGlobal("chrome", { runtime: { sendMessage } });
-
-    await expect(vaultClient.finishProviderAttachmentUpload(
-      "keepass-1",
-      "item-1",
-      "11111111-1111-4111-8111-111111111111"
-    ))
-      .rejects.toMatchObject({ name: "ExtensionRuntimeError", code: "attachment-upload-digest-mismatch" });
+    const { vaultClient } = await import("./client");
+    await expect(vaultClient.status()).rejects.toMatchObject({ code: "RUNTIME_RELOAD_REQUIRED" });
+    expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("sends KeePass group lifecycle commands with explicit mutation identity and delete confirmation", async () => {
-    const sendMessage = vi.fn().mockResolvedValue({ ok: true, data: {} });
+  it("shares concurrent checks, then checks again immediately before unlocking", async () => {
+    const sendMessage = vi.fn(async (request: { type: string }) => request.type === "RUNTIME_INFO" ? compatible : { ok: true, data: request.type === "VAULT_STATUS" ? "locked" : [] });
     vi.stubGlobal("chrome", { runtime: { sendMessage } });
-    const providerId = "keepass-1";
-    const operationId = "11111111-1111-4111-8111-111111111111";
-    const groupId = "22222222-2222-4222-8222-222222222222";
-    const parentGroupId = "33333333-3333-4333-8333-333333333333";
-
-    await vaultClient.listKeePassGroups(providerId, { includeRecycleBin: true, pageSize: 50, cursor: "next" });
-    await vaultClient.createKeePassGroup(providerId, operationId, "Work", parentGroupId);
-    await vaultClient.renameKeePassGroup(providerId, operationId, groupId, "Archive");
-    await vaultClient.moveKeePassGroup(providerId, operationId, groupId, parentGroupId);
-    await vaultClient.deleteKeePassGroup(providerId, operationId, groupId);
-    await vaultClient.restoreKeePassGroup(providerId, operationId, groupId, parentGroupId);
-
-    expect(sendMessage.mock.calls.map(([message]) => message)).toEqual([
-      { type: "KEEPASS_GROUP_LIST", providerId, includeRecycleBin: true, pageSize: 50, cursor: "next" },
-      { type: "KEEPASS_GROUP_CREATE", providerId, operationId, name: "Work", parentGroupId },
-      { type: "KEEPASS_GROUP_RENAME", providerId, operationId, groupId, name: "Archive" },
-      { type: "KEEPASS_GROUP_MOVE", providerId, operationId, groupId, targetParentGroupId: parentGroupId },
-      { type: "KEEPASS_GROUP_DELETE", providerId, operationId, groupId, confirmed: true },
-      { type: "KEEPASS_GROUP_RESTORE", providerId, operationId, groupId, targetParentGroupId: parentGroupId }
-    ]);
+    const { vaultClient } = await import("./client");
+    await Promise.all([vaultClient.status(), vaultClient.listItems()]);
+    expect(sendMessage.mock.calls.filter(([request]) => request.type === "RUNTIME_INFO")).toHaveLength(1);
+    await vaultClient.unlock("synthetic password");
+    expect(sendMessage.mock.calls.slice(-2).map(([request]) => request.type)).toEqual(["RUNTIME_INFO", "VAULT_UNLOCK"]);
   });
 
-  it("sends KeePass history disclosure and confirmed restore commands", async () => {
-    const sendMessage = vi.fn().mockResolvedValue({ ok: true, data: {} });
+  it("retries a failed compatibility check after the background becomes available", async () => {
+    let ready = false;
+    const sendMessage = vi.fn(async (request: { type: string }) => request.type === "RUNTIME_INFO" ? ready ? compatible : unsupported : { ok: true, data: "locked" });
     vi.stubGlobal("chrome", { runtime: { sendMessage } });
-    const providerId = "keepass-1";
-    const itemId = "item-1";
-    const historyId = "22222222-2222-4222-8222-222222222222";
-    const fieldId = "33333333-3333-4333-8333-333333333333";
-    const operationId = "11111111-1111-4111-8111-111111111111";
-
-    await vaultClient.listKeePassHistory(providerId, itemId, { pageSize: 25, cursor: "next" });
-    await vaultClient.getKeePassHistoryDetail(providerId, itemId, historyId);
-    await vaultClient.revealKeePassHistoryField(providerId, itemId, historyId, fieldId);
-    await vaultClient.restoreKeePassHistory(providerId, itemId, operationId, historyId);
-
-    expect(sendMessage.mock.calls.map(([message]) => message)).toEqual([
-      { type: "KEEPASS_HISTORY_LIST", providerId, itemId, pageSize: 25, cursor: "next" },
-      { type: "KEEPASS_HISTORY_DETAIL", providerId, itemId, historyId },
-      { type: "KEEPASS_HISTORY_FIELD_REVEAL", providerId, itemId, historyId, fieldId },
-      { type: "KEEPASS_HISTORY_RESTORE", providerId, itemId, operationId, historyId, confirmed: true }
-    ]);
+    const { vaultClient } = await import("./client");
+    await expect(vaultClient.status()).rejects.toMatchObject({ code: "RUNTIME_RELOAD_REQUIRED" });
+    ready = true;
+    await expect(vaultClient.status()).resolves.toBe("locked");
   });
 
-  it("sends manager KeePass WebDAV probe open and restore commands", async () => {
-    const sendMessage = vi.fn().mockResolvedValue({ ok: true, data: {} });
+  it("preserves a real authentication failure instead of treating it as an upgrade", async () => {
+    const sendMessage = vi.fn(async (request: { type: string }) => request.type === "RUNTIME_INFO" ? compatible : { ok: false, error: "主密码错误。", code: "TEST_AUTHENTICATION_FAILURE" });
     vi.stubGlobal("chrome", { runtime: { sendMessage } });
-    const connection = {
-      baseUrl: "https://dav.example.test/files/demo",
-      username: "demo",
-      webDavPassword: "webdav secret",
-      remotePath: "vaults/main.kdbx"
-    };
+    const { vaultClient } = await import("./client");
+    await expect(vaultClient.unlock("wrong password")).rejects.toMatchObject({ message: "主密码错误。", code: "TEST_AUTHENTICATION_FAILURE" });
+  });
 
-    await vaultClient.testKeePassWebDav(connection);
-    await vaultClient.openKeePassWebDav({
-      ...connection,
-      providerId: "keepass-remote",
-      name: "Remote KeePass",
-      databasePassword: "database secret",
-      keyFile: "a2V5"
-    });
-    await vaultClient.restoreKeePassRemote("keepass-remote");
-
-    expect(sendMessage.mock.calls.map(([message]) => message)).toEqual([
-      { type: "KEEPASS_WEBDAV_TEST", input: connection },
-      {
-        type: "KEEPASS_WEBDAV_OPEN",
-        input: {
-          ...connection,
-          providerId: "keepass-remote",
-          name: "Remote KeePass",
-          databasePassword: "database secret",
-          keyFile: "a2V5"
-        }
-      },
-      { type: "KEEPASS_REMOTE_RESTORE", providerId: "keepass-remote" }
-    ]);
+  it("offers recovery if a supported command disappears after the initial check", async () => {
+    const sendMessage = vi.fn(async (request: { type: string }) => request.type === "RUNTIME_INFO" ? compatible : unsupported);
+    vi.stubGlobal("chrome", { runtime: { sendMessage } });
+    const { vaultClient } = await import("./client");
+    await expect(vaultClient.lockedAutofillIds()).rejects.toMatchObject({ code: "RUNTIME_RELOAD_REQUIRED" });
   });
 });

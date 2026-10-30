@@ -1,0 +1,823 @@
+{
+  "title": "Monica · 统一设置入口与二级页面",
+  "brief": "设置首页的所有入口使用完全相同的列表项：48px图标容器、标题、说明、右箭头；每项独立24px四角，8px间距，16px内边距。首页不放开关、表单、折叠或弹窗。点击统一进入有返回栏的二级页；语言、外观、同步、填充、排除项、Hello、备份、保护方式、迁移、安全说明全部遵循。沿用Monica青绿色与系统字体。",
+  "frame": "phone",
+  "platform": "web",
+  "paletteKey": "teal",
+  "theme": {
+    "dark": true,
+    "bothModes": true,
+    "contrast": "standard",
+    "shape": "rounded",
+    "font": "system",
+    "emphasized": true,
+    "motion": "standard"
+  },
+  "frames": [
+    {
+      "id": "settingshome318",
+      "name": "设置与备份",
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 1070
+    },
+    {
+      "id": "settingsappearance318",
+      "name": "外观",
+      "x": 430,
+      "y": 0,
+      "w": 390,
+      "h": 800
+    },
+    {
+      "id": "settingsbackup318",
+      "name": "加密整库备份",
+      "x": 860,
+      "y": 0,
+      "w": 390,
+      "h": 800
+    },
+    {
+      "id": "settingsprotection318",
+      "name": "更改保护方式",
+      "x": 1290,
+      "y": 0,
+      "w": 390,
+      "h": 800
+    },
+    {
+      "id": "settingshello318",
+      "name": "Windows Hello",
+      "x": 1720,
+      "y": 0,
+      "w": 390,
+      "h": 800
+    },
+    {
+      "id": "settingsexclusions318",
+      "name": "自动填充排除项",
+      "x": 2150,
+      "y": 0,
+      "w": 390,
+      "h": 800
+    }
+  ],
+  "groups": [
+    {
+      "id": "settingshome318-0",
+      "frameId": "settingshome318",
+      "x": 12,
+      "y": 12,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingshome318-0-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "settings",
+          "kind": "topAppBar",
+          "label": "设置与备份"
+        }
+      ]
+    },
+    {
+      "id": "settingshome318-1",
+      "frameId": "settingshome318",
+      "x": 12,
+      "y": 106,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingshome318-1-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "language",
+          "kind": "listItem",
+          "label": "界面语言",
+          "supporting": "跟随浏览器",
+          "icon2": "chevron_right"
+        }
+      ]
+    },
+    {
+      "id": "settingshome318-2",
+      "frameId": "settingshome318",
+      "x": 12,
+      "y": 194,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingshome318-2-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "palette",
+          "kind": "listItem",
+          "label": "外观",
+          "supporting": "显示模式与配色",
+          "icon2": "chevron_right"
+        }
+      ]
+    },
+    {
+      "id": "settingshome318-3",
+      "frameId": "settingshome318",
+      "x": 12,
+      "y": 282,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingshome318-3-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "sync",
+          "kind": "listItem",
+          "label": "自动同步",
+          "supporting": "接收其他设备的修改",
+          "icon2": "chevron_right"
+        }
+      ]
+    },
+    {
+      "id": "settingshome318-4",
+      "frameId": "settingshome318",
+      "x": 12,
+      "y": 370,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingshome318-4-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "edit",
+          "kind": "listItem",
+          "label": "表单旁自动填充",
+          "supporting": "输入框旁显示匹配的登录项",
+          "icon2": "chevron_right"
+        }
+      ]
+    },
+    {
+      "id": "settingshome318-5",
+      "frameId": "settingshome318",
+      "x": 12,
+      "y": 458,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingshome318-5-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "domain_disabled",
+          "kind": "listItem",
+          "label": "自动填充排除项",
+          "supporting": "自动填充 0 个 · 保存提示 0 个",
+          "icon2": "chevron_right"
+        }
+      ]
+    },
+    {
+      "id": "settingshome318-6",
+      "frameId": "settingshome318",
+      "x": 12,
+      "y": 546,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingshome318-6-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "fingerprint",
+          "kind": "listItem",
+          "label": "Windows Hello",
+          "supporting": "设备不可用 · 主密码",
+          "icon2": "chevron_right"
+        }
+      ]
+    },
+    {
+      "id": "settingshome318-7",
+      "frameId": "settingshome318",
+      "x": 12,
+      "y": 634,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingshome318-7-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "encrypted",
+          "kind": "listItem",
+          "label": "加密整库备份",
+          "supporting": "导出或恢复完整密码库",
+          "icon2": "chevron_right"
+        }
+      ]
+    },
+    {
+      "id": "settingshome318-8",
+      "frameId": "settingshome318",
+      "x": 12,
+      "y": 722,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingshome318-8-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "key_vertical",
+          "kind": "listItem",
+          "label": "更改保护方式",
+          "supporting": "主密码或设备密钥",
+          "icon2": "chevron_right"
+        }
+      ]
+    },
+    {
+      "id": "settingshome318-9",
+      "frameId": "settingshome318",
+      "x": 12,
+      "y": 810,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingshome318-9-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "swap_vert",
+          "kind": "listItem",
+          "label": "明文手动迁移",
+          "supporting": "导出项目或导入 JSON / CSV",
+          "icon2": "chevron_right"
+        }
+      ]
+    },
+    {
+      "id": "settingshome318-10",
+      "frameId": "settingshome318",
+      "x": 12,
+      "y": 898,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingshome318-10-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "security",
+          "kind": "listItem",
+          "label": "安全边界",
+          "supporting": "AES-256-GCM · 会话级解锁",
+          "icon2": "chevron_right"
+        }
+      ]
+    },
+    {
+      "id": "settingsappearance318-0",
+      "frameId": "settingsappearance318",
+      "x": 442,
+      "y": 12,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingsappearance318-0-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "arrow_back",
+          "kind": "topAppBar",
+          "label": "外观"
+        }
+      ]
+    },
+    {
+      "id": "settingsappearance318-1",
+      "frameId": "settingsappearance318",
+      "x": 442,
+      "y": 106,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingsappearance318-1-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": null,
+          "kind": "radio",
+          "label": "跟随系统",
+          "checked": true
+        }
+      ]
+    },
+    {
+      "id": "settingsappearance318-2",
+      "frameId": "settingsappearance318",
+      "x": 442,
+      "y": 194,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingsappearance318-2-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": null,
+          "kind": "radio",
+          "label": "浅色"
+        }
+      ]
+    },
+    {
+      "id": "settingsappearance318-3",
+      "frameId": "settingsappearance318",
+      "x": 442,
+      "y": 282,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingsappearance318-3-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": null,
+          "kind": "radio",
+          "label": "深色"
+        }
+      ]
+    },
+    {
+      "id": "settingsappearance318-4",
+      "frameId": "settingsappearance318",
+      "x": 442,
+      "y": 370,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingsappearance318-4-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "palette",
+          "kind": "listItem",
+          "label": "Monica",
+          "supporting": "当前配色"
+        }
+      ]
+    },
+    {
+      "id": "settingsappearance318-5",
+      "frameId": "settingsappearance318",
+      "x": 442,
+      "y": 458,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingsappearance318-5-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "palette",
+          "kind": "listItem",
+          "label": "Nothing"
+        }
+      ]
+    },
+    {
+      "id": "settingsbackup318-0",
+      "frameId": "settingsbackup318",
+      "x": 872,
+      "y": 12,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingsbackup318-0-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "arrow_back",
+          "kind": "topAppBar",
+          "label": "加密整库备份"
+        }
+      ]
+    },
+    {
+      "id": "settingsbackup318-1",
+      "frameId": "settingsbackup318",
+      "x": 872,
+      "y": 106,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingsbackup318-1-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "encrypted",
+          "kind": "button",
+          "label": "导出备份"
+        }
+      ]
+    },
+    {
+      "id": "settingsbackup318-2",
+      "frameId": "settingsbackup318",
+      "x": 872,
+      "y": 194,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingsbackup318-2-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "upload",
+          "kind": "button",
+          "label": "选择加密整库备份"
+        }
+      ]
+    },
+    {
+      "id": "settingsbackup318-3",
+      "frameId": "settingsbackup318",
+      "x": 872,
+      "y": 282,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingsbackup318-3-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": null,
+          "kind": "textField",
+          "label": "备份密码"
+        }
+      ]
+    },
+    {
+      "id": "settingsbackup318-4",
+      "frameId": "settingsbackup318",
+      "x": 872,
+      "y": 374,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingsbackup318-4-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": null,
+          "kind": "textField",
+          "label": "恢复前的当前主密码"
+        }
+      ]
+    },
+    {
+      "id": "settingsbackup318-5",
+      "frameId": "settingsbackup318",
+      "x": 872,
+      "y": 466,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingsbackup318-5-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "restore",
+          "kind": "button",
+          "label": "验证并替换当前密码库"
+        }
+      ]
+    },
+    {
+      "id": "settingsprotection318-0",
+      "frameId": "settingsprotection318",
+      "x": 1302,
+      "y": 12,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingsprotection318-0-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "arrow_back",
+          "kind": "topAppBar",
+          "label": "更改保护方式"
+        }
+      ]
+    },
+    {
+      "id": "settingsprotection318-1",
+      "frameId": "settingsprotection318",
+      "x": 1302,
+      "y": 106,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingsprotection318-1-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": null,
+          "kind": "textField",
+          "label": "当前主密码"
+        }
+      ]
+    },
+    {
+      "id": "settingsprotection318-2",
+      "frameId": "settingsprotection318",
+      "x": 1302,
+      "y": 198,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingsprotection318-2-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": null,
+          "kind": "textField",
+          "label": "新主密码（可选）"
+        }
+      ]
+    },
+    {
+      "id": "settingsprotection318-3",
+      "frameId": "settingsprotection318",
+      "x": 1302,
+      "y": 290,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingsprotection318-3-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": null,
+          "kind": "textField",
+          "label": "确认新主密码"
+        }
+      ]
+    },
+    {
+      "id": "settingsprotection318-4",
+      "frameId": "settingsprotection318",
+      "x": 1302,
+      "y": 382,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingsprotection318-4-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "check",
+          "kind": "button",
+          "label": "更改主密码"
+        }
+      ]
+    },
+    {
+      "id": "settingshello318-0",
+      "frameId": "settingshello318",
+      "x": 1732,
+      "y": 12,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingshello318-0-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "arrow_back",
+          "kind": "topAppBar",
+          "label": "Windows Hello"
+        }
+      ]
+    },
+    {
+      "id": "settingshello318-1",
+      "frameId": "settingshello318",
+      "x": 1732,
+      "y": 106,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingshello318-1-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "fingerprint",
+          "kind": "listItem",
+          "label": "设备不可用",
+          "supporting": "平台验证器"
+        }
+      ]
+    },
+    {
+      "id": "settingshello318-2",
+      "frameId": "settingshello318",
+      "x": 1732,
+      "y": 194,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingshello318-2-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "key_vertical",
+          "kind": "listItem",
+          "label": "未注册 · 主密码",
+          "supporting": "当前密码库"
+        }
+      ]
+    },
+    {
+      "id": "settingshello318-3",
+      "frameId": "settingshello318",
+      "x": 1732,
+      "y": 282,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingshello318-3-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "refresh",
+          "kind": "button",
+          "label": "刷新状态"
+        }
+      ]
+    },
+    {
+      "id": "settingsexclusions318-0",
+      "frameId": "settingsexclusions318",
+      "x": 2162,
+      "y": 12,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingsexclusions318-0-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "arrow_back",
+          "kind": "topAppBar",
+          "label": "自动填充排除项"
+        }
+      ]
+    },
+    {
+      "id": "settingsexclusions318-1",
+      "frameId": "settingsexclusions318",
+      "x": 2162,
+      "y": 106,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingsexclusions318-1-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": null,
+          "kind": "select",
+          "label": "排除类型",
+          "tabs": [
+            {
+              "label": "禁止自动填充",
+              "icon": null
+            }
+          ],
+          "selected": 0
+        }
+      ]
+    },
+    {
+      "id": "settingsexclusions318-2",
+      "frameId": "settingsexclusions318",
+      "x": 2162,
+      "y": 194,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingsexclusions318-2-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": null,
+          "kind": "textField",
+          "label": "网站域名"
+        }
+      ]
+    },
+    {
+      "id": "settingsexclusions318-3",
+      "frameId": "settingsexclusions318",
+      "x": 2162,
+      "y": 286,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingsexclusions318-3-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "add",
+          "kind": "button",
+          "label": "添加"
+        }
+      ]
+    },
+    {
+      "id": "settingsexclusions318-4",
+      "frameId": "settingsexclusions318",
+      "x": 2162,
+      "y": 374,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingsexclusions318-4-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "domain_disabled",
+          "kind": "listItem",
+          "label": "禁止自动填充",
+          "supporting": "暂无排除项"
+        }
+      ]
+    },
+    {
+      "id": "settingsexclusions318-5",
+      "frameId": "settingsexclusions318",
+      "x": 2162,
+      "y": 462,
+      "axis": "y",
+      "gap": 8,
+      "items": [
+        {
+          "id": "settingsexclusions318-5-control",
+          "size": 366,
+          "radius": 24,
+          "variant": "filled",
+          "icon": "check",
+          "kind": "button",
+          "label": "保存"
+        }
+      ]
+    }
+  ],
+  "dynamicColor": false
+}

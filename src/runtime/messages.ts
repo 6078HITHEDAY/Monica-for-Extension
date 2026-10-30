@@ -1,4 +1,7 @@
 import type { LoginItem, ProviderAccount, ProviderConflict, ProviderConflictResolution, ProviderDiagnosticExport, VaultItem } from "../core/model";
+export type { Mdbx2PendingMove } from "../providers/mdbx2/mdbx2-batch-transfer-coordinator";
+export type { Mdbx2FileExportBegin, Mdbx2FileExportChunk } from "../providers/mdbx2/local-file-export";
+import type { BlockedFieldSignatureRecord } from "../autofill/field-policy";
 import type { ProviderAttachmentMutationResult, ProviderAttachmentPage, ProviderAttachmentReadBeginResult, ProviderAttachmentReadChunk, ProviderAttachmentUploadBeginResult, ProviderAttachmentUploadChunkResult } from "../providers/attachments/attachment-contract";
 import type { ProviderAttachmentTransferRequest, ProviderAttachmentTransferResult } from "../providers/attachments/attachment-transfer";
 import type { Mdbx2CollectionMutationResult, Mdbx2CollectionSummaryPage, Mdbx2CommitDiffResult, Mdbx2CommitHistoryPage, Mdbx2CommitRevertResult, Mdbx2ConflictResolutionChoice, Mdbx2ConflictResolutionResult, Mdbx2ConflictSummaryPage, Mdbx2HealthRepairApplyResult, Mdbx2HealthRepairDecision, Mdbx2HealthRepairPlan, Mdbx2HostStatus, Mdbx2ManagedSnapshotPage, Mdbx2ObjectDeleteResult, Mdbx2ObjectRecord, Mdbx2ObjectSummaryPage, Mdbx2ObjectUpsertInput, Mdbx2ObjectWriteResult, Mdbx2SnapshotCreateResult, Mdbx2SnapshotDeleteResult, Mdbx2SnapshotPrunePlan, Mdbx2SnapshotPruneResult, Mdbx2SnapshotRestoreResult, Mdbx2SnapshotStructurePage, Mdbx2SnapshotStructureSide, Mdbx2TransferBeginResult, Mdbx2TransferChunkResult, Mdbx2TransferFinishResult, Mdbx2VaultCredential, Mdbx2VaultDiagnosticsReport, Mdbx2VaultInspection, Mdbx2VaultRuntimeStatus, Mdbx2VaultSessionSummary, Mdbx2VaultSource, Mdbx2VaultTigaPosture, Mdbx2WindowsHelloStatus } from "../providers/mdbx2/native-contract";
@@ -11,17 +14,27 @@ import type { BitwardenCollectionMutationResult, BitwardenCollectionPage } from 
 import type { BitwardenSendDetail, BitwardenSendFileInput, BitwardenSendPage, BitwardenSendTextInput, BitwardenSendUpdateInput } from "../providers/bitwarden/bitwarden-sends";
 import type { KeePassHistoryDetail, KeePassHistoryFieldValue, KeePassHistoryPage, KeePassHistoryRestoreResult } from "../providers/keepass/keepass-history";
 import type { MonicaWebDavConfig } from "../providers/webdav/monica-webdav-provider";
+import type { AndroidGeneratorHistoryEntry } from "../providers/webdav/android-backup-codec";
 import type { SteamInventoryOverview, SteamInventoryPage, SteamMarketListingsPage, SteamMarketQuote, SteamMarketSellBatchResult, SteamMarketSellEntry, SteamMiniProfileBackground } from "../providers/steam/steam-market";
 import type { SteamAuthorizedDevice } from "../providers/steam/steam-network";
 import type { EncryptedVaultBackup, VaultLifecycleStatus } from "../security/secure-vault-service";
+import type { AutofillSitePolicy } from "../autofill/site-policy";
+import type { AutofillCredentialIdentity } from "../autofill/credential-identity";
 
 export interface LoginMatchSummary {
+  credentialIdentity?: AutofillCredentialIdentity;
+  customIconType?: string;
+  customIconValue?: string;
   id: string;
   title: string;
   username: string;
   favorite: boolean;
   uris: string[];
+  loginType?: LoginItem["loginType"];
+  /** Website origin only; never includes URI credentials, path, query or fragment. */
+  iconOrigin?: string;
   hasTotp: boolean;
+  allowLockedAutofill?: boolean;
 }
 
 export interface PasskeyMatchSummary {
@@ -39,6 +52,8 @@ export interface PasskeyMatchSummary {
 export type WalletFillKind = "identity" | "billing-address" | "card" | "payment-account";
 
 export type WalletFieldName =
+  | "addressLine3" | "district" | "homeEmail" | "homePhone" | "workEmail" | "workPhone"
+  | "cardholderFirstName" | "cardholderMiddleName" | "cardholderLastName"
   | "fullName" | "firstName" | "middleName" | "lastName" | "birthDate" | "nationality" | "documentNumber"
   | "documentType" | "documentIssuedDate" | "documentExpiryDate" | "documentIssuedBy" | "passportNumber" | "licenseNumber" | "ssn"
   | "company" | "streetAddress" | "apartment" | "city" | "stateProvince" | "postalCode" | "country" | "phone" | "email"
@@ -96,20 +111,36 @@ export interface PasskeyPromptContext {
   origin: string;
   userName: string;
   userDisplayName?: string;
+  userVerificationRequired?: boolean;
+  userVerificationMethod?: "master-password" | "windows-hello";
+  unlockRequired?: boolean;
+  userVerified?: boolean;
   saveTargets: Array<{ providerId: string; name: string; sourceMode: "browser-local" | "bitwarden" }>;
   defaultSaveTargetId?: string;
-  credentials: Array<{ itemId: string; title: string; userName: string; userDisplayName: string; sourceMode: "browser-local" | "bitwarden"; useCount: number; lastUsedAt?: string }>;
+  credentials: Array<{ itemId: string; title: string; userName: string; userDisplayName: string; sourceMode: "browser-local" | "bitwarden"; providerName: string; isLocalSource?: boolean; credentialConflict: boolean; userVerificationRequired?: boolean; useCount: number; lastUsedAt?: string }>;
   expiresAt: number;
 }
 
+export interface PasskeyVerificationContext {
+  verificationId: string;
+  operation: "create" | "get";
+  rpId: string;
+  origin: string;
+  accountName: string;
+  expiresAt: number;
+  unlockRequired?: boolean;
+  method?: "master-password" | "windows-hello";
+}
+
 export type PasskeyResult =
-  | { operation: "create"; id: string; rawId: string; response: { clientDataJSON: string; attestationObject: string; authenticatorData: string; publicKey: string; publicKeyAlgorithm: -7 }; clientExtensionResults: { credProps?: { rk: boolean } } }
+  | { operation: "create"; id: string; rawId: string; response: { clientDataJSON: string; attestationObject: string; authenticatorData: string; publicKey: string; publicKeyAlgorithm: -7 | -257 }; clientExtensionResults: { credProps?: { rk: boolean } } }
   | { operation: "get"; id: string; rawId: string; response: { clientDataJSON: string; authenticatorData: string; signature: string; userHandle: string } };
 
 export type BitwardenConnectResult =
   | { status: "authenticated"; providerId: string }
-  | { status: "two-factor-required"; providers: number[] }
-  | { status: "device-verification-required" };
+  | { status: "two-factor-required"; providers: number[]; providerData?: Record<string, unknown> }
+  | { status: "device-verification-required" }
+  | { status: "sso-required"; organizationIdentifier: string };
 
 export interface SavePromptProviderSummary {
   id: string;
@@ -123,6 +154,7 @@ export interface SavePromptUpdateTarget {
   title: string;
   username: string;
   providerName: string;
+  isLocalSource?: boolean;
 }
 
 export interface SavePromptContext {
@@ -145,6 +177,7 @@ export interface CredentialCaptureInput {
   pageUrl: string;
   pageTitle: string;
   captureKind: "login" | "password-change";
+  fieldSignatures?: string[];
 }
 
 export interface VaultWindowsHelloStatus {
@@ -241,6 +274,8 @@ export interface KeePassFileExport {
 }
 
 export type ExtensionRequest =
+  | { type: "RUNTIME_INFO" }
+  | { type: "CLIPBOARD_ARM"; digest: string }
   | { type: "VAULT_STATUS" }
   | { type: "VAULT_SETUP"; masterPassword: string }
   | { type: "VAULT_UNLOCK"; masterPassword: string }
@@ -251,20 +286,72 @@ export type ExtensionRequest =
   | { type: "VAULT_HELLO_REVOKE"; confirmed: true }
   | { type: "VAULT_CHANGE_MASTER_PASSWORD"; currentPassword: string; newPassword: string }
   | { type: "VAULT_EXPORT_ENCRYPTED"; backupPassword: string }
+  | { type: "VAULT_AUTHENTICATED_EXPORT"; input: import('../security/authenticated-export').VaultExportInput }
+  | { type: "VAULT_STORAGE_OVERVIEW" }
+  | { type: "VAULT_RECOVERY_CLEAR"; confirmed: true }
   | { type: "VAULT_RESTORE_ENCRYPTED"; backup: EncryptedVaultBackup; backupPassword: string; replaceExisting?: boolean; currentPassword?: string }
   | { type: "VAULT_IMPORT_ITEMS"; items: VaultItem[] }
   | { type: "VAULT_LIST_ITEMS" }
+  | { type: "VAULT_ITEM_SNAPSHOT" }
+  | { type: "VAULT_HOME_GET" }
+  | { type: "VAULT_HOME_SET"; preferences: Partial<import("../core/home-preferences").HomePreferences> }
   | { type: "VAULT_LIST_ARCHIVED_ITEMS" }
   | { type: "VAULT_LIST_DELETED_ITEMS" }
   | { type: "VAULT_GET_ITEM"; itemId: string }
-  | { type: "VAULT_UPSERT_ITEM"; item: VaultItem }
+  | { type: "VAULT_UPSERT_ITEM"; item: VaultItem; allowLockedAutofill?: boolean; expectedUpdatedAt?: string }
+  | { type: "VAULT_CONSUME_HOTP"; usage: import('../core/login-otp').HotpUsage }
+  | { type: "VAULT_UNARCHIVE_ITEM"; itemId: string; expectedUpdatedAt: string }
+  | { type: 'VAULT_DELETE_PASSWORD_HISTORY'; itemId: string; index: number; expectedUpdatedAt: string }
+  | { type: "VAULT_SAVE_PASSWORD_GROUP"; items: LoginItem[]; expected: Record<string, string>; allowLockedAutofill?: boolean }
+  | { type: "VAULT_SET_PASSWORD_COVER"; anchorItemId: string; enabled: boolean; expected: Record<string, string> }
+  | { type: "VAULT_SET_PASSWORD_STACK"; anchorItemIds: string[]; action: import("../core/password-manual-stacks").PasswordStackAction; expected: Record<string, string> }
+  | { type: "VAULT_PASSWORD_PROJECT_REMOVE"; input: import('../background/password-project-removal').PasswordProjectRemovalRequest; confirmed: true }
+  | { type: "VAULT_PASSWORD_PROJECT_REMOVALS"; operationId?: string }
+  | { type: "VAULT_PASSWORD_PROJECT_REMOVAL_RESUME"; operationId: string }
+  | { type: "VAULT_PASSWORD_PROJECT_REMOVAL_CANCEL"; operationId: string }
+  | { type: 'VAULT_KEEPASS_PROJECT_SOURCE_TOKEN'; providerId: string }
+  | { type: 'VAULT_KEEPASS_PROJECT_REMOVE'; input: import('../background/keepass-project-removal').KeePassProjectRemovalRequest; confirmed: true }
+  | { type: 'VAULT_KEEPASS_PROJECT_REMOVALS'; operationId?: string }
+  | { type: 'VAULT_KEEPASS_PROJECT_REMOVAL_RESUME'; operationId: string }
+  | { type: 'VAULT_KEEPASS_PROJECT_REMOVAL_CANCEL'; operationId: string }
+  | { type: 'VAULT_KEEPASS_PROJECT_CONFLICT_REVIEW'; providerId: string }
+  | { type: 'VAULT_KEEPASS_PROJECT_RESOLVE'; providerId: string; input: import('../providers/keepass/keepass-project-resolution').KeePassProjectResolutionRequest; confirmed: true }
+  | { type: 'VAULT_KEEPASS_PROJECT_RESOLUTIONS'; operationId?: string }
+  | { type: 'VAULT_KEEPASS_PROJECT_RESOLUTION_RESUME'; operationId: string }
+  | { type: 'VAULT_KEEPASS_PROJECT_RESOLUTION_CANCEL'; operationId: string }
+  | { type: 'VAULT_KEEPASS_PROJECT_RECOVERY_LIST'; providerId: string }
+  | { type: 'VAULT_KEEPASS_PROJECT_RECOVERY_DELETE'; providerId: string; operationId: string; expectedIntentTag: string; confirmed: true }
+  | { type: 'VAULT_KEEPASS_PROJECT_RECOVERY_EXPORT_BEGIN'; providerId: string; operationId: string; expectedIntentTag: string; exportPassword: string; requestId: string }
+  | { type: 'VAULT_KEEPASS_PROJECT_RECOVERY_EXPORT_STATUS'; providerId: string; requestId: string }
+  | { type: 'VAULT_KEEPASS_PROJECT_RECOVERY_EXPORT_CANCEL'; providerId: string; requestId: string }
+  | { type: 'VAULT_KEEPASS_PROJECT_RECOVERY_EXPORT_READ'; providerId: string; downloadHandle: string; offset: number }
+  | { type: 'VAULT_KEEPASS_PROJECT_RECOVERY_EXPORT_RELEASE'; providerId: string; downloadHandle: string }
+  | { type: "VAULT_LOCKED_AUTOFILL_IDS" }
+  | { type: "VAULT_SET_LOCKED_AUTOFILL"; itemId: string; enabled: boolean }
+  | { type: 'VAULT_BATCH_MUTATE'; input: import('../core/vault-batch').VaultBatchRequest }
   | { type: "VAULT_DELETE_ITEM"; itemId: string }
+  | { type: "VAULT_EMPTY_LOCAL_TRASH" }
+  | { type: "VAULT_DELETE_PASSWORD_GROUP"; anchorItemId: string; expected: Record<string, string> }
   | { type: "VAULT_RESTORE_ITEM"; itemId: string }
-  | { type: "VAULT_MATCH_LOGINS"; pageUrl: string }
+  | { type: 'VAULT_PASSWORD_PROJECT_RESTORE'; input: import('../background/password-project-restore').PasswordProjectRestoreRequest; confirmed: true }
+  | { type: 'VAULT_PASSWORD_PROJECT_RESTORES'; operationId?: string }
+  | { type: 'VAULT_PASSWORD_PROJECT_RESTORE_RESUME'; operationId: string }
+  | { type: "VAULT_MATCH_LOGINS"; pageUrl: string; fieldSignature?: string }
+  | { type: "AUTOFILL_INLINE_QUERY"; sessionId: string }
+  | { type: "AUTOFILL_INLINE_FILL"; sessionId: string; itemId: string }
+  | { type: "AUTOFILL_INLINE_OPEN"; sessionId: string }
+  | { type: "VAULT_LIST_LOGIN_SUMMARIES" }
+  | { type: "VAULT_LOGIN_SECRET"; itemId: string; field: "username" | "password" }
   | { type: "VAULT_MATCH_PASSKEYS"; pageUrl: string }
   | { type: "VAULT_FILL_LOGIN"; itemId: string; tabId: number; frameId?: number; documentId?: string; expectedOrigin?: string }
-  | { type: "VAULT_LIST_WALLET_ITEMS"; kinds: WalletFillKind[] }
+  | { type: "VAULT_LIST_WALLET_ITEMS"; kinds: WalletFillKind[]; pageUrl: string; fieldSignature?: string }
   | { type: "VAULT_FILL_WALLET"; itemId: string; tabId: number; frameId?: number; documentId?: string; expectedOrigin?: string }
+  | { type: "AUTOFILL_SITE_POLICY_GET" }
+  | { type: "AUTOFILL_SITE_POLICY_SET"; policy: AutofillSitePolicy }
+  | { type: "AUTOFILL_FIELD_POLICY_LIST" }
+  | { type: "AUTOFILL_FIELD_POLICY_STATUS"; signature: string }
+  | { type: "AUTOFILL_FIELD_POLICY_SET_CURRENT"; blocked: boolean; tabId: number; frameId?: number; documentId?: string; expectedOrigin?: string }
+  | { type: "AUTOFILL_FIELD_POLICY_REMOVE"; signature: string }
   | { type: "STEAM_LIST_CONFIRMATIONS"; itemId: string }
   | { type: "STEAM_RESPOND_CONFIRMATION"; itemId: string; confirmation: SteamConfirmation; accept: boolean }
   | { type: "STEAM_LIST_PENDING_LOGINS"; itemId: string }
@@ -284,6 +371,11 @@ export type ExtensionRequest =
   | { type: "CREDENTIAL_ACCEPT"; candidateId: string; providerId?: string; existingItemId?: string }
   | { type: "CREDENTIAL_DISMISS"; candidateId: string }
   | { type: "PASSKEY_BEGIN"; request: PasskeyRequest }
+  | { type: "PASSKEY_UNLOCK_CONTINUE"; candidateId: string }
+  | { type: "PASSKEY_VERIFICATION_CONTEXT"; verificationId: string }
+  | { type: "PASSKEY_VERIFY_PASSWORD"; verificationId: string; masterPassword: string }
+  | { type: "PASSKEY_VERIFY_HELLO"; verificationId: string }
+  | { type: "PASSKEY_CANCEL_VERIFICATION"; verificationId: string }
   | { type: "PASSKEY_ACCEPT"; candidateId: string; itemId?: string; providerId?: string }
   | { type: "PASSKEY_DISMISS"; candidateId: string }
   | { type: "PROVIDER_LIST" }
@@ -302,10 +394,13 @@ export type ExtensionRequest =
       masterPassword: string;
       twoFactorCode?: string;
       twoFactorProvider?: number;
+      twoFactorProviderData?: Record<string, unknown>;
       rememberTwoFactor?: boolean;
       newDeviceOtp?: string;
+      ssoOrganizationIdentifier?: string;
       isDefaultSaveTarget?: boolean;
     }
+  | { type: "BITWARDEN_LOGOUT"; providerId: string }
   | { type: "BITWARDEN_SEND_EMAIL_CODE"; providerId?: string; vaultUrl: string; email: string; masterPassword: string }
   | { type: "BITWARDEN_FOLDER_LIST"; providerId: string; pageSize?: number; cursor?: string }
   | { type: "BITWARDEN_FOLDER_CREATE"; providerId: string; name: string }
@@ -324,8 +419,12 @@ export type ExtensionRequest =
   | { type: "BITWARDEN_SEND_FILE_UPLOAD_CHUNK"; providerId: string; transferId: string; offset: number; dataBase64: string }
   | { type: "BITWARDEN_SEND_FILE_UPLOAD_FINISH"; providerId: string; transferId: string }
   | { type: "BITWARDEN_SEND_FILE_UPLOAD_ABORT"; providerId: string; transferId: string }
-  | { type: "MDBX2_HOST_STATUS" }
+  | { type: "MDBX2_HOST_STATUS"; providerId?: string }
+  | { type: "MDBX2_VAULT_CREATE"; input: { name: string; password: string; isDefaultSaveTarget?: boolean } }
   | { type: "MDBX2_TRANSFER_BEGIN"; sizeBytes: number; sha256?: string }
+  | { type: "MDBX2_FILE_EXPORT_BEGIN"; providerId: string }
+  | { type: "MDBX2_FILE_EXPORT_READ"; providerId: string; downloadHandle: string; offset: number }
+  | { type: "MDBX2_FILE_EXPORT_RELEASE"; providerId: string; downloadHandle: string }
   | { type: "MDBX2_TRANSFER_CHUNK"; transferId: string; offset: number; dataBase64: string }
   | { type: "MDBX2_TRANSFER_FINISH"; transferId: string }
   | { type: "MDBX2_TRANSFER_ABORT"; transferId: string }
@@ -352,8 +451,15 @@ export type ExtensionRequest =
   | { type: "MDBX2_OBJECT_LIST"; providerId: string; collectionId: string; objectTypeId?: string; deleted?: boolean; pageSize?: number; cursor?: string }
   | { type: "MDBX2_OBJECT_REVEAL"; providerId: string; objectId: string }
   | { type: "MDBX2_OBJECT_UPSERT"; providerId: string; operationId: string; input: Mdbx2ObjectUpsertInput }
-  | { type: "MDBX2_OBJECT_DELETE"; providerId: string; operationId: string; logicalObjectId: string }
+  | { type: "MDBX2_OBJECT_DELETE"; providerId: string; operationId: string; logicalObjectId: string; expectedHeadCommitId?: string }
   | { type: "MDBX2_BATCH_TRANSFER_PLAN"; input: Mdbx2BatchTransferRequest }
+  | { type: "LOCAL_TRANSFER_FOLDERS" }
+  | { type: "KEEPASS_PENDING_TRANSFERS"; providerId: string }
+  | { type: "KEEPASS_CANCEL_UNWRITTEN_TRANSFER"; providerId: string; operationId: string }
+  | { type: "BITWARDEN_PENDING_TRANSFERS"; providerId: string }
+  | { type: "BITWARDEN_CANCEL_UNWRITTEN_TRANSFER"; providerId: string; operationId: string }
+  | { type: "BITWARDEN_KEEP_BOTH_TRANSFER"; providerId: string; operationId: string; confirmed: boolean }
+  | { type: "MDBX2_PENDING_MOVES" }
   | { type: "MDBX2_BATCH_TRANSFER_EXECUTE"; input: Mdbx2BatchTransferRequest; confirmed?: true }
   | { type: "MDBX2_BATCH_TRANSFER_STATUS"; operationId: string }
   | { type: "MDBX2_HISTORY_LIST"; providerId: string; pageSize?: number; cursor?: string }
@@ -374,14 +480,20 @@ export type ExtensionRequest =
   | { type: "PROVIDER_ATTACHMENT_READ_BEGIN"; providerId: string; itemId: string; attachmentId: string }
   | { type: "PROVIDER_ATTACHMENT_READ_CHUNK"; providerId: string; readHandle: string; offset: number; maxBytes?: number }
   | { type: "PROVIDER_ATTACHMENT_READ_RELEASE"; providerId: string; readHandle: string }
-  | { type: "PROVIDER_ATTACHMENT_UPLOAD_BEGIN"; providerId: string; itemId: string; fileName: string; mediaType?: string; sizeBytes: number; sha256?: string; replaceExisting?: boolean; operationId?: string; attachmentId?: string }
+  | { type: "PROVIDER_ATTACHMENT_UPLOAD_BEGIN"; providerId: string; itemId: string; fileName: string; mediaType?: string; sizeBytes: number; sha256?: string; replaceExisting?: boolean; operationId?: string; attachmentId?: string; expectedRevision?: string }
   | { type: "PROVIDER_ATTACHMENT_UPLOAD_CHUNK"; providerId: string; transferId: string; offset: number; dataBase64: string }
   | { type: "PROVIDER_ATTACHMENT_UPLOAD_FINISH"; providerId: string; itemId: string; transferId: string; operationId?: string }
   | { type: "PROVIDER_ATTACHMENT_UPLOAD_ABORT"; providerId: string; transferId: string }
-  | { type: "PROVIDER_ATTACHMENT_DELETE"; providerId: string; itemId: string; attachmentId: string; operationId: string; confirmed: boolean }
+  | { type: "PROVIDER_ATTACHMENT_DELETE"; providerId: string; itemId: string; attachmentId: string; operationId: string; confirmed: boolean; expectedRevision?: string }
+  | { type: "ANDROID_GENERATOR_HISTORY_LIST"; providerId: string }
+  | { type: "ANDROID_GENERATOR_HISTORY_DELETE"; providerId: string; entryId: string; confirmed: true }
   | { type: "KEEPASS_OPEN"; input: KeePassOpenInput }
   | { type: "KEEPASS_WEBDAV_TEST"; input: KeePassWebDavTestInput }
   | { type: "KEEPASS_WEBDAV_OPEN"; input: KeePassRemoteOpenInput }
+  | { type: "ONEDRIVE_LOGIN"; loginId: string; clientId?: string }
+  | { type: "ONEDRIVE_LOGIN_CANCEL"; loginId: string }
+  | { type: "ONEDRIVE_BROWSE"; input: OneDriveBrowserInput }
+  | { type: "KEEPASS_ONEDRIVE_OPEN"; input: KeePassOneDriveConnectInput }
   | { type: "KEEPASS_REMOTE_RESTORE"; providerId: string }
   | { type: "KEEPASS_REMOTE_STATUS"; providerId: string }
   | { type: "KEEPASS_STATUS"; providerId: string }
@@ -398,6 +510,7 @@ export type ExtensionRequest =
   | { type: "KEEPASS_EXPORT_FILE"; providerId: string }
   | { type: "KEEPASS_LOCK"; providerId?: string }
   | { type: "PROVIDER_SYNC"; providerId: string; allowEmptyRemote?: true }
+  | { type: "BITWARDEN_SYNC_ALL" }
   | { type: "PROVIDER_SYNC_CANCEL"; providerId: string }
   | { type: "PROVIDER_REMOVE"; providerId: string };
 
@@ -409,6 +522,7 @@ export type VaultStatusResponse = VaultLifecycleStatus;
 export type { LoginItem, ProviderAccount, ProviderConflict, ProviderConflictResolution, ProviderDiagnosticExport, VaultItem };
 export type { ProviderAttachmentMutationResult, ProviderAttachmentPage, ProviderAttachmentReadBeginResult, ProviderAttachmentReadChunk, ProviderAttachmentUploadBeginResult, ProviderAttachmentUploadChunkResult };
 export type { ProviderAttachmentTransferRequest, ProviderAttachmentTransferResult };
+export type { AndroidGeneratorHistoryEntry };
 export type { BitwardenSendDetail, BitwardenSendPage, BitwardenSendSummary, BitwardenSendTextInput, BitwardenSendUpdateInput } from "../providers/bitwarden/bitwarden-sends";
 export type { Mdbx2CollectionMutationResult, Mdbx2CollectionSummaryPage, Mdbx2CommitDiffResult, Mdbx2CommitHistoryPage, Mdbx2CommitRevertResult, Mdbx2ConflictResolutionChoice, Mdbx2ConflictResolutionResult, Mdbx2ConflictSummaryPage, Mdbx2HealthRepairApplyResult, Mdbx2HealthRepairDecision, Mdbx2HealthRepairPlan, Mdbx2HostStatus, Mdbx2ManagedSnapshotPage, Mdbx2ObjectDeleteResult, Mdbx2ObjectRecord, Mdbx2ObjectSummaryPage, Mdbx2ObjectUpsertInput, Mdbx2ObjectWriteResult, Mdbx2SnapshotCreateResult, Mdbx2SnapshotDeleteResult, Mdbx2SnapshotPrunePlan, Mdbx2SnapshotPruneResult, Mdbx2SnapshotRestoreResult, Mdbx2SnapshotStructurePage, Mdbx2SnapshotStructureSide, Mdbx2TransferBeginResult, Mdbx2TransferChunkResult, Mdbx2TransferFinishResult, Mdbx2VaultCredential, Mdbx2VaultDiagnosticsReport, Mdbx2VaultInspection, Mdbx2VaultRuntimeStatus, Mdbx2VaultSessionSummary, Mdbx2VaultSource, Mdbx2VaultTigaPosture, KeePassSessionSummary };
 export type { Mdbx2BatchTransferExecuteResult, Mdbx2BatchTransferPlanResult, Mdbx2BatchTransferRequest, Mdbx2BatchTransferStatus };
@@ -418,3 +532,5 @@ export type { BitwardenCollectionMutationResult, BitwardenCollectionPage };
 export type { KeePassHistoryDetail, KeePassHistoryFieldValue, KeePassHistoryPage, KeePassHistoryRestoreResult };
 export type { KeePassRemoteManagerStatus, KeePassRemoteProbeResult };
 export type { SteamAuthorizedDevice, SteamInventoryOverview, SteamInventoryPage, SteamMarketListingsPage, SteamMarketQuote, SteamMarketSellBatchResult, SteamMarketSellEntry, SteamMiniProfileBackground };
+import type { KeePassOneDriveConnectInput } from "../background/onedrive-keepass-connection";
+import type { OneDriveBrowserInput } from "../providers/onedrive/onedrive-session";

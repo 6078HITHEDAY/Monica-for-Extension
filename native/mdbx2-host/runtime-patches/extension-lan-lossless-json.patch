@@ -1,0 +1,181 @@
+diff --git a/native/mdbx2-host/vendor/monica-lan-sync/Cargo.toml b/native/mdbx2-host/vendor/monica-lan-sync/Cargo.toml
+index 65756c1..a3f17dd 100644
+--- a/native/mdbx2-host/vendor/monica-lan-sync/Cargo.toml
++++ b/native/mdbx2-host/vendor/monica-lan-sync/Cargo.toml
+@@ -18,7 +18,7 @@ chacha20poly1305 = "0.10"
+ if-addrs = "0.13"
+ rand = "0.8"
+ serde = { version = "1", features = ["derive"] }
+-serde_json = "1"
++serde_json = { version = "1", features = ["arbitrary_precision", "raw_value"] }
+ sha2 = "0.10"
+ snow = "0.9"
+ socket2 = "0.5"
+diff --git a/native/mdbx2-host/vendor/monica-lan-sync/src/lib.rs b/native/mdbx2-host/vendor/monica-lan-sync/src/lib.rs
+index 0737943..8cbee69 100644
+--- a/native/mdbx2-host/vendor/monica-lan-sync/src/lib.rs
++++ b/native/mdbx2-host/vendor/monica-lan-sync/src/lib.rs
+@@ -24,6 +24,62 @@ use std::{
+ };
+ use zeroize::Zeroizing;
+ 
++/// Preserve user JSON as literal containers and validated number tokens. Serde's
++/// private Number/RawValue marker keys are legal user fields, not type tags.
++/// This extension overlay changes parsing only, never the wire or storage format.
++pub mod json {
++    use serde::{de::Error as _, Deserialize, Deserializer};
++    use serde_json::{value::RawValue, Number, Value};
++    use std::collections::BTreeMap;
++
++    pub fn from_str(input: &str) -> serde_json::Result<Value> {
++        let raw: &RawValue = serde_json::from_str(input)?;
++        from_raw(raw, 0)
++    }
++
++    pub fn from_slice(input: &[u8]) -> serde_json::Result<Value> {
++        let raw: &RawValue = serde_json::from_slice(input)?;
++        from_raw(raw, 0)
++    }
++
++    pub fn deserialize<'de, D: Deserializer<'de>>(
++        deserializer: D,
++    ) -> std::result::Result<Value, D::Error> {
++        let raw = Box::<RawValue>::deserialize(deserializer)?;
++        from_raw(&raw, 0).map_err(serde::de::Error::custom)
++    }
++
++    fn from_raw(raw: &RawValue, depth: usize) -> serde_json::Result<Value> {
++        if depth >= 128 {
++            return Err(serde_json::Error::custom("JSON nesting limit exceeded"));
++        }
++        match raw.get().as_bytes()[0] {
++            b'{' => {
++                let fields: BTreeMap<String, &RawValue> = serde_json::from_str(raw.get())?;
++                fields
++                    .into_iter()
++                    .map(|(key, value)| Ok((key, from_raw(value, depth + 1)?)))
++                    .collect::<serde_json::Result<_>>()
++                    .map(Value::Object)
++            }
++            b'[' => {
++                let elements: Vec<&RawValue> = serde_json::from_str(raw.get())?;
++                elements
++                    .into_iter()
++                    .map(|value| from_raw(value, depth + 1))
++                    .collect::<serde_json::Result<_>>()
++                    .map(Value::Array)
++            }
++            // RawValue validated the complete token. Preserve its lexeme rather
++            // than round through f64 or normalize -0/exponent spelling.
++            b'-' | b'0'..=b'9' => Ok(Value::Number(Number::from_string_unchecked(
++                raw.get().to_owned(),
++            ))),
++            _ => serde_json::from_str(raw.get()),
++        }
++    }
++}
++
+ /// Shared by the JSON dispatcher and native ABI wrappers before reading requests.
+ pub const MAX_REQUEST_BYTES: usize = 8 * 1024 * 1024;
+ const MAX_JOBS: usize = 8;
+@@ -577,11 +633,15 @@ pub fn request_json(input: &str) -> String {
+         if input.len() > MAX_REQUEST_BYTES {
+             return Err("request_too_large");
+         }
+-        request(serde_json::from_str(input).map_err(|_| "invalid_request")?)
++        request(json::from_str(input).map_err(|_| "invalid_request")?)
+     })
+     .unwrap_or(Err("unavailable"));
+     match result {
+-        Ok(data) => json!({"ok": true, "data": data}),
++        Ok(data) => {
++            let mut response = json!({"ok": true});
++            response["data"] = data;
++            response
++        }
+         Err(code) => json!({"ok": false, "error": code}),
+     }
+     .to_string()
+diff --git a/native/mdbx2-host/vendor/monica-lan-sync/src/replica.rs b/native/mdbx2-host/vendor/monica-lan-sync/src/replica.rs
+index 3f4c6d7..25613a8 100644
+--- a/native/mdbx2-host/vendor/monica-lan-sync/src/replica.rs
++++ b/native/mdbx2-host/vendor/monica-lan-sync/src/replica.rs
+@@ -22,6 +22,7 @@ struct Record {
+     origins: BTreeSet<String>,
+     writer: String,
+     deleted: bool,
++    #[serde(deserialize_with = "crate::json::deserialize")]
+     data: Value,
+ }
+ 
+@@ -56,6 +57,7 @@ struct Local {
+     scope: String,
+     guard: String,
+     deleted: bool,
++    #[serde(deserialize_with = "crate::json::deserialize")]
+     data: Value,
+ }
+ 
+@@ -749,9 +751,14 @@ pub(super) fn request(value: &Value) -> Result<Value> {
+             Ok(json!({}))
+         }
+         "replica_scan_batch" => {
++            // Decode raw user fields from JSON text; Value's deserializer treats
++            // literal private marker keys as serde internals.
++            let entries_json = Zeroizing::new(
++                serde_json::to_vec(value.get("entries").ok_or("invalid_request")?)
++                    .map_err(|_| "invalid_record")?,
++            );
+             let entries: Vec<Local> =
+-                serde_json::from_value(value.get("entries").cloned().ok_or("invalid_request")?)
+-                    .map_err(|_| "invalid_record")?;
++                serde_json::from_slice(&entries_json).map_err(|_| "invalid_record")?;
+             if entries.len() > MAX_BATCH_RECORDS {
+                 return Err("replica_limit");
+             }
+@@ -799,7 +806,9 @@ pub(super) fn request(value: &Value) -> Result<Value> {
+                     }
+                 }
+             }
+-            Ok(json!({"items":items}))
++            let mut response = json!({});
++            response["items"] = Value::Array(items);
++            Ok(response)
+         }
+         "replica_resolve" => {
+             let ids = value
+@@ -833,7 +842,9 @@ pub(super) fn request(value: &Value) -> Result<Value> {
+                 }
+                 items.push(item);
+             }
+-            Ok(json!({"items":items}))
++            let mut response = json!({});
++            response["items"] = Value::Array(items);
++            Ok(response)
+         }
+         "replica_rebind" => {
+             let items = value
+@@ -1010,7 +1021,11 @@ pub(super) fn request(value: &Value) -> Result<Value> {
+                 if bindings.is_some() && binding.is_none() {
+                     continue; // An unavailable source is not a deletion or a new local copy.
+                 }
+-                let item = json!({"record":record,"local_id":binding.map(|(id,_)|id),"scope":binding.map(|(_,b)|&b.scope),"expected_guard":binding.map(|(_,b)|&b.guard)});
++                let mut item = json!({"local_id":binding.map(|(id,_)|id),"scope":binding.map(|(_,b)|&b.scope),"expected_guard":binding.map(|(_,b)|&b.guard)});
++                let serialized =
++                    Zeroizing::new(serde_json::to_vec(record).map_err(|_| "invalid_record")?);
++                item["record"] =
++                    crate::json::from_slice(&serialized).map_err(|_| "invalid_record")?;
+                 bytes += serde_json::to_vec(&item)
+                     .map_err(|_| "invalid_record")?
+                     .len();
+@@ -1023,7 +1038,9 @@ pub(super) fn request(value: &Value) -> Result<Value> {
+                 }
+                 pending.push(item);
+             }
+-            Ok(json!({"items":pending,"next_cursor":next_cursor,"total":total}))
++            let mut response = json!({"next_cursor":next_cursor,"total":total});
++            response["items"] = Value::Array(pending);
++            Ok(response)
+         }
+         "replica_applied" => {
+             let mut state = replica.state.clone();

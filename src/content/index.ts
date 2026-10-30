@@ -1,15 +1,44 @@
 import type { CredentialCaptureInput, ExtensionResponse, PasskeyPromptContext, PasskeyRequest, PasskeyResult, SavePromptContext, WalletFillPayload } from "../runtime/messages";
 import { installCredentialCapture } from "./content-lifecycle";
-import { fillCredential, scanPage, type FillCredentialInput } from "./dom";
+import { fillCredential, scanPageWithFieldContext, type FillCredentialInput } from "./dom";
+import { createCurrentFieldContext } from "./field-signature";
+import { createFieldContextsForRoot } from "./field-signature";
 import { renderSavePrompt } from "./save-prompt";
-import { fillWallet } from "./wallet-dom";
+import { fillWallet, installWalletFocusTracking } from "./wallet-dom";
 import { closePasskeyPrompt, renderPasskeyPrompt } from "./passkey-prompt";
+import { initializeUiLocale, translateRuntimeError } from "../i18n/runtime";
+import { installInlineAutofill } from "./inline-autofill";
+import type { InlineAutofillResult } from "../autofill/inline-contract";
 
-chrome.runtime.onMessage.addListener((message: { type?: string; credential?: FillCredentialInput; context?: SavePromptContext; wallet?: WalletFillPayload; expectedOrigin?: string; candidateId?: string }, sender, sendResponse) => {
+installWalletFocusTracking();
+const inlineAutofill = installInlineAutofill({
+  query: sessionId => sendRuntime<InlineAutofillResult>({ type: "AUTOFILL_INLINE_QUERY", sessionId }),
+  fill: (sessionId, itemId) => sendRuntime({ type: "AUTOFILL_INLINE_FILL", sessionId, itemId }),
+  openManager: sessionId => sendRuntime({ type: "AUTOFILL_INLINE_OPEN", sessionId })
+});
+
+chrome.runtime.onMessage.addListener((message: { type?: string; credential?: FillCredentialInput; context?: SavePromptContext | null; wallet?: WalletFillPayload; expectedOrigin?: string; candidateId?: string; sessionId?: string }, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL("")) || sender.tab !== undefined) return false;
-  if (message?.type === "MONICA_SCAN_PAGE") {
-    sendResponse(scanPage());
+  if (message?.type === "MONICA_INLINE_INVALIDATE") {
+    inlineAutofill.dismiss();
     return false;
+  }
+  if (message?.type === "MONICA_INLINE_GET_FIELD_CONTEXT" && message.sessionId) {
+    void inlineAutofill.fieldContext(message.sessionId).then(context => sendResponse({ ok: Boolean(context), context })).catch(() => sendResponse({ ok: false }));
+    return true;
+  }
+  if (message?.type === "MONICA_FILL_INLINE_CREDENTIAL" && message.sessionId) {
+    if (message.expectedOrigin !== location.origin) return void sendResponse({ ok: false, error: "页面来源已变化，已阻止填充。" });
+    sendResponse(inlineAutofill.applyCredential(message.sessionId, message.credential || {}));
+    return false;
+  }
+  if (message?.type === "MONICA_SCAN_PAGE") {
+    void scanPageWithFieldContext().then(sendResponse).catch(() => sendResponse({ ok: false }));
+    return true;
+  }
+  if (message?.type === "MONICA_GET_FIELD_CONTEXT") {
+    void createCurrentFieldContext().then((context) => sendResponse({ ok: true, context })).catch(() => sendResponse({ ok: false }));
+    return true;
   }
   if (message?.type === "MONICA_FILL_CREDENTIAL") {
     if (message.expectedOrigin !== location.origin) return void sendResponse({ ok: false, error: "页面来源已变化，已阻止填充。" });
@@ -21,8 +50,9 @@ chrome.runtime.onMessage.addListener((message: { type?: string; credential?: Fil
     sendResponse(fillWallet(message.wallet));
     return false;
   }
-  if (message?.type === "MONICA_SHOW_SAVE_PROMPT" && message.context) {
-    showPrompt(message.context);
+  if (message?.type === "MONICA_SHOW_SAVE_PROMPT" && message.context !== undefined) {
+    if (message.context) inlineAutofill.dismiss();
+    void showPrompt(message.context);
     return false;
   }
   if (message?.type === "MONICA_CANCEL_PASSKEY" && message.candidateId) {
@@ -39,7 +69,7 @@ installCredentialCapture({ onCandidate: submitCandidate, onUsernameContext: reme
 
 if (window.top === window) void restorePendingPrompt();
 
-interface PasskeyCancellationReason { message: string; name: "AbortError" | "NotAllowedError"; }
+interface PasskeyCancellationReason { message: string; name: "AbortError" | "NotAllowedError" | "NotSupportedError"; }
 const activePasskeyRequests = new Map<string, { candidateId: string; dismiss: (reason?: PasskeyCancellationReason) => Promise<boolean>; cancelFromBackground: () => void }>();
 const pendingPasskeyCancellations = new Map<string, PasskeyCancellationReason>();
 const pendingBackgroundPasskeyCancellations = new Set<string>();
@@ -48,6 +78,10 @@ let currentPasskeyRequestId: string | undefined;
 window.addEventListener("message", (event) => {
   if (event.source !== window || event.origin !== location.origin || !event.data?.requestId) return;
   const requestId = String(event.data.requestId);
+  if (event.data.source === "monica-passkey-ready-check") {
+    window.postMessage({ source: "monica-passkey-extension", requestId, ready: true }, location.origin);
+    return;
+  }
   if (event.data.source === "monica-passkey-page-cancel") {
     const reason = cancellationReason(event.data);
     const active = activePasskeyRequests.get(requestId);
@@ -64,15 +98,18 @@ window.addEventListener("message", (event) => {
   window.postMessage({ source: "monica-passkey-extension", requestId, ack: true }, location.origin);
   void handlePasskeyRequest(requestId, event.data.request as PasskeyRequest);
 });
+window.postMessage({ source: "monica-passkey-extension", ready: true }, location.origin);
 
 async function handlePasskeyRequest(requestId: string, request: PasskeyRequest): Promise<void> {
+  inlineAutofill.dismiss();
   if (currentPasskeyRequestId && currentPasskeyRequestId !== requestId) {
     window.postMessage({ source: "monica-passkey-extension", requestId, error: "已有另一个 Passkey 请求正在处理。", name: "NotAllowedError" }, location.origin);
     return;
   }
   currentPasskeyRequestId = requestId;
   try {
-    const context = await sendRuntime<PasskeyPromptContext>({ type: "PASSKEY_BEGIN", request });
+    await initializeUiLocale();
+    let context = await sendRuntime<PasskeyPromptContext>({ type: "PASSKEY_BEGIN", request });
     let settled = false;
     let accepting = false;
     let requestedCancellation: PasskeyCancellationReason | undefined;
@@ -105,20 +142,20 @@ async function handlePasskeyRequest(requestId: string, request: PasskeyRequest):
             return false;
           }
           if (result.cancelled !== false) {
-            rejectPage(reason);
+            rejectPage(requestedCancellation || reason);
             return true;
           }
           if (!result.pending) return false;
         } catch {
           if (!accepting) {
-            rejectPage(reason);
+            rejectPage(requestedCancellation || reason);
             return true;
           }
         }
         await new Promise((resolve) => window.setTimeout(resolve, 100));
       }
       if (!settled) {
-        rejectPage(reason);
+        rejectPage(requestedCancellation || reason);
         return true;
       }
       return false;
@@ -139,14 +176,32 @@ async function handlePasskeyRequest(requestId: string, request: PasskeyRequest):
     if (pendingBackgroundPasskeyCancellations.delete(context.candidateId)) return void cancelFromBackground();
     const pendingCancellation = pendingPasskeyCancellations.get(requestId);
     if (pendingCancellation) return void await dismiss(pendingCancellation);
-    renderPasskeyPrompt(context, async (itemId, providerId) => {
+    renderPasskeyPrompt(context, async (itemId, providerId, useNativeAuthenticator) => {
       if (settled) return;
+      if (useNativeAuthenticator && context.operation === "get") {
+        // Release Monica's pending request before MAIN resumes the original native get.
+        const cancelled = await dismiss({ message: "已选择系统 Passkey 验证器。", name: "NotSupportedError" });
+        if (cancelled) closePasskeyPrompt();
+        return;
+      }
       accepting = true;
       let result: PasskeyResult;
       try {
+        if (context.unlockRequired) {
+          context = await sendRuntimeWithTransportRetry<PasskeyPromptContext>({ type: "PASSKEY_UNLOCK_CONTINUE", candidateId: context.candidateId }, 2);
+          accepting = false;
+          if (settled) return;
+          if (requestedCancellation) { await dismiss(requestedCancellation); return; }
+          return context;
+        }
         result = await sendRuntimeWithTransportRetry<PasskeyResult>({ type: "PASSKEY_ACCEPT", candidateId: context.candidateId, itemId, providerId }, 2);
       } catch (error) {
         if (settled) return;
+        if (error instanceof RuntimeRequestError && error.code === "PASSKEY_UNAVAILABLE") {
+          rejectPage({ message: error.message, name: "NotSupportedError" });
+          closePasskeyPrompt();
+          return;
+        }
         if (error instanceof RuntimeRequestError && (error.code === "PASSKEY_CANCELLED" || error.code === "PASSKEY_EXCLUDED")) {
           const reason = error.code === "PASSKEY_EXCLUDED"
             ? { message: error.message, name: "InvalidStateError" as const }
@@ -197,9 +252,10 @@ function isBoundedBridgeRequest(request: unknown): request is PasskeyRequest {
   }
 }
 
-async function submitCandidate(candidate: CredentialCaptureInput): Promise<void> {
+async function submitCandidate(candidate: CredentialCaptureInput, root: ParentNode): Promise<void> {
   try {
-    const context = await sendRuntime<SavePromptContext>({ type: "CREDENTIAL_CAPTURE", candidate });
+    const contexts = await createFieldContextsForRoot(root);
+    const context = await sendRuntime<SavePromptContext | null>({ type: "CREDENTIAL_CAPTURE", candidate: { ...candidate, fieldSignatures: [...new Set(contexts.map((field) => field.signature))] } });
     if (window.top === window) showPrompt(context);
   } catch (error) {
     // Locked vaults and unsupported pages fail closed without retaining the password in page state.
@@ -222,7 +278,18 @@ async function restorePendingPrompt(): Promise<void> {
   }
 }
 
-function showPrompt(context: SavePromptContext): void {
+let savePromptGeneration = 0;
+async function showPrompt(context: SavePromptContext | null): Promise<void> {
+  const generation = ++savePromptGeneration;
+  if (!context) {
+    document.getElementById("monica-save-prompt-host")?.remove();
+    return;
+  }
+  await initializeUiLocale();
+  if (generation !== savePromptGeneration) return;
+  // Clicking Passkey on a populated login form can also trigger password capture.
+  // Its async result must not replace (and cancel) the active WebAuthn ceremony.
+  if (currentPasskeyRequestId) return;
   renderSavePrompt(context, {
     accept: (providerId, existingItemId) => sendRuntime<{ action: "saved" | "updated"; title: string; providerName: string; syncPending: boolean }>({ type: "CREDENTIAL_ACCEPT", candidateId: context.candidateId, providerId, existingItemId }),
     dismiss: () => sendRuntime({ type: "CREDENTIAL_DISMISS", candidateId: context.candidateId })
@@ -231,7 +298,7 @@ function showPrompt(context: SavePromptContext): void {
 
 async function sendRuntime<T>(request: unknown): Promise<T> {
   const response = await chrome.runtime.sendMessage(request) as ExtensionResponse<T>;
-  if (!response?.ok) throw new RuntimeRequestError(response?.error || "Monica 后台操作失败。", response?.code);
+  if (!response?.ok) throw new RuntimeRequestError(translateRuntimeError(response?.error || "Monica 后台操作失败。"), response?.code);
   return response.data;
 }
 

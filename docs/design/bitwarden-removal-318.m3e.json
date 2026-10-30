@@ -1,0 +1,497 @@
+{
+  "title": "Monica · Bitwarden 密码移除与 Passkey 保留",
+  "brief": "沿用 Monica 青绿色与系统字体。左右12px；信息行连续分组，外侧24px相邻4px圆角、4px间距。核对并继续、重新登录和取消各自只做一种操作。Passkey进度只显示数量，不显示凭据或内部标识。取消后明确说明可能保留独立副本。",
+  "frame": "phone",
+  "platform": "web",
+  "paletteKey": "teal",
+  "theme": {
+    "dark": false,
+    "bothModes": true,
+    "contrast": "standard",
+    "shape": "rounded",
+    "font": "system",
+    "emphasized": true,
+    "motion": "standard"
+  },
+  "frames": [
+    {
+      "id": "bwremoveconfirm318",
+      "name": "确认移除密码",
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 660
+    },
+    {
+      "id": "bwremovepending318",
+      "name": "未完成的密码移除",
+      "x": 430,
+      "y": 0,
+      "w": 390,
+      "h": 660
+    },
+    {
+      "id": "bwremovelocked318",
+      "name": "未完成的密码移除",
+      "x": 860,
+      "y": 0,
+      "w": 390,
+      "h": 660
+    },
+    {
+      "id": "bwremovecancel318",
+      "name": "已取消这次移除",
+      "x": 1290,
+      "y": 0,
+      "w": 390,
+      "h": 660
+    },
+    {
+      "id": "bwremovelocal318",
+      "name": "核对本地编辑",
+      "x": 1720,
+      "y": 0,
+      "w": 390,
+      "h": 660
+    },
+    {
+      "id": "bwremovepreparation318",
+      "name": "正在核对取消准备",
+      "x": 2150,
+      "y": 0,
+      "w": 390,
+      "h": 660
+    }
+  ],
+  "groups": [
+    {
+      "id": "bwremoveconfirm318-header",
+      "frameId": "bwremoveconfirm318",
+      "x": 12,
+      "y": 16,
+      "axis": "y",
+      "items": [
+        {
+          "id": "bwremoveconfirm318-title",
+          "kind": "topAppBar",
+          "label": "确认移除密码",
+          "icon": "arrow_back",
+          "size": 366,
+          "variant": "filled"
+        }
+      ]
+    },
+    {
+      "id": "bwremoveconfirm318-rows",
+      "frameId": "bwremoveconfirm318",
+      "x": 12,
+      "y": 112,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "bwremoveconfirm318-row-0",
+          "kind": "listItem",
+          "label": "工作账号 · 密码 1",
+          "supporting": "移入回收站",
+          "icon": "key",
+          "size": 366,
+          "variant": "filled",
+          "radius": 24
+        },
+        {
+          "id": "bwremoveconfirm318-row-1",
+          "kind": "listItem",
+          "label": "保留 2 个密码",
+          "supporting": "备注、共享内容与附件会保留",
+          "icon": "inventory_2",
+          "size": 366,
+          "variant": "filled",
+          "radius": 24
+        },
+        {
+          "id": "bwremoveconfirm318-row-2",
+          "kind": "listItem",
+          "label": "保留 Passkey",
+          "supporting": "先保存独立副本，再移除原密码",
+          "icon": "key",
+          "size": 366,
+          "variant": "filled",
+          "radius": 24
+        }
+      ]
+    },
+    {
+      "id": "bwremoveconfirm318-action-0",
+      "frameId": "bwremoveconfirm318",
+      "x": 12,
+      "y": 424,
+      "axis": "y",
+      "items": [
+        {
+          "id": "bwremoveconfirm318-button-0",
+          "kind": "button",
+          "label": "确认移除并保存",
+          "icon": "check",
+          "size": 366,
+          "variant": "filled"
+        }
+      ]
+    },
+    {
+      "id": "bwremovepending318-header",
+      "frameId": "bwremovepending318",
+      "x": 442,
+      "y": 16,
+      "axis": "y",
+      "items": [
+        {
+          "id": "bwremovepending318-title",
+          "kind": "topAppBar",
+          "label": "未完成的密码移除",
+          "icon": "arrow_back",
+          "size": 366,
+          "variant": "filled"
+        }
+      ]
+    },
+    {
+      "id": "bwremovepending318-rows",
+      "frameId": "bwremovepending318",
+      "x": 442,
+      "y": 112,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "bwremovepending318-row-0",
+          "kind": "listItem",
+          "label": "工作账号",
+          "supporting": "Bitwarden · 移除 1 个密码",
+          "icon": "key",
+          "size": 366,
+          "variant": "filled",
+          "radius": 24
+        },
+        {
+          "id": "bwremovepending318-row-1",
+          "kind": "listItem",
+          "label": "正在保留 Passkey",
+          "supporting": "已核对 1 / 2 个独立副本",
+          "icon": "pending_actions",
+          "size": 366,
+          "variant": "filled",
+          "radius": 24
+        }
+      ]
+    },
+    {
+      "id": "bwremovepending318-action-0",
+      "frameId": "bwremovepending318",
+      "x": 442,
+      "y": 336,
+      "axis": "y",
+      "items": [
+        {
+          "id": "bwremovepending318-button-0",
+          "kind": "button",
+          "label": "核对并继续",
+          "icon": "restore",
+          "size": 366,
+          "variant": "filled"
+        }
+      ]
+    },
+    {
+      "id": "bwremovepending318-action-1",
+      "frameId": "bwremovepending318",
+      "x": 442,
+      "y": 408,
+      "axis": "y",
+      "items": [
+        {
+          "id": "bwremovepending318-button-1",
+          "kind": "button",
+          "label": "取消这次移除",
+          "icon": "undo",
+          "size": 366,
+          "variant": "text"
+        }
+      ]
+    },
+    {
+      "id": "bwremovelocked318-header",
+      "frameId": "bwremovelocked318",
+      "x": 872,
+      "y": 16,
+      "axis": "y",
+      "items": [
+        {
+          "id": "bwremovelocked318-title",
+          "kind": "topAppBar",
+          "label": "未完成的密码移除",
+          "icon": "arrow_back",
+          "size": 366,
+          "variant": "filled"
+        }
+      ]
+    },
+    {
+      "id": "bwremovelocked318-rows",
+      "frameId": "bwremovelocked318",
+      "x": 872,
+      "y": 112,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "bwremovelocked318-row-0",
+          "kind": "listItem",
+          "label": "工作账号",
+          "supporting": "Bitwarden · 移除 1 个密码",
+          "icon": "key",
+          "size": 366,
+          "variant": "filled",
+          "radius": 24
+        },
+        {
+          "id": "bwremovelocked318-row-1",
+          "kind": "listItem",
+          "label": "需要重新登录",
+          "supporting": "登录原 Bitwarden 账号后继续",
+          "icon": "lock",
+          "size": 366,
+          "variant": "filled",
+          "radius": 24
+        }
+      ]
+    },
+    {
+      "id": "bwremovelocked318-action-0",
+      "frameId": "bwremovelocked318",
+      "x": 872,
+      "y": 336,
+      "axis": "y",
+      "items": [
+        {
+          "id": "bwremovelocked318-button-0",
+          "kind": "button",
+          "label": "重新登录",
+          "icon": "lock_open",
+          "size": 366,
+          "variant": "filled"
+        }
+      ]
+    },
+    {
+      "id": "bwremovecancel318-header",
+      "frameId": "bwremovecancel318",
+      "x": 1302,
+      "y": 16,
+      "axis": "y",
+      "items": [
+        {
+          "id": "bwremovecancel318-title",
+          "kind": "topAppBar",
+          "label": "已取消这次移除",
+          "icon": "arrow_back",
+          "size": 366,
+          "variant": "filled"
+        }
+      ]
+    },
+    {
+      "id": "bwremovecancel318-rows",
+      "frameId": "bwremovecancel318",
+      "x": 1302,
+      "y": 112,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "bwremovecancel318-row-0",
+          "kind": "listItem",
+          "label": "其他编辑已保留",
+          "supporting": "原密码仍然保留",
+          "icon": "undo",
+          "size": 366,
+          "variant": "filled",
+          "radius": 24
+        },
+        {
+          "id": "bwremovecancel318-row-1",
+          "kind": "listItem",
+          "label": "独立 Passkey 副本会保留",
+          "supporting": "同步后检查已创建或结果未确认的副本",
+          "icon": "key",
+          "size": 366,
+          "variant": "filled",
+          "radius": 24
+        }
+      ]
+    },
+    {
+      "id": "bwremovecancel318-action-0",
+      "frameId": "bwremovecancel318",
+      "x": 1302,
+      "y": 336,
+      "axis": "y",
+      "items": [
+        {
+          "id": "bwremovecancel318-button-0",
+          "kind": "button",
+          "label": "刷新",
+          "icon": "refresh",
+          "size": 366,
+          "variant": "filled"
+        }
+      ]
+    },
+    {
+      "id": "bwremovelocal318-header",
+      "frameId": "bwremovelocal318",
+      "x": 1732,
+      "y": 16,
+      "axis": "y",
+      "items": [
+        {
+          "id": "bwremovelocal318-title",
+          "kind": "topAppBar",
+          "label": "核对本地编辑",
+          "icon": "arrow_back",
+          "size": 366,
+          "variant": "filled"
+        }
+      ]
+    },
+    {
+      "id": "bwremovelocal318-rows",
+      "frameId": "bwremovelocal318",
+      "x": 1732,
+      "y": 112,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "bwremovelocal318-row-0",
+          "kind": "listItem",
+          "label": "移除已撤销",
+          "supporting": "原密码和 Passkey 均已保留",
+          "icon": "undo",
+          "size": 366,
+          "variant": "filled",
+          "radius": 24
+        },
+        {
+          "id": "bwremovelocal318-row-1",
+          "kind": "listItem",
+          "label": "两份内容均已保留",
+          "supporting": "移除期间本地有修改，请核对后选择",
+          "icon": "compare_arrows",
+          "size": 366,
+          "variant": "filled",
+          "radius": 24
+        }
+      ]
+    },
+    {
+      "id": "bwremovelocal318-action-0",
+      "frameId": "bwremovelocal318",
+      "x": 1732,
+      "y": 336,
+      "axis": "y",
+      "items": [
+        {
+          "id": "bwremovelocal318-button-0",
+          "kind": "button",
+          "label": "保留浏览器版本",
+          "icon": "check",
+          "size": 366,
+          "variant": "filled"
+        }
+      ]
+    },
+    {
+      "id": "bwremovelocal318-action-1",
+      "frameId": "bwremovelocal318",
+      "x": 1732,
+      "y": 408,
+      "axis": "y",
+      "items": [
+        {
+          "id": "bwremovelocal318-button-1",
+          "kind": "button",
+          "label": "采用 Bitwarden 版本",
+          "icon": "cloud_sync",
+          "size": 366,
+          "variant": "text"
+        }
+      ]
+    },
+    {
+      "id": "bwremovepreparation318-header",
+      "frameId": "bwremovepreparation318",
+      "x": 2162,
+      "y": 16,
+      "axis": "y",
+      "items": [
+        {
+          "id": "bwremovepreparation318-title",
+          "kind": "topAppBar",
+          "label": "正在核对取消准备",
+          "icon": "arrow_back",
+          "size": 366,
+          "variant": "filled"
+        }
+      ]
+    },
+    {
+      "id": "bwremovepreparation318-rows",
+      "frameId": "bwremovepreparation318",
+      "x": 2162,
+      "y": 112,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "bwremovepreparation318-row-0",
+          "kind": "listItem",
+          "label": "原密码尚未移除",
+          "supporting": "本地编辑与恢复记录均已保留",
+          "icon": "undo",
+          "size": 366,
+          "variant": "filled",
+          "radius": 24
+        },
+        {
+          "id": "bwremovepreparation318-row-1",
+          "kind": "listItem",
+          "label": "核对已尝试创建的副本",
+          "supporting": "确认结果后再选择本地或远端内容",
+          "icon": "key",
+          "size": 366,
+          "variant": "filled",
+          "radius": 24
+        }
+      ]
+    },
+    {
+      "id": "bwremovepreparation318-action-0",
+      "frameId": "bwremovepreparation318",
+      "x": 2162,
+      "y": 336,
+      "axis": "y",
+      "items": [
+        {
+          "id": "bwremovepreparation318-button-0",
+          "kind": "button",
+          "label": "继续",
+          "icon": "sync",
+          "size": 366,
+          "variant": "filled"
+        }
+      ]
+    }
+  ],
+  "dynamicColor": false
+}

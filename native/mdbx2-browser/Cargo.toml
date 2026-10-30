@@ -1,0 +1,30 @@
+[package]
+name = "monica-mdbx2-browser"
+version = "0.1.2"
+edition = "2021"
+license = "GPL-3.0-only"
+publish = false
+
+[workspace]
+members = ["ffi-rlib"]
+
+[dependencies]
+mdbx-ffi = { path = "ffi-rlib" }
+mdbx-core = { path = "../mdbx2-host/vendor/mdbx/crates/mdbx-core" }
+uniffi = { version = "=0.31.1", features = ["wasm-unstable-single-threaded"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["arbitrary_precision", "raw_value"] }
+base64 = "0.22"
+md-5 = "0.10"
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
+zeroize = "1"
+tempfile = { version = "=3.27.0", features = ["monica-private-memfs"] }
+zip = { version = "=2.4.2", default-features = false }
+
+[patch.crates-io]
+tempfile = { path = "vendor/tempfile" }
+
+[profile.release]
+opt-level = 2
+panic = "abort"

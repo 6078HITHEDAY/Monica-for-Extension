@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { CardItem, IdentityItem, LoginItem, PasskeyItem, SecureNoteItem } from "../../core/model";
+import { applySsoAccountChoice, resolveSsoAccount, ssoLogicalId } from "../../core/sso-links";
+import type { CardItem, IdentityItem, LoginItem, PasskeyItem, SecureNoteItem, TotpItem } from "../../core/model";
 import { resolveLoginOtp } from "../../core/login-otp";
+import { createAssertion } from "../../passkey/webauthn-core";
 import { decodeBitwardenCipher, encodeBitwardenCipher, encodeBitwardenPasskeyCipher } from "./bitwarden-cipher-codec";
 import { decryptBitwardenString, encryptBitwardenBytes, encryptBitwardenString, type BitwardenSymmetricKey } from "./bitwarden-crypto";
 
@@ -9,8 +11,19 @@ const KEY: BitwardenSymmetricKey = {
   macKey: Uint8Array.from({ length: 32 }, (_, index) => index + 32)
 };
 const REVISION = "2026-07-15T03:00:00.000Z";
+const P256_PKCS8 = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgsloK6aKNvj0CZMYdBdSZs+AUAsFy1t66q4tq5SvyeJahRANCAASlCTbHlIcaKQ2lzoEFhtjkLEO++f3cYq6FMYG7eH3BmuLQPz71FAtWq4z+tIb7oequwhUJL3xos1nA8jFqpkDs";
 
 describe("Bitwarden Cipher codec", () => {
+  it.each(['deletedDate', 'archivedDate'] as const)('projects %s onto the login authenticator and removes the flag after restoration', async flag => {
+    const raw = { id: 'otp-lifecycle', type: 1, name: await encryptBitwardenString('OTP lifecycle', KEY), revisionDate: REVISION,
+      [flag]: REVISION, login: { totp: await encryptBitwardenString('otpauth://hotp/Synthetic?secret=JBSWY3DPEHPK3PXP&counter=17', KEY) } };
+    const property = flag === 'deletedDate' ? 'deletedAt' : 'archivedAt';
+    const changed = (await decodeBitwardenCipher(raw, 'bw', KEY)).items;
+    expect(changed.find(row => row.kind === 'totp')).toMatchObject({ [property]: REVISION, counter: 17 });
+    const restored = (await decodeBitwardenCipher({ ...raw, [flag]: null }, 'bw', KEY)).items;
+    expect(restored.find(row => row.kind === 'totp')?.[property]).toBeUndefined();
+  });
+
   it("maps login, TOTP, custom fields, and FIDO2 credentials", async () => {
     const enc = (value: string) => encryptBitwardenString(value, KEY);
     const raw = {
@@ -32,7 +45,7 @@ describe("Bitwarden Cipher codec", () => {
         Fido2Credentials: [{
           CredentialId: await enc("credential-id"),
           KeyAlgorithm: await enc("ECDSA"),
-          KeyValue: await enc("pkcs8-material"),
+          KeyValue: await enc(P256_PKCS8),
           RpId: await enc("github.com"),
           RpName: await enc("GitHub"),
           Counter: await enc("7"),
@@ -47,7 +60,7 @@ describe("Bitwarden Cipher codec", () => {
     };
 
     const decoded = await decodeBitwardenCipher(raw, "provider-1", KEY);
-    expect(decoded.items).toHaveLength(2);
+    expect(decoded.items).toHaveLength(3);
     expect(decoded.items[0]).toMatchObject({
       kind: "login",
       username: "joy@example.com",
@@ -61,7 +74,103 @@ describe("Bitwarden Cipher codec", () => {
       customFields: [{ name: "Recovery", value: "code", protected: true }],
       bitwardenCustomFieldsVersion: 1
     });
-    expect(decoded.items[1]).toMatchObject({ kind: "passkey", credentialId: "credential-id", rpId: "github.com", privateKeyPkcs8: "pkcs8-material", signCount: 7, sourceMode: "bitwarden" });
+    expect(decoded.items[1]).toMatchObject({ kind: "totp", secret: "JBSWY3DPEHPK3PXP", issuer: "GitHub", accountName: "joy@example.com" });
+    expect(decoded.items[2]).toMatchObject({ kind: "passkey", credentialId: "credential-id", rpId: "github.com", privateKeyPkcs8: P256_PKCS8, signCount: 7, sourceMode: "bitwarden" });
+  });
+
+  it("imports an official Base64URL PKCS8 KeyValue and uses it for a real assertion", async () => {
+    const enc = (value: string) => encryptBitwardenString(value, KEY);
+    const keyValue = P256_PKCS8.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    const decoded = await decodeBitwardenCipher({
+      id: "official-passkey", type: 1, name: await enc("Example"), revisionDate: REVISION, creationDate: REVISION,
+      login: { username: await enc("joy"), password: null, uris: [], fido2Credentials: [{
+        credentialId: await enc("b64.AAECAwQFBgcICQoLDA0ODw"),
+        keyType: await enc("public-key"), keyAlgorithm: await enc("ECDSA"), keyCurve: await enc("P-256"),
+        keyValue: await enc(keyValue), rpId: await enc("example.com"), rpName: await enc("Example"),
+        counter: await enc("0"), userHandle: await enc("dXNlcg"), userName: await enc("joy"),
+        userDisplayName: await enc("Joy"), discoverable: await enc("true"), creationDate: REVISION
+      }] }
+    }, "provider-official", KEY);
+
+    const passkey = decoded.items.find((item): item is PasskeyItem => item.kind === "passkey")!;
+    expect(passkey.credentialId).toBe("AAECAwQFBgcICQoLDA0ODw");
+    expect(passkey.privateKeyPkcs8).toBe(P256_PKCS8);
+    await expect(createAssertion({
+      origin: "https://example.com",
+      challenge: "AAECAwQFBgcICQoLDA0ODw",
+      rpId: "example.com",
+      credentialId: passkey.credentialId,
+      userHandle: passkey.userHandle,
+      privateKeyPkcs8: passkey.privateKeyPkcs8!,
+      signCount: passkey.signCount
+    })).resolves.toMatchObject({ response: { signature: expect.any(String) } });
+  });
+
+  it("keeps malformed or non-P256 FIDO2 keys visible but never marks them usable", async () => {
+    const enc = (value: string) => encryptBitwardenString(value, KEY);
+    const decoded = await decodeBitwardenCipher({
+      Id: "invalid-passkey", Type: 1, Name: await enc("Invalid"), RevisionDate: REVISION, CreationDate: REVISION,
+      Login: { Fido2Credentials: [{
+        CredentialId: await enc("00112233-4455-6677-8899-aabbccddeeff"), KeyType: await enc("public-key"),
+        KeyAlgorithm: await enc("ECDSA"), KeyCurve: await enc("P-384"), KeyValue: await enc("not-pkcs8"),
+        RpId: await enc("example.com"), Counter: await enc("0"), Discoverable: await enc("true")
+      }] }
+    }, "provider-1", KEY);
+    const passkey = decoded.items.find((item): item is PasskeyItem => item.kind === "passkey")!;
+    expect(passkey).toMatchObject({ sourceMode: "bitwarden", algorithm: -7 });
+    expect(passkey.privateKeyPkcs8).toBeUndefined();
+  });
+
+  it("imports Monica Android's legacy name-only Passkey as a metadata child", async () => {
+    const decoded = await decodeBitwardenCipher({
+      Id: "legacy-passkey", Type: 1, Name: await encryptBitwardenString("GitHub [Passkey]", KEY),
+      Notes: await encryptBitwardenString("", KEY), Favorite: false, RevisionDate: REVISION, CreationDate: REVISION,
+      Login: {
+        Username: await encryptBitwardenString("joy@example.com", KEY), Password: null,
+        Uris: [{ Uri: await encryptBitwardenString("https://github.com/login", KEY), Match: 3 }],
+        Fido2Credentials: []
+      }
+    }, "provider-legacy", KEY);
+
+    expect(decoded.items.map((item) => item.kind)).toEqual(["login", "passkey"]);
+    expect(decoded.items[0]).toMatchObject({ kind: "login", title: "GitHub [Passkey]", username: "joy@example.com" });
+    expect(decoded.items[1]).toMatchObject({
+      kind: "passkey",
+      credentialId: "bw_ref_legacy-passkey",
+      rpId: "github.com",
+      rpName: "GitHub",
+      userName: "joy@example.com",
+      userDisplayName: "joy@example.com",
+      sourceMode: "android-metadata-only"
+    });
+    expect((decoded.items[1] as PasskeyItem).privateKeyPkcs8).toBeUndefined();
+  });
+
+  it("projects an Android standalone validator Login into a first-class TOTP item", async () => {
+    const raw = {
+      Id: "cipher-standalone-totp",
+      Type: 1,
+      Name: await encryptBitwardenString("GitHub authenticator", KEY),
+      Notes: await encryptBitwardenString("", KEY),
+      Favorite: false,
+      RevisionDate: REVISION,
+      CreationDate: REVISION,
+      Login: {
+        Username: await encryptBitwardenString("joy@example.com", KEY),
+        Password: null,
+        Totp: await encryptBitwardenString("otpauth://totp/GitHub:joy?secret=JBSWY3DPEHPK3PXP&issuer=GitHub", KEY),
+        Uris: []
+      }
+    };
+    const decoded = await decodeBitwardenCipher(raw, "provider-1", KEY);
+    expect(decoded.items.map((item) => item.kind)).toEqual(["login", "totp"]);
+    expect(decoded.items[1] as TotpItem).toMatchObject({
+      title: "GitHub authenticator",
+      issuer: "GitHub",
+      accountName: "joy",
+      secret: "JBSWY3DPEHPK3PXP",
+      otpType: "TOTP"
+    });
   });
 
   it("tracks Collection routing only for organization Ciphers", async () => {
@@ -71,6 +180,16 @@ describe("Bitwarden Cipher codec", () => {
     const organization = await decodeBitwardenCipher({ ...base, Id: "shared", OrganizationId: "org-1" }, "provider-1", KEY);
     expect(personal.items[0].providerRefs[0]).not.toHaveProperty("remoteCollectionIds");
     expect(organization.items[0].providerRefs[0]).toMatchObject({ remoteCollectionIds: [] });
+  });
+
+  it("projects the Bitwarden folder name into the shared Android category field", async () => {
+    const raw = {
+      Id: "foldered-login", Type: 1, Name: await encryptBitwardenString("Foldered", KEY),
+      FolderId: "folder-1", RevisionDate: REVISION, CreationDate: REVISION,
+      Login: { Username: null, Password: null, Uris: [] }
+    };
+    const decoded = await decodeBitwardenCipher(raw, "provider-1", KEY, "工作账号");
+    expect(decoded.items[0]).toMatchObject({ categoryName: "工作账号", providerRefs: [{ remoteFolderId: "folder-1" }] });
   });
 
   it("retains a non-ES256 FIDO2 algorithm for the passkey availability policy to reject", async () => {
@@ -137,6 +256,129 @@ describe("Bitwarden Cipher codec", () => {
     const encoded = await encodeBitwardenCipher(item, KEY, { Key: null, Login: { Fido2Credentials: preservedFido } });
     expect((encoded.login as Record<string, unknown>).fido2Credentials).toEqual(preservedFido);
     await expect(decryptBitwardenString((encoded.login as Record<string, string>).username, KEY)).resolves.toBe("user");
+  });
+
+  it("round-trips Secure Note custom fields without dropping unknown fields", async () => {
+    const raw = {
+      Id: "secure-note-fields",
+      Type: 2,
+      Name: await encryptBitwardenString("Recovery note", KEY),
+      Notes: await encryptBitwardenString("private body", KEY),
+      Favorite: false,
+      RevisionDate: REVISION,
+      CreationDate: REVISION,
+      SecureNote: { Type: 0 },
+      Fields: [
+        { Type: 1, Name: await encryptBitwardenString("Recovery code", KEY), Value: await encryptBitwardenString("ABCD", KEY) },
+        { Type: 2, Name: await encryptBitwardenString("Future boolean", KEY), Value: await encryptBitwardenString("true", KEY), Future: "preserve" }
+      ]
+    };
+
+    const decoded = await decodeBitwardenCipher(raw, "provider-1", KEY);
+    const note = decoded.items[0] as SecureNoteItem;
+    expect(note).toMatchObject({
+      kind: "secure-note",
+      customFields: [{ name: "Recovery code", value: "ABCD", protected: true }, { name: "Future boolean", value: "true", protected: false, fieldType: "BOOLEAN" }]
+    });
+
+    const encoded = await encodeBitwardenCipher({
+      ...note,
+      customFields: note.customFields!.map((field) => field.name === "Recovery code" ? { ...field, value: "WXYZ" } : field)
+    }, KEY, raw);
+    const fields = encoded.fields as Array<Record<string, unknown>>;
+    expect(fields.some((field) => field.Future === "preserve")).toBe(true);
+    const editable = fields.find((field) => !field.Future)!;
+    await expect(decryptBitwardenString(String(editable.name), KEY)).resolves.toBe("Recovery code");
+    await expect(decryptBitwardenString(String(editable.value), KEY)).resolves.toBe("WXYZ");
+    expect(editable.type).toBe(1);
+  });
+
+  it("round-trips Monica Android Markdown and note tags through encrypted fields", async () => {
+    const raw = {
+      Id: "markdown-note", Type: 2, Name: await encryptBitwardenString("指南", KEY),
+      Notes: await encryptBitwardenString("# 标题", KEY), Favorite: false, RevisionDate: REVISION, CreationDate: REVISION,
+      Fields: [
+        { Type: 0, Name: await encryptBitwardenString("monica_note_markdown", KEY), Value: await encryptBitwardenString("true", KEY) },
+        { Type: 0, Name: await encryptBitwardenString("monica_note_tags", KEY), Value: await encryptBitwardenString('["工作","重要"]', KEY) },
+        { Type: 0, Name: await encryptBitwardenString("Owner", KEY), Value: await encryptBitwardenString("Joy", KEY) }
+      ]
+    };
+    const decoded = await decodeBitwardenCipher(raw, "provider-1", KEY);
+    const note = decoded.items[0] as SecureNoteItem;
+    expect(note).toMatchObject({ isMarkdown: true, tags: ["工作", "重要"], customFields: [{ name: "Owner", value: "Joy" }] });
+    const encoded = await encodeBitwardenCipher({ ...note, isMarkdown: false, tags: ["更新"] }, KEY, raw);
+    const fields = encoded.fields as Array<Record<string, unknown>>;
+    const plain = await Promise.all(fields.map(async (field) => [
+      await decryptBitwardenString(String(field.name), KEY), await decryptBitwardenString(String(field.value), KEY)
+    ]));
+    expect(plain).toEqual(expect.arrayContaining([["monica_note_markdown", "false"], ["monica_note_tags", '["更新"]'], ["Owner", "Joy"]]));
+  });
+
+  it("imports Monica Android metadata-only Passkeys without marking them usable", async () => {
+    const raw = {
+      Id: "android-passkey-reference",
+      Type: 1,
+      Name: await encryptBitwardenString("GitHub [Passkey]", KEY),
+      Notes: await encryptBitwardenString("[Monica Passkey Metadata]\ncredentialId: android-credential\nrpId: github.com\nrpName: GitHub\nuserId: android-user\nuserDisplayName: Joy", KEY),
+      Favorite: false,
+      RevisionDate: REVISION,
+      CreationDate: REVISION,
+      Login: { Username: await encryptBitwardenString("joy", KEY), Password: null, Uris: [] }
+    };
+    const decoded = await decodeBitwardenCipher(raw, "provider-1", KEY);
+    expect(decoded.items.find((item) => item.kind === "passkey")).toMatchObject({
+      credentialId: "android-credential",
+      rpId: "github.com",
+      sourceMode: "android-metadata-only"
+    });
+    expect(decoded.items.find((item) => item.kind === "passkey")).not.toHaveProperty("privateKeyPkcs8");
+  });
+
+  it("accepts plaintext FIDO2 scalar fields returned by self-hosted servers", async () => {
+    const enc = (value: string) => encryptBitwardenString(value, KEY);
+    const decoded = await decodeBitwardenCipher({
+      Id: "cipher-plaintext-fido",
+      Type: 1,
+      Name: await enc("Self-hosted passkey"),
+      Notes: null,
+      Login: {
+        Username: null,
+        Password: null,
+        Fido2Credentials: [{
+          CredentialId: "plain-credential",
+          KeyAlgorithm: "ECDSA",
+          KeyValue: "plain-private-key",
+          RpId: "example.com",
+          RpName: "Example",
+          Counter: 3,
+          UserHandle: "plain-user",
+          UserName: "joy",
+          UserDisplayName: "Joy",
+          Discoverable: true,
+          CreationDate: REVISION
+        }]
+      }
+    }, "provider-1", KEY);
+    expect(decoded.items.find((item) => item.kind === "passkey")).toMatchObject({
+      credentialId: "plain-credential",
+      algorithm: -7,
+      signCount: 3,
+      rpId: "example.com"
+    });
+  });
+
+  it("fills incomplete FIDO2 fields from Monica Android metadata", async () => {
+    const enc = (value: string) => encryptBitwardenString(value, KEY);
+    const decoded = await decodeBitwardenCipher({
+      Id: "partial-fido", Type: 1, Name: await enc("GitHub [Passkey]"),
+      Notes: await enc("[Monica Passkey Metadata]\ncredentialId: android-id\nrpId: github.com\nrpName: GitHub\nuserId: android-user\nuserName: joy\nuserDisplayName: Joy\npublicKeyAlgorithm: -7\nsignCount: 12\ncreatedAt: 2026-07-14T00:00:00.000Z"),
+      RevisionDate: REVISION, CreationDate: REVISION,
+      Login: { Fido2Credentials: [{ KeyValue: null, Discoverable: "true" }] }
+    }, "provider-1", KEY);
+    expect(decoded.items.find((item) => item.kind === "passkey")).toMatchObject({
+      credentialId: "android-id", rpId: "github.com", rpName: "GitHub", userHandle: "android-user", userName: "joy", signCount: 12,
+      sourceMode: "android-metadata-only"
+    });
   });
 
   it("writes the local archive timestamp into the Bitwarden Cipher", async () => {
@@ -352,6 +594,99 @@ describe("Bitwarden Cipher codec", () => {
     expect(fields).toContain(future);
   });
 
+  it("round-trips Monica Wi-Fi metadata without degrading the login type", async () => {
+    const enc = (value: string) => encryptBitwardenString(value, KEY);
+    const wifiMetadata = '{"ssid":"Monica Lab","security":"WPA3","future":{"keep":true}}';
+    const raw = {
+      Id: "wifi-cipher", Type: 1, Name: await enc("Monica Lab"), Notes: await enc(""),
+      RevisionDate: REVISION, CreationDate: REVISION,
+      Login: { Username: await enc("enterprise-user"), Password: await enc("wifi-secret"), Uris: [] },
+      Fields: [
+        { Type: 0, Name: await enc("monica_login_type"), Value: await enc("WIFI") },
+        { Type: 0, Name: await enc("monica_wifi_data"), Value: await enc(wifiMetadata) }
+      ]
+    };
+
+    const decoded = await decodeBitwardenCipher(raw, "provider-1", KEY);
+    const item = decoded.items[0] as LoginItem;
+    expect(item).toMatchObject({ loginType: "WIFI", wifiMetadata });
+
+    const changedMetadata = JSON.stringify({ ...JSON.parse(item.wifiMetadata || "{}"), hiddenNetwork: true });
+    const encoded = await encodeBitwardenCipher({ ...item, wifiMetadata: changedMetadata }, KEY, raw);
+    const roundTrip = await decodeBitwardenCipher(encoded, "provider-1", KEY);
+    expect(roundTrip.items[0]).toMatchObject({ loginType: "WIFI", wifiMetadata: changedMetadata });
+    expect(JSON.parse((roundTrip.items[0] as LoginItem).wifiMetadata || "{}")).toMatchObject({ future: { keep: true }, hiddenNetwork: true });
+  });
+
+  it("round-trips Monica barcode and SSO type markers", async () => {
+    const barcode: LoginItem = {
+      id: "barcode", kind: "login", title: "Membership", favorite: false, notes: "", createdAt: REVISION, updatedAt: REVISION,
+      providerRefs: [{ providerId: "provider-1" }], username: "", password: "MONICA-123", uris: [], customFields: [], loginType: "BARCODE"
+    };
+    const sso: LoginItem = { ...barcode, id: "sso", title: "Company SSO", password: "", loginType: "SSO", ssoProvider: "OKTA", ssoRefEntryId: 42 };
+
+    const barcodeEncoded = await encodeBitwardenCipher(barcode, KEY);
+    const ssoEncoded = await encodeBitwardenCipher(sso, KEY);
+    const barcodeRoundTrip = await decodeBitwardenCipher({ ...barcodeEncoded, Id: "barcode-roundtrip", RevisionDate: REVISION, CreationDate: REVISION }, "provider-1", KEY);
+    const ssoRoundTrip = await decodeBitwardenCipher({ ...ssoEncoded, Id: "sso-roundtrip", RevisionDate: REVISION, CreationDate: REVISION }, "provider-1", KEY);
+    expect(barcodeRoundTrip.items[0]).toMatchObject({ loginType: "BARCODE", password: "MONICA-123" });
+    expect(ssoRoundTrip.items[0]).toMatchObject({ loginType: "SSO", ssoProvider: "OKTA", ssoRefEntryId: 42 });
+  });
+
+  it("resolves an encrypted SSO pair after reconnecting the same Bitwarden source", async () => {
+    const account: LoginItem = {
+      id: "bitwarden:old:account", kind: "login", title: "Account", favorite: false, notes: "", createdAt: REVISION, updatedAt: REVISION,
+      providerRefs: [{ providerId: "old", remoteId: "account" }], username: "user@example.test", password: "synthetic", uris: [], customFields: []
+    };
+    const site: LoginItem = { ...account, id: "bitwarden:old:site", title: "Site", password: "", loginType: "SSO", providerRefs: [{ providerId: "old", remoteId: "site" }] };
+    const linked = applySsoAccountChoice(site, ssoLogicalId(account), [site, account]);
+    const raws = await Promise.all([account, linked].map(async item => ({ ...await encodeBitwardenCipher(item, KEY), Id: item.providerRefs[0].remoteId, RevisionDate: REVISION, CreationDate: REVISION })));
+    const reopened = (await Promise.all(raws.map(raw => decodeBitwardenCipher(raw, "reconnected", KEY)))).flatMap(result => result.items);
+    const owner = reopened.find(item => item.title === "Site") as LoginItem;
+    const target = resolveSsoAccount(owner, reopened);
+    expect(target?.title).toBe("Account");
+    expect(target?.id).not.toBe(account.id);
+    expect(target?.providerRefs[0].remoteId).toBe("account");
+    expect(owner.ssoRefEntryId).toBeUndefined();
+    expect(resolveSsoAccount(owner, [account])).toBeUndefined();
+  });
+
+  it.each([undefined, "password:bitwarden:account"])("clears the old Room reference when selecting SSO relation %s", async logicalId => {
+    const item: LoginItem = {
+      id: "legacy-sso", kind: "login", title: "SSO site", favorite: false, notes: "", createdAt: REVISION, updatedAt: REVISION,
+      providerRefs: [{ providerId: "provider-1" }], username: "", password: "", uris: [], customFields: [],
+      loginType: "SSO", ssoProvider: "OKTA", ssoRefEntryId: 42
+    };
+    const raw = { ...await encodeBitwardenCipher(item, KEY), Id: "legacy-sso", RevisionDate: REVISION, CreationDate: REVISION };
+    const original = (await decodeBitwardenCipher(raw, "provider-1", KEY)).items[0] as LoginItem;
+    const renamedRaw = await encodeBitwardenCipher({ ...original, title: "Renamed" }, KEY, raw);
+    const renamed = (await decodeBitwardenCipher(renamedRaw, "provider-1", KEY)).items[0] as LoginItem;
+    expect(renamed.ssoRefEntryId).toBe(42);
+    const changed = await encodeBitwardenCipher({ ...renamed, ssoRefEntryId: undefined, ssoRefLogicalId: logicalId }, KEY, renamedRaw);
+    const reread = (await decodeBitwardenCipher(changed, "provider-1", KEY)).items[0] as LoginItem;
+    expect(reread.ssoRefEntryId).toBeUndefined();
+    expect(reread.ssoRefLogicalId).toBe(logicalId);
+  });
+
+  it("preserves encrypted stable SSO references across edits and explicitly clears them", async () => {
+    const item: LoginItem = {
+      id: "stable-sso", kind: "login", title: "SSO site", favorite: false, notes: "", createdAt: REVISION, updatedAt: REVISION,
+      providerRefs: [{ providerId: "provider-1" }], username: "", password: "", uris: [], customFields: [],
+      loginType: "SSO", ssoProvider: "OKTA", ssoRefLogicalId: "password:stable-account"
+    };
+    const raw = { ...await encodeBitwardenCipher(item, KEY), Id: "remote-sso", RevisionDate: REVISION, CreationDate: REVISION };
+    expect(JSON.stringify(raw)).not.toContain("password:stable-account");
+    const decoded = (await decodeBitwardenCipher(raw, "provider-2", KEY)).items[0] as LoginItem;
+    expect(decoded.ssoRefLogicalId).toBe(item.ssoRefLogicalId);
+    expect(decoded.customFields.some(field => field.name === "monica_sso_ref_logical_id")).toBe(false);
+    const renamed = await encodeBitwardenCipher({ ...decoded, title: "Renamed" }, KEY, raw);
+    const afterEdit = (await decodeBitwardenCipher(renamed, "provider-2", KEY)).items[0] as LoginItem;
+    expect(afterEdit.ssoRefLogicalId).toBe(item.ssoRefLogicalId);
+    expect(afterEdit.ssoRefEntryId).toBeUndefined();
+    const cleared = await encodeBitwardenCipher({ ...afterEdit, ssoRefLogicalId: undefined }, KEY, renamed);
+    expect(((await decodeBitwardenCipher(cleared, "provider-2", KEY)).items[0] as LoginItem).ssoRefLogicalId).toBeUndefined();
+  });
+
   it("preserves reprompt, attachments, history, and unknown Cipher keys when only the title changes", async () => {
     const attachments = [{ Id: "attachment-1", FileName: await encryptBitwardenString("report.pdf", KEY), Size: "2048", Key: "attachment-key" }];
     const passwordHistory = [{ Password: await encryptBitwardenString("old-secret", KEY), LastUsedDate: "2026-07-01T00:00:00.000Z" }];
@@ -544,6 +879,11 @@ describe("Bitwarden Cipher codec", () => {
 
   it("creates a login Cipher containing a Bitwarden-compatible FIDO2 credential", async () => {
     const encoded = await encodeBitwardenPasskeyCipher(passkey("new-credential", 0), KEY);
+    const credential = ((encoded.login as Record<string, unknown>).fido2Credentials as Array<Record<string, string>>)[0];
+    await expect(decryptBitwardenString(credential.credentialId, KEY)).resolves.toBe("b64.new-credential");
+    await expect(decryptBitwardenString(credential.keyType, KEY)).resolves.toBe("public-key");
+    await expect(decryptBitwardenString(credential.keyCurve, KEY)).resolves.toBe("P-256");
+    await expect(decryptBitwardenString(credential.keyValue, KEY)).resolves.toBe(P256_PKCS8.replace(/\+/g, "-").replace(/\//g, "_"));
     const decoded = await decodeBitwardenCipher({ ...encoded, id: "created", revisionDate: REVISION, creationDate: REVISION }, "provider-1", KEY);
 
     expect(decoded.items).toHaveLength(2);
@@ -551,7 +891,7 @@ describe("Bitwarden Cipher codec", () => {
     expect(decoded.items[1]).toMatchObject({
       kind: "passkey",
       credentialId: "new-credential",
-      privateKeyPkcs8: "pkcs8-material-new-credential",
+      privateKeyPkcs8: P256_PKCS8,
       signCount: 0,
       sourceMode: "bitwarden"
     });
@@ -570,6 +910,31 @@ describe("Bitwarden Cipher codec", () => {
     const decoded = await decodeBitwardenCipher(raw, "provider-1", KEY);
     expect(decoded.items.find((item) => item.kind === "passkey")).toMatchObject({ algorithm: -257, keyAlgorithm: "FUTURE-999" });
     await expect(encodeBitwardenPasskeyCipher(decoded.items.find((item): item is PasskeyItem => item.kind === "passkey")!, KEY, raw)).rejects.toThrow("ES256");
+  });
+
+  it('refuses to upload a backup-ineligible Passkey without changing its existing data', async () => {
+    const item = { ...passkey('restricted-credential', 0), backupEligible: false, backupState: false };
+    const before = structuredClone(item);
+    await expect(encodeBitwardenPasskeyCipher(item, KEY)).rejects.toThrow('Bitwarden');
+    const parent = await encodeBitwardenPasskeyCipher(passkey('restricted-credential', 0), KEY);
+    const unchanged = structuredClone(parent);
+    await expect(encodeBitwardenPasskeyCipher(item, KEY, parent)).rejects.toThrow('Bitwarden');
+    expect(item).toEqual(before); expect(parent).toEqual(unchanged);
+    // Removal is still possible: it does not export the incompatible credential.
+    const removed = await encodeBitwardenPasskeyCipher(item, KEY, parent, 'delete');
+    expect((removed.login as Record<string, unknown>).fido2Credentials).toEqual([]);
+  });
+
+  it.each([-1, 0.5, 0x100000000, NaN, Infinity])('refuses invalid counter %s instead of silently rewriting it', async counter => {
+    await expect(encodeBitwardenPasskeyCipher(passkey('counter', counter), KEY)).rejects.toThrow('计数');
+  });
+
+  it.each([0, 23, 0xffffffff])('preserves valid counter %s and legacy implicit backup eligibility', async counter => {
+    const input = passkey('counter', counter), before = structuredClone(input);
+    const raw = await encodeBitwardenPasskeyCipher(input, KEY);
+    const decoded = await decodeBitwardenCipher({ ...raw, id: 'counter', revisionDate: REVISION }, 'provider-1', KEY);
+    expect(decoded.items.find(row => row.kind === 'passkey')).toMatchObject({ signCount: counter, privateKeyPkcs8: P256_PKCS8 });
+    expect(input).toEqual(before);
   });
 
   it("preserves parent attachments history and future fields when updating a Passkey", async () => {
@@ -633,7 +998,7 @@ function passkey(credentialId: string, signCount: number): PasskeyItem {
     userDisplayName: "Joy",
     algorithm: -7,
     publicKey: "spki-material",
-    privateKeyPkcs8: `pkcs8-material-${credentialId}`,
+    privateKeyPkcs8: P256_PKCS8,
     signCount,
     discoverable: true,
     sourceMode: "bitwarden"

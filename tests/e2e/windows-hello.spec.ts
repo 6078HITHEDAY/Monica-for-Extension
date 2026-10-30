@@ -1,13 +1,14 @@
-import { chromium, expect, test, type BrowserContext } from "@playwright/test";
+import { launchTestContext } from './fixtures/edge';
+import { expect, test, type BrowserContext } from "@playwright/test";
 import path from "node:path";
 
 test("Windows Hello remains manager-only and exposes a truthful device-key recovery UI", async ({}, testInfo) => {
   const extensionPath = path.resolve("dist");
   let context: BrowserContext | undefined;
   try {
-    context = await chromium.launchPersistentContext(testInfo.outputPath("windows-hello-profile"), {
+    context = await launchTestContext(testInfo.outputPath("windows-hello-profile"), {
       channel: "chromium",
-      headless: true,
+      headless: true, locale: "zh-CN",
       args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
     });
     const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
@@ -18,11 +19,13 @@ test("Windows Hello remains manager-only and exposes a truthful device-key recov
     const setup = await manager.evaluate(async () => chrome.runtime.sendMessage({ type: "VAULT_SETUP", masterPassword: "" }));
     expect(setup).toMatchObject({ ok: true });
     await manager.reload();
-    await expect(manager.getByRole("heading", { name: "密码库概览" })).toBeVisible();
+    await expect(manager.getByRole("heading", { name: "全部项目", exact: true })).toBeVisible();
 
     await manager.getByRole("button", { name: "设置与备份" }).click();
-    await expect(manager.getByRole("heading", { name: "Windows Hello" })).toBeVisible();
-    await expect(manager.getByText(/设备密钥模式不保存主密码，请保留加密整库备份/)).toBeVisible();
+    await expect(manager.locator('[data-settings-entry="protection"]')).toContainText("设备密钥 · Windows Hello 未注册");
+    await manager.locator('[data-settings-entry="protection"]').click();
+    const helloDisclosure = manager.locator('[data-settings-page="protection"]');
+    await expect(helloDisclosure.getByText("使用 Windows Hello 保护设备密钥；私钥不离开本机。")).toBeVisible();
 
     const popup = await context.newPage();
     await popup.goto(`chrome-extension://${extensionId}/popup.html`);

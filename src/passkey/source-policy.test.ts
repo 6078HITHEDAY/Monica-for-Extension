@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PasskeyItem } from "../core/model";
-import { hasExcludedUsablePasskey, isUsablePasskey, normalizeCredentialId, passkeyAvailability, passkeyAvailabilityLabel, passkeyMatchesPageHost, passkeyRpIdsEqual, selectPasskeyCandidates } from "./source-policy";
+import { decodeBitwardenCredentialId, duplicatePasskeyCredentialIds, hasExcludedUsablePasskey, isUsablePasskey, normalizeCredentialId, passkeyAvailability, passkeyAvailabilityLabel, passkeyMatchesPageHost, passkeyRpIdsEqual, selectPasskeyCandidates, toBitwardenCredentialId } from "./source-policy";
 
 const base: PasskeyItem = {
   id: "passkey-1",
@@ -41,12 +41,12 @@ describe("Passkey source policy", () => {
   });
 
   it("does not offer algorithms that the browser signer cannot use", () => {
-    const unsupported = { ...base, sourceMode: "bitwarden" as const, algorithm: -257 as const };
-    expect(passkeyAvailability({ ...base, algorithm: -257 }, "example.com")).toBe("unsupported-algorithm");
-    expect(isUsablePasskey({ ...base, algorithm: -257 }, "example.com")).toBe(false);
+    const unsupported = { ...base, sourceMode: "bitwarden" as const, algorithm: -999 as const };
+    expect(passkeyAvailability({ ...base, algorithm: -999 }, "example.com")).toBe("unsupported-algorithm");
+    expect(isUsablePasskey({ ...base, algorithm: -999 }, "example.com")).toBe(false);
     expect(passkeyAvailability(unsupported, "example.com")).toBe("unsupported-algorithm");
     expect(isUsablePasskey(unsupported, "example.com")).toBe(false);
-    expect(passkeyAvailabilityLabel("unsupported-algorithm")).toContain("ES256");
+    expect(passkeyAvailabilityLabel("unsupported-algorithm")).toContain("不受支持");
   });
 
   it("normalizes base64url and UUID-like credential IDs consistently", () => {
@@ -69,8 +69,34 @@ describe("Passkey source policy", () => {
 
   it("does not let Android metadata or unsupported keys block registration", () => {
     const metadata = { ...base, sourceMode: "android-metadata-only" as const };
-    const unsupported = { ...base, algorithm: -257 };
+    const unsupported = { ...base, algorithm: -999 };
     expect(hasExcludedUsablePasskey([metadata, unsupported], "example.com", ["AQID"])).toBe(false);
     expect(hasExcludedUsablePasskey([base], "example.com", ["AQID"])).toBe(true);
+  });
+
+  it("decodes only explicitly tagged Bitwarden byte IDs", () => {
+    expect(decodeBitwardenCredentialId("b64.AAECAwQFBgcICQoLDA0ODw")).toBe("AAECAwQFBgcICQoLDA0ODw");
+    expect(decodeBitwardenCredentialId("android-id")).toBe("android-id");
+    expect(toBitwardenCredentialId("b64.AAECAwQFBgcICQoLDA0ODw")).toBe("b64.AAECAwQFBgcICQoLDA0ODw");
+  });
+
+  it("keeps 16-byte credential identity through UUID storage and subsequent edits", () => {
+    const bytes = "AAECAwQFBgcICQoLDA0ODw";
+    const uuid = "00010203-0405-0607-0809-0a0b0c0d0e0f";
+    expect(toBitwardenCredentialId(bytes)).toBe(uuid);
+    expect(toBitwardenCredentialId(decodeBitwardenCredentialId(uuid))).toBe(uuid);
+    expect(decodeBitwardenCredentialId(toBitwardenCredentialId(bytes))).toBe(bytes);
+    const historical = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
+    expect(toBitwardenCredentialId(historical)).toBe(`b64.${historical}`);
+    expect(decodeBitwardenCredentialId(toBitwardenCredentialId(historical))).toBe(historical);
+  });
+
+  it("detects normalized duplicate credential IDs across provider-owned records", () => {
+    const bitwarden = { ...base, id: "bitwarden", credentialId: "AQID=", sourceMode: "bitwarden" as const, providerRefs: [{ providerId: "bw-work" }] };
+    const keepass = { ...base, id: "keepass", credentialId: "AQID", providerRefs: [{ providerId: "kp-family" }] };
+    const distinct = { ...base, id: "distinct", credentialId: "BAUG", providerRefs: [{ providerId: "local" }] };
+
+    expect([...duplicatePasskeyCredentialIds([bitwarden, keepass, distinct])]).toEqual(["AQID"]);
+    expect(duplicatePasskeyCredentialIds([bitwarden, { ...bitwarden }])).toEqual(new Set());
   });
 });

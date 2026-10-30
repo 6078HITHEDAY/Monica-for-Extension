@@ -53,7 +53,7 @@ export class BitwardenAttachmentMutationStoreError extends Error {
   }
 }
 
-const MAX_CIPHERTEXT_BYTES = BITWARDEN_ATTACHMENT_MAX_BYTES + 64;
+const MAX_CIPHERTEXT_BYTES = BITWARDEN_ATTACHMENT_MAX_BYTES + 65;
 const MAX_ID_BYTES = 4096;
 const MAX_PROVIDER_ID_BYTES = 512;
 const MAX_RECORDS_RETURNED = 512;

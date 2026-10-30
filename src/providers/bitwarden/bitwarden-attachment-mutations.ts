@@ -17,7 +17,7 @@ import {
   BitwardenAttachmentDownloadService,
   type BitwardenAttachmentVaultContext
 } from "./bitwarden-attachments";
-import { resolveBitwardenCipherKey } from "./bitwarden-cipher-codec";
+import { assertKnownBitwardenCipher, resolveBitwardenCipherKey } from "./bitwarden-cipher-codec";
 import {
   BitwardenClient,
   type BitwardenClientLimits,
@@ -147,6 +147,7 @@ export class BitwardenAttachmentMutationService {
   }
 
   async upload(input: BitwardenAttachmentUploadMutationInput): Promise<BitwardenAttachmentMutationResult> {
+    assertKnownBitwardenCipher(input.rawCipher);
     const normalized = await this.normalizeUploadInput(input);
     const activeKey = operationKey(normalized.providerId, normalized.operationId);
     const fingerprint = uploadOperationFingerprint(normalized);
@@ -165,6 +166,7 @@ export class BitwardenAttachmentMutationService {
   }
 
   async delete(input: BitwardenAttachmentDeleteMutationInput): Promise<BitwardenAttachmentMutationResult> {
+    assertKnownBitwardenCipher(input.rawCipher);
     validateContext(input);
     assertOperationId(input.operationId);
     assertOpaqueId(input.attachmentId, "附件");
@@ -534,7 +536,10 @@ export class BitwardenAttachmentMutationService {
     let attachmentKey: BitwardenSymmetricKey | undefined;
     try {
       attachmentKey = await decryptBitwardenSymmetricKey(remote.wrappedKey, cipherKey);
-      const encryptedBytes = await encryptAttachmentPayload(input.bytes, attachmentKey, this.randomness, this.limits.maxPlaintextBytes);
+      // Resume an already prepared historical upload using its original wire
+      // layout and size; new uploads always use the standard Bitwarden format.
+      const encryptedBytes = await encryptAttachmentPayload(input.bytes, attachmentKey, this.randomness, this.limits.maxPlaintextBytes,
+        record.encryptedSizeBytes! % AES_BLOCK_BYTES === 0);
       if (encryptedBytes.length !== record.encryptedSizeBytes) {
         encryptedBytes.fill(0);
         throw mutationError("bitwarden-attachment-size-invalid", "重新加密的 Bitwarden 附件大小与恢复记录不一致。");
@@ -677,6 +682,7 @@ export class BitwardenAttachmentMutationService {
     const ciphers = arrayValue(synced.payload, "Ciphers", "ciphers");
     const rawCipher = ciphers.map(asRecord).find((candidate) => optionalString(candidate, "Id", "id") === cipherId);
     if (!rawCipher) throw mutationError("bitwarden-cipher-not-found", "Bitwarden Cipher 不存在或已被删除。");
+    assertKnownBitwardenCipher(rawCipher);
     revisionDateOf(rawCipher);
     return { session: synced.session, rawCipher };
   }
@@ -746,7 +752,8 @@ async function encryptAttachmentPayload(
   plaintext: Uint8Array,
   key: BitwardenSymmetricKey,
   randomness: (length: number) => Uint8Array,
-  maximumPlaintextBytes: number
+  maximumPlaintextBytes: number,
+  legacy = false
 ): Promise<Uint8Array> {
   if (plaintext.length > maximumPlaintextBytes || plaintext.length > BITWARDEN_ATTACHMENT_MAX_BYTES) {
     throw mutationError("bitwarden-attachment-size-invalid", "Bitwarden 附件明文超过 100 MiB 安全上限。");
@@ -768,7 +775,7 @@ async function encryptAttachmentPayload(
     const hmacKey = await crypto.subtle.importKey("raw", key.macKey as BufferSource, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
     mac = new Uint8Array(await crypto.subtle.sign("HMAC", hmacKey, macInput as BufferSource));
     if (mac.length !== ATTACHMENT_MAC_BYTES) throw mutationError("bitwarden-attachment-encryption-failed", "Bitwarden 附件 HMAC 长度无效。");
-    return concatBytes(iv, ciphertext, mac);
+    return legacy ? concatBytes(iv, ciphertext, mac) : concatBytes(Uint8Array.of(2), iv, mac, ciphertext);
   } finally {
     iv.fill(0);
     ciphertext.fill(0);
@@ -827,7 +834,7 @@ function parseRemoteAttachments(rawCipher: Record<string, unknown>): RemoteAttac
     if (!encryptedFileName) throw mutationError("bitwarden-attachment-metadata-invalid", "Bitwarden 附件缺少加密名称。");
     const sizeValue = value(record, "Size", "size");
     const encryptedSizeBytes = typeof sizeValue === "string" && /^\d+$/.test(sizeValue) ? Number(sizeValue) : sizeValue;
-    if (!Number.isSafeInteger(encryptedSizeBytes) || Number(encryptedSizeBytes) < 64 || Number(encryptedSizeBytes) > BITWARDEN_ATTACHMENT_MAX_BYTES + 64) {
+    if (!Number.isSafeInteger(encryptedSizeBytes) || Number(encryptedSizeBytes) < 64 || Number(encryptedSizeBytes) > BITWARDEN_ATTACHMENT_MAX_BYTES + 65) {
       throw mutationError("bitwarden-attachment-metadata-invalid", "Bitwarden 附件密文大小无效。");
     }
     return { id, encryptedFileName, wrappedKey, encryptedSizeBytes: Number(encryptedSizeBytes) };

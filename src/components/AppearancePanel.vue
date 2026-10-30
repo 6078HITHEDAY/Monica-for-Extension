@@ -1,45 +1,38 @@
 <script setup lang="ts">
-import { paletteId, palettes, schemePreference, setPalette, setScheme, type SchemePreference, type ThemePaletteId } from "../lib/theme";
+import { tr } from '../i18n';
+import { paletteId, palettes, setPalette, type ThemePaletteId } from '../lib/theme';
 
-const schemes: SchemePreference[] = ["auto", "light", "dark"];
-const schemeLabels: Record<SchemePreference, string> = { auto: "跟随系统", light: "浅色", dark: "深色" };
-const paletteLabels: Record<ThemePaletteId, string> = { monica: "Monica", ocean: "海洋", forest: "森林", sakura: "樱花", amber: "琥珀" };
-
-function updateScheme(event: Event) {
-  setScheme((event.target as HTMLSelectElement).value as SchemePreference);
-}
-
-function updatePalette(value: ThemePaletteId) {
-  setPalette(value);
-}
+const paletteLabels: Record<ThemePaletteId, string> = { nothing: 'Nothing', monica: 'Monica', get ocean() { return tr('海洋'); }, get forest() { return tr('森林'); }, get sakura() { return tr('樱花'); }, get amber() { return tr('琥珀'); } };
 </script>
 
 <template>
-  <m3e-card variant="filled">
-    <div slot="content" class="stack">
-      <h2>外观</h2>
-      <label class="field">
-        <span>显示模式</span>
-        <select :value="schemePreference" @change="updateScheme">
-          <option v-for="item in schemes" :key="item" :value="item">{{ schemeLabels[item] }}</option>
-        </select>
-      </label>
-      <div class="field">
-        <span>配色</span>
-        <div class="palette-grid">
-          <button
-            v-for="item in palettes"
-            :key="item.id"
-            class="palette-button"
-            :class="{ selected: item.id === paletteId }"
-            type="button"
-            @click="updatePalette(item.id)"
-          >
-            <span class="swatch" :style="{ '--swatch': item.color, '--accent': item.accent }"></span>
-            {{ paletteLabels[item.id] }}
-          </button>
+  <section class="appearance-page">
+        <div class="appearance-controls">
+          <section>
+            <m3e-radio-group class="palette-list" :aria-label="tr('配色')">
+              <label v-choice-label v-for="item in palettes" :key="item.id" class="palette-option" :class="{ selected: item.id === paletteId }">
+                <span class="swatch" :style="{ '--swatch': item.color, '--secondary': item.darkColor, '--accent': item.accent }" aria-hidden="true"><span /><span /><span /></span>
+                <span class="palette-label">{{ paletteLabels[item.id] }}</span>
+                <m3e-radio :value="item.id" :checked.prop="item.id === paletteId" @input="setPalette(item.id)" />
+              </label>
+            </m3e-radio-group>
+          </section>
         </div>
-      </div>
-    </div>
-  </m3e-card>
+  </section>
 </template>
+
+<style scoped>
+.appearance-page { min-width: 0; }
+.appearance-controls { display: grid; gap: 24px; }
+.appearance-controls section { min-width: 0; }
+.appearance-controls h3 { margin: 0 0 12px; font-size: .875rem; font-weight: 500; color: var(--md-sys-color-on-surface-variant); }
+.palette-list { display: grid; gap: 4px; }
+.palette-option { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 56px; padding: 4px 12px; border-radius: 16px; cursor: pointer; }
+.palette-option.selected { background: var(--md-sys-color-secondary-container); color: var(--md-sys-color-on-secondary-container); }
+.palette-label { overflow-wrap: anywhere; }
+.swatch { width: 28px; height: 28px; border-radius: 50%; display: flex; overflow: hidden; }
+.swatch > span { flex: 1; height: 100%; }
+.swatch > span:first-child { background: var(--swatch); }
+.swatch > span:nth-child(2) { background: var(--secondary); }
+.swatch > span:last-child { background: var(--accent); }
+</style>

@@ -1,0 +1,196 @@
+--- a/crates/mdbx-storage/src/repo/operation_coordinator.rs
++++ b/crates/mdbx-storage/src/repo/operation_coordinator.rs
+@@ -124,6 +124,9 @@
+     },
+     RemoveObjectLabelAssignment {
+         assignment_id: String,
++    },
++    TrashProjectWithAttachments {
++        project_id: String,
+     },
+ }
+ 
+@@ -141,6 +144,7 @@
+             | Self::RenameProject { .. }
+             | Self::MoveProject { .. }
+             | Self::DeleteProject { .. }
++            | Self::TrashProjectWithAttachments { .. }
+             | Self::RestoreProject { .. }
+             | Self::DeleteEntry { .. }
+             | Self::RestoreEntry { .. }
+@@ -310,6 +314,26 @@
+     /// `CommitOperation` and transaction.
+     pub fn apply(&self, conn: &VaultConnection, ctx: &CommitContext) -> StorageResult<()> {
+         execute_prepared_commands(conn, ctx, &self.commands)
++    }
++
++    /// Composite adoption executes file mutations before the explicit folder
++    /// trash commands. Both phases use the caller's single outer transaction.
++    pub fn apply_with_deferred_folder_trash(
++        &self,
++        conn: &VaultConnection,
++        ctx: &CommitContext,
++        trash_phase: bool,
++    ) -> StorageResult<()> {
++        for command in &self.commands {
++            if matches!(
++                command,
++                PreparedWriteCommand::TrashProjectWithAttachments { .. }
++            ) == trash_phase
++            {
++                execute_prepared_commands(conn, ctx, std::slice::from_ref(command))?;
++            }
++        }
++        Ok(())
+     }
+ 
+     fn commit_operation(&self) -> CommitOperation {
+@@ -565,7 +589,8 @@
+             WriteCommand::MoveProject { project_id, .. } => {
+                 ("project", project_id, "move", &["group_id"])
+             }
+-            WriteCommand::DeleteProject { project_id } => {
++            WriteCommand::DeleteProject { project_id }
++            | WriteCommand::TrashProjectWithAttachments { project_id } => {
+                 ("project", project_id, "delete", &["deleted"])
+             }
+             WriteCommand::RestoreProject { project_id, .. } => {
+@@ -771,6 +796,9 @@
+     RemoveObjectLabelAssignment {
+         assignment_id: String,
+     },
++    TrashProjectWithAttachments {
++        project_id: String,
++    },
+ }
+ 
+ impl PreparedWriteCommand {
+@@ -782,6 +810,7 @@
+             | Self::CreateProjectWithParent { .. }
+             | Self::RenameProject { .. }
+             | Self::DeleteProject { .. }
++            | Self::TrashProjectWithAttachments { .. }
+             | Self::CreateEntry { .. }
+             | Self::UpdateEntry { .. }
+             | Self::DeleteEntry { .. }
+@@ -845,6 +874,12 @@
+             WriteCommand::DeleteProject { project_id } => {
+                 validate_uuid(project_id, "project_id")?;
+                 Ok(Self::DeleteProject {
++                    project_id: project_id.clone(),
++                })
++            }
++            WriteCommand::TrashProjectWithAttachments { project_id } => {
++                validate_uuid(project_id, "project_id")?;
++                Ok(Self::TrashProjectWithAttachments {
+                     project_id: project_id.clone(),
+                 })
+             }
+@@ -1156,6 +1191,11 @@
+             PreparedWriteCommand::DeleteProject { project_id } => {
+                 active_project(conn, project_id)?;
+                 ensure_project_empty(conn, project_id)?;
++                ProjectRepo::soft_delete(conn, ctx, project_id)?;
++            }
++            PreparedWriteCommand::TrashProjectWithAttachments { project_id } => {
++                active_project(conn, project_id)?;
++                ensure_project_without_active_members(conn, project_id)?;
+                 ProjectRepo::soft_delete(conn, ctx, project_id)?;
+             }
+             PreparedWriteCommand::RestoreProject {
+@@ -1413,7 +1453,10 @@
+     Ok(())
+ }
+ 
+-fn ensure_project_empty(conn: &VaultConnection, project_id: &str) -> StorageResult<()> {
++fn ensure_project_without_active_members(
++    conn: &VaultConnection,
++    project_id: &str,
++) -> StorageResult<()> {
+     if ProjectRepo::list_all(conn)?
+         .iter()
+         .any(|project| project.group_id.as_deref() == Some(project_id))
+@@ -1427,6 +1470,11 @@
+             "a project with active entries cannot be deleted".to_string(),
+         ));
+     }
++    Ok(())
++}
++
++fn ensure_project_empty(conn: &VaultConnection, project_id: &str) -> StorageResult<()> {
++    ensure_project_without_active_members(conn, project_id)?;
+     if !AttachmentRepo::list_by_project(conn, project_id)?.is_empty() {
+         return Err(StorageError::ConstraintViolation(
+             "a project with active attachments cannot be deleted".to_string(),
+--- a/crates/mdbx-ffi/src/write_facade.rs
++++ b/crates/mdbx-ffi/src/write_facade.rs
+@@ -116,6 +116,9 @@
+     },
+     RemoveObjectLabelAssignment {
+         assignment_id: String,
++    },
++    TrashProjectWithAttachments {
++        project_id: String,
+     },
+ }
+ 
+@@ -252,6 +255,9 @@
+                 parent_project_id,
+             },
+             MdbxWriteCommand::DeleteProject { project_id } => Self::DeleteProject { project_id },
++            MdbxWriteCommand::TrashProjectWithAttachments { project_id } => {
++                Self::TrashProjectWithAttachments { project_id }
++            }
+             MdbxWriteCommand::RestoreProject {
+                 project_id,
+                 parent_project_id,
+@@ -643,12 +649,21 @@
+         }
+         // Match OperationCoordinator's repository kinds; restore/move may not
+         // execute inside a context declared as an ordinary change.
+-        let kinds = commands.iter().map(|command| match command {
+-            MdbxWriteCommand::RestoreProject { .. } | MdbxWriteCommand::RestoreEntry { .. } => "restore",
+-            MdbxWriteCommand::MoveProject { .. } | MdbxWriteCommand::MoveEntry { .. } => "move",
+-            _ => "change",
+-        }).collect::<std::collections::BTreeSet<_>>();
+-        let commit_kind = if kinds.len() == 1 { *kinds.iter().next().unwrap() } else { "multi" };
++        let kinds = commands
++            .iter()
++            .map(|command| match command {
++                MdbxWriteCommand::RestoreProject { .. } | MdbxWriteCommand::RestoreEntry { .. } => {
++                    "restore"
++                }
++                MdbxWriteCommand::MoveProject { .. } | MdbxWriteCommand::MoveEntry { .. } => "move",
++                _ => "change",
++            })
++            .collect::<std::collections::BTreeSet<_>>();
++        let commit_kind = if kinds.len() == 1 {
++            *kinds.iter().next().unwrap()
++        } else {
++            "multi"
++        };
+         let prepared = OperationCoordinator::prepare(WriteOperationRequest::new(
+             operation_id,
+             operation_kind,
+@@ -965,7 +980,7 @@
+                 ));
+             }
+             if let Some(prepared) = &prepared {
+-                prepared.apply(&conn, scoped)?;
++                prepared.apply_with_deferred_folder_trash(&conn, scoped, false)?;
+             }
+             execute_attachment_batch_commands(
+                 &conn,
+@@ -973,7 +988,11 @@
+                 attachment_commands,
+                 chunk_size,
+                 &attachment_ids,
+-            )
++            )?;
++            if let Some(prepared) = &prepared {
++                prepared.apply_with_deferred_folder_trash(&conn, scoped, true)?;
++            }
++            Ok(())
+         })?;
+         let (commit_id, already_committed) = match execution {
+             OperationExecution::Applied { commit_id, .. } => (commit_id, false),

@@ -11,7 +11,7 @@ import {
   type ProviderAttachmentSummary
 } from "../attachments/attachment-contract";
 import { paginateProviderAttachments } from "../attachments/attachment-pagination";
-import { providerHttpError, resilientFetch, type ProviderTransportPolicy } from "../provider-transport";
+import { ProviderTransportError, providerHttpError, resilientFetch, type ProviderTransportPolicy } from "../provider-transport";
 import {
   BitwardenClient,
   type BitwardenAttachmentDownloadInfo,
@@ -30,6 +30,8 @@ const ATTACHMENT_MAC_BYTES = 32;
 const MAX_BITWARDEN_ATTACHMENTS_PER_CIPHER = 512;
 const MAX_OPAQUE_ID_BYTES = 4096;
 const MAX_FILE_NAME_BYTES = 4096;
+const UNREADABLE_ENCRYPTED_FILE_NAME = "Bitwarden 加密附件";
+const BITWARDEN_CIPHER_STRING_PATTERN = /^[0-9]+\.[A-Za-z0-9+/_=-]+\|[A-Za-z0-9+/_=-]+(?:\|[A-Za-z0-9+/_=-]+)?$/;
 const EMPTY_BYTES: Uint8Array = new Uint8Array(0);
 const SYNTHETIC_PADDING_PLAINTEXT = new Uint8Array(AES_BLOCK_BYTES).fill(AES_BLOCK_BYTES);
 
@@ -39,6 +41,8 @@ export interface BitwardenAttachmentVaultContext {
   session: BitwardenSessionConfig;
   rawCipher: Record<string, unknown>;
   organizationKeys?: ReadonlyMap<string, BitwardenSymmetricKey>;
+  /** Transfers must not replace an unreadable encrypted name with UI fallback text. */
+  requireReadableFileName?: boolean;
 }
 
 export interface BitwardenAttachmentDownloadInput extends BitwardenAttachmentVaultContext {
@@ -144,7 +148,7 @@ export class BitwardenAttachmentDownloadService {
     try {
       const summaries: ProviderAttachmentSummary[] = [];
       for (const attachment of attachments) {
-        summaries.push(await attachmentSummary(attachment, cipherKey));
+        summaries.push(await attachmentSummary(attachment, cipherKey, input.requireReadableFileName));
       }
       return paginateProviderAttachments(summaries, page);
     } finally {
@@ -168,12 +172,23 @@ export class BitwardenAttachmentDownloadService {
       cipherKey = await this.resolveCipherKey(input);
       const download = await this.client.attachmentDownloadInfo(input.session, cipherId, input.attachmentId, input.signal);
       const reconciled = reconcileDownloadInfo(rawAttachment, download.info, input.attachmentId, this.maximumCiphertextBytes());
-      const fileName = await decryptAttachmentFileName(reconciled.encryptedFileName, cipherKey);
+      const fileName = await decryptAttachmentFileName(reconciled.encryptedFileName, cipherKey, input.requireReadableFileName);
       attachmentKey = reconciled.key
         ? await decryptBitwardenSymmetricKey(reconciled.key, cipherKey)
         : cloneKey(cipherKey);
-      const signedUrl = validateSignedDownloadUrl(download.info.url);
-      plaintext = await this.downloadAuthenticatedPlaintext(signedUrl, attachmentKey, input.signal);
+      const signedUrl = validateSignedDownloadUrl(download.info.url, download.session.apiUrl);
+      let lastError: unknown;
+      for (const candidateUrl of attachmentDownloadCandidates(signedUrl, download.session.apiUrl)) {
+        try {
+          plaintext = await this.downloadAuthenticatedPlaintext(candidateUrl, attachmentKey, input.signal, download.session.accessToken, download.session.apiUrl);
+          lastError = undefined;
+          break;
+        } catch (error) {
+          lastError = error;
+          if (!(error instanceof ProviderTransportError) || error.status !== 404) throw error;
+        }
+      }
+      if (!plaintext) throw lastError instanceof Error ? lastError : new Error("Bitwarden 附件下载失败。");
       if (plaintext.sizeBytes > this.limits.maxPlaintextBytes) {
         throw attachmentError("bitwarden-attachment-too-large", "Bitwarden 附件明文超过 100 MiB 安全上限。");
       }
@@ -305,11 +320,15 @@ export class BitwardenAttachmentDownloadService {
   private async downloadAuthenticatedPlaintext(
     signedUrl: string,
     key: BitwardenSymmetricKey,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    accessToken?: string,
+    apiUrl?: string
   ): Promise<{ chunks: Uint8Array[]; sizeBytes: number }> {
+    const headers = new Headers({ Accept: "application/octet-stream", "Cache-Control": "no-store" });
+    if (accessToken && apiUrl && sameOrigin(signedUrl, apiUrl)) headers.set("Authorization", `Bearer ${accessToken}`);
     return resilientFetch(signedUrl, {
       method: "GET",
-      headers: new Headers({ Accept: "application/octet-stream", "Cache-Control": "no-store" }),
+      headers,
       cache: "no-store",
       credentials: "omit",
       redirect: "error",
@@ -328,7 +347,7 @@ export class BitwardenAttachmentDownloadService {
   }
 
   private maximumCiphertextBytes(): number {
-    return this.limits.maxPlaintextBytes + ATTACHMENT_IV_BYTES + ATTACHMENT_MAC_BYTES + AES_BLOCK_BYTES;
+    return this.limits.maxPlaintextBytes + 1 + ATTACHMENT_IV_BYTES + ATTACHMENT_MAC_BYTES + AES_BLOCK_BYTES;
   }
 
   private pruneExpired(): void {
@@ -367,8 +386,31 @@ async function readAuthenticatedEnvelope(
   const hmac = await createHMAC(createSHA256(), macKey);
   hmac.init();
   const collector = new CiphertextCollector();
-  let tail = EMPTY_BYTES;
+  // Retain bounded encrypted chunks until the total length identifies the
+  // layout. A legacy IV can start with 2, so the first byte alone is ambiguous.
+  const chunks: Uint8Array[] = [];
+  let current: Uint8Array = new Uint8Array(PROVIDER_ATTACHMENT_CHUNK_BYTES);
+  let used = 0;
   let total = 0;
+  const consume = (value: Uint8Array) => {
+    total += value.length;
+    if (!Number.isSafeInteger(total) || total > maximumBytes) {
+      throw attachmentError('bitwarden-attachment-too-large', 'Bitwarden 附件密文超过安全上限。');
+    }
+    for (let offset = 0; offset < value.length;) {
+      const size = Math.min(current.length - used, value.length - offset);
+      current.set(value.subarray(offset, offset + size), used);
+      used += size; offset += size;
+      if (used === current.length) { chunks.push(current); current = new Uint8Array(PROVIDER_ATTACHMENT_CHUNK_BYTES); used = 0; }
+    }
+  };
+  const copyRange = (start: number, end: number) => {
+    const bytes = new Uint8Array(end - start);
+    for (let index = start; index < end; index++) bytes[index - start] = chunks[Math.floor(index / PROVIDER_ATTACHMENT_CHUNK_BYTES)][index % PROVIDER_ATTACHMENT_CHUNK_BYTES];
+    return bytes;
+  };
+  let expectedMac: Uint8Array = EMPTY_BYTES;
+  let iv: Uint8Array = EMPTY_BYTES;
   const reader = response.body?.getReader();
   const onAbort = () => { void reader?.cancel(signal.reason).catch(() => undefined); };
   if (signal.aborted) onAbort();
@@ -381,8 +423,7 @@ async function readAuthenticatedEnvelope(
       } catch (cause) {
         throw new ProviderBodyReadNetworkError(cause);
       }
-      ({ tail, total } = consumeDownloadedBytes(value, tail, total, maximumBytes, hmac, collector));
-      value.fill(0);
+      try { consume(value); } finally { value.fill(0); }
     } else {
       while (true) {
         let result: ReadableStreamReadResult<Uint8Array>;
@@ -393,57 +434,49 @@ async function readAuthenticatedEnvelope(
           throw new ProviderBodyReadNetworkError(cause);
         }
         if (result.done) break;
-        ({ tail, total } = consumeDownloadedBytes(result.value, tail, total, maximumBytes, hmac, collector));
+        consume(result.value);
       }
     }
     if (signal.aborted) throw signal.reason || new DOMException("Attachment download aborted", "AbortError");
-    if (total < ATTACHMENT_IV_BYTES + AES_BLOCK_BYTES + ATTACHMENT_MAC_BYTES || tail.length !== ATTACHMENT_MAC_BYTES) {
+    if (total < ATTACHMENT_IV_BYTES + AES_BLOCK_BYTES + ATTACHMENT_MAC_BYTES || (total % AES_BLOCK_BYTES !== 0 && total % AES_BLOCK_BYTES !== 1)) {
       throw attachmentError("bitwarden-attachment-truncated", "Bitwarden 附件密文不完整。");
     }
+    if (used) chunks.push(current.slice(0, used));
+    current.fill(0);
+    const standard = total % AES_BLOCK_BYTES === 1;
+    if (standard && chunks[0][0] !== 2) throw attachmentError('bitwarden-attachment-metadata-invalid', 'Bitwarden 附件加密格式不受支持。');
+    const ciphertextStart = standard ? 49 : 16;
+    const ciphertextEnd = standard ? total : total - 32;
+    iv = copyRange(standard ? 1 : 0, standard ? 17 : 16);
+    expectedMac = copyRange(standard ? 17 : total - 32, standard ? 49 : total);
+    hmac.update(iv);
+    collector.append(iv);
+    for (let index = 0; index < chunks.length; index++) {
+      const chunk = chunks[index], start = index * PROVIDER_ATTACHMENT_CHUNK_BYTES;
+      const from = Math.max(0, ciphertextStart - start), to = Math.min(chunk.length, ciphertextEnd - start);
+      if (to > from) { const bytes = chunk.subarray(from, to); hmac.update(bytes); collector.append(bytes); }
+      chunk.fill(0);
+      chunks[index] = EMPTY_BYTES;
+    }
     const digest = hmac.digest("binary");
-    if (!(digest instanceof Uint8Array) || !constantTimeEqual(digest, tail)) {
+    if (!(digest instanceof Uint8Array) || !constantTimeEqual(digest, expectedMac)) {
       if (digest instanceof Uint8Array) digest.fill(0);
       throw attachmentError("bitwarden-attachment-mac-invalid", "Bitwarden 附件完整性校验失败。");
     }
     digest.fill(0);
-    tail.fill(0);
-    tail = EMPTY_BYTES;
     return collector.finish();
   } catch (error) {
-    tail.fill(0);
+    void reader?.cancel().catch(() => undefined);
     collector.destroy();
     throw error;
   } finally {
+    current.fill(0);
+    clearChunks(chunks);
+    expectedMac.fill(0);
+    iv.fill(0);
     signal.removeEventListener("abort", onAbort);
     reader?.releaseLock();
   }
-}
-
-function consumeDownloadedBytes(
-  value: Uint8Array,
-  previousTail: Uint8Array,
-  previousTotal: number,
-  maximumBytes: number,
-  hmac: { update(data: Uint8Array): unknown },
-  collector: CiphertextCollector
-): { tail: Uint8Array; total: number } {
-  const total = previousTotal + value.length;
-  if (!Number.isSafeInteger(total) || total > maximumBytes) {
-    throw attachmentError("bitwarden-attachment-too-large", "Bitwarden 附件密文超过安全上限。");
-  }
-  const combined = new Uint8Array(previousTail.length + value.length);
-  combined.set(previousTail);
-  combined.set(value, previousTail.length);
-  previousTail.fill(0);
-  const releasedLength = Math.max(0, combined.length - ATTACHMENT_MAC_BYTES);
-  if (releasedLength) {
-    const released = combined.subarray(0, releasedLength);
-    hmac.update(released);
-    collector.append(released);
-  }
-  const tail = combined.slice(releasedLength);
-  combined.fill(0);
-  return { tail, total };
 }
 
 class CiphertextCollector {
@@ -604,11 +637,11 @@ function parseRawAttachments(rawCipher: Record<string, unknown>, maximumCipherte
   });
 }
 
-async function attachmentSummary(attachment: RawAttachment, cipherKey: BitwardenSymmetricKey): Promise<ProviderAttachmentSummary> {
+async function attachmentSummary(attachment: RawAttachment, cipherKey: BitwardenSymmetricKey, requireReadableFileName = false): Promise<ProviderAttachmentSummary> {
   return {
     attachmentId: attachment.id,
     providerKind: "bitwarden",
-    fileName: await decryptAttachmentFileName(attachment.encryptedFileName, cipherKey),
+    fileName: await decryptAttachmentFileName(attachment.encryptedFileName, cipherKey, requireReadableFileName),
     sizeBytes: attachment.declaredCiphertextBytes,
     protected: true
   };
@@ -644,13 +677,18 @@ function reconcileDownloadInfo(
   };
 }
 
-async function decryptAttachmentFileName(value: string | undefined, key: BitwardenSymmetricKey): Promise<string> {
+async function decryptAttachmentFileName(value: string | undefined, key: BitwardenSymmetricKey, requireReadableFileName = false): Promise<string> {
   if (!value) throw attachmentError("bitwarden-attachment-metadata-invalid", "Bitwarden 附件缺少加密文件名。");
   let fileName: string;
   try {
     fileName = await decryptBitwardenString(value, key);
   } catch {
-    throw attachmentError("bitwarden-attachment-name-invalid", "Bitwarden 附件文件名无法解密。");
+    if (requireReadableFileName && BITWARDEN_CIPHER_STRING_PATTERN.test(value))
+      throw attachmentError('bitwarden-attachment-name-unreadable', 'Bitwarden 附件文件名无法解密，不能完整复制；来源文件已保留。');
+    // Older Monica/Bitwarden records can contain plaintext attachment names. A value that
+    // still has CipherString syntax must never be exposed when its key is unavailable or
+    // invalid, but the attachment body remains useful for content-validated Steam recovery.
+    fileName = BITWARDEN_CIPHER_STRING_PATTERN.test(value) ? UNREADABLE_ENCRYPTED_FILE_NAME : value;
   }
   const bytes = new TextEncoder().encode(fileName).length;
   if (!fileName || bytes > MAX_FILE_NAME_BYTES || /[\u0000-\u001f\u007f]/.test(fileName)) {
@@ -659,10 +697,10 @@ async function decryptAttachmentFileName(value: string | undefined, key: Bitward
   return fileName;
 }
 
-function validateSignedDownloadUrl(raw: string): string {
+function validateSignedDownloadUrl(raw: string, apiUrl?: string): string {
   let parsed: URL;
   try {
-    parsed = new URL(raw);
+    parsed = new URL(raw, apiUrl);
   } catch {
     throw attachmentError("bitwarden-attachment-url-invalid", "Bitwarden 附件签名地址无效。");
   }
@@ -673,6 +711,34 @@ function validateSignedDownloadUrl(raw: string): string {
     throw attachmentError("bitwarden-attachment-url-invalid", "Bitwarden 附件签名地址必须使用 HTTPS。");
   }
   return parsed.toString();
+}
+
+function sameOrigin(left: string, right: string): boolean {
+  try { return new URL(left).origin === new URL(right).origin; } catch { return false; }
+}
+
+/**
+ * Vaultwarden installations hosted below a reverse-proxy prefix can return an
+ * object URL without that prefix. Keep the signed URL first, then retry only
+ * the safe same-origin prefixed variant when the object server responds 404.
+ */
+function attachmentDownloadCandidates(signedUrl: string, apiUrl?: string): string[] {
+  if (!apiUrl || !sameOrigin(signedUrl, apiUrl)) return [signedUrl];
+  try {
+    const signed = new URL(signedUrl);
+    const api = new URL(apiUrl);
+    const normalizedApiPath = api.pathname.replace(/\/+$/, "");
+    const apiDirectory = normalizedApiPath && normalizedApiPath !== "/"
+      ? normalizedApiPath
+      : "";
+    if (!apiDirectory || apiDirectory === "/" || signed.pathname.startsWith(`${apiDirectory}/`)) return [signedUrl];
+    const prefixed = new URL(signedUrl);
+    prefixed.pathname = `${apiDirectory}${signed.pathname.startsWith("/") ? signed.pathname : `/${signed.pathname}`}`;
+    const candidate = prefixed.toString();
+    return candidate === signedUrl ? [signedUrl] : [signedUrl, candidate];
+  } catch {
+    return [signedUrl];
+  }
 }
 
 function validateLimits(input: BitwardenAttachmentDownloadLimits): BitwardenAttachmentDownloadLimits {

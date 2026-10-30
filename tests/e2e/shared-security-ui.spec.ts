@@ -1,4 +1,6 @@
-import { chromium, expect, test, type BrowserContext, type Locator, type Page } from "@playwright/test";
+import { launchTestContext } from './fixtures/edge';
+import { dialogContent } from "./fixtures/material";
+import { expect, test, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import path from "node:path";
 
 const PROVIDER_ID = "shared-webdav-provider";
@@ -8,9 +10,9 @@ test("shared provider and Windows Hello actions use secret-free retry-safe M3E c
   let context: BrowserContext | undefined;
   const nativeDialogs: string[] = [];
   try {
-    context = await chromium.launchPersistentContext(testInfo.outputPath("shared-security-ui-profile"), {
+    context = await launchTestContext(testInfo.outputPath("shared-security-ui-profile"), {
       channel: "chromium",
-      headless: true,
+      headless: true, locale: "zh-CN",
       colorScheme: "dark",
       reducedMotion: "reduce",
       viewport: { width: 375, height: 1000 },
@@ -124,7 +126,7 @@ test("shared provider and Windows Hello actions use secret-free retry-safe M3E c
     await expectSecretsAbsent(manager);
 
     await providerCard.getByRole("button", { name: "采用 Android 版本" }).click();
-    const conflictDialog = manager.getByRole("dialog", { name: "采用 Android 版本？" });
+    const conflictDialog = dialogContent(manager, { name: "采用 Android 版本？" });
     await expect(conflictDialog).toBeVisible();
     await expectFourRoundedCorners(conflictDialog, "16px");
     await expect(conflictDialog.getByRole("button", { name: "取消" })).toBeFocused();
@@ -137,7 +139,7 @@ test("shared provider and Windows Hello actions use secret-free retry-safe M3E c
 
     const removeButton = providerCard.getByRole("button", { name: "移除 WebDAV" });
     await removeButton.click();
-    const removeDialog = manager.getByRole("dialog", { name: "移除“Android 共享库”？" });
+    const removeDialog = dialogContent(manager, { name: "移除“Android 共享库”？" });
     await expect(removeDialog).toBeVisible();
     await expectFourRoundedCorners(removeDialog, "16px");
     await expectNoGradients(removeDialog);
@@ -150,25 +152,26 @@ test("shared provider and Windows Hello actions use secret-free retry-safe M3E c
     await expect(providerCard).toHaveCount(0);
 
     await openMobileSection(manager, "设置与备份");
+    await manager.locator('[data-settings-entry="protection"]').click();
     const helloCard = manager.locator(".windows-hello-card");
     await expectNoGradients(helloCard);
-    const enrollButton = helloCard.getByRole("button", { name: "注册 Windows Hello" });
+    const enrollButton = helloCard.getByRole("button", { name: "注册 Windows Hello 本机凭据" });
     await expect(enrollButton).toBeEnabled();
     await enrollButton.click();
-    const enrollDialog = manager.getByRole("dialog", { name: "注册 Windows Hello？" });
+    const enrollDialog = dialogContent(manager, { name: "注册 Windows Hello？" });
     await expect(enrollDialog.getByRole("button", { name: "取消" })).toBeFocused();
     await manager.keyboard.press("Escape");
     await expect(enrollDialog).toHaveCount(0);
     await expect(enrollButton).toBeFocused();
 
     await enrollButton.click();
-    const enrollRetry = manager.getByRole("dialog", { name: "注册 Windows Hello？" });
+    const enrollRetry = dialogContent(manager, { name: "注册 Windows Hello？" });
     await enrollRetry.getByRole("button", { name: "确认注册 Windows Hello" }).click();
     await expect(enrollRetry).toHaveCount(0);
     await expect(helloCard.getByText("已注册", { exact: true })).toBeVisible();
 
     await helloCard.getByRole("button", { name: "撤销本机绑定" }).click();
-    const revokeDialog = manager.getByRole("dialog", { name: "撤销本机 Windows Hello 绑定？" });
+    const revokeDialog = dialogContent(manager, { name: "撤销本机 Windows Hello 绑定？" });
     await expectFourRoundedCorners(revokeDialog, "16px");
     await expectNoGradients(revokeDialog);
     await revokeDialog.getByRole("button", { name: "确认撤销本机绑定" }).click();
@@ -190,8 +193,9 @@ test("shared provider and Windows Hello actions use secret-free retry-safe M3E c
 
 async function openMobileSection(page: Page, name: string): Promise<void> {
   const openNavigation = page.getByRole("button", { name: "打开导航" });
-  if (await openNavigation.isVisible()) await openNavigation.click();
-  await page.getByRole("button", { name }).click();
+  await expect(openNavigation).toBeVisible();
+  await openNavigation.click();
+  await page.getByRole("navigation", { name: "主导航" }).getByRole("button", { name }).click();
 }
 
 async function expectNoHorizontalOverflow(locator: Locator): Promise<void> {

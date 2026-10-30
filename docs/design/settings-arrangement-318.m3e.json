@@ -1,0 +1,715 @@
+{
+  "title": "Monica · 直接设置与分组",
+  "brief": "通用、同步与填充、密码库与安全三组连续M3E行；24px外圆角、4px相邻圆角、4px间隔、横向16px纵向8px内边距；普通字号主要行约72px，组间20px，语言与模式不预留空提示行。语言和显示模式直接选择，同步和自动填充直接开关；仅配色、排除项、解锁与保护、备份与迁移进入二级页。Hello与保护方式合并，备份与迁移合并，安全说明回到对应功能附近。沿用Monica青绿与系统字体，桌面/窄屏保持单列信息顺序。 下拉设置不再嵌套亮色胶囊包边；鼠标悬停及菜单展开时整行轻微提亮，选择结束移开鼠标后恢复。Tab定位仅在整行外缘显示单层焦点，菜单选项保留键盘提示，高对比度使用系统Highlight。",
+  "frame": "phone",
+  "platform": "web",
+  "paletteKey": "teal",
+  "theme": {
+    "dark": true,
+    "bothModes": true,
+    "contrast": "standard",
+    "shape": "rounded",
+    "font": "system",
+    "emphasized": true,
+    "motion": "standard"
+  },
+  "frames": [
+    {
+      "id": "settingsdirect318",
+      "name": "设置与备份",
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 896
+    },
+    {
+      "id": "settingssecurity318",
+      "name": "解锁与保护",
+      "x": 430,
+      "y": 0,
+      "w": 390,
+      "h": 828
+    },
+    {
+      "id": "settingsdata318",
+      "name": "备份与迁移",
+      "x": 860,
+      "y": 0,
+      "w": 390,
+      "h": 632
+    }
+  ],
+  "groups": [
+    {
+      "id": "settingsdirect318-group-0",
+      "frameId": "settingsdirect318",
+      "x": 12,
+      "y": 12,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "settingsdirect318-0-0",
+          "size": 366,
+          "radius": 4,
+          "corners": {
+            "tl": 24,
+            "tr": 24,
+            "bl": 24,
+            "br": 24
+          },
+          "variant": "filled",
+          "icon": "settings",
+          "kind": "topAppBar",
+          "label": "设置与备份"
+        }
+      ]
+    },
+    {
+      "id": "settingsdirect318-heading-1",
+      "frameId": "settingsdirect318",
+      "x": 16,
+      "y": 104,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "settingsdirect318-label-1",
+          "size": 14,
+          "kind": "text",
+          "label": "通用",
+          "variant": "filled",
+          "icon": null,
+          "radius": 0,
+          "textStyle": "titleSmall",
+          "fill": "surface"
+        }
+      ]
+    },
+    {
+      "id": "settingsdirect318-group-1",
+      "frameId": "settingsdirect318",
+      "x": 12,
+      "y": 148,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "settingsdirect318-1-0",
+          "size": 366,
+          "radius": 4,
+          "corners": {
+            "tl": 24,
+            "tr": 24,
+            "bl": 4,
+            "br": 4
+          },
+          "variant": "filled",
+          "icon": null,
+          "kind": "select",
+          "label": "界面语言",
+          "tabs": [
+            {
+              "label": "跟随浏览器",
+              "icon": null
+            },
+            {
+              "label": "简体中文",
+              "icon": null
+            },
+            {
+              "label": "English",
+              "icon": null
+            }
+          ],
+          "selected": 0
+        },
+        {
+          "id": "settingsdirect318-1-1",
+          "size": 366,
+          "radius": 4,
+          "corners": {
+            "tl": 4,
+            "tr": 4,
+            "bl": 4,
+            "br": 4
+          },
+          "variant": "filled",
+          "icon": null,
+          "kind": "select",
+          "label": "显示模式",
+          "tabs": [
+            {
+              "label": "跟随系统",
+              "icon": null
+            },
+            {
+              "label": "浅色",
+              "icon": null
+            },
+            {
+              "label": "深色",
+              "icon": null
+            }
+          ],
+          "selected": 0
+        },
+        {
+          "id": "settingsdirect318-1-2",
+          "size": 366,
+          "radius": 4,
+          "corners": {
+            "tl": 4,
+            "tr": 4,
+            "bl": 24,
+            "br": 24
+          },
+          "variant": "filled",
+          "icon": "palette",
+          "kind": "listItem",
+          "label": "配色",
+          "supporting": "Monica",
+          "icon2": "chevron_right"
+        }
+      ]
+    },
+    {
+      "id": "settingsdirect318-heading-2",
+      "frameId": "settingsdirect318",
+      "x": 16,
+      "y": 368,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "settingsdirect318-label-2",
+          "size": 14,
+          "kind": "text",
+          "label": "同步与填充",
+          "variant": "filled",
+          "icon": null,
+          "radius": 0,
+          "textStyle": "titleSmall",
+          "fill": "surface"
+        }
+      ]
+    },
+    {
+      "id": "settingsdirect318-group-2",
+      "frameId": "settingsdirect318",
+      "x": 12,
+      "y": 412,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "settingsdirect318-2-0",
+          "size": 366,
+          "radius": 4,
+          "corners": {
+            "tl": 24,
+            "tr": 24,
+            "bl": 4,
+            "br": 4
+          },
+          "variant": "filled",
+          "icon": "sync",
+          "kind": "listItem",
+          "label": "自动同步",
+          "supporting": "锁定后暂停，可随时手动同步",
+          "switch": true,
+          "checked": true
+        },
+        {
+          "id": "settingsdirect318-2-1",
+          "size": 366,
+          "radius": 4,
+          "corners": {
+            "tl": 4,
+            "tr": 4,
+            "bl": 4,
+            "br": 4
+          },
+          "variant": "filled",
+          "icon": "edit",
+          "kind": "listItem",
+          "label": "表单旁自动填充",
+          "supporting": "关闭后仍可从工具栏填写",
+          "switch": true,
+          "checked": true
+        },
+        {
+          "id": "settingsdirect318-2-2",
+          "size": 366,
+          "radius": 4,
+          "corners": {
+            "tl": 4,
+            "tr": 4,
+            "bl": 24,
+            "br": 24
+          },
+          "variant": "filled",
+          "icon": "domain_disabled",
+          "kind": "listItem",
+          "label": "自动填充排除项",
+          "supporting": "自动填充 0 个 · 保存提示 0 个",
+          "icon2": "chevron_right"
+        }
+      ]
+    },
+    {
+      "id": "settingsdirect318-heading-3",
+      "frameId": "settingsdirect318",
+      "x": 16,
+      "y": 664,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "settingsdirect318-label-3",
+          "size": 14,
+          "kind": "text",
+          "label": "密码库与安全",
+          "variant": "filled",
+          "icon": null,
+          "radius": 0,
+          "textStyle": "titleSmall",
+          "fill": "surface"
+        }
+      ]
+    },
+    {
+      "id": "settingsdirect318-group-3",
+      "frameId": "settingsdirect318",
+      "x": 12,
+      "y": 708,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "settingsdirect318-3-0",
+          "size": 366,
+          "radius": 4,
+          "corners": {
+            "tl": 24,
+            "tr": 24,
+            "bl": 4,
+            "br": 4
+          },
+          "variant": "filled",
+          "icon": "key_vertical",
+          "kind": "listItem",
+          "label": "解锁与保护",
+          "supporting": "主密码 · Windows Hello 未注册",
+          "icon2": "chevron_right"
+        },
+        {
+          "id": "settingsdirect318-3-1",
+          "size": 366,
+          "radius": 4,
+          "corners": {
+            "tl": 4,
+            "tr": 4,
+            "bl": 24,
+            "br": 24
+          },
+          "variant": "filled",
+          "icon": "encrypted",
+          "kind": "listItem",
+          "label": "备份与迁移",
+          "supporting": "加密备份、恢复与 JSON / CSV 迁移",
+          "icon2": "chevron_right"
+        }
+      ]
+    },
+    {
+      "id": "settingssecurity318-group-0",
+      "frameId": "settingssecurity318",
+      "x": 442,
+      "y": 12,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "settingssecurity318-0-0",
+          "size": 366,
+          "radius": 4,
+          "corners": {
+            "tl": 24,
+            "tr": 24,
+            "bl": 24,
+            "br": 24
+          },
+          "variant": "filled",
+          "icon": "arrow_back",
+          "kind": "topAppBar",
+          "label": "解锁与保护"
+        }
+      ]
+    },
+    {
+      "id": "settingssecurity318-heading-1",
+      "frameId": "settingssecurity318",
+      "x": 446,
+      "y": 104,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "settingssecurity318-label-1",
+          "size": 14,
+          "kind": "text",
+          "label": "更改保护方式",
+          "variant": "filled",
+          "icon": null,
+          "radius": 0,
+          "textStyle": "titleSmall",
+          "fill": "surface"
+        }
+      ]
+    },
+    {
+      "id": "settingssecurity318-group-1",
+      "frameId": "settingssecurity318",
+      "x": 442,
+      "y": 148,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "settingssecurity318-1-0",
+          "size": 366,
+          "radius": 4,
+          "corners": {
+            "tl": 24,
+            "tr": 24,
+            "bl": 4,
+            "br": 4
+          },
+          "variant": "filled",
+          "icon": null,
+          "kind": "textField",
+          "label": "当前主密码"
+        },
+        {
+          "id": "settingssecurity318-1-1",
+          "size": 366,
+          "radius": 4,
+          "corners": {
+            "tl": 4,
+            "tr": 4,
+            "bl": 4,
+            "br": 4
+          },
+          "variant": "filled",
+          "icon": null,
+          "kind": "textField",
+          "label": "新主密码（可选）"
+        },
+        {
+          "id": "settingssecurity318-1-2",
+          "size": 366,
+          "radius": 4,
+          "corners": {
+            "tl": 4,
+            "tr": 4,
+            "bl": 4,
+            "br": 4
+          },
+          "variant": "filled",
+          "icon": null,
+          "kind": "textField",
+          "label": "确认新主密码"
+        },
+        {
+          "id": "settingssecurity318-1-3",
+          "size": 366,
+          "radius": 4,
+          "corners": {
+            "tl": 4,
+            "tr": 4,
+            "bl": 24,
+            "br": 24
+          },
+          "variant": "filled",
+          "icon": "check",
+          "kind": "button",
+          "label": "更改主密码"
+        }
+      ]
+    },
+    {
+      "id": "settingssecurity318-heading-2",
+      "frameId": "settingssecurity318",
+      "x": 446,
+      "y": 452,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "settingssecurity318-label-2",
+          "size": 14,
+          "kind": "text",
+          "label": "Windows Hello",
+          "variant": "filled",
+          "icon": null,
+          "radius": 0,
+          "textStyle": "titleSmall",
+          "fill": "surface"
+        }
+      ]
+    },
+    {
+      "id": "settingssecurity318-group-2",
+      "frameId": "settingssecurity318",
+      "x": 442,
+      "y": 496,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "settingssecurity318-2-0",
+          "size": 366,
+          "radius": 4,
+          "corners": {
+            "tl": 24,
+            "tr": 24,
+            "bl": 4,
+            "br": 4
+          },
+          "variant": "filled",
+          "icon": "fingerprint",
+          "kind": "listItem",
+          "label": "设备不可用",
+          "supporting": "当前密码库未注册"
+        },
+        {
+          "id": "settingssecurity318-2-1",
+          "size": 366,
+          "radius": 4,
+          "corners": {
+            "tl": 4,
+            "tr": 4,
+            "bl": 24,
+            "br": 24
+          },
+          "variant": "filled",
+          "icon": "refresh",
+          "kind": "button",
+          "label": "刷新状态"
+        }
+      ]
+    },
+    {
+      "id": "settingssecurity318-heading-3",
+      "frameId": "settingssecurity318",
+      "x": 446,
+      "y": 672,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "settingssecurity318-label-3",
+          "size": 14,
+          "kind": "text",
+          "label": "安全说明",
+          "variant": "filled",
+          "icon": null,
+          "radius": 0,
+          "textStyle": "titleSmall",
+          "fill": "surface"
+        }
+      ]
+    },
+    {
+      "id": "settingssecurity318-group-3",
+      "frameId": "settingssecurity318",
+      "x": 442,
+      "y": 716,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "settingssecurity318-3-0",
+          "size": 366,
+          "radius": 4,
+          "corners": {
+            "tl": 24,
+            "tr": 24,
+            "bl": 24,
+            "br": 24
+          },
+          "variant": "filled",
+          "icon": "security",
+          "kind": "listItem",
+          "label": "推荐使用长而独立的主密码",
+          "supporting": "设备密钥依赖浏览器与系统保护"
+        }
+      ]
+    },
+    {
+      "id": "settingsdata318-group-0",
+      "frameId": "settingsdata318",
+      "x": 872,
+      "y": 12,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "settingsdata318-0-0",
+          "size": 366,
+          "radius": 4,
+          "corners": {
+            "tl": 24,
+            "tr": 24,
+            "bl": 24,
+            "br": 24
+          },
+          "variant": "filled",
+          "icon": "arrow_back",
+          "kind": "topAppBar",
+          "label": "备份与迁移"
+        }
+      ]
+    },
+    {
+      "id": "settingsdata318-heading-1",
+      "frameId": "settingsdata318",
+      "x": 876,
+      "y": 104,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "settingsdata318-label-1",
+          "size": 14,
+          "kind": "text",
+          "label": "加密整库备份",
+          "variant": "filled",
+          "icon": null,
+          "radius": 0,
+          "textStyle": "titleSmall",
+          "fill": "surface"
+        }
+      ]
+    },
+    {
+      "id": "settingsdata318-group-1",
+      "frameId": "settingsdata318",
+      "x": 872,
+      "y": 148,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "settingsdata318-1-0",
+          "size": 366,
+          "radius": 4,
+          "corners": {
+            "tl": 24,
+            "tr": 24,
+            "bl": 4,
+            "br": 4
+          },
+          "variant": "filled",
+          "icon": "encrypted",
+          "kind": "button",
+          "label": "导出加密整库备份"
+        },
+        {
+          "id": "settingsdata318-1-1",
+          "size": 366,
+          "radius": 4,
+          "corners": {
+            "tl": 4,
+            "tr": 4,
+            "bl": 24,
+            "br": 24
+          },
+          "variant": "filled",
+          "icon": "upload",
+          "kind": "button",
+          "label": "选择加密整库备份"
+        }
+      ]
+    },
+    {
+      "id": "settingsdata318-heading-2",
+      "frameId": "settingsdata318",
+      "x": 876,
+      "y": 324,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "settingsdata318-label-2",
+          "size": 14,
+          "kind": "text",
+          "label": "明文手动迁移",
+          "variant": "filled",
+          "icon": null,
+          "radius": 0,
+          "textStyle": "titleSmall",
+          "fill": "surface"
+        }
+      ]
+    },
+    {
+      "id": "settingsdata318-group-2",
+      "frameId": "settingsdata318",
+      "x": 872,
+      "y": 368,
+      "axis": "y",
+      "gap": 4,
+      "items": [
+        {
+          "id": "settingsdata318-2-0",
+          "size": 366,
+          "radius": 4,
+          "corners": {
+            "tl": 24,
+            "tr": 24,
+            "bl": 4,
+            "br": 4
+          },
+          "variant": "filled",
+          "icon": "warning",
+          "kind": "listItem",
+          "label": "明文文件包含密码等敏感信息",
+          "supporting": "仅保存到可信位置，迁移完成后妥善处理"
+        },
+        {
+          "id": "settingsdata318-2-1",
+          "size": 366,
+          "radius": 4,
+          "corners": {
+            "tl": 4,
+            "tr": 4,
+            "bl": 4,
+            "br": 4
+          },
+          "variant": "filled",
+          "icon": "download",
+          "kind": "button",
+          "label": "导出 JSON"
+        },
+        {
+          "id": "settingsdata318-2-2",
+          "size": 366,
+          "radius": 4,
+          "corners": {
+            "tl": 4,
+            "tr": 4,
+            "bl": 24,
+            "br": 24
+          },
+          "variant": "filled",
+          "icon": "upload",
+          "kind": "button",
+          "label": "导入明文 JSON / CSV"
+        }
+      ]
+    }
+  ],
+  "dynamicColor": false
+}

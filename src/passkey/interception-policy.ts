@@ -1,3 +1,12 @@
+import { selectPasskeyRegistrationAlgorithm } from "./registration-policy";
+
+/** Edge's JSON parser materializes this optional boolean even when it was omitted. */
+export function requestedPasskeyExtensionNames(extensions?: AuthenticationExtensionsClientInputs): string[] {
+  return Object.entries(extensions || {})
+    .filter(([name, value]) => !(name === "enforceCredentialProtectionPolicy" && value === false))
+    .map(([name]) => name);
+}
+
 export interface PasskeyCreateInterceptionInput {
   topLevel: boolean;
   authenticatorAttachment?: string | null;
@@ -15,23 +24,20 @@ export interface PasskeyGetInterceptionInput {
 }
 
 /**
- * Monica currently provides user presence through its confirmation dialog,
- * but it does not yet have a trusted OS re-authentication surface. Requests
- * that require UV therefore remain with the browser's native authenticator.
+ * UV-required requests enter Monica for fresh master-password or Windows Hello
+ * verification. Without either, the bridge keeps the browser authenticator available.
  */
 export function shouldInterceptPasskeyCreate(input: PasskeyCreateInterceptionInput): boolean {
   return input.topLevel
     && input.authenticatorAttachment !== "cross-platform"
-    && input.userVerification !== "required"
     && input.extensionNames.every((name) => name === "credProps")
-    && input.algorithms.includes(-7);
+    && selectPasskeyRegistrationAlgorithm(input.algorithms) !== undefined;
 }
 
 export function shouldInterceptPasskeyGet(input: PasskeyGetInterceptionInput): boolean {
   return input.topLevel
     && input.mediation !== "conditional"
     && input.mediation !== "silent"
-    && input.userVerification !== "required"
     && input.extensionNames.length === 0
     && !input.externalOnly;
 }

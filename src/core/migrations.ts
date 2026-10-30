@@ -1,6 +1,16 @@
 import type { LoginItem, LoginUriMatchType, ProviderMutationReceipt, ProviderSourceRecord, VaultItem, VaultState, WindowsHelloBinding } from "./model";
+import { normalizeSitePolicy } from "../autofill/site-policy";
+import { normalizeBlockedFieldSignatures } from "../autofill/field-policy";
+import { normalizeHomePreferences } from "./home-preferences";
+import { readBitwardenCipherCopies } from './bitwarden-transfer-journal';
+import { readBitwardenBatches } from './bitwarden-batch-transfer';
+import { readNearbyPreferences } from '../nearby/preferences';
+import { readNearbyNativeJournal } from '../nearby/native-journal';
+import { readNearbyLocalMetadata } from '../nearby/local-metadata';
+import { readNearbyRetainedLocals } from '../nearby/local-adoption';
+import { repairPersistedTotpParameters } from '../nearby/local-totp-repair';
 
-const URI_MATCH_TYPES = new Set<LoginUriMatchType>(["base-domain", "domain", "starts-with", "exact", "regex", "never"]);
+const URI_MATCH_TYPES = new Set<LoginUriMatchType>(["default", "base-domain", "host", "domain", "starts-with", "exact", "regex", "never"]);
 const LEGACY_MDBX_MESSAGE = "此密码源使用 Monica Extension 已停用的 MDBX1 实现。请使用 Monica Android 或桌面端升级为 MDBX2 后重新连接。";
 export const MAX_SOURCE_RECORD_TAG_LENGTH = 64;
 
@@ -13,28 +23,56 @@ export function migrateVaultState(input: unknown): VaultState {
   const items = Array.isArray(raw.items) ? raw.items.map(migrateItem) : raw.items;
   let providers = Array.isArray(raw.providers) ? raw.providers.map(migrateProvider) : raw.providers;
   let settings = raw.settings && typeof raw.settings === "object" && !Array.isArray(raw.settings)
-    ? {
-        ...(raw.settings as Record<string, unknown>),
-        protectionMode: normalizeProtectionMode((raw.settings as Record<string, unknown>).protectionMode),
-        windowsHello: normalizeWindowsHelloBinding((raw.settings as Record<string, unknown>).windowsHello)
-      }
+    ? normalizeSettings(raw.settings as Record<string, unknown>)
     : raw.settings;
   ({ providers, settings } = normalizeDefaultProvider(providers, settings));
   const sourceRecords = Array.isArray(raw.sourceRecords) ? raw.sourceRecords.filter(validSourceRecord).map((record) => ({ ...record })) : [];
+  // Discarding an unknown/corrupt receipt can turn a committed remote create
+  // back into a new queued create. Keep the encrypted vault intact and stop.
+  if (raw.providerMutationReceipts !== undefined && (!Array.isArray(raw.providerMutationReceipts)
+    || raw.providerMutationReceipts.some(receipt => !validProviderMutationReceipt(receipt))))
+    throw new Error('密码源持久同步回执无效或版本不受支持，已停止读取以保留恢复记录。');
 
-  return {
+  const state = {
     ...raw,
+    ...(raw.nearbyNativeJournal === undefined ? {} : { nearbyNativeJournal: readNearbyNativeJournal(raw.nearbyNativeJournal) }),
+    ...(raw.nearbyPreferences === undefined ? {} : { nearbyPreferences: readNearbyPreferences(raw.nearbyPreferences) }),
+    ...(raw.nearbyLocalMetadata === undefined ? {} : { nearbyLocalMetadata: readNearbyLocalMetadata(raw.nearbyLocalMetadata) }),
+    ...(raw.nearbyRetainedLocals === undefined ? {} : { nearbyRetainedLocals: readNearbyRetainedLocals(raw.nearbyRetainedLocals) }),
+    ...(raw.bitwardenCipherCopies === undefined ? {} : { bitwardenCipherCopies: readBitwardenCipherCopies(raw.bitwardenCipherCopies) }),
+    ...(raw.bitwardenBatchTransfers === undefined ? {} : { bitwardenBatchTransfers: readBitwardenBatches(raw.bitwardenBatchTransfers) }),
     schemaVersion: 2,
     items,
     providers,
     settings,
     providerMutationReceipts: Array.isArray(raw.providerMutationReceipts)
-      ? raw.providerMutationReceipts.filter(validProviderMutationReceipt).map((receipt) => ({ ...receipt }))
+      ? raw.providerMutationReceipts.map((receipt) => ({ ...receipt }))
       : [],
     providerConflicts: Array.isArray(raw.providerConflicts) ? raw.providerConflicts : [],
     providerDiagnostics: Array.isArray(raw.providerDiagnostics) ? raw.providerDiagnostics : [],
     sourceRecords
   } as VaultState;
+  repairPersistedTotpParameters(state);
+  return state;
+}
+
+function normalizeSettings(raw: Record<string, unknown>): Record<string, unknown> {
+  const policy = normalizeSitePolicy({
+    blockedHosts: raw.autofillBlockedHosts === undefined ? [] : raw.autofillBlockedHosts as string[],
+    saveBlockedHosts: raw.saveBlockedHosts === undefined ? [] : raw.saveBlockedHosts as string[]
+  });
+  return {
+    ...raw,
+    protectionMode: normalizeProtectionMode(raw.protectionMode),
+    lockedAutofillItemIds: Array.isArray(raw.lockedAutofillItemIds)
+      ? [...new Set(raw.lockedAutofillItemIds.filter((id): id is string => typeof id === "string" && id.length > 0 && id.length <= 256))]
+      : [],
+    windowsHello: normalizeWindowsHelloBinding(raw.windowsHello),
+    ...(raw.home === undefined ? {} : { home: normalizeHomePreferences(raw.home) }),
+    autofillBlockedHosts: policy.blockedHosts,
+    saveBlockedHosts: policy.saveBlockedHosts,
+    autofillBlockedFieldSignatures: normalizeBlockedFieldSignatures(raw.autofillBlockedFieldSignatures === undefined ? [] : raw.autofillBlockedFieldSignatures)
+  };
 }
 
 function migrateProvider(value: unknown): unknown {
@@ -97,7 +135,7 @@ function migrateItem(value: unknown): unknown {
     const rule = candidate as Record<string, unknown>;
     if (typeof rule.uri !== "string" || !rule.uri.trim()) return [];
     const matchType = typeof rule.matchType === "string" && URI_MATCH_TYPES.has(rule.matchType as LoginUriMatchType) ? rule.matchType as LoginUriMatchType : "base-domain";
-    return [{ uri: rule.uri.trim(), matchType }];
+    return [{ uri: rule.uri, matchType }];
   }) : [];
   const seen = new Set(existingRules.map((rule) => rule.uri));
   const uriRules = [...existingRules, ...uris.filter((uri) => !seen.has(uri)).map((uri) => ({ uri, matchType: "base-domain" as const }))];
@@ -142,6 +180,7 @@ export function validProviderMutationReceipt(value: unknown): value is ProviderM
   if (receipt.operation !== "create" && receipt.operation !== "update" && receipt.operation !== "delete") return false;
   if (receipt.stage !== "prepared" && receipt.stage !== "attempted" && receipt.stage !== "committed") return false;
   if (typeof receipt.intentFingerprint !== "string" || !/^[a-f0-9]{64}$/.test(receipt.intentFingerprint)) return false;
+  if (receipt.fingerprintVersion !== undefined && receipt.fingerprintVersion !== 1 && receipt.fingerprintVersion !== 2) return false;
   if (receipt.remoteId !== undefined && !bounded(receipt.remoteId, 4096)) return false;
   if (receipt.baseRevision !== undefined && !bounded(receipt.baseRevision, 1024)) return false;
   if (!Number.isSafeInteger(receipt.attemptCount) || Number(receipt.attemptCount) < 0 || Number(receipt.attemptCount) > 16) return false;

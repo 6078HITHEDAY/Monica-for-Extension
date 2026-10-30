@@ -1,0 +1,140 @@
+/* Connected lists and a visible database scope, adapted from the M3E Canvas
+   layout patterns. All palettes share the Material 3 Expressive hierarchy. */
+#root .page-view:has(> .vault-browse-bar) > .page-heading { padding-block: 20px; }
+#root .page-view:has(> .vault-browse-bar) > .page-heading h1 { font-size: clamp(1.75rem, 3vw, 2.25rem); }
+#root .vault-browse-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; min-width: 0; margin: 0 0 12px; }
+#root .vault-browse-bar > m3e-button { flex: 0 0 auto; max-width: 100%; }
+#root .vault-result-count { flex: 1; margin: 0; text-align: end; color: var(--app-muted); font: 400 .75rem/1.5 var(--font-data); }
+
+#root .vault-list-card {
+  --m3e-card-padding: 0;
+  --m3e-card-container-color: transparent;
+  --m3e-filled-card-container-color: transparent;
+  background: transparent;
+  border: 0;
+}
+#root .vault-list-card .item-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 3px; padding: 0; }
+#root .vault-list-card .item-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, .85fr) minmax(7rem, .6fr) 132px;
+  align-items: center;
+  gap: 12px;
+  min-height: 72px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 4px;
+  background: var(--app-surface);
+  box-shadow: none;
+}
+#root .vault-list-card .item-card:first-child { border-start-start-radius: 12px; border-start-end-radius: 12px; }
+#root .vault-list-card .item-card:last-child { border-end-start-radius: 12px; border-end-end-radius: 12px; }
+#root .vault-list-card .item-card:is(:hover, :focus-within) { background: var(--app-surface-high); transform: none; }
+#root .vault-list-card .row-clickable {
+  position: relative;
+  transition: background-color 160ms var(--motion-ease);
+}
+/* The row owns the state surface. Its title remains the keyboard action,
+   while edit/delete keep their own independent buttons and focus rings. */
+#root .vault-list-card .vault-row-focus {
+  border-radius: inherit;
+  --m3e-focus-ring-color: var(--app-primary);
+  z-index: 1;
+}
+#root .vault-list-card .item-card-main {
+  min-width: 0;
+  width: 100%;
+  --m3e-list-item-leading-space: 0;
+  --m3e-list-item-trailing-space: 0;
+  --m3e-list-item-between-space: 12px;
+  --m3e-list-item-one-line-height: 40px;
+  --m3e-list-item-two-line-height: 40px;
+  --m3e-list-item-three-line-height: 40px;
+  --m3e-list-item-one-line-top-space: 0px;
+  --m3e-list-item-one-line-bottom-space: 0px;
+  --m3e-list-item-two-line-top-space: 0px;
+  --m3e-list-item-two-line-bottom-space: 0px;
+  --m3e-list-item-three-line-top-space: 0px;
+  --m3e-list-item-three-line-bottom-space: 0px;
+  --m3e-list-item-container-color: transparent;
+  --m3e-list-item-hover-state-layer-opacity: 0;
+  --m3e-list-item-focus-state-layer-opacity: 0;
+  --m3e-list-item-pressed-state-layer-opacity: 0;
+  --m3e-focus-ring-visibility: hidden;
+}
+#root .vault-list-card .item-card-main > strong { font-size: 1rem; font-weight: 500; line-height: 1.5; overflow-wrap: anywhere; }
+#root .vault-list-card .item-card-main > small { font-size: .8125rem; line-height: 1.5; overflow-wrap: anywhere; }
+#root .vault-list-card .row-icon { flex: 0 0 40px; width: 40px; height: 40px; border: 0; border-radius: 12px; background: var(--app-bg); }
+#root .vault-list-card .item-card-summary { min-width: 0; min-height: 0; overflow: visible; }
+#root .vault-list-card .item-summary-text { font-size: .8125rem; font-weight: 400; line-height: 1.6; color: var(--app-muted); }
+#root .vault-list-card .item-card-meta { min-width: 0; display: grid; justify-content: start; gap: 2px; font-size: .75rem; line-height: 1.4; }
+#root .vault-list-card .item-card-meta time { font: 400 .6875rem/1.5 var(--font-data); }
+#root .vault-list-card .item-card-actions { min-width: 0; flex-wrap: wrap; align-items: center; gap: 0; border: 0; padding: 0; margin: 0; }
+#root .vault-list-card .empty-state { min-height: 240px; margin: 0; padding: 32px 24px; border: 1px solid var(--app-outline); border-radius: 12px; }
+
+#root .lifecycle-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; margin: 0 0 8px; }
+#root .lifecycle-toolbar .danger-action {
+  margin-left: auto;
+  color: var(--md-sys-color-error, #ba1a1a);
+  --m3e-button-label-text-color: var(--md-sys-color-error, #ba1a1a);
+  --m3e-button-hover-label-text-color: var(--md-sys-color-error, #ba1a1a);
+  --m3e-button-focus-label-text-color: var(--md-sys-color-error, #ba1a1a);
+  --m3e-button-pressed-label-text-color: var(--md-sys-color-error, #ba1a1a);
+  --m3e-text-button-label-text-color: var(--md-sys-color-error, #ba1a1a);
+  --m3e-text-button-hover-label-text-color: var(--md-sys-color-error, #ba1a1a);
+  --m3e-text-button-focus-label-text-color: var(--md-sys-color-error, #ba1a1a);
+  --m3e-text-button-pressed-label-text-color: var(--md-sys-color-error, #ba1a1a);
+  --m3e-text-button-icon-color: var(--md-sys-color-error, #ba1a1a);
+  --m3e-text-button-hover-icon-color: var(--md-sys-color-error, #ba1a1a);
+  --m3e-text-button-focus-icon-color: var(--md-sys-color-error, #ba1a1a);
+  --m3e-text-button-pressed-icon-color: var(--md-sys-color-error, #ba1a1a);
+}
+
+@container manager-content (max-width: 58rem) {
+  #root .vault-list-card .item-card { grid-template-columns: minmax(0, 1fr) minmax(7rem, .45fr) 132px; grid-template-areas: 'main meta actions' 'summary meta actions'; gap: 4px 16px; }
+  #root .vault-list-card .item-card-main { grid-area: main; }
+  #root .vault-list-card .item-card-summary { grid-area: summary; padding-inline-start: 52px; }
+  #root .vault-list-card .item-card-meta { grid-area: meta; }
+  #root .vault-list-card .item-card-actions { grid-area: actions; }
+}
+@container manager-content (max-width: 38rem) {
+  #root .vault-list-card .item-card { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: 'main main' 'summary summary' 'meta actions'; gap: 4px 12px; }
+  #root .vault-list-card .item-card-summary { padding-inline-start: 0; }
+  #root .vault-list-card .item-card-meta { gap: 4px; }
+  #root .vault-list-card .item-card-actions { max-width: 176px; }
+  #root .vault-source-select { flex: 1 1 12rem; }
+  #root .vault-result-count { flex: 1 0 auto; }
+}
+@container manager-content (max-width: 24rem) {
+  #root .vault-list-card .item-card { padding: 8px 12px; }
+  #root .vault-list-card .item-card-actions { max-width: 88px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #root .vault-list-card .row-clickable { transition: none; }
+}
+
+/* The bottom surface stays in the viewport; its measured clearance follows the
+   list and pagination, including when actions wrap or text size changes. */
+#root #main-content.item-selection-page { padding-bottom: env(safe-area-inset-bottom, 0px); }
+#root .item-selection-clearance { flex: 0 0 auto; pointer-events: none; }
+#root .item-selection-toolbar { position: fixed; bottom: max(12px, env(safe-area-inset-bottom, 0px)); z-index: 10; transform: translateX(-50%); box-sizing: border-box; max-width: 64rem; max-height: calc(100dvh - 112px); min-width: 0; padding: clamp(8px, 2vw, 16px); margin: 0; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--app-outline); border-radius: 24px; box-shadow: 0 4px 24px rgb(0 0 0 / 18%); background: var(--md-sys-color-secondary-container, var(--app-surface-high)); color: var(--md-sys-color-on-secondary-container, var(--app-text)); }
+#root .item-selection-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+#root .item-selection-heading strong { flex: 1 1 12rem; overflow-wrap: anywhere; }
+#root .item-selection-heading > m3e-button { flex: 0 0 auto; margin-inline-start: auto; }
+#root .item-selection-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+#root .item-selection-actions m3e-button { max-width: 100%; }
+#root .item-selection-check { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 44px; width: 44px; height: 44px; border: 0; border-radius: 50%; background: transparent; color: var(--app-primary); cursor: pointer; }
+#root .item-selection-check:disabled { opacity: .38; cursor: default; }
+#root .item-selection-check:focus-visible { outline: 2px solid var(--app-primary); outline-offset: -2px; }
+#root .vault-list-card .item-card.item-selection-active { grid-template-columns: minmax(0, 1fr) minmax(0, .7fr) minmax(7rem, .5fr) 44px; }
+#root .vault-list-card .item-card.item-selected { background: var(--md-sys-color-secondary-container, var(--app-surface-high)); }
+#root .vault-tile.item-selection-active { position: relative; }
+#root .vault-tile.item-selected { outline: 2px solid var(--app-primary); outline-offset: -2px; --m3e-filled-card-container-color: var(--md-sys-color-secondary-container); }
+#root .item-selection-active { -webkit-user-select: none; user-select: none; }
+@container manager-content (max-width: 58rem) {
+  #root .vault-list-card .item-card.item-selection-active { grid-template-columns: minmax(0, 1fr) minmax(7rem, .45fr) 44px; }
+  #root .vault-list-card .item-selection-check { grid-area: actions; }
+}
+@container manager-content (max-width: 38rem) {
+  #root .vault-list-card .item-card.item-selection-active { grid-template-columns: minmax(0, 1fr) 44px; grid-template-areas: 'main actions' 'summary actions' 'meta actions'; }
+}

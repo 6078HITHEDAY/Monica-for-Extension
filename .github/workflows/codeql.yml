@@ -30,6 +30,20 @@ jobs:
           node-version: 22.14.0
           cache: npm
       - run: npm ci --ignore-scripts
+      # The build refuses to ship without the verified browser engine; build the
+      # pinned package exactly as the CI validate job does.
+      - name: Build the pinned browser MDBX engine
+        shell: bash
+        run: |
+          rustup toolchain install 1.97.0 --profile minimal --target wasm32-unknown-emscripten
+          git clone --no-checkout https://github.com/emscripten-core/emsdk.git .tmp/emsdk
+          git -C .tmp/emsdk checkout --detach eb5eb4b3b2b792f44ded198bfe615c985da5be2c
+          python .tmp/emsdk/emsdk.py install 4.0.18
+          python .tmp/emsdk/emsdk.py activate 4.0.18
+          source .tmp/emsdk/emsdk_env.sh
+          # Include host-target build-script dependencies before offline build.
+          cargo +1.97.0 fetch --locked --manifest-path native/mdbx2-browser/Cargo.toml
+          npm run build:mdbx2-browser
       - run: npm run build
       - uses: github/codeql-action/analyze@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
         with:

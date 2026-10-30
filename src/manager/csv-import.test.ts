@@ -57,12 +57,11 @@ describe("csv import", () => {
     expect(result.items[5]).toMatchObject({ favorite: false });
   });
 
-  it("produces an item with default title for all-empty rows", () => {
+  it("skips all-empty rows instead of creating empty accounts", () => {
     const csv = "name,url,username,password\n,,,\n";
     const result = parseCsvToVaultItems(csv);
-    expect(result.items).toHaveLength(1);
-    expect(result.items[0]).toMatchObject({ title: "导入项目", username: "", password: "" });
-    expect(result.skipped).toBe(0);
+    expect(result.items).toHaveLength(0);
+    expect(result.skipped).toBe(1);
   });
 
   it("returns empty results for empty or header-only input", () => {

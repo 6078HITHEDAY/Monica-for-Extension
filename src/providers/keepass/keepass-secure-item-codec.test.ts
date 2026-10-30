@@ -233,6 +233,36 @@ describe("keePassSecureItemToVaultItem", () => {
       cardType: "PREPAID"
     });
   });
+
+  it("round-trips Android note custom fields through protected MonicaItemData", () => {
+    const original = note({
+      customFields: [
+        { name: "Recovery code", value: "ABCD", protected: true, fieldType: "HIDDEN" },
+        { name: "Pinned", value: "true", protected: false, fieldType: "BOOLEAN" }
+      ]
+    });
+
+    const written = buildKeePassSecureItemFields({ item: original })!;
+    const payload = JSON.parse(keePassFieldText(written.get("MonicaItemData")));
+    expect(payload.customFields).toEqual([
+      { label: "Recovery code", value: "ABCD", type: "HIDDEN" },
+      { label: "Pinned", value: "true", type: "BOOLEAN" }
+    ]);
+
+    const restored = keePassSecureItemToVaultItem(readKeePassSecureItemFields(written)!, base()) as SecureNoteItem;
+    expect(restored.customFields).toEqual(original.customFields);
+  });
+
+  it("decodes an Android authenticator with aliases and an unusable counter instead of failing the entry", () => {
+    const projection = readKeePassSecureItemFields(
+      fields({ Title: "Steam", MonicaItemType: "TOTP", MonicaItemData: secret(JSON.stringify({ key: "gezd gnbv-gy3tqojq", serviceName: "Steam Community", account: "joy", otpType: "TOTP", period: 0, digits: 12, counter: "not-a-number" })) })
+    );
+
+    const item = keePassSecureItemToVaultItem(projection!, base()) as TotpItem;
+
+    expect(item).toMatchObject({ kind: "totp", secret: "GEZDGNBVGY3TQOJQ", issuer: "Steam Community", accountName: "joy", otpType: "STEAM", digits: 5, period: 30, algorithm: "SHA1" });
+    expect(item.counter).toBeUndefined();
+  });
 });
 
 describe("buildKeePassSecureItemFields", () => {
@@ -313,15 +343,17 @@ describe("buildKeePassSecureItemFields", () => {
 
     expect(written.get("otp")).toBeInstanceOf(kdbxweb.ProtectedValue);
     expect(written.get("TOTP Seed")).toBeInstanceOf(kdbxweb.ProtectedValue);
-    expect(written.get("TOTP Settings")).toBe("period=60;digits=6;algorithm=SHA1");
+    expect(written.get("TOTP Settings")).toBe("60;6");
     expect(written.get("OTP Type")).toBe("TOTP");
     expect(written.has("MonicaItemData")).toBe(true);
   });
 
-  it("projects Steam as OTP Type TOTP while MonicaItemData keeps the real type", () => {
+  it("keeps the Steam encoder and avoids advertising native TimeOtp", () => {
     const written = buildKeePassSecureItemFields({ item: totp({ otpType: "STEAM" }) })!;
 
-    expect(written.get("OTP Type")).toBe("TOTP");
+    expect(written.get("OTP Type")).toBe("STEAM");
+    expect(written.has("TimeOtp-Secret-Base32")).toBe(false);
+    expect(keePassFieldText(written.get("otp"))).toContain("encoder=steam");
     expect(JSON.parse(keePassFieldText(written.get("MonicaItemData"))).otpType).toBe("STEAM");
   });
 
@@ -405,12 +437,12 @@ describe("buildKeePassSecureItemPatch", () => {
    * counter left by an HOTP entry survives a switch to TOTP on Android too. Asserted rather than fixed:
    * diverging would make the browser delete a field Android keeps.
    */
-  it("leaves a stale HOTP Counter behind when switching to TOTP, exactly as Android does", () => {
+  it("removes stale HOTP fields when switching to TOTP", () => {
     const existing = fields({ Title: "GitHub", MonicaItemType: "TOTP", "HOTP Counter": "3" });
 
     const updated = applyKeePassFieldPatch(existing, buildKeePassSecureItemPatch({ item: totp() })!);
 
-    expect(updated.get("HOTP Counter")).toBe("3");
+    expect(updated.has("HOTP Counter")).toBe(false);
     expect(updated.get("OTP Type")).toBe("TOTP");
   });
 
@@ -435,7 +467,8 @@ describe("readKeePassSecureItemCustomFields", () => {
 
     expect(custom).toEqual([
       { name: "Recovery code", value: "ABCD", protected: true, fieldType: "HIDDEN" },
-      { name: "Branch", value: "001", protected: false, fieldType: "TEXT" }
+      { name: "Branch", value: "001", protected: false, fieldType: "TEXT" },
+      { name: "Blank", value: "", protected: false, fieldType: "TEXT" }
     ]);
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createLoginItem, type ProviderAccount } from "../../core/model";
+import { createLoginItem, type ApiTokenItem, type PasskeyItem, type ProviderAccount } from "../../core/model";
 import { Mdbx2Provider, type Mdbx2CloudSynchronizer, type Mdbx2RuntimeClient } from "./mdbx2-provider";
 import type { Mdbx2ObjectMutationInput, Mdbx2ObjectOperationResolution, Mdbx2ObjectRecord, Mdbx2ObjectUpsertInput, Mdbx2ObjectWriteResult } from "./native-contract";
 
@@ -37,7 +37,7 @@ class FakeRuntime implements Mdbx2RuntimeClient {
     this.head = "commit-written";
     this.password = JSON.parse(input.payloadJson).password_plain || this.password;
     if (this.failAfterWrite) throw new Error("Native Host response was lost");
-    return { commitId: "commit-written", alreadyCommitted: false, logicalObjectId: input.logicalObjectId, objectId: input.logicalObjectId === "password:42" ? LOGIN_OBJECT : CREATED_OBJECT, collectionId: input.collectionId || COLLECTION, objectTypeId: input.objectTypeId };
+    return { commitId: "commit-written", alreadyCommitted: false, logicalObjectId: input.logicalObjectId, objectId: input.logicalObjectId === "password:42" || input.logicalObjectId === `native:${LOGIN_OBJECT}` ? LOGIN_OBJECT : CREATED_OBJECT, collectionId: input.collectionId || COLLECTION, objectTypeId: input.objectTypeId };
   }
   async deleteObject() { return { changed: true, commitId: "commit-delete", alreadyCommitted: false, logicalObjectId: "password:42", objectId: LOGIN_OBJECT }; }
   async mutateObjects(_handle: string, operationScope: string, mutations: Mdbx2ObjectMutationInput[]) {
@@ -51,7 +51,7 @@ class FakeRuntime implements Mdbx2RuntimeClient {
         kind: "upsert" as const,
         changed: true,
         logicalObjectId: mutation.logicalObjectId,
-        objectId: mutation.logicalObjectId === "password:42" ? LOGIN_OBJECT : CREATED_OBJECT,
+        objectId: mutation.logicalObjectId === "password:42" || mutation.logicalObjectId === `native:${LOGIN_OBJECT}` ? LOGIN_OBJECT : CREATED_OBJECT,
         collectionId: mutation.collectionId || COLLECTION,
         objectTypeId: mutation.objectTypeId
       };
@@ -71,12 +71,154 @@ class FakeRuntime implements Mdbx2RuntimeClient {
 const account: ProviderAccount = { id: "mdbx-provider", kind: "mdbx2", name: "MDBX2", enabled: true, isDefaultSaveTarget: false, config: { vaultHandle: HANDLE } };
 
 describe("MDBX2 provider", () => {
+  it('retains local password history through acknowledgement and a fresh provider instance', async () => {
+    const runtime = new FakeRuntime(), provider = new Mdbx2Provider(runtime);
+    const initial = await provider.sync(account, { now: '2026-10-06T00:00:00Z', localItems: [] });
+    const login = initial.items.find(item => item.kind === 'login')!;
+    if (login.kind !== 'login') throw new Error('Missing login');
+    const history = [{ password: 'older', lastUsedAt: '2026-10-05T00:00:00Z' }];
+    const edited = { ...login, password: 'changed', passwordHistory: history };
+    const synced = await provider.sync(account, { now: '2026-10-06T00:01:00Z', localItems: [edited] });
+    expect(synced.items.find(item => item.id === login.id)).toMatchObject({ password: 'changed', passwordHistory: history });
+    const reopened = await new Mdbx2Provider(runtime).sync(account, { now: '2026-10-06T00:02:00Z', localItems: synced.items });
+    expect(reopened.items.find(item => item.id === login.id)).toMatchObject({ password: 'changed', passwordHistory: history });
+  });
+  it("keeps raw API JSON numbers distinct from literal rawJSON objects in revision fingerprints", async () => {
+    class NumericApiRuntime extends FakeRuntime {
+      future = '9007199254740993';
+      async listObjects(_handle: string, _collection: string, input: { deleted?: boolean } = {}) {
+        return { items: input.deleted ? [] : [{ objectId: LOGIN_OBJECT, collectionId: COLLECTION, objectTypeId: "api-token", title: "Synthetic", payloadSchemaVersion: 1, headCommitId: this.head, deleted: false, updatedAt: "2026-09-30T00:00:00Z" }] };
+      }
+      async revealObject(): Promise<Mdbx2ObjectRecord> {
+        return { objectId: LOGIN_OBJECT, collectionId: COLLECTION, objectTypeId: "api-token", title: "Synthetic", payloadSchemaVersion: 1, deleted: false, apiTokenFavorite: false,
+          payloadJson: `{"schema":"monica.api-token.v1","provider":"github","api_base":"","token":"synthetic-token","future":${this.future}}` };
+      }
+    }
+    const runtime = new NumericApiRuntime();
+    const provider = new Mdbx2Provider(runtime);
+    const first = await provider.sync(account, { now: "2026-09-30T00:00:00Z", localItems: [] });
+    const firstEtag = first.items[0].providerRefs[0].etag;
+    expect(firstEtag).toContain('"future":9007199254740993');
+    runtime.future = '{"rawJSON":"9007199254740993"}';
+    const next = await provider.sync(account, { now: "2026-09-30T00:00:01Z", localItems: first.items });
+    expect(next.items[0].providerRefs[0].etag).not.toBe(firstEtag);
+    expect((next.items[0] as ApiTokenItem).apiTokenPayload).toContain('"future":{"rawJSON":"9007199254740993"}');
+  });
+
+  it("reads the current native source before a single update and forwards deletion revisions", async () => {
+    class GuardedRuntime extends FakeRuntime {
+      deletedRequest?: { logicalObjectId: string; expectedHeadCommitId?: string };
+      async revealObject(handle: string, id: string) {
+        return { ...await super.revealObject(handle, id), headCommitId: id === LOGIN_OBJECT ? this.head : "future-1" };
+      }
+      async deleteObject(_handle?: string, _operationId?: string, logicalObjectId = "", expectedHeadCommitId?: string) {
+        this.deletedRequest = { logicalObjectId, expectedHeadCommitId };
+        return { changed: true, commitId: "commit-delete", alreadyCommitted: false, logicalObjectId, objectId: LOGIN_OBJECT };
+      }
+    }
+    const runtime = new GuardedRuntime();
+    const loaded = await new Mdbx2Provider(runtime).sync(account, { now: "2026-09-30T00:00:00Z", localItems: [] });
+    const login = loaded.items.find(item => item.kind === "login")!;
+    // A new Provider has no source cache, as after a service worker restart.
+    const provider = new Mdbx2Provider(runtime);
+    const updated = await provider.update(account, { ...login, notes: "edited" });
+    expect(runtime.writes[0]).toMatchObject({ logicalObjectId: `native:${LOGIN_OBJECT}`, expectedHeadCommitId: "commit-1" });
+    expect(JSON.parse(runtime.writes[0].payloadJson)).toMatchObject({ future_field: 7, monica_entry_id: "password:42" });
+    expect(updated.replicaGroupId).toBe("password:42");
+    await expect(provider.update(account, login)).rejects.toThrow("已变化");
+    expect(runtime.writes).toHaveLength(1);
+    await provider.remove(account, updated);
+    expect(runtime.deletedRequest).toEqual({ logicalObjectId: `native:${LOGIN_OBJECT}`, expectedHeadCommitId: "commit-written" });
+    await expect(provider.remove(account, loaded.items.find(item => item.kind === "opaque")!)).rejects.toThrow("仅可安全查看");
+  });
+
+  it("aborts a partial native snapshot before writing or discarding local items", async () => {
+    class FailedDisclosure extends FakeRuntime {
+      async revealObject(handle: string, id: string): Promise<Mdbx2ObjectRecord> {
+        if (id === FUTURE_OBJECT) throw new Error("synthetic disclosure denied");
+        return super.revealObject(handle, id);
+      }
+    }
+    const runtime = new FailedDisclosure();
+    const provider = new Mdbx2Provider(runtime);
+    await expect(provider.sync(account, { now: "2026-09-30T00:00:00Z", localItems: [createLoginItem({title: "Pending", providerRefs: [{providerId: account.id}]})] })).rejects.toThrow("读取失败");
+    expect(runtime.writes).toEqual([]);
+  });
+  it("does not create MDBX2 commits for local Passkey usage or old usage-inclusive baselines", async () => {
+    class PasskeyRuntime extends FakeRuntime {
+      async listObjects() {
+        return { items: [{ objectId: LOGIN_OBJECT, collectionId: COLLECTION, objectTypeId: "passkey", title: "Example", payloadSchemaVersion: 1, headCommitId: this.head, deleted: false, updatedAt: "2026-08-02T00:00:00Z" }] };
+      }
+      async revealObject(): Promise<Mdbx2ObjectRecord> {
+        return { objectId: LOGIN_OBJECT, collectionId: COLLECTION, objectTypeId: "passkey", title: "Example", payloadSchemaVersion: 1, deleted: false,
+          payloadJson: JSON.stringify({ kind: "passkey", monica_entry_id: "passkey:usage", credential_id: "AQID", rp_id: "example.com", rp_name: "Example", user_id: "dXNlcg", public_key_algorithm: -7, private_key_alias: "device-reference-only", sign_count: 4, use_count: 2 }) };
+      }
+    }
+    const runtime = new PasskeyRuntime();
+    const provider = new Mdbx2Provider(runtime);
+    const initial = await provider.sync(account, { now: "2026-09-14T00:00:00Z", localItems: [] });
+    const item = initial.items[0] as PasskeyItem;
+    const reference = item.providerRefs[0];
+    const baseline = JSON.parse(reference.etag!);
+    baseline.useCount = 2;
+    const oldEtag = JSON.stringify(baseline, (_key, value) => value && typeof value === "object" && !Array.isArray(value)
+      ? Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right))) : value);
+    const used = { ...item, useCount: 3, lastUsedAt: "2026-09-14T01:00:00Z", providerRefs: [{ ...reference, etag: oldEtag }] };
+    const result = await provider.sync(account, { now: "2026-09-14T01:00:00Z", localItems: [used] });
+    expect(result.conflicts).toEqual([]);
+    expect(runtime.writes).toEqual([]);
+    expect(result.items[0]).toMatchObject({ signCount: 4, useCount: 3, lastUsedAt: used.lastUsedAt, replicaGroupId: "passkey:usage" });
+  });
+  it("reads Android label-only API edits and prevents concurrent local edits from overwriting them", async () => {
+    class ApiRuntime extends FakeRuntime {
+      favorite = false;
+      notes = "Original notes";
+      async listObjects(_handle: string, _collection: string, input: { deleted?: boolean } = {}) {
+        return { items: input.deleted ? [] : [{ objectId: LOGIN_OBJECT, collectionId: COLLECTION, objectTypeId: "api-token", title: "Workspace key", payloadSchemaVersion: 1, headCommitId: this.head, deleted: false, updatedAt: "2026-08-02T00:00:00Z" }] };
+      }
+      async revealObject(): Promise<Mdbx2ObjectRecord> {
+        return { objectId: LOGIN_OBJECT, collectionId: COLLECTION, objectTypeId: "api-token", title: "Workspace key", payloadSchemaVersion: 1, deleted: false,
+          payloadJson: JSON.stringify({ schema: "monica.api-token.v1", provider: "github", api_base: "", token: "synthetic-token" }),
+          apiTokenFavorite: this.favorite,
+          apiTokenMetadataJson: JSON.stringify({ schema: "monica.api-token.fields.v1", notes: this.notes, custom_fields: [] }) };
+      }
+    }
+    const runtime = new ApiRuntime();
+    const provider = new Mdbx2Provider(runtime);
+    const initial = await provider.sync(account, { now: "2026-08-02T00:01:00Z", localItems: [] });
+    const original = initial.items[0] as ApiTokenItem;
+    runtime.favorite = true;
+    runtime.notes = "Edited on Android";
+    const pulled = await provider.sync(account, { now: "2026-08-02T00:02:00Z", localItems: initial.items });
+    expect(pulled.items[0]).toMatchObject({ favorite: true, notes: "Edited on Android" });
+    expect(Date.parse(pulled.items[0].updatedAt)).toBeGreaterThan(Date.parse(original.updatedAt));
+    expect(pulled.conflicts).toEqual([]);
+    const unchanged = await provider.sync(account, { now: "2026-08-02T00:02:01Z", localItems: pulled.items });
+    expect(unchanged.items[0].updatedAt).toBe(pulled.items[0].updatedAt);
+    const conflicting = await provider.sync(account, { now: "2026-08-02T00:03:00Z", localItems: [{ ...original, token: "edited-on-extension" }] });
+    expect(conflicting.conflicts).toHaveLength(1);
+    expect(conflicting.items[0]).toMatchObject({ token: "edited-on-extension", notes: "Original notes" });
+    expect(conflicting.conflicts[0].remote).toMatchObject({ favorite: true, notes: "Edited on Android" });
+    const deletion = await provider.sync(account, { now: "2026-08-02T00:04:00Z", localItems: [{ ...original, deletedAt: "2026-08-02T00:03:00Z" }] });
+    expect(deletion.conflicts).toHaveLength(1);
+    expect(runtime.writes).toEqual([]);
+    const cloudProvider = new Mdbx2Provider(runtime, { async synchronize() {
+      return { uploadedSegments: 0, downloadedSegments: 0, uploadedBlobs: 0, downloadedBlobs: 0, appliedCommits: 0, skippedCommits: 0, conflicts: 0, blockedStreams: 0 };
+    } });
+    const cloudAccount = { ...account, config: { ...account.config, webDavBaseUrl: "https://vault.test/dav", remotePath: "vaults/main.mdbx", syncStateHandle: "66666666-6666-4666-8666-666666666666" } };
+    const cloudConflict = await cloudProvider.sync(cloudAccount, { now: "2026-08-02T00:05:00Z", localItems: [{ ...original, token: "edited-on-extension" }] });
+    expect(cloudConflict.conflicts).toHaveLength(1);
+    expect(cloudConflict.items[0]).toMatchObject({ token: "edited-on-extension", notes: "Original notes" });
+    expect(runtime.writes).toEqual([]);
+  });
+
   it("imports Android objects and preserves unsupported future payloads", async () => {
     const runtime = new FakeRuntime();
     const provider = new Mdbx2Provider(runtime);
     const result = await provider.sync(account, { now: "2026-08-02T00:01:00Z", localItems: [] });
 
-    expect(result.items).toHaveLength(1);
+    expect(result.items).toHaveLength(2);
+    expect(result.items[1]).toMatchObject({ kind: "opaque", nativeType: "future/v1" });
     expect(result.items[0]).toMatchObject({ kind: "login", username: "demo", password: "secret", replicaGroupId: "password:42" });
     expect(result.sourceRecords).toHaveLength(1);
     expect(result.warnings[0]).toContain("future/v1");
@@ -92,7 +234,8 @@ describe("MDBX2 provider", () => {
     expect(result.conflicts).toHaveLength(0);
     expect(runtime.writes).toHaveLength(1);
     expect(JSON.parse(runtime.writes[0].payloadJson)).toMatchObject({ password_plain: "changed", future_field: 7 });
-    expect(result.items[0].providerRefs[0]).toMatchObject({ revision: "commit-written", remoteId: LOGIN_OBJECT });
+    expect(result.items.find(item => item.kind === "login")!.providerRefs[0]).toMatchObject({ revision: "commit-written", remoteId: LOGIN_OBJECT });
+    expect(runtime.writes[0]).toMatchObject({ logicalObjectId: `native:${LOGIN_OBJECT}`, expectedHeadCommitId: "commit-1" });
   });
 
   it("keeps the browser version when both sides changed", async () => {
@@ -105,7 +248,7 @@ describe("MDBX2 provider", () => {
 
     expect(result.conflicts).toHaveLength(1);
     expect(runtime.writes).toHaveLength(0);
-    expect(result.items[0]).toMatchObject({ password: "local-change" });
+    expect(result.items.find(item => item.kind === "login")).toMatchObject({ password: "local-change" });
   });
 
   it("creates a queued MDBX2 item whose provider reference has no physical Object ID", async () => {
@@ -191,7 +334,15 @@ describe("MDBX2 provider", () => {
   });
 
   it("recovers a committed Object operation after the Native Host response is lost", async () => {
-    const runtime = new FakeRuntime();
+    class PersistedRuntime extends FakeRuntime {
+      async revealObject(handle: string, id: string) {
+        const record = await super.revealObject(handle, id);
+        const written = [...this.writes].reverse().find(write => write.logicalObjectId === `native:${id}`);
+        // The real Host persists the complete payload, including Android encoding metadata.
+        return written ? { ...record, payloadJson: written.payloadJson } : record;
+      }
+    }
+    const runtime = new PersistedRuntime();
     const provider = new Mdbx2Provider(runtime);
     const imported = await provider.sync(account, { now: "2026-08-02T00:01:00Z", localItems: [] });
     const edited = { ...imported.items[0], password: "durable-change" } as typeof imported.items[0];
@@ -202,9 +353,10 @@ describe("MDBX2 provider", () => {
     const recovered = await provider.sync(account, { now: "2026-08-02T00:03:00Z", localItems: [edited] });
 
     expect(runtime.writes).toHaveLength(1);
+    expect(JSON.parse(runtime.writes[0].payloadJson).monica_password_encoding).toBe("plaintext-v1");
     expect(recovered.conflicts).toHaveLength(0);
-    expect(recovered.items[0]).toMatchObject({ password: "durable-change" });
-    expect(recovered.items[0].providerRefs[0]).toMatchObject({ remoteId: LOGIN_OBJECT, revision: "commit-written" });
+    expect(recovered.items.find(item => item.kind === "login")).toMatchObject({ password: "durable-change" });
+    expect(recovered.items.find(item => item.kind === "login")!.providerRefs[0]).toMatchObject({ remoteId: LOGIN_OBJECT, revision: "commit-written" });
   });
 
   it("stops before opening the Native Host when the provider sync was cancelled", async () => {

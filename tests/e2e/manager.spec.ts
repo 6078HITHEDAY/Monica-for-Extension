@@ -1,4 +1,6 @@
-import { chromium, expect, test, type BrowserContext, type Page, type TestInfo } from "@playwright/test";
+import { launchTestContext } from './fixtures/edge';
+import { chooseOption, dialogContent } from "./fixtures/material";
+import { expect, test, type BrowserContext, type Page, type TestInfo } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -6,9 +8,9 @@ test("manager UI creates edits imports and deletes non-login vault records", asy
   const extensionPath = path.resolve("dist");
   let context: BrowserContext | undefined;
   try {
-    context = await chromium.launchPersistentContext(testInfo.outputPath("manager-profile"), {
+    context = await launchTestContext(testInfo.outputPath("manager-profile"), {
       channel: "chromium",
-      headless: true,
+      headless: true, locale: "zh-CN",
       args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
     });
     const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
@@ -20,7 +22,7 @@ test("manager UI creates edits imports and deletes non-login vault records", asy
     await manager.getByLabel("主密码", { exact: true }).fill("manager e2e master password");
     await manager.getByLabel("确认主密码", { exact: true }).fill("manager e2e master password");
     await manager.getByRole("button", { name: "创建并解锁" }).click();
-    await expect(manager.getByRole("heading", { name: "密码库概览" })).toBeVisible();
+    await expect(manager.getByRole("heading", { name: "全部项目", exact: true })).toBeVisible();
 
     await manager.getByRole("button", { name: /钱包与身份/ }).click();
     await manager.getByRole("button", { name: "添加钱包项目" }).click();
@@ -33,21 +35,41 @@ test("manager UI creates edits imports and deletes non-login vault records", asy
     await manager.getByLabel("到期年").fill("2030");
     await manager.getByLabel("安全码").fill("123");
     await manager.getByRole("button", { name: "加密保存" }).click();
-    await expect(manager.getByText("Daily Visa", { exact: true })).toBeVisible();
+    await expect(dialogContent(manager)).toHaveCount(0);
+    await expect(manager.locator(".vault-tile-open").getByText("Daily Visa", { exact: true })).toBeVisible();
     await expect(manager.getByText(/•••• 1111/)).toBeVisible();
     await expect(manager.getByText("4111111111111111", { exact: true })).toHaveCount(0);
 
-    await manager.getByRole("button", { name: "编辑银行卡" }).click();
+    // Wallet items are tiles; editing lives in each tile's actions menu.
+    await manager.locator(".vault-tile").filter({ hasText: "Daily Visa" }).locator(".vault-tile-menu-trigger").click();
+    await manager.locator(".vault-tile-menu:popover-open").getByRole("menuitem", { name: "编辑", exact: true }).click();
     await manager.getByLabel("名称 *").fill("Daily Visa Updated");
     await manager.getByRole("button", { name: "加密保存" }).click();
-    await expect(manager.getByText("Daily Visa Updated", { exact: true })).toBeVisible();
+    await expect(dialogContent(manager)).toHaveCount(0);
+    await expect(manager.locator(".vault-tile-open").getByText("Daily Visa Updated", { exact: true })).toBeVisible();
 
     await manager.getByRole("button", { name: /安全笔记/ }).click();
     await manager.getByRole("button", { name: "添加安全笔记" }).click();
     await manager.getByLabel("名称 *").fill("Private Note");
     await manager.getByLabel("笔记内容 *").fill("Recovery instructions stored safely.");
+    // Supplemental content opens in its own editor section and returns with Done.
+    const customFields = manager.locator('[data-content-section="自定义字段"] [data-content-open]');
+    await customFields.click();
+    await manager.getByRole("button", { name: "添加字段" }).click();
+    await manager.getByLabel("自定义字段 1 名称").fill("Recovery code");
+    await manager.getByLabel("自定义字段 1 值").fill("ABCD");
+    await chooseOption(manager.getByLabel("自定义字段 1 类型"), "HIDDEN");
+    await manager.getByRole("button", { name: "完成", exact: true }).click();
     await manager.getByRole("button", { name: "加密保存" }).click();
+    await expect(dialogContent(manager)).toHaveCount(0);
     await expect(manager.getByText("Private Note", { exact: true })).toBeVisible();
+    await manager.getByRole("button", { name: "编辑安全笔记" }).click();
+    await customFields.click();
+    await expect(manager.getByLabel("自定义字段 1 名称")).toHaveValue("Recovery code");
+    await expect(manager.getByLabel("自定义字段 1 值")).toHaveValue("ABCD");
+    await expect(manager.getByLabel("自定义字段 1 类型")).toHaveJSProperty("value", "HIDDEN");
+    await manager.getByRole("button", { name: "完成", exact: true }).click();
+    await manager.getByRole("button", { name: "取消" }).click();
 
     await manager.getByRole("button", { name: /动态验证码/ }).click();
     await manager.getByRole("button", { name: "添加验证码" }).click();
@@ -56,10 +78,11 @@ test("manager UI creates edits imports and deletes non-login vault records", asy
     await manager.getByLabel("签发方").fill("Example");
     await manager.getByLabel("账户").fill("joy@example.com");
     await manager.getByRole("button", { name: "加密保存" }).click();
+    await expect(dialogContent(manager)).toHaveCount(0);
     await expect(manager.getByText("Example OTP", { exact: true })).toBeVisible();
 
     await manager.getByRole("button", { name: /安全笔记/ }).click();
-    const noteRow = manager.getByRole("row").filter({ hasText: "Private Note" });
+    const noteRow = manager.locator(".item-card").filter({ hasText: "Private Note" });
     manager.once("dialog", (dialog) => void dialog.accept());
     await noteRow.getByRole("button", { name: "删除安全笔记" }).click();
     await expect(manager.getByText("Private Note", { exact: true })).toHaveCount(0);
@@ -75,13 +98,23 @@ test("manager UI creates edits imports and deletes non-login vault records", asy
     ] }), "utf8");
 
     await manager.getByRole("button", { name: "设置与备份" }).click();
-    await manager.locator("label.file-action").filter({ hasText: "导入明文 JSON" }).locator('input[type="file"]').setInputFiles(importPath);
-    await expect(manager.getByText(/已加密导入 4 个密码库项目/)).toBeVisible();
+    await manager.locator('[data-settings-entry="transfer"]').click();
+    await manager.locator('[data-transfer-file]').setInputFiles(importPath);
+    await manager.getByRole('button', { name: '读取并预览', exact: true }).click();
+    await expect(manager.locator('[data-transfer-preview]')).toContainText('可导入 4 个项目');
+    await manager.getByRole('button', { name: '导入 4 个项目', exact: true }).click();
+    await expect.poll(() => manager.evaluate(async () => {
+      const result = await chrome.runtime.sendMessage({ type: 'VAULT_LIST_ITEMS' });
+      return result.data.filter((item: { title: string }) => item.title.startsWith('Imported ')).length;
+    })).toBe(4);
     await manager.getByRole("button", { name: /钱包与身份/ }).click();
-    for (const title of ["Imported Passport", "Imported Home", "Imported Bank"]) await expect(manager.getByText(title, { exact: true })).toBeVisible();
+    for (const title of ["Imported Passport", "Imported Home", "Imported Bank"]) await expect(manager.locator(".vault-tile-open").getByText(title, { exact: true })).toBeVisible();
     await manager.getByRole("button", { name: /Passkey/ }).click();
     await expect(manager.getByText("Imported Passkey", { exact: true })).toBeVisible();
-    await expect(manager.getByText("Android 元数据，仅可查看", { exact: true })).toBeVisible();
+    // Metadata-only Passkeys are marked unusable in the browser, with the reason.
+    const passkeyStatus = manager.locator(".passkey-status-badges", { hasText: "浏览器不可用" });
+    await expect(passkeyStatus).toBeVisible();
+    await expect(passkeyStatus).toHaveAttribute("title", /仅含 Android 元数据/);
 
     const response = await manager.evaluate(async () => chrome.runtime.sendMessage({ type: "VAULT_LIST_ITEMS" })) as { ok: boolean; data: Array<{ kind: string; title: string }> };
     expect(response.ok).toBe(true);
@@ -95,9 +128,9 @@ test("manager rotates the master password and atomically restores an encrypted f
   const extensionPath = path.resolve("dist");
   let context: BrowserContext | undefined;
   try {
-    context = await chromium.launchPersistentContext(testInfo.outputPath("lifecycle-profile"), {
+    context = await launchTestContext(testInfo.outputPath("lifecycle-profile"), {
       channel: "chromium",
-      headless: true,
+      headless: true, locale: "zh-CN",
       acceptDownloads: true,
       args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
     });
@@ -111,7 +144,7 @@ test("manager rotates the master password and atomically restores an encrypted f
     await manager.getByLabel("主密码", { exact: true }).fill(originalPassword);
     await manager.getByLabel("确认主密码", { exact: true }).fill(originalPassword);
     await manager.getByRole("button", { name: "创建并解锁" }).click();
-    await expect(manager.getByRole("heading", { name: "密码库概览" })).toBeVisible();
+    await expect(manager.getByRole("heading", { name: "全部项目", exact: true })).toBeVisible();
     const createdAt = new Date().toISOString();
     const itemId = "lifecycle-login";
     const upsert = await manager.evaluate(async ({ itemId, createdAt }) => chrome.runtime.sendMessage({
@@ -121,16 +154,20 @@ test("manager rotates the master password and atomically restores an encrypted f
     expect(upsert.ok, upsert.error).toBe(true);
 
     await manager.getByRole("button", { name: "设置与备份" }).click();
+    await manager.locator('[data-settings-entry="backup"]').click();
     await manager.getByRole("button", { name: "导出加密整库备份" }).click();
-    const exportDialog = manager.getByRole("dialog", { name: "导出加密整库备份" });
+    const exportDialog = dialogContent(manager, { name: "导出加密整库备份" });
+    await exportDialog.getByLabel("当前主密码", { exact: true }).fill(originalPassword);
     await exportDialog.getByLabel("备份密码 *", { exact: true }).fill(originalPassword);
     await exportDialog.getByLabel("确认备份密码 *", { exact: true }).fill(originalPassword);
     const downloadPromise = manager.waitForEvent("download");
-    await exportDialog.getByRole("button", { name: "加密导出" }).click();
+    await exportDialog.getByRole("button", { name: "验证并导出" }).click();
     const download = await downloadPromise;
     const backupPath = testInfo.outputPath("encrypted-vault-backup.json");
     await download.saveAs(backupPath);
 
+    await manager.locator('[data-settings-back]').click();
+    await manager.locator('[data-settings-entry="protection"]').click();
     await manager.getByLabel("当前主密码（设备密钥模式留空）", { exact: true }).fill(originalPassword);
     await manager.getByLabel("新主密码（可选）", { exact: true }).fill(rotatedPassword);
     await manager.getByLabel("确认新主密码", { exact: true }).fill(rotatedPassword);
@@ -143,11 +180,12 @@ test("manager rotates the master password and atomically restores an encrypted f
     await expect(manager.getByRole("alert")).toContainText("主密码错误");
     await manager.getByLabel("主密码", { exact: true }).fill(rotatedPassword);
     await manager.getByRole("button", { name: "解锁", exact: true }).click();
-    await expect(manager.getByRole("heading", { name: "密码库概览" })).toBeVisible();
+    await expect(manager.getByRole("heading", { name: "全部项目", exact: true })).toBeVisible();
 
     const removed = await manager.evaluate(async (itemId) => chrome.runtime.sendMessage({ type: "VAULT_DELETE_ITEM", itemId }), itemId) as { ok: boolean };
     expect(removed.ok).toBe(true);
     await manager.getByRole("button", { name: "设置与备份" }).click();
+    await manager.locator('[data-settings-entry="backup"]').click();
     await manager.locator("label.file-action").filter({ hasText: "选择加密整库备份" }).locator('input[type="file"]').setInputFiles(backupPath);
     await manager.getByLabel("备份密码", { exact: true }).fill(originalPassword);
     await manager.getByLabel("恢复前的当前主密码").fill(rotatedPassword);
@@ -161,7 +199,7 @@ test("manager rotates the master password and atomically restores an encrypted f
     await manager.getByRole("button", { name: "立即锁定" }).click();
     await manager.getByLabel("主密码", { exact: true }).fill(originalPassword);
     await manager.getByRole("button", { name: "解锁", exact: true }).click();
-    await expect(manager.getByRole("heading", { name: "密码库概览" })).toBeVisible();
+    await expect(manager.getByRole("heading", { name: "全部项目", exact: true })).toBeVisible();
   } finally {
     await context?.close();
   }
@@ -169,9 +207,9 @@ test("manager rotates the master password and atomically restores an encrypted f
 
 async function launchManager(testInfo: TestInfo, profileName: string): Promise<{ context: BrowserContext; manager: Page }> {
   const extensionPath = path.resolve("dist");
-  const context = await chromium.launchPersistentContext(testInfo.outputPath(profileName), {
+  const context = await launchTestContext(testInfo.outputPath(profileName), {
     channel: "chromium",
-    headless: true,
+    headless: true, locale: "zh-CN",
     acceptDownloads: true,
     args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
   });
@@ -191,16 +229,18 @@ test("encrypted backup dialog rejects mismatched password and produces no downlo
     await manager.getByLabel("主密码", { exact: true }).fill("export mismatch password");
     await manager.getByLabel("确认主密码", { exact: true }).fill("export mismatch password");
     await manager.getByRole("button", { name: "创建并解锁" }).click();
-    await expect(manager.getByRole("heading", { name: "密码库概览" })).toBeVisible();
+    await expect(manager.getByRole("heading", { name: "全部项目", exact: true })).toBeVisible();
 
     await manager.getByRole("button", { name: "设置与备份" }).click();
+    await manager.locator('[data-settings-entry="backup"]').click();
     await manager.getByRole("button", { name: "导出加密整库备份" }).click();
-    const exportDialog = manager.getByRole("dialog", { name: "导出加密整库备份" });
+    const exportDialog = dialogContent(manager, { name: "导出加密整库备份" });
+    await exportDialog.getByLabel("当前主密码", { exact: true }).fill("export mismatch password");
     await exportDialog.getByLabel("备份密码 *", { exact: true }).fill("intended-backup-password");
     await exportDialog.getByLabel("确认备份密码 *", { exact: true }).fill("different-confirmation-value");
 
     const downloadPromise = manager.waitForEvent("download", { timeout: 1500 }).catch(() => null);
-    await exportDialog.getByRole("button", { name: "加密导出" }).click();
+    await exportDialog.getByRole("button", { name: "验证并导出" }).click();
     await expect(exportDialog.getByRole("alert")).toContainText("两次输入的备份密码不一致。");
     expect(await downloadPromise).toBeNull();
     await expect(exportDialog).toBeVisible();
@@ -218,11 +258,12 @@ test("encrypted backup dialog cancels without exporting", async ({}, testInfo) =
     await manager.getByLabel("主密码", { exact: true }).fill("export cancel password");
     await manager.getByLabel("确认主密码", { exact: true }).fill("export cancel password");
     await manager.getByRole("button", { name: "创建并解锁" }).click();
-    await expect(manager.getByRole("heading", { name: "密码库概览" })).toBeVisible();
+    await expect(manager.getByRole("heading", { name: "全部项目", exact: true })).toBeVisible();
 
     await manager.getByRole("button", { name: "设置与备份" }).click();
+    await manager.locator('[data-settings-entry="backup"]').click();
     await manager.getByRole("button", { name: "导出加密整库备份" }).click();
-    const exportDialog = manager.getByRole("dialog", { name: "导出加密整库备份" });
+    const exportDialog = dialogContent(manager, { name: "导出加密整库备份" });
     await exportDialog.getByLabel("备份密码 *", { exact: true }).fill("would-be-exported-value");
     await exportDialog.getByLabel("确认备份密码 *", { exact: true }).fill("would-be-exported-value");
 
@@ -241,9 +282,13 @@ test("device-key vault restores an encrypted backup while leaving the current pa
     const launched = await launchManager(testInfo, "device-key-restore-profile");
     context = launched.context;
     const { manager } = launched;
-    // Empty master password -> device-key vault.
+    // Export with fresh authentication, then switch the target to device-key
+    // protection before restoring. Device-key export without Hello is blocked.
+    const exportPassword = "device-key export authentication";
+    await manager.getByLabel("主密码", { exact: true }).fill(exportPassword);
+    await manager.getByLabel("确认主密码", { exact: true }).fill(exportPassword);
     await manager.getByRole("button", { name: "创建并解锁" }).click();
-    await expect(manager.getByRole("heading", { name: "密码库概览" })).toBeVisible();
+    await expect(manager.getByRole("heading", { name: "全部项目", exact: true })).toBeVisible();
 
     const createdAt = new Date().toISOString();
     const itemId = "device-key-login";
@@ -254,20 +299,33 @@ test("device-key vault restores an encrypted backup while leaving the current pa
     expect(upsert.ok, upsert.error).toBe(true);
 
     await manager.getByRole("button", { name: "设置与备份" }).click();
+    await manager.locator('[data-settings-entry="backup"]').click();
     await manager.getByRole("button", { name: "导出加密整库备份" }).click();
-    const exportDialog = manager.getByRole("dialog", { name: "导出加密整库备份" });
+    const exportDialog = dialogContent(manager, { name: "导出加密整库备份" });
     const backupPassword = "independent-backup-password";
+    await exportDialog.getByLabel("当前主密码", { exact: true }).fill(exportPassword);
     await exportDialog.getByLabel("备份密码 *", { exact: true }).fill(backupPassword);
     await exportDialog.getByLabel("确认备份密码 *", { exact: true }).fill(backupPassword);
     const downloadPromise = manager.waitForEvent("download");
-    await exportDialog.getByRole("button", { name: "加密导出" }).click();
+    await exportDialog.getByRole("button", { name: "验证并导出" }).click();
     const download = await downloadPromise;
     const backupPath = testInfo.outputPath("device-key-encrypted-backup.json");
     await download.saveAs(backupPath);
 
+    await manager.locator('[data-settings-back]').click();
+    await manager.locator('[data-settings-entry="protection"]').click();
+    await manager.getByLabel("当前主密码（设备密钥模式留空）", { exact: true }).fill(exportPassword);
+    await manager.getByRole("button", { name: "更改主密码", exact: true }).click();
+    await expect(manager.getByText(/主密码已更改/)).toBeVisible();
+    await manager.locator('[data-settings-entry="backup"]').click();
+    await manager.getByRole("button", { name: "导出加密整库备份", exact: true }).click();
+    const blockedExport = dialogContent(manager, { name: "导出加密整库备份" });
+    await expect(blockedExport.getByRole("alert")).toContainText("设置主密码或注册 Windows Hello");
+    await expect(blockedExport.getByRole("button", { name: "验证并导出", exact: true })).toBeDisabled();
+    await blockedExport.getByRole("button", { name: "取消", exact: true }).click();
     await manager.locator("label.file-action").filter({ hasText: "选择加密整库备份" }).locator('input[type="file"]').setInputFiles(backupPath);
     // Device-key hint must be visible; current password stays empty on purpose.
-    await expect(manager.getByText(/设备密钥模式可留空/)).toBeVisible();
+    await expect(manager.locator('.settings-password-field small').filter({ hasText: /设备密钥模式可留空/ })).toBeVisible();
     await manager.getByLabel("备份密码", { exact: true }).fill(backupPassword);
     manager.once("dialog", (dialog) => void dialog.accept());
     await manager.getByRole("button", { name: "验证并替换当前密码库" }).click();

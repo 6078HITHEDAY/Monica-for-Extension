@@ -1,0 +1,30 @@
+/* Optional Nothing palette: no typography, geometry or motion overrides. */
+:root[data-palette='nothing'] {
+  --app-text: #1a1a1a;
+  --app-muted: #62625e;
+  --app-outline: #cdcdc7;
+  --app-outline-strong: #777773;
+  --app-on-primary: #fff;
+}
+:root[data-palette='nothing'][data-theme='dark'] {
+  --app-text: #e8e8e8;
+  --app-muted: #b6b6b2;
+  --app-outline: #414141;
+  --app-outline-strong: #93938e;
+  --app-on-primary: #111;
+}
+:root[data-palette='nothing'] m3e-theme {
+  --md-sys-color-secondary: var(--app-text);
+  --md-sys-color-on-secondary: var(--app-bg);
+  --md-sys-color-tertiary: var(--app-accent);
+  --md-sys-color-on-tertiary: #fff;
+  --md-sys-color-tertiary-container: #ffdad9;
+  --md-sys-color-on-tertiary-container: #690008;
+  --md-sys-color-surface-variant: var(--app-surface-high);
+}
+:root[data-palette='nothing'][data-theme='dark'] m3e-theme {
+  --md-sys-color-tertiary: #ffb3b2;
+  --md-sys-color-on-tertiary: #690008;
+  --md-sys-color-tertiary-container: #930010;
+  --md-sys-color-on-tertiary-container: #ffdad9;
+}

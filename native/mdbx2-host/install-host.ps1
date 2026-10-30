@@ -2,11 +2,13 @@
 param(
     [string]$ChromeExtensionId = "",
     [string]$EdgeExtensionId = "",
+    [string]$FirefoxExtensionId = "",
     [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA "Monica\Extension\MDBX2")
 )
 
 $ErrorActionPreference = "Stop"
 $HostName = "com.monica_pass.mdbx2"
+$WindowsHelloHostName = "com.monica_pass.windows_hello"
 $BundleRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $SourceExecutable = Join-Path $BundleRoot "monica-mdbx2-host.exe"
 $SourceUninstaller = Join-Path $BundleRoot "uninstall-host.ps1"
@@ -19,8 +21,11 @@ function Assert-ExtensionId([string]$Value, [string]$Label) {
 
 Assert-ExtensionId $ChromeExtensionId "ChromeExtensionId"
 Assert-ExtensionId $EdgeExtensionId "EdgeExtensionId"
-if (-not $ChromeExtensionId -and -not $EdgeExtensionId) {
-    throw "Provide ChromeExtensionId, EdgeExtensionId, or both."
+if ($FirefoxExtensionId -and $FirefoxExtensionId -cne 'monica@monica-pass.github.io') {
+    throw "FirefoxExtensionId must be the Monica add-on ID: monica@monica-pass.github.io"
+}
+if (-not $ChromeExtensionId -and -not $EdgeExtensionId -and -not $FirefoxExtensionId) {
+    throw "Provide ChromeExtensionId, EdgeExtensionId, or FirefoxExtensionId."
 }
 if (-not (Test-Path -LiteralPath $SourceExecutable -PathType Leaf)) {
     throw "The package is missing monica-mdbx2-host.exe."
@@ -29,6 +34,7 @@ if (-not (Test-Path -LiteralPath $SourceExecutable -PathType Leaf)) {
 $InstallRoot = [IO.Path]::GetFullPath($InstallRoot)
 $ExecutablePath = Join-Path $InstallRoot "monica-mdbx2-host.exe"
 $ManifestPath = Join-Path $InstallRoot "$HostName.json"
+$WindowsHelloManifestPath = Join-Path $InstallRoot "$WindowsHelloHostName.json"
 New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
 Copy-Item -LiteralPath $SourceExecutable -Destination $ExecutablePath -Force
 if (Test-Path -LiteralPath $SourceUninstaller -PathType Leaf) {
@@ -44,20 +50,46 @@ $Manifest = [ordered]@{
     description = "Monica MDBX2 Native Host"
     path = $ExecutablePath
     type = "stdio"
-    allowed_origins = $Origins
+    allowed_origins = @($Origins)
+}
+$WindowsHelloManifest = [ordered]@{
+    name = $WindowsHelloHostName
+    description = "Monica Windows Hello Host"
+    path = $ExecutablePath
+    type = "stdio"
+    allowed_origins = @($Origins)
 }
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [IO.File]::WriteAllText($ManifestPath, ($Manifest | ConvertTo-Json -Depth 4), $Utf8NoBom)
+[IO.File]::WriteAllText($WindowsHelloManifestPath, ($WindowsHelloManifest | ConvertTo-Json -Depth 4), $Utf8NoBom)
+
+# Firefox uses an add-on ID allowlist and its own manifests, never Chromium origins.
+if ($FirefoxExtensionId) {
+    foreach ($Entry in @(@{ Name = $HostName; Description = 'Monica MDBX2 Native Host' }, @{ Name = $WindowsHelloHostName; Description = 'Monica Windows Hello Host' })) {
+        $FirefoxManifestPath = Join-Path $InstallRoot "$($Entry.Name).firefox.json"
+        $FirefoxManifest = [ordered]@{ name = $Entry.Name; description = $Entry.Description; path = $ExecutablePath; type = 'stdio'; allowed_extensions = @($FirefoxExtensionId) }
+        [IO.File]::WriteAllText($FirefoxManifestPath, ($FirefoxManifest | ConvertTo-Json -Depth 4), $Utf8NoBom)
+        $FirefoxKey = "HKCU:\Software\Mozilla\NativeMessagingHosts\$($Entry.Name)"
+        New-Item -Path $FirefoxKey -Force | Out-Null
+        Set-Item -Path $FirefoxKey -Value $FirefoxManifestPath
+    }
+}
 
 if ($ChromeExtensionId) {
     $ChromeKey = "HKCU:\Software\Google\Chrome\NativeMessagingHosts\$HostName"
     New-Item -Path $ChromeKey -Force | Out-Null
     Set-Item -Path $ChromeKey -Value $ManifestPath
+    $ChromeHelloKey = "HKCU:\Software\Google\Chrome\NativeMessagingHosts\$WindowsHelloHostName"
+    New-Item -Path $ChromeHelloKey -Force | Out-Null
+    Set-Item -Path $ChromeHelloKey -Value $WindowsHelloManifestPath
 }
 if ($EdgeExtensionId) {
     $EdgeKey = "HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\$HostName"
     New-Item -Path $EdgeKey -Force | Out-Null
     Set-Item -Path $EdgeKey -Value $ManifestPath
+    $EdgeHelloKey = "HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\$WindowsHelloHostName"
+    New-Item -Path $EdgeHelloKey -Force | Out-Null
+    Set-Item -Path $EdgeHelloKey -Value $WindowsHelloManifestPath
 }
 
 Write-Host "Monica MDBX2 Native Host was installed to $InstallRoot"

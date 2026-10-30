@@ -1,0 +1,275 @@
+diff --git a/crates/mdbx-storage/src/repo/operation_coordinator.rs b/crates/mdbx-storage/src/repo/operation_coordinator.rs
+--- a/crates/mdbx-storage/src/repo/operation_coordinator.rs
++++ b/crates/mdbx-storage/src/repo/operation_coordinator.rs
+@@ -1,7 +1,10 @@
+ use std::collections::{BTreeSet, HashMap};
+ use std::io::{self, Write};
+ 
+-use mdbx_core::model::{ObjectTypeId, RelationKindId};
++use mdbx_core::model::{
++    ObjectTypeId, RelationKindId, MAX_COLLECTION_PROFILE_CAPABILITIES,
++    MAX_COLLECTION_PROFILE_OBJECT_TYPES, MAX_COLLECTION_PROFILE_PAYLOAD_BYTES,
++};
+ use sha2::{Digest, Sha256};
+ use uuid::Uuid;
+ 
+@@ -9,10 +12,10 @@ use crate::connection::VaultConnection;
+ use crate::error::{StorageError, StorageResult};
+ 
+ use super::{
+-    AttachmentRepo, CommitChange, CommitContext, CommitOperation, EntryRepo,
+-    ObjectLabelAssignmentCreateRequest, ObjectLabelAssignmentRepo, ObjectLabelCreateRequest,
+-    ObjectLabelRepo, ObjectRelationCreateRequest, ObjectRelationRepo, OperationExecution,
+-    ProjectRepo,
++    AttachmentRepo, CollectionProfileRepo, CollectionProfileSpec, CommitChange, CommitContext,
++    CommitOperation, EntryRepo, ObjectLabelAssignmentCreateRequest, ObjectLabelAssignmentRepo,
++    ObjectLabelCreateRequest, ObjectLabelRepo, ObjectRelationCreateRequest, ObjectRelationRepo,
++    OperationExecution, ProjectRepo,
+ };
+ 
+ pub const DEFAULT_MAX_WRITE_COMMANDS: usize = 256;
+@@ -128,6 +131,20 @@ pub enum WriteCommand {
+     TrashProjectWithAttachments {
+         project_id: String,
+     },
++    SetCollectionProfile {
++        project_id: String,
++        collection_type_id: String,
++        payload: Vec<u8>,
++        payload_schema_version: u32,
++        allowed_object_type_ids: Vec<String>,
++        required_capability_ids: Vec<String>,
++    },
++    UpdateProjectPresentation {
++        project_id: String,
++        favorite: bool,
++        archived: bool,
++        icon_ref: Option<String>,
++    },
+ }
+ 
+ impl WriteCommand {
+@@ -145,6 +162,8 @@ impl WriteCommand {
+             | Self::MoveProject { .. }
+             | Self::DeleteProject { .. }
+             | Self::TrashProjectWithAttachments { .. }
++            | Self::SetCollectionProfile { .. }
++            | Self::UpdateProjectPresentation { .. }
+             | Self::RestoreProject { .. }
+             | Self::DeleteEntry { .. }
+             | Self::RestoreEntry { .. }
+@@ -479,10 +498,10 @@ fn validate_resource_usage(
+     }
+     let mut total_payload_bytes = 0usize;
+     for command in commands {
+-        let Some(payload_json) = command.payload_json() else {
+-            continue;
++        let payload_bytes = match command {
++            WriteCommand::SetCollectionProfile { payload, .. } => payload.len(),
++            _ => command.payload_json().map_or(0, str::len),
+         };
+-        let payload_bytes = payload_json.len();
+         if payload_bytes > limits.max_payload_bytes_per_command {
+             return Err(StorageError::ResourceLimit {
+                 resource: "write operation command payload bytes".to_string(),
+@@ -586,6 +605,15 @@ pub fn write_operation_changes(commands: &[WriteCommand]) -> Vec<CommitChange> {
+             WriteCommand::RenameProject { project_id, .. } => {
+                 ("project", project_id, "update", &["title"])
+             }
++            WriteCommand::SetCollectionProfile { project_id, .. } => {
++                ("project", project_id, "update", &["collection_profile"])
++            }
++            WriteCommand::UpdateProjectPresentation { project_id, .. } => (
++                "project",
++                project_id,
++                "update",
++                &["favorite", "archived", "icon_ref"],
++            ),
+             WriteCommand::MoveProject { project_id, .. } => {
+                 ("project", project_id, "move", &["group_id"])
+             }
+@@ -704,6 +732,13 @@ pub fn write_operation_scope(changes: &[CommitChange]) -> String {
+ 
+ #[derive(Debug, Clone)]
+ enum PreparedWriteCommand {
++    SetCollectionProfile(CollectionProfileSpec),
++    UpdateProjectPresentation {
++        project_id: String,
++        favorite: bool,
++        archived: bool,
++        icon_ref: Option<String>,
++    },
+     CreateProject {
+         project_id: String,
+         title: String,
+@@ -807,6 +842,8 @@ impl PreparedWriteCommand {
+             Self::RestoreProject { .. } | Self::RestoreEntry { .. } => "restore",
+             Self::MoveProject { .. } | Self::MoveEntry { .. } => "move",
+             Self::CreateProject { .. }
++            | Self::SetCollectionProfile(..)
++            | Self::UpdateProjectPresentation { .. }
+             | Self::CreateProjectWithParent { .. }
+             | Self::RenameProject { .. }
+             | Self::DeleteProject { .. }
+@@ -831,6 +868,74 @@ impl TryFrom<&WriteCommand> for PreparedWriteCommand {
+ 
+     fn try_from(command: &WriteCommand) -> Result<Self, Self::Error> {
+         match command {
++            WriteCommand::SetCollectionProfile {
++                project_id,
++                collection_type_id,
++                payload,
++                payload_schema_version,
++                allowed_object_type_ids,
++                required_capability_ids,
++            } => {
++                validate_uuid(project_id, "project_id")?;
++                if payload.len() > MAX_COLLECTION_PROFILE_PAYLOAD_BYTES
++                    || *payload_schema_version == 0
++                    || allowed_object_type_ids.len() > MAX_COLLECTION_PROFILE_OBJECT_TYPES
++                    || required_capability_ids.len() > MAX_COLLECTION_PROFILE_CAPABILITIES
++                    || allowed_object_type_ids
++                        .iter()
++                        .collect::<BTreeSet<_>>()
++                        .len()
++                        != allowed_object_type_ids.len()
++                    || required_capability_ids
++                        .iter()
++                        .collect::<BTreeSet<_>>()
++                        .len()
++                        != required_capability_ids.len()
++                {
++                    return Err(StorageError::Validation(
++                        "invalid collection profile limits or declarations".into(),
++                    )
++                    .into());
++                }
++                Ok(Self::SetCollectionProfile(CollectionProfileSpec {
++                    collection_id: project_id.clone(),
++                    collection_type_id: collection_type_id
++                        .parse()
++                        .map_err(StorageError::Validation)?,
++                    payload: payload.clone(),
++                    payload_schema_version: *payload_schema_version,
++                    allowed_object_type_ids: allowed_object_type_ids
++                        .iter()
++                        .map(|v| v.parse().map_err(StorageError::Validation))
++                        .collect::<StorageResult<_>>()?,
++                    required_capability_ids: required_capability_ids
++                        .iter()
++                        .map(|v| v.parse().map_err(StorageError::Validation))
++                        .collect::<StorageResult<_>>()?,
++                }))
++            }
++            WriteCommand::UpdateProjectPresentation {
++                project_id,
++                favorite,
++                archived,
++                icon_ref,
++            } => {
++                validate_uuid(project_id, "project_id")?;
++                if icon_ref
++                    .as_ref()
++                    .is_some_and(|v| v.is_empty() || v.len() > 4096)
++                {
++                    return Err(
++                        StorageError::Validation("invalid project icon reference".into()).into(),
++                    );
++                }
++                Ok(Self::UpdateProjectPresentation {
++                    project_id: project_id.clone(),
++                    favorite: *favorite,
++                    archived: *archived,
++                    icon_ref: icon_ref.clone(),
++                })
++            }
+             WriteCommand::CreateProject { project_id, title } => {
+                 validate_uuid(project_id, "project_id")?;
+                 Ok(Self::CreateProject {
+@@ -1144,6 +1249,29 @@ fn execute_prepared_commands(
+ ) -> StorageResult<()> {
+     for command in commands {
+         match command {
++            PreparedWriteCommand::SetCollectionProfile(spec) => {
++                // Replacement cannot remove a currently required capability in
++                // order to bypass it. The repository also checks the new profile,
++                // immutable type and every existing object before any commit.
++                CollectionProfileRepo::ensure_collection_write_capabilities(
++                    conn,
++                    &spec.collection_id,
++                )?;
++                CollectionProfileRepo::set(conn, ctx, spec.clone())?;
++            }
++            PreparedWriteCommand::UpdateProjectPresentation {
++                project_id,
++                favorite,
++                archived,
++                icon_ref,
++            } => {
++                let mut project = active_project(conn, project_id)?;
++                project.favorite = *favorite;
++                project.archived = *archived;
++                project.icon_ref = icon_ref.clone();
++                // Retain title, ancestry, Tiga override and all other native fields.
++                ProjectRepo::update(conn, ctx, &project)?;
++            }
+             PreparedWriteCommand::CreateProject { project_id, title } => {
+                 ProjectRepo::create_with_id(conn, ctx, project_id, title, None, None)?;
+             }
+diff --git a/crates/mdbx-ffi/src/write_facade.rs b/crates/mdbx-ffi/src/write_facade.rs
+--- a/crates/mdbx-ffi/src/write_facade.rs
++++ b/crates/mdbx-ffi/src/write_facade.rs
+@@ -120,6 +120,20 @@ pub enum MdbxWriteCommand {
+     TrashProjectWithAttachments {
+         project_id: String,
+     },
++    SetCollectionProfile {
++        project_id: String,
++        collection_type_id: String,
++        payload: Vec<u8>,
++        payload_schema_version: u32,
++        allowed_object_type_ids: Vec<String>,
++        required_capability_ids: Vec<String>,
++    },
++    UpdateProjectPresentation {
++        project_id: String,
++        favorite: bool,
++        archived: bool,
++        icon_ref: Option<String>,
++    },
+ }
+ 
+ #[derive(Debug, Clone, uniffi::Record)]
+@@ -258,6 +272,32 @@ impl From<MdbxWriteCommand> for StorageWriteCommand {
+             MdbxWriteCommand::TrashProjectWithAttachments { project_id } => {
+                 Self::TrashProjectWithAttachments { project_id }
+             }
++            MdbxWriteCommand::SetCollectionProfile {
++                project_id,
++                collection_type_id,
++                payload,
++                payload_schema_version,
++                allowed_object_type_ids,
++                required_capability_ids,
++            } => Self::SetCollectionProfile {
++                project_id,
++                collection_type_id,
++                payload,
++                payload_schema_version,
++                allowed_object_type_ids,
++                required_capability_ids,
++            },
++            MdbxWriteCommand::UpdateProjectPresentation {
++                project_id,
++                favorite,
++                archived,
++                icon_ref,
++            } => Self::UpdateProjectPresentation {
++                project_id,
++                favorite,
++                archived,
++                icon_ref,
++            },
+             MdbxWriteCommand::RestoreProject {
+                 project_id,
+                 parent_project_id,

@@ -1,8 +1,10 @@
+import { dialogContent } from "./fixtures/material";
 import AxeBuilder from "@axe-core/playwright";
 import { chromium, expect, test, type BrowserContext, type Locator, type Page, type TestInfo } from "@playwright/test";
 import * as kdbxweb from "kdbxweb";
 import path from "node:path";
 import { buildKeePassFixture, keePassCredentials } from "../../src/providers/keepass/keepass-fixture";
+import { completeUserVerification } from "./fixtures/passkey-verification";
 
 const kdbxRuntime = ((kdbxweb as unknown as { default?: typeof kdbxweb }).default ?? kdbxweb);
 const VAULT_PASSWORD = "keepass webdav manager vault password";
@@ -25,7 +27,7 @@ interface RemoteState {
   putCount: number;
 }
 
-test("remote KeePass configures safely and presents restorable and pending states after worker restart", async ({}, testInfo) => {
+test("with automatic sync disabled, remote KeePass presents restorable and pending states after worker restart", async ({}, testInfo) => {
   test.setTimeout(120_000);
   let context: BrowserContext | undefined;
   try {
@@ -43,10 +45,13 @@ test("remote KeePass configures safely and presents restorable and pending state
     const launched = await launchExtension(testInfo, remote);
     context = launched.context;
     const page = launched.manager;
+    // Manual mode must retain the explicit recovery and durable pending states.
+    // Automatic recovery is exercised in automatic-webdav-sync.spec.ts.
+    await page.evaluate(() => chrome.storage.local.set({ "monica.sync.preferences.v1": { enabled: false } }));
 
     await openProviders(page);
     await page.getByRole("button", { name: "连接 KeePass" }).click();
-    const dialog = page.getByRole("dialog", { name: "连接 KeePass" });
+    const dialog = dialogContent(page, { name: "连接 KeePass" });
     await expect(dialog).toBeVisible();
     await dialog.getByLabel("WebDAV 文件").check();
     await dialog.getByLabel("显示名称").fill("Remote KeePass UI");
@@ -64,9 +69,12 @@ test("remote KeePass configures safely and presents restorable and pending state
     const card = providerCard(page, "Remote KeePass UI");
     await expect(card).toBeVisible();
     await expect(card.getByText("已解锁", { exact: true }).first()).toBeVisible();
-    await expect(card.getByText("工作副本可用", { exact: true })).toBeVisible();
-    await expect(card.getByText("远端基线可用", { exact: true })).toBeVisible();
-    await expect(card.getByText("同步完成", { exact: true })).toBeVisible();
+    // The status summary reports the encrypted working copy as offline access and
+    // the available remote baseline as a synced cloud save.
+    const statusRow = (label: string) => card.locator(".keepass-source-status-row").filter({ hasText: label });
+    await expect(statusRow("离线访问").locator("dd")).toHaveText("可用");
+    await expect(statusRow("云端保存").locator("dd")).toHaveText("已同步");
+    await expect(card.getByText("同步队列：0 项", { exact: true })).toBeVisible();
     await expect(card.getByText("修改只在内存中", { exact: false })).toHaveCount(0);
     await expect(card.getByText("后台重启后必须重新选择", { exact: false })).toHaveCount(0);
     await expectNoGradients(card);
@@ -81,7 +89,7 @@ test("remote KeePass configures safely and presents restorable and pending state
     expect(JSON.stringify(providers)).not.toMatch(new RegExp(`${escapeRegExp(DATABASE_PASSWORD)}|${escapeRegExp(WEBDAV_PASSWORD)}|ui-etag-1|remote-ui-private-secret`));
 
     await card.getByRole("button", { name: "管理 KeePass" }).click();
-    const editDialog = page.getByRole("dialog", { name: "管理 KeePass" });
+    const editDialog = dialogContent(page, { name: "管理 KeePass" });
     await expect(editDialog.getByLabel("WebDAV 地址")).toHaveValue(`${REMOTE_ORIGIN}/dav`);
     await expect(editDialog.getByLabel("用户名")).toHaveValue("remote-ui-user");
     await expect(editDialog.getByLabel("远端 .kdbx 位置")).toHaveValue("vaults/main.kdbx");
@@ -186,11 +194,134 @@ test("remote KeePass preserves a rebase conflict code and never overwrites the c
   }
 });
 
+test("KeePass passkey saves into the KDBX and signs a later assertion", async ({}, testInfo) => {
+  test.setTimeout(180_000);
+  let context: BrowserContext | undefined;
+  try {
+    const fixture = await buildKeePassFixture({
+      password: DATABASE_PASSWORD,
+      name: "KeePass Passkey Fixture",
+      entries: [{ title: "Anchor login", group: "Shared", fields: { UserName: "anchor-user" }, protectedFields: { Password: "anchor-private-secret" } }]
+    });
+    const remote: RemoteState = { bytes: fixture, etag: '"passkey-etag-1"', getCount: 0, putCount: 0 };
+    const launched = await launchExtension(testInfo, remote);
+    context = launched.context;
+    const providerId = await connectRemoteKeePass(launched.manager, "Passkey KeePass");
+
+    const rpId = "keepass-passkey.example.test";
+    await context.route(`https://${rpId}/**`, (route) => route.fulfill({ contentType: "text/html; charset=utf-8", body: passkeyCeremonyPage(rpId) }));
+    const page = await context.newPage();
+    await page.goto(`https://${rpId}/`);
+    await page.locator("#register").click();
+    // The prompt lives in a closed shadow root: focus starts on 创建 Passkey;
+    // Shift+Tab twice reaches the 保存位置 select, ArrowDown picks the KeePass target.
+    await expect.poll(() => page.evaluate(() => (document.activeElement as HTMLElement | null)?.id)).toBe("monica-passkey-prompt-host");
+    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Enter");
+    await completeUserVerification(context, VAULT_PASSWORD);
+    await expect(page.locator("#result")).toContainText("registered:");
+    await expect(page.locator("#result")).not.toContainText("error:");
+
+    const created = await vaultPasskeys(launched.manager);
+    expect(created).toHaveLength(1);
+    expect(created[0]).toMatchObject({ sourceMode: "browser-local", signCount: 0 });
+    expect(created[0].providerRefs).toEqual([expect.objectContaining({ providerId })]);
+
+    expect(await send(launched.manager, { type: "PROVIDER_SYNC", providerId })).toMatchObject({ ok: true, data: { conflicts: 0 } });
+    expect(remote.putCount).toBe(1);
+    const stored = await fixturePasskeyEntry(remote.bytes, rpId);
+    expect(stored.credentialId).toBe(created[0].credentialId);
+    expect(stored.privateKeyPem).toContain("BEGIN PRIVATE KEY");
+    const savedBeforeAuthentication = Buffer.from(remote.bytes);
+
+    await page.locator("#authenticate").click();
+    const prompt = page.locator("#monica-passkey-prompt-host");
+    await expect(prompt).toHaveCount(1);
+    await expect.poll(() => page.evaluate(() => (document.activeElement as HTMLElement | null)?.id)).toBe("monica-passkey-prompt-host");
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Enter");
+    await completeUserVerification(context, VAULT_PASSWORD);
+    await expect(page.locator("#result")).toContainText("authenticated:");
+    await expect(page.locator("#result")).not.toContainText("error:");
+    const signed = await vaultPasskeys(launched.manager);
+    expect(signed[0]).toMatchObject({ useCount: 1, lastUsedAt: expect.any(String) });
+
+    expect(await send(launched.manager, { type: "PROVIDER_SYNC", providerId })).toMatchObject({ ok: true, data: { conflicts: 0 } });
+    expect(remote.putCount).toBe(1);
+    expect(Buffer.from(remote.bytes)).toEqual(savedBeforeAuthentication);
+    const storedAfterSign = await fixturePasskeyEntry(remote.bytes, rpId);
+    expect(storedAfterSign.credentialId).toBe(created[0].credentialId);
+    expect(storedAfterSign.useCount).toBe(0);
+
+    expect(await send(launched.manager, { type: "VAULT_DELETE_ITEM", itemId: created[0].id })).toMatchObject({ ok: true });
+    expect(await send(launched.manager, { type: "PROVIDER_SYNC", providerId })).toMatchObject({ ok: true, data: { conflicts: 0 } });
+    expect(remote.putCount).toBe(2);
+    expect(await vaultPasskeys(launched.manager)).toHaveLength(0);
+    await expect(fixturePasskeyEntry(remote.bytes, rpId)).rejects.toThrow("Passkey 条目");
+    await expectSecretsAbsent(launched.manager);
+  } finally {
+    await context?.close();
+  }
+});
+
+async function vaultPasskeys(page: Page): Promise<Array<Record<string, any>>> {
+  const response = await send<Array<{ kind: string } & Record<string, any>>>(page, { type: "VAULT_LIST_ITEMS" });
+  expect(response, response.error).toMatchObject({ ok: true });
+  return (response.data || []).filter((item) => item.kind === "passkey");
+}
+
+interface FixturePasskeyEntry {
+  credentialId: string;
+  privateKeyPem: string;
+  useCount?: number;
+}
+
+async function fixturePasskeyEntry(bytes: Uint8Array, rpId: string): Promise<FixturePasskeyEntry> {
+  const database = await kdbxRuntime.Kdbx.load(bytes.slice().buffer, keePassCredentials(DATABASE_PASSWORD));
+  const recycleBinUuid = database.meta.recycleBinUuid?.id;
+  for (const entry of database.getDefaultGroup().allEntries()) {
+    // Deleted entries move into the KDBX recycle bin; only the active tree counts as present.
+    let parent: kdbxweb.KdbxGroup | undefined = entry.parentGroup;
+    let inRecycleBin = false;
+    while (parent) {
+      if (recycleBinUuid && parent.uuid.id === recycleBinUuid) inRecycleBin = true;
+      parent = parent.parentGroup;
+    }
+    if (inRecycleBin) continue;
+    const relyingParty = entry.fields.get("KPEX_PASSKEY_RELYING_PARTY");
+    if (typeof relyingParty !== "string" || relyingParty !== rpId) continue;
+    const text = (value: unknown): string => (typeof value === "string" ? value : (value as { getText?: () => string })?.getText?.() ?? "");
+    const payloadText = text(entry.fields.get("MonicaPasskeyData"));
+    let useCount: number | undefined;
+    try { useCount = JSON.parse(payloadText).useCount; } catch { /* Monica payload is optional. */ }
+    return {
+      credentialId: String(entry.fields.get("MonicaPasskeyCredentialId") ?? ""),
+      privateKeyPem: text(entry.fields.get("KPEX_PASSKEY_PRIVATE_KEY_PEM")),
+      useCount
+    };
+  }
+  throw new Error(`KDBX 中没有 ${rpId} 的 Passkey 条目`);
+}
+
+function passkeyCeremonyPage(rpId: string): string {
+  return `<!doctype html><title>KeePass Passkey Test</title><button id="register">Register passkey</button><button id="authenticate">Authenticate passkey</button><output id="result"></output><script>
+    const challenge = () => new Uint8Array(32).fill(21); let credentialId;
+    const decode = value => { const normalized=value.replace(/-/g,'+').replace(/_/g,'/'); const binary=atob(normalized+'='.repeat((4-normalized.length%4)%4)); return Uint8Array.from(binary,c=>c.charCodeAt(0)); };
+    register.onclick = async () => { try { const credential = await navigator.credentials.create({ publicKey: { challenge: challenge(), rp: { id: '${rpId}', name: 'KeePass Passkey Test' }, user: { id: new Uint8Array(16).fill(13), name: 'joy@example.com', displayName: 'Joy' }, pubKeyCredParams: [{ type: 'public-key', alg: -7 }], timeout: 60000, attestation: 'none' } }); credentialId=credential.id; result.textContent='registered:'+credential.id; } catch(error) { result.textContent='error:'+error.name+':'+error.message; } };
+    authenticate.onclick = async () => { try { const credential = await navigator.credentials.get({ publicKey: { challenge: challenge(), rpId: '${rpId}', allowCredentials: [{ type:'public-key', id: decode(credentialId) }], timeout: 60000 } }); result.textContent='authenticated:'+credential.id+':'+credential.response.signature.byteLength; } catch(error) { result.textContent='error:'+error.name+':'+error.message; } };
+  </script>`;
+}
+
 async function launchExtension(testInfo: TestInfo, remote: RemoteState): Promise<{ context: BrowserContext; extensionId: string; manager: Page }> {
   const extensionPath = path.resolve("dist");
   const context = await chromium.launchPersistentContext(testInfo.outputPath("p"), {
     channel: "chromium",
-    headless: true,
+    headless: true, locale: "zh-CN",
     colorScheme: "dark",
     reducedMotion: "reduce",
     viewport: { width: 375, height: 1000 },
@@ -212,7 +343,7 @@ async function installRemoteRoute(context: BrowserContext, remote: RemoteState):
   await context.route(`${REMOTE_ORIGIN}/**`, async (route) => {
     const request = route.request();
     const url = new URL(request.url());
-    if (request.method() === "PROPFIND" && url.pathname === "/dav") {
+    if (request.method() === "PROPFIND" && url.pathname === "/dav/") {
       await route.fulfill({ status: 207, contentType: "application/xml; charset=utf-8", body: "<d:multistatus xmlns:d=\"DAV:\"></d:multistatus>" });
       return;
     }
@@ -250,7 +381,7 @@ async function installRemoteRoute(context: BrowserContext, remote: RemoteState):
 async function connectRemoteKeePass(page: Page, name: string): Promise<string> {
   await openProviders(page);
   await page.getByRole("button", { name: "连接 KeePass" }).click();
-  const dialog = page.getByRole("dialog", { name: "连接 KeePass" });
+  const dialog = dialogContent(page, { name: "连接 KeePass" });
   await dialog.getByLabel("WebDAV 文件").check();
   await dialog.getByLabel("显示名称").fill(name);
   await dialog.getByLabel("WebDAV 地址").fill(`${REMOTE_ORIGIN}/dav`);

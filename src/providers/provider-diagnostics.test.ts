@@ -3,6 +3,17 @@ import { createProviderDiagnostic, redactProviderDiagnostic, redactProviderMessa
 import { ProviderTransportError } from "./provider-transport";
 
 describe("provider diagnostic redaction", () => {
+  it('removes quoted and provider-specific secret fields without leaving passphrase fragments', () => {
+    const messages = [
+      '{"password":"short secret words","shared_secret":"small-key"}',
+      "refresh_token='two word token'; accessToken=short-token; private_key=short-key",
+      '{"authorization":"Bearer token with spaces","identity_secret":"identity-value"}'
+    ];
+    const result = messages.map(redactProviderMessage).join(' ');
+    for (const secret of ['short secret', 'words', 'small-key', 'two word', 'short-token', 'short-key', 'token with spaces', 'identity-value']) {
+      expect(result).not.toContain(secret);
+    }
+  });
   it("deeply removes credentials tokens keys URLs email and server-echoed secrets", () => {
     const source = {
       provider: "bitwarden",

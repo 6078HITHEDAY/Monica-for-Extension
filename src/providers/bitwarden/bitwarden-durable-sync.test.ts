@@ -7,14 +7,158 @@ import { MemoryVaultStorage } from "../../security/vault-storage";
 import { encryptBitwardenString, type BitwardenSymmetricKey } from "./bitwarden-crypto";
 import { BitwardenDurableSyncCoordinator, bitwardenMutationFingerprint } from "./bitwarden-durable-sync";
 import { BitwardenProvider } from "./bitwarden-provider";
+import { encodeBitwardenPasskeyCipher } from './bitwarden-cipher-codec';
 
 const KEY: BitwardenSymmetricKey = {
   encKey: Uint8Array.from({ length: 32 }, (_, index) => index),
   macKey: Uint8Array.from({ length: 32 }, (_, index) => index + 32)
 };
 const REVISION = "2026-08-08T00:00:00.000Z";
+const P256_PKCS8 = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgsloK6aKNvj0CZMYdBdSZs+AUAsFy1t66q4tq5SvyeJahRANCAASlCTbHlIcaKQ2lzoEFhtjkLEO++f3cYq6FMYG7eH3BmuLQPz71FAtWq4z+tIb7oequwhUJL3xos1nA8jFqpkDs";
 
 describe("Bitwarden durable item synchronization", () => {
+  it.each(['canonical', 'base64url-key', 'uuid-id', 'legacy-canonical', 'legacy-url', 'legacy-edited', 'ambiguous', 'missing', 'changed-key'])(
+    'recovers a committed Passkey create after restart with %s input without another write', async representation => {
+      const storage = new MemoryVaultStorage(), account = bitwardenAccount();
+      const service = new SecureVaultService(storage, new MemoryVaultSessionStore());
+      const master = 'Synthetic portable passkey recovery';
+      await service.setup(master); await service.upsertProvider(account);
+      const item: PasskeyItem = {
+        id: 'portable-create', kind: 'passkey', title: 'Example', notes: '', favorite: false,
+        createdAt: REVISION, updatedAt: REVISION, providerRefs: [{ providerId: account.id }],
+        credentialId: representation === 'uuid-id' ? '00010203-0405-0607-0809-0a0b0c0d0e0f' : 'AAECAwQFBgcICQoLDA0ODw',
+        privateKeyPkcs8: representation === 'base64url-key' || representation.startsWith('legacy-') && representation !== 'legacy-canonical'
+          ? P256_PKCS8.replace(/\+/g, '-').replace(/\//g, '_') : P256_PKCS8,
+        publicKey: '', algorithm: -7, rpId: 'example.com', rpName: 'Example', userHandle: 'dXNlcg',
+        userName: 'joy@example.com', userDisplayName: 'Joy', signCount: 0, discoverable: true,
+        backupEligible: true, backupState: true, sourceMode: 'browser-local'
+      };
+      await service.upsertItem(item);
+      const remote: Record<string, unknown>[] = []; let posts = 0;
+      const fetcher: typeof fetch = async (input, init) => {
+        if (String(input).includes('/sync')) return json({ Profile: { Id: 'user' }, Ciphers: remote });
+        if (init?.method === 'POST') {
+          posts++;
+          remote.push({ ...JSON.parse(String(init.body)), id: 'portable-remote', revisionDate: REVISION, creationDate: REVISION });
+          throw new TypeError('Synthetic response loss after server commit');
+        }
+        throw new Error('Unexpected request');
+      };
+      if (representation.startsWith('legacy-')) {
+        const state = await service.readState(), queued = state.mutationQueue[0];
+        await service.prepareProviderMutationReceipts([{ version: 1, providerId: account.id, itemId: item.id, mutationId: queued.id,
+          operation: 'create', stage: 'prepared', intentFingerprint: await bitwardenMutationFingerprint(state.items.find(row => row.id === item.id)!, 1),
+          attemptCount: 0, createdAt: queued.createdAt, updatedAt: queued.createdAt }]);
+        await service.markProviderMutationReceiptsAttempted(account.id, [queued.id]);
+        remote.push({ ...await encodeBitwardenPasskeyCipher(item, KEY), id: 'portable-remote', revisionDate: REVISION, creationDate: REVISION }); posts++;
+        if (representation === 'legacy-edited') await service.upsertItem({ ...item, userName: 'later local edit' });
+      } else await new BitwardenDurableSyncCoordinator(new BitwardenProvider(fetcher), service).synchronize(account);
+      expect(posts).toBe(1);
+      expect((await service.readState()).providerMutationReceipts[0]).toMatchObject({ stage: 'attempted' });
+      if (representation === 'ambiguous') remote.push({ ...structuredClone(remote[0]), id: 'duplicate-remote' });
+      if (representation === 'missing') remote.length = 0;
+      if (representation === 'changed-key') {
+        const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+        const other = bytesToBase64(new Uint8Array(await crypto.subtle.exportKey('pkcs8', pair.privateKey)));
+        remote[0] = { ...await encodeBitwardenPasskeyCipher({ ...item, privateKeyPkcs8: other }, KEY),
+          id: 'portable-remote', revisionDate: REVISION, creationDate: REVISION };
+      }
+      await service.lock();
+      const reopened = new SecureVaultService(storage, new MemoryVaultSessionStore()); await reopened.unlock(master);
+      const result = await new BitwardenDurableSyncCoordinator(new BitwardenProvider(fetcher), reopened).synchronize(account);
+      if (['legacy-edited', 'ambiguous', 'missing', 'changed-key'].includes(representation)) {
+        expect(result.conflicts).toHaveLength(1); expect(posts).toBe(1);
+        const preserved = await reopened.readState();
+        expect(preserved.providerConflicts).toHaveLength(1);
+        expect(preserved.providerMutationReceipts[0].stage).toBe('attempted'); expect(preserved.mutationQueue).toHaveLength(1);
+        expect(preserved.items.find(row => row.id === item.id)).toMatchObject({ privateKeyPkcs8: item.privateKeyPkcs8, signCount: 0 });
+        return;
+      }
+      expect(result.conflicts).toEqual([]);
+      expect(posts).toBe(1);
+      const final = await reopened.readState();
+      expect(final.mutationQueue).toEqual([]); expect(final.providerMutationReceipts).toEqual([]);
+      expect(final.items.find(row => row.id === item.id)).toMatchObject({ kind: 'passkey', signCount: 0 });
+      const fresh = await new BitwardenProvider(fetcher).sync(account, { now: REVISION, localItems: [] });
+      expect(fresh.items.find(row => row.kind === 'passkey')).toMatchObject({
+        credentialId: 'AAECAwQFBgcICQoLDA0ODw', privateKeyPkcs8: P256_PKCS8, signCount: 0
+      });
+    }
+  );
+
+  it('rejects a restricted Passkey before folder creation or marking a network attempt', async () => {
+    const vault = new SecureVaultService(new MemoryVaultStorage(), new MemoryVaultSessionStore()), account = bitwardenAccount();
+    await vault.setup('Synthetic restricted upload'); await vault.upsertProvider(account);
+    const item: PasskeyItem = { id: 'restricted', kind: 'passkey', title: 'Restricted', notes: '', favorite: false,
+      createdAt: REVISION, updatedAt: REVISION, providerRefs: [{ providerId: account.id }], categoryName: 'Must not be created',
+      credentialId: 'AAECAwQFBgcICQoLDA0ODw', privateKeyPkcs8: P256_PKCS8, publicKey: '', algorithm: -7,
+      rpId: 'example.com', rpName: 'Example', userHandle: 'dXNlcg', userName: 'joy', userDisplayName: 'Joy', signCount: 0, discoverable: true,
+      backupEligible: false, backupState: false, sourceMode: 'browser-local' };
+    await vault.upsertItem(item); const calls: string[] = [];
+    const provider = new BitwardenProvider(async (url, init) => {
+      calls.push(`${init?.method || 'GET'} ${url}`);
+      if (String(url).includes('/sync')) return json({ Profile: { Id: 'user' }, Ciphers: [] });
+      throw new Error('Unexpected mutation');
+    });
+    await expect(provider.create(account, item)).rejects.toThrow('注册');
+    await expect(provider.update(account, item)).rejects.toThrow('注册');
+    expect(calls).toEqual([]);
+    const result = await new BitwardenDurableSyncCoordinator(provider, vault).synchronize(account);
+    expect(result.conflicts[0].reason).toContain('注册'); expect(calls).toHaveLength(1);
+    const state = await vault.readState();
+    expect(state.providerMutationReceipts[0]).toMatchObject({ stage: 'prepared', attemptCount: 0 });
+    expect(state.items.find(row => row.id === item.id)).toMatchObject({ backupEligible: false, privateKeyPkcs8: P256_PKCS8, signCount: 0 });
+  });
+
+  it.each(['confirmed', 'read-interrupted', 'restored-keep-remote', 'restored-keep-local'])(
+    'preserves concurrent password content and durable trash intent: %s', async scenario => {
+      const storage = new MemoryVaultStorage(), account = bitwardenAccount();
+      const vault = new SecureVaultService(storage, new MemoryVaultSessionStore());
+      const password = 'Synthetic durable trash test';
+      await vault.setup(password); await vault.upsertProvider(account);
+      let raw = await loginCipher('original', REVISION, 'trash-cipher');
+      let deletes = 0, interruptRead = scenario === 'read-interrupted', restoreOnDelete = scenario.startsWith('restored');
+      const fetcher: typeof fetch = async (url, init) => {
+        if (String(url).includes('/sync')) return json({ Profile: { Id: 'user' }, Ciphers: [raw] });
+        if (String(url).endsWith('/delete') && init?.method === 'PUT') {
+          deletes++;
+          raw = { ...await loginCipher('concurrent', '2026-08-08T00:04:00.000Z', 'trash-cipher'),
+            DeletedDate: restoreOnDelete ? null : '2026-08-08T00:04:00.000Z' };
+          return new Response(null, { status: 200 });
+        }
+        if (String(url).endsWith('/details')) {
+          if (interruptRead) throw new DOMException('Interrupted readback', 'AbortError');
+          return json(raw);
+        }
+        throw new Error(`Unexpected ${init?.method} ${String(url)}`);
+      };
+      await new BitwardenDurableSyncCoordinator(new BitwardenProvider(fetcher), vault).synchronize(account);
+      const original = (await vault.listItems())[0]; await vault.deleteItem(original.id);
+      await new BitwardenDurableSyncCoordinator(new BitwardenProvider(fetcher), vault).synchronize(account);
+      expect(deletes).toBe(1);
+      if (scenario !== 'confirmed') expect((await vault.readState()).providerMutationReceipts[0].stage).toBe('attempted');
+      await vault.lock();
+      const reopened = new SecureVaultService(storage, new MemoryVaultSessionStore()); await reopened.unlock(password);
+      interruptRead = false;
+      await new BitwardenDurableSyncCoordinator(new BitwardenProvider(fetcher), reopened).synchronize(account);
+      const recovered = await reopened.readState();
+      expect(deletes).toBe(1);
+      if (scenario.startsWith('restored')) {
+        expect(recovered.providerConflicts).toHaveLength(1);
+        expect(recovered.providerConflicts[0].remote).toMatchObject({ password: 'concurrent' });
+        expect(recovered.mutationQueue).toHaveLength(1);
+        await reopened.resolveProviderConflict(recovered.providerConflicts[0].id, scenario === 'restored-keep-remote' ? 'use-remote' : 'keep-local');
+        restoreOnDelete = false;
+        await new BitwardenDurableSyncCoordinator(new BitwardenProvider(fetcher), reopened).synchronize(account);
+        expect(deletes).toBe(scenario === 'restored-keep-remote' ? 1 : 2);
+      }
+      const final = await reopened.readState();
+      expect(final.items.find(row => row.id === original.id)).toMatchObject({ password: 'concurrent' });
+      expect(final.mutationQueue).toHaveLength(0);
+      expect(final.providerMutationReceipts).toHaveLength(0);
+      expect(final.providerConflicts).toHaveLength(0);
+    }
+  );
   it("includes Passkey archive state in the durable Bitwarden intent fingerprint", async () => {
     const raw = await loginCipher("secret", REVISION, "archive-passkey-cipher");
     raw.Login = { ...(raw.Login as Record<string, unknown>), Fido2Credentials: [await fidoCredential("archive-credential", 0)] };
@@ -603,7 +747,7 @@ async function fidoCredential(credentialId: string, counter: number): Promise<Re
   return {
     CredentialId: await enc(credentialId),
     KeyAlgorithm: await enc("ECDSA"),
-    KeyValue: await enc(`pkcs8-${credentialId}`),
+    KeyValue: await enc(P256_PKCS8),
     RpId: await enc("example.com"),
     RpName: await enc("Example"),
     Counter: await enc(String(counter)),

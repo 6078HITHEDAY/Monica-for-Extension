@@ -24,8 +24,27 @@ jobs:
       - run: npm run verify:toolchain
       - run: npm ci --ignore-scripts
       - run: npx playwright install --with-deps chromium
+      - name: Build the pinned browser MDBX engine
+        shell: bash
+        run: |
+          rustup toolchain install 1.97.0 --profile minimal --target wasm32-unknown-emscripten
+          git clone --no-checkout https://github.com/emscripten-core/emsdk.git .tmp/emsdk
+          git -C .tmp/emsdk checkout --detach eb5eb4b3b2b792f44ded198bfe615c985da5be2c
+          python .tmp/emsdk/emsdk.py install 4.0.18
+          python .tmp/emsdk/emsdk.py activate 4.0.18
+          source .tmp/emsdk/emsdk_env.sh
+          # Build scripts also need host-target dependencies before offline build.
+          cargo +1.97.0 fetch --locked --manifest-path native/mdbx2-browser/Cargo.toml
+          npm run build:mdbx2-browser
       - run: npm run release:check
       - run: npm run package:verify
+      - name: Build and verify unsigned Firefox package
+        run: node scripts/build-firefox.mjs && node scripts/verify-firefox.mjs && node scripts/package-firefox.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: monica-extension-firefox-unsigned
+          path: .artifacts/firefox/*
+          if-no-files-found: error
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: monica-extension
@@ -50,13 +69,72 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci --ignore-scripts
+      - run: npx playwright install chromium
       - run: npm run verify:supply-chain
       - run: npm run test:mdbx2-host
       - run: npm run lint:mdbx2-host
+      - name: Build the pinned browser MDBX engine
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.97.0 --profile minimal --target wasm32-unknown-emscripten
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git clone --no-checkout https://github.com/emscripten-core/emsdk.git .tmp/emsdk
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git -C .tmp/emsdk checkout --detach eb5eb4b3b2b792f44ded198bfe615c985da5be2c
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python .tmp/emsdk/emsdk.py install 4.0.18
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python .tmp/emsdk/emsdk.py activate 4.0.18
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          . .tmp/emsdk/emsdk_env.ps1
+          cargo +1.97.0 fetch --locked --manifest-path native/mdbx2-browser/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build:mdbx2-browser
+      - run: npm run build
+      - name: Required Edge core acceptance (not Android, CLI or hardware acceptance)
+        run: node scripts/e2e-edge.mjs tests/e2e/export-clipboard.spec.ts tests/e2e/vault-storage.spec.ts tests/e2e/runtime-startup.spec.ts tests/e2e/settings-pages.spec.ts tests/e2e/card-artwork.spec.ts tests/e2e/editor-groups.spec.ts tests/e2e/wallet-create.spec.ts tests/e2e/navigation-drawer.spec.ts --workers=1
+      - run: npx playwright test tests/e2e/passkey-windows-hello.spec.ts
       - run: npm run package:mdbx2-host
       - run: npm run package:verify:mdbx2-host
+      - name: Verify Firefox and Chromium native installer isolation
+        run: node scripts/test-firefox-installers.mjs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: monica-mdbx2-host-windows-x64
           path: release/monica-mdbx2-host-windows-x64-*
           if-no-files-found: error
+
+  publish-preview:
+    name: Publish rolling Preview
+    needs: [validate, mdbx2-host-windows]
+    if: >-
+      github.repository == 'Monica-Pass/Monica-for-Extension' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: extension-preview-release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: monica-extension
+          path: .artifacts/preview/extension
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: monica-mdbx2-host-windows-x64
+          path: .artifacts/preview/host
+      - name: Verify and replace Preview assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/publish-preview.mjs

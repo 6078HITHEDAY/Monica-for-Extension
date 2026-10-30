@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import * as kdbxweb from "kdbxweb";
-import type { LoginItem, PendingMutation, ProviderAccount, VaultItem } from "../../core/model";
+import type { LoginItem, PasskeyItem, PendingMutation, ProviderAccount, VaultItem } from "../../core/model";
 import { buildKeePassFixture, keePassCredentials, type KeePassFixtureEntry } from "./keepass-fixture";
 import { KeePassProvider } from "./keepass-provider";
 import { keePassFieldText } from "./keepass-login-codec";
+import { applySsoAccountChoice, resolveSsoAccount, ssoLogicalId } from "../../core/sso-links";
 
 /**
  * Adapter-level assertions: what the settings UI may see, and what survives an edit made through the
@@ -11,6 +12,37 @@ import { keePassFieldText } from "./keepass-login-codec";
  */
 
 const PASSWORD = "fixture master password";
+
+it.each(['account-lock', 'vault-lock', 'replacement'] as const)('does not revive a session after %s during file unlock', async mode => {
+  const provider = new KeePassProvider(), target = account();
+  const bytes = await buildKeePassFixture({ password: PASSWORD });
+  // unlock reaches its first asynchronous KDF before a lock or newer unlock runs.
+  const opening = provider.unlock(target, bytes, { password: PASSWORD });
+  const rejected = expect(opening).rejects.toThrow(/锁定或替换/);
+  if (mode === 'account-lock') provider.lockAccount(target.id);
+  else if (mode === 'vault-lock') provider.lock();
+  else await provider.unlock(target, bytes, { password: PASSWORD, sourceName: 'Replacement' });
+  await rejected;
+  expect(provider.isUnlocked(target.id)).toBe(mode === 'replacement');
+});
+
+it('keeps card layout local and carries document layout through a fresh KDBX read', async () => {
+  const provider = new KeePassProvider();
+  const { target } = await unlock(provider, []);
+  const base = { id: 'wallet', title: 'Synthetic wallet', favorite: false, notes: '', createdAt: '2026-10-09', updatedAt: '2026-10-09',
+    providerRefs: [{ providerId: target.id }], editorSectionOrder: ['notes', 'custom', 'future'] };
+  const card = await provider.create(target, { ...base, kind: 'card', cardholderName: 'Holder', number: '4111111111111111', securityCode: '123', expiryMonth: '12', expiryYear: '2030' });
+  const document = await provider.create(target, { ...base, id: 'document', kind: 'identity', documentType: 'PASSPORT', documentNumber: 'Synthetic', firstName: 'A', middleName: '', lastName: 'B', fullName: 'A B' });
+  const cardLayout = { ...card, editorSectionOrder: ['custom', 'notes'] } as typeof card;
+  const result = await sync(provider, target, [cardLayout, document]);
+  expect(result.conflicts).toHaveLength(0);
+  expect(result.items.find(item => item.kind === 'card')).toMatchObject({ editorSectionOrder: ['custom', 'notes'] });
+  const reopened = new KeePassProvider();
+  await reopened.unlock(target, await provider.exportFile(target.id), { password: PASSWORD });
+  const fresh = await sync(reopened, target, []);
+  expect(fresh.items.find(item => item.kind === 'identity')).toMatchObject({ editorSectionOrder: base.editorSectionOrder });
+});
+const P256_PKCS8 = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgsloK6aKNvj0CZMYdBdSZs+AUAsFy1t66q4tq5SvyeJahRANCAASlCTbHlIcaKQ2lzoEFhtjkLEO++f3cYq6FMYG7eH3BmuLQPz71FAtWq4z+tIb7oequwhUJL3xos1nA8jFqpkDs";
 const ENTRIES: KeePassFixtureEntry[] = [
   {
     title: "GitHub",
@@ -42,6 +74,39 @@ async function sync(provider: KeePassProvider, target: ProviderAccount, localIte
   return provider.sync(target, { now: "2026-07-26T12:00:00.000Z", localItems });
 }
 
+it("links a newly created KeePass account before any subsequent sync changes its local ID", async () => {
+  const provider = new KeePassProvider();
+  const { target } = await unlock(provider, []);
+  const created = await provider.create(target, newLogin({ id: "local-account", title: "SSO account", providerRefs: [{ providerId: target.id }] })) as LoginItem;
+  expect(created.id).toBe("local-account");
+  expect(ssoLogicalId(created)).toBe(`password:keepass:${created.keepassEntryUuid}`);
+  const site = newLogin({ id: "local-site", title: "SSO site", loginType: "SSO", keepassDatabaseId: created.keepassDatabaseId, providerRefs: [{ providerId: target.id }] });
+  await provider.create(target, applySsoAccountChoice(site, ssoLogicalId(created), [created]));
+  const reopened = new KeePassProvider();
+  const newTarget = { ...target, id: "reconnected" };
+  await reopened.unlock(newTarget, await provider.exportFile(target.id), { password: PASSWORD });
+  const items = (await sync(reopened, newTarget, [])).items;
+  const owner = items.find(item => item.title === "SSO site") as LoginItem;
+  expect(resolveSsoAccount(owner, items)?.keepassEntryUuid).toBe(created.keepassEntryUuid);
+});
+
+it.each(["SsoRefEntryId", "MonicaSsoRefId"])("removes legacy %s after an encrypted KDBX provider roundtrip", async alias => {
+  const provider = new KeePassProvider();
+  const { target } = await unlock(provider, [{ title: "Legacy site", fields: { MonicaLoginType: "SSO" }, protectedFields: { [alias]: "42", "Future metadata": "keep" } }]);
+  const item = (await sync(provider, target, [])).items[0] as LoginItem;
+  expect(item.ssoRefEntryId).toBe(42);
+  await provider.update(target, { ...item, title: "Renamed", ssoRefEntryId: undefined });
+  const bytes = await provider.exportFile(target.id);
+  const reopened = new KeePassProvider();
+  await reopened.unlock(target, bytes, { password: PASSWORD });
+  const read = (await sync(reopened, target, [])).items[0] as LoginItem;
+  expect(read.ssoRefEntryId).toBeUndefined();
+  expect(read.customFields).toContainEqual({ name: "Future metadata", value: "keep", protected: true });
+  const database = await kdbxweb.Kdbx.load(bytes.buffer as ArrayBuffer, keePassCredentials(PASSWORD));
+  const entry = database.getDefaultGroup().entries[0];
+  expect(entry.fields.has(alias)).toBe(false);
+});
+
 function newLogin(overrides: Partial<LoginItem> = {}): LoginItem {
   return {
     id: "local-new",
@@ -60,12 +125,79 @@ function newLogin(overrides: Partial<LoginItem> = {}): LoginItem {
   };
 }
 
+function newPasskey(overrides: Partial<PasskeyItem> = {}): PasskeyItem {
+  return {
+    id: "passkey-new",
+    kind: "passkey",
+    title: "Example Passkey",
+    favorite: false,
+    notes: "",
+    createdAt: "2026-07-26T12:00:00.000Z",
+    updatedAt: "2026-07-26T12:00:00.000Z",
+    providerRefs: [{ providerId: "kp-a" }],
+    credentialId: "AQID",
+    rpId: "example.test",
+    rpName: "Example",
+    userHandle: "dXNlcg",
+    userName: "joy",
+    userDisplayName: "Joy",
+    algorithm: -7,
+    publicKey: "public",
+    privateKeyPkcs8: P256_PKCS8,
+    signCount: 0,
+    discoverable: true,
+    passkeyMode: "KEEPASS_COMPAT",
+    sourceMode: "browser-local",
+    ...overrides
+  };
+}
+
 async function reopen(provider: KeePassProvider, target: ProviderAccount): Promise<kdbxweb.Kdbx> {
   const bytes = await provider.exportFile(target.id);
   return kdbxweb.Kdbx.load(bytes.slice().buffer, keePassCredentials(PASSWORD));
 }
 
 describe("KeePassProvider", () => {
+  it.each(['login', 'passkey'] as const)('keeps an archived %s hidden across updates, sync and encrypted working-copy reopen', async kind => {
+    const provider = new KeePassProvider();
+    const { target } = await unlock(provider, []);
+    const item = kind === 'login' ? newLogin() : newPasskey();
+    const created = await provider.create(target, item);
+    const archivedAt = '2026-10-06T00:00:00Z';
+    const updated = await provider.update(target, { ...created, archivedAt, notes: 'keep archived' });
+    expect(updated.archivedAt).toBe(archivedAt);
+    const bytes = await provider.exportFile(target.id);
+    const reopened = new KeePassProvider();
+    await reopened.unlock(target, bytes, { password: PASSWORD });
+    const synced = await sync(reopened, target, [updated]);
+    expect(synced.conflicts).toEqual([]);
+    expect(synced.items[0]).toMatchObject({ archivedAt, notes: 'keep archived' });
+    expect(reopened.summarize(target.id).dirty).toBe(false);
+    const restored = await reopened.update(target, { ...synced.items[0], archivedAt: undefined });
+    expect(restored.archivedAt).toBeUndefined();
+    expect((await sync(reopened, target, [restored])).items[0].archivedAt).toBeUndefined();
+  });
+  it("keeps usage local without rewriting the KDBX or adding entry history, including old baselines", async () => {
+    const provider = new KeePassProvider();
+    const { target } = await unlock(provider, []);
+    const created = await provider.create(target, newPasskey({ signCount: 4, useCount: 2 })) as PasskeyItem;
+    await provider.exportFile(target.id);
+    const reference = created.providerRefs[0];
+    const baseline = JSON.parse(reference.etag!);
+    baseline.useCount = 2;
+    const oldEtag = JSON.stringify(baseline, (_key, value) => value && typeof value === "object" && !Array.isArray(value)
+      ? Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right))) : value);
+    const used = { ...created, useCount: 3, lastUsedAt: "2026-09-14T03:00:00.000Z", providerRefs: [{ ...reference, etag: oldEtag }] };
+    const result = await sync(provider, target, [used]);
+    expect(result.conflicts).toEqual([]);
+    expect(result.items[0]).toMatchObject({ signCount: 4, useCount: 3, lastUsedAt: used.lastUsedAt });
+    expect(provider.summarize(target.id).dirty).toBe(false);
+    const database = await reopen(provider, target);
+    const entry = database.getDefaultGroup().entries[0];
+    expect(entry.history).toHaveLength(0);
+    const payload = JSON.parse(keePassFieldText(entry.fields.get("MonicaPasskeyData")));
+    expect(payload).toMatchObject({ signCount: 4, useCount: 2 });
+  });
   it("summarizes the file without handing the UI the database or its entries", async () => {
     const provider = new KeePassProvider();
     const { summary } = await unlock(provider);
@@ -113,6 +245,39 @@ describe("KeePassProvider", () => {
     expect(created.providerRefs.find((reference) => reference.providerId === target.id)?.remoteId).toBe(
       group.entries[0].uuid.toString()
     );
+  });
+
+  it("rejects duplicate Passkey credential IDs before mutating another KeePass entry", async () => {
+    const provider = new KeePassProvider();
+    const { target } = await unlock(provider, []);
+    const first = await provider.create(target, newPasskey({ id: "first", credentialId: "AQID=" })) as PasskeyItem;
+    const second = await provider.create(target, newPasskey({ id: "second", credentialId: "BAUG", userName: "other" })) as PasskeyItem;
+
+    await expect(provider.create(target, newPasskey({ id: "duplicate", credentialId: "AQID" })))
+      .rejects.toMatchObject({ code: "keepass-passkey-credential-conflict" });
+    await expect(provider.update(target, { ...second, credentialId: "AQID" }))
+      .rejects.toMatchObject({ code: "keepass-passkey-credential-conflict" });
+    await expect(provider.update(target, { ...first, title: "Updated same entry" })).resolves.toMatchObject({ title: "Updated same entry" });
+
+    const reopened = await reopen(provider, target);
+    const entries = reopened.getDefaultGroup().entries;
+    expect(entries).toHaveLength(2);
+    expect(entries.find((entry) => keePassFieldText(entry.fields.get("MonicaPasskeyCredentialId")) === "AQID=")?.history).toHaveLength(1);
+    expect(entries.find((entry) => keePassFieldText(entry.fields.get("MonicaPasskeyCredentialId")) === "BAUG")?.history).toHaveLength(0);
+  });
+
+  it("preflights a duplicate Passkey sync batch without partially writing either entry", async () => {
+    const provider = new KeePassProvider();
+    const { target } = await unlock(provider, []);
+
+    const result = await sync(provider, target, [
+      newPasskey({ id: "batch-a", credentialId: "AQID=" }),
+      newPasskey({ id: "batch-b", credentialId: "AQID", userName: "other" })
+    ]);
+
+    expect(result.conflicts.map((conflict) => conflict.itemId).sort()).toEqual(["batch-a", "batch-b"]);
+    expect(result.items.filter((item) => item.kind === "passkey")).toHaveLength(2);
+    expect((await reopen(provider, target)).getDefaultGroup().entries).toHaveLength(0);
   });
 
   /** The handoff's core requirement, exercised end to end: an edit may not disturb a field it does not own. */
@@ -169,6 +334,25 @@ describe("KeePassProvider", () => {
     });
     expect(provider.readAttachment(target, item, attachments[0].attachmentId, 4, 2)).toMatchObject({ bytes: new Uint8Array(), eof: true });
     expect(() => provider.readAttachment(target, item, attachments[0].attachmentId, 5, 2)).toThrowError(/超过文件大小/);
+  });
+
+  it("keeps unchanged attachment handles across remote reloads but rejects replaced bytes and locked sessions", async () => {
+    const provider = new KeePassProvider();
+    const { target } = await unlock(provider, [{ title: "Reload", binaries: { "document.bin": new Uint8Array([1, 2, 3]) } }]);
+    const item = (await sync(provider, target, [])).items[0];
+    const attachment = provider.listAttachments(target, item)[0];
+    const bytes = await provider.snapshotFile(target.id);
+    await provider.unlock(target, bytes, { password: PASSWORD }, true);
+    expect(provider.readAttachment(target, item, attachment.attachmentId, 0).bytes).toEqual(new Uint8Array([1, 2, 3]));
+    const changed = new KeePassProvider();
+    await changed.unlock(target, bytes, { password: PASSWORD });
+    await changed.addAttachment(target, item, "document.bin", new Uint8Array([1, 2, 4]), true);
+    await provider.unlock(target, await changed.snapshotFile(target.id), { password: PASSWORD }, true);
+    expect(() => provider.readAttachment(target, item, attachment.attachmentId, 0)).toThrowError(/标识已失效/);
+    const refreshed = provider.listAttachments(target, item)[0];
+    provider.lockAccount(target.id);
+    await provider.unlock(target, bytes, { password: PASSWORD }, true);
+    expect(() => provider.readAttachment(target, item, refreshed.attachmentId, 0)).toThrowError(/标识已失效/);
   });
 
   it("adds and explicitly replaces an attachment while preserving both prior entry states", async () => {
@@ -245,17 +429,18 @@ describe("KeePassProvider", () => {
     expect(bin.entries).toHaveLength(1);
   });
 
-  it("envelopes an entry no codec claimed and leaves it out of the item list", async () => {
+  it("envelopes an unknown entry and exposes it as a readonly item", async () => {
     const provider = new KeePassProvider();
     const { target, summary } = await unlock(provider, [
       ...ENTRIES,
       { title: "未来", fields: { MonicaItemType: "CRYPTO_SEED" }, protectedFields: { MonicaItemData: "{}" } }
     ]);
 
-    expect(summary.itemCount).toBe(1);
+    expect(summary.itemCount).toBe(2);
     expect(summary.skipped).toMatchObject([{ reason: "unknown-item-type" }]);
 
     const result = await sync(provider, target, []);
+    expect(result.items).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "opaque", nativeType: "CRYPTO_SEED", title: "未来" })]));
     expect(result.sourceRecords).toMatchObject([{ format: "keepass-entry", encoding: "json" }]);
     expect(JSON.parse(result.sourceRecords![0].payload).fields).toContainEqual({
       name: "MonicaItemType",
@@ -263,6 +448,10 @@ describe("KeePassProvider", () => {
       value: "CRYPTO_SEED"
     });
     expect(result.warnings.join()).toContain("无法解析");
+    const unknown = result.items.find(item => item.kind === "opaque")!;
+    await expect(provider.addAttachment(target, unknown, "synthetic.txt", Uint8Array.of(1, 2), false)).rejects.toThrow(/未知/);
+    expect(() => provider.deleteAttachment(target, unknown, "nonexistent")).toThrow(/未知/);
+    expect(() => provider.restoreEntryHistory(target, unknown, "synthetic-operation", "nonexistent")).toThrow(/未知/);
   });
 
   it("never rewrites an entry it could not model", async () => {
