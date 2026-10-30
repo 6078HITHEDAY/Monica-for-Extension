@@ -21,7 +21,9 @@ export function loginMatchScore(item: LoginItem, pageUrl: string): number {
   const page = parsePageUrl(pageUrl);
   if (!page) return 0;
   const rules = effectiveLoginUriRules(item), android = hasAndroidUrlRules(item.customFields);
-  return rules.reduce((score, rule) => Math.max(score, uriRuleMatchScore(rule, page, android)), 0);
+  const score = rules.reduce((best, rule) => Math.max(best, uriRuleMatchScore(rule, page, android)), 0);
+  if (score > 0 || android || rules.some((rule) => rule.uri.trim() && rule.matchType !== "never")) return score;
+  return uriRuleMatchScore({ uri: hostnameTitle(item.title), matchType: "base-domain" }, page, false);
 }
 
 export function matchingLogins(items: LoginItem[], pageUrl: string): LoginItem[] {
@@ -100,4 +102,14 @@ function registrableDomain(host: string): string {
 
 function normalizeHostname(host: string): string {
   return host.toLocaleLowerCase().replace(/^www\./, "").replace(/\.$/, "");
+}
+
+/** KeePass/Android entries often store the site as the title and leave URL empty. */
+function hostnameTitle(title: string): string {
+  const candidate = title.trim();
+  if (!candidate || /[\s/<>]/.test(candidate)) return "";
+  const host = normalizeHost(candidate);
+  if (!host.includes(".")) return "";
+  if (getDomain(host, { allowPrivateDomains: true })) return host;
+  return /^(?:\d{1,3}\.){3}\d{1,3}$/.test(host) ? host : "";
 }
