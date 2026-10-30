@@ -33,6 +33,13 @@ describe("sniffMdbxImportFile", () => {
       kind: "unknown",
       incompatibilityReason: "unknown"
     });
+    expect(sniffMdbxImportFile(Uint8Array.of(0x03, 0xd9, 0xa2, 0x9a, 0x67, 0xfb, 0x4b, 0xb5, 0x00, 0x00, 0x04, 0x00))).toMatchObject({
+      kind: "kdbx",
+      needsPasswordPrompt: true
+    });
+    expect(sniffMdbxImportFile(Uint8Array.of(0x03, 0xd9, 0xa2, 0x9a, 0x65, 0xfb, 0x4b, 0xb5))).toMatchObject({
+      incompatibilityReason: "kdb-legacy"
+    });
   });
 
   it("treats PIN-only unlock as non-handshake portable", () => {

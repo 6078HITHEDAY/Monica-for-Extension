@@ -1,6 +1,8 @@
 import { launchTestContext } from "./fixtures/edge";
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import { buildKeePassFixture } from "../../src/providers/keepass/keepass-fixture";
 
 const GOLDEN = path.resolve("native/mdbx2-host/vendor/mdbx/crates/mdbx-storage/test-data/mdbx1-release-1.0.mdbx");
 
@@ -81,6 +83,31 @@ test("uninitialized manager imports an MDBX1 golden with a device key", async ({
     await manager.getByLabel("MDBX 密码").fill("mdbx1-golden-password");
     await manager.getByRole("button", { name: "打开并接入密码库" }).click();
     await expect(manager.getByRole("heading", { name: "全部项目", exact: true })).toBeVisible({ timeout: 90_000 });
+  } finally {
+    await context?.close();
+  }
+});
+
+test("uninitialized manager imports a KeePass KDBX as an existing vault", async ({}, testInfo) => {
+  test.setTimeout(120_000);
+  let context: BrowserContext | undefined;
+  try {
+    const bytes = await buildKeePassFixture({
+      password: "first-run-kdbx-password",
+      name: "First-run KDBX",
+      entries: [{ title: "ctf.show", fields: { UserName: "alice@example.test" }, protectedFields: { Password: "synthetic-secret" } }]
+    });
+    const kdbxPath = testInfo.outputPath("first-run.kdbx");
+    await writeFile(kdbxPath, bytes);
+    const opened = await openManager(testInfo);
+    context = opened.context;
+    const manager = opened.manager;
+    await manager.getByRole("tab", { name: "打开已有的密码库" }).click();
+    await manager.locator('input[type="file"][accept*=".kdbx"]').setInputFiles(kdbxPath);
+    await manager.getByLabel("数据库密码（可留空）").fill("first-run-kdbx-password");
+    await manager.getByRole("button", { name: "打开并接入密码库" }).click();
+    await expect(manager.getByRole("heading", { name: "全部项目", exact: true })).toBeVisible({ timeout: 90_000 });
+    await expect(manager.getByText("ctf.show", { exact: false }).first()).toBeVisible();
   } finally {
     await context?.close();
   }

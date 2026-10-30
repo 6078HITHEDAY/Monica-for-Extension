@@ -1,3 +1,4 @@
+import { detectKeePassContainerFormat } from "../keepass/keepass-format";
 import {
   MDBX3_RUNTIME_NAME,
   type MdbxImportableFormatVersion,
@@ -10,6 +11,7 @@ export type MdbxImportKind =
   | "mdbx-vault"
   | "mdbx-complete-backup-zip"
   | "android-project-zip"
+  | "kdbx"
   | "unknown";
 
 export interface MdbxImportSniff {
@@ -37,6 +39,9 @@ export async function sniffMdbxImportBlob(file: Blob): Promise<MdbxImportSniff> 
   const head = new Uint8Array(await file.slice(0, Math.min(64, file.size)).arrayBuffer());
   if (isSqliteHeader(head)) return baseSniff("mdbx-vault");
   if (isZipHeader(head)) return classifyImport(head, await listZipEntryNamesFromBlob(file));
+  const keepass = detectKeePassContainerFormat(head, file.name);
+  if (keepass === "kdbx") return { ...baseSniff("kdbx"), needsPasswordPrompt: true };
+  if (keepass === "kdb-legacy") return { ...baseSniff("unknown"), incompatibilityReason: "kdb-legacy" };
   if (file.size > 64 * 1024 * 1024) {
     return { ...baseSniff("unknown"), incompatibilityReason: "unknown" };
   }
@@ -56,6 +61,9 @@ function classifyImport(bytes: Uint8Array, zipNames: string[] | undefined): Mdbx
   if (json?.magic === "MONICA_EXTENSION_BACKUP") {
     return { ...baseSniff("plugin-backup-json"), needsPasswordPrompt: true };
   }
+  const keepass = detectKeePassContainerFormat(bytes);
+  if (keepass === "kdbx") return { ...baseSniff("kdbx"), needsPasswordPrompt: true };
+  if (keepass === "kdb-legacy") return { ...baseSniff("unknown"), incompatibilityReason: "kdb-legacy" };
   return { ...baseSniff("unknown"), incompatibilityReason: "unknown" };
 }
 

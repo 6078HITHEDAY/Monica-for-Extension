@@ -2865,7 +2865,7 @@ function errorCode(error: unknown): string | undefined {
             <m3e-button variant="filled" type="button" @click="reloadRuntime">{{ tr('重新加载扩展') }}</m3e-button>
           </div>
           <template v-else>
-          <div class="login-heading"><h1>{{ lifecycle === 'uninitialized' ? tr('创建加密密码库') : tr('解锁 Monica') }}</h1><p class="supporting">{{ lifecycle === 'uninitialized' ? (authAction === 'create' ? tr('主密码可选，也可使用设备密钥。') : authAction === 'mdbx' ? tr('打开已有的 MDBX 或完整备份，并同时选择插件保护方式。') : tr('恢复插件状态（条目与密码源配置）。独立 MDBX 数据库需要单独的 MDBX 备份。')) : protectionMode === 'device-key' ? tr('设备密钥模式可留空解锁。') : tr('输入主密码解锁。') }}</p></div>
+          <div class="login-heading"><h1>{{ lifecycle === 'uninitialized' ? tr('创建加密密码库') : tr('解锁 Monica') }}</h1><p class="supporting">{{ lifecycle === 'uninitialized' ? (authAction === 'create' ? tr('主密码可选，也可使用设备密钥。') : authAction === 'mdbx' ? tr('打开已有的 MDBX、KDBX 或完整备份，并同时选择插件保护方式。') : tr('恢复插件状态（条目与密码源配置）。独立 MDBX 数据库需要单独的 MDBX 备份。')) : protectionMode === 'device-key' ? tr('设备密钥模式可留空解锁。') : tr('输入主密码解锁。') }}</p></div>
           <div v-if="lifecycle === 'uninitialized'" class="auth-action-picker" role="tablist" :aria-label="tr('首次使用')">
             <button type="button" role="tab" :aria-selected="authAction === 'create'" :class="{ selected: authAction === 'create' }" @click="authAction = 'create'">{{ tr('创建密码库') }}</button>
             <button type="button" role="tab" :aria-selected="authAction === 'mdbx'" :class="{ selected: authAction === 'mdbx' }" @click="authAction = 'mdbx'">{{ tr('打开已有的密码库') }}</button>
