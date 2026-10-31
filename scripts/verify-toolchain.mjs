@@ -17,16 +17,26 @@ const npmCli = process.env.npm_execpath;
 if (!npmCli) throw new Error("verify:toolchain must run through the pinned npm CLI.");
 const actualNpm = execFileSync(process.execPath, [npmCli, "--version"], { cwd: root, encoding: "utf8" }).trim();
 
-if (!supportedNodeRange || !expectedNode || !expectedNpm || expectedManager !== `npm@${expectedNpm}`) {
-  throw new Error("package.json must declare a Node range and pin one exact npm version; .nvmrc must pin Node.");
+if (!supportedNodeRange || !expectedNode || !expectedNpm) {
+  throw new Error("package.json must declare Node and npm engine ranges; .nvmrc must pin Node.");
+}
+const managerMatch = /^npm@(\d+\.\d+\.\d+)$/.exec(expectedManager ?? "");
+if (!managerMatch) {
+  throw new Error("packageManager must declare an exact npm version (npm@x.y.z).");
 }
 if (!satisfiesComparators(expectedNode, supportedNodeRange)) {
   throw new Error(`.nvmrc Node ${expectedNode} does not satisfy engines.node range ${supportedNodeRange}.`);
 }
-if (actualNode !== expectedNode || actualNpm !== expectedNpm) {
-  throw new Error(`Toolchain mismatch: expected Node ${expectedNode} / npm ${expectedNpm}, got Node ${actualNode} / npm ${actualNpm}.`);
+if (!satisfiesComparators(managerMatch[1], expectedNpm)) {
+  throw new Error(`packageManager npm ${managerMatch[1]} does not satisfy engines.npm range ${expectedNpm}.`);
 }
-console.log(`Verified pinned toolchain: Node ${actualNode} (range ${supportedNodeRange}), npm ${actualNpm}.`);
+if (!satisfiesComparators(actualNode, supportedNodeRange)) {
+  throw new Error(`Node ${actualNode} does not satisfy engines.node range ${supportedNodeRange}.`);
+}
+if (!satisfiesComparators(actualNpm, expectedNpm)) {
+  throw new Error(`npm ${actualNpm} does not satisfy engines.npm range ${expectedNpm}.`);
+}
+console.log(`Verified toolchain: Node ${actualNode} (range ${supportedNodeRange}), npm ${actualNpm} (range ${expectedNpm}).`);
 
 function satisfiesComparators(version, range) {
   const actual = parseVersion(version);
