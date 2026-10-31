@@ -1,4 +1,9 @@
 {
+  "Bitwarden 服务器要求更新客户端才能登录，请更新 Monica 扩展；若已是最新版，请反馈此兼容问题。": "Bitwarden yêu cầu phiên bản ứng dụng mới hơn để đăng nhập. Hãy cập nhật tiện ích Monica; nếu đã là bản mới nhất, hãy báo cáo vấn đề tương thích này.",
+  "Bitwarden 服务器未收到客户端版本信息，请检查代理是否保留 Bitwarden-Client-Version 请求头。": "Bitwarden không nhận được thông tin phiên bản ứng dụng. Kiểm tra xem proxy có giữ nguyên tiêu đề Bitwarden-Client-Version hay không.",
+  "Bitwarden 服务器未收到有效设备信息，请更新 Monica 扩展后重试。": "Bitwarden không nhận được thông tin thiết bị hợp lệ. Hãy cập nhật tiện ích Monica rồi thử lại.",
+  "Bitwarden 服务器不接受当前客户端的登录请求，请更新 Monica 扩展；若官网可以登录，请反馈此兼容问题。": "Bitwarden từ chối yêu cầu đăng nhập của ứng dụng này. Hãy cập nhật tiện ích Monica; nếu trang web chính thức đăng nhập được, hãy báo cáo vấn đề tương thích này.",
+  "Bitwarden 登录失败（HTTP 400）：服务器拒绝了登录请求。若官方网页可以正常登录，请反馈扩展登录兼容问题。": "Đăng nhập Bitwarden thất bại (HTTP 400): máy chủ từ chối yêu cầu. Nếu trang web chính thức đăng nhập được, hãy báo cáo vấn đề tương thích đăng nhập của tiện ích.",
   "KeePass 来源完整条目保留在原生回收站；云端发布确认后才完成移动。本地文件仍需导出 KDBX 并自行保存。": "Toàn bộ mục KeePass gốc được giữ trong thùng rác của cơ sở dữ liệu. Việc chuyển qua đám mây chỉ hoàn tất sau khi xác nhận tải lên. Tệp cục bộ vẫn cần được xuất thành KDBX và tự lưu.",
   "地址与其他信息": "Địa chỉ và thông tin khác",
   "上移自定义字段 {0}": "Di chuyển trường tùy chỉnh {0} lên",
@@ -3987,5 +3992,9 @@
   "加密文件参数无效。": "Invalid encrypted file parameters.",
   "无法识别 CSV 列名。": "Could not recognize the CSV column names.",
   "CSV 引号未闭合，未导入任何项目。": "CSV contains an unclosed quote. No items were imported.",
-  "加密备份与恢复": "Encrypted backup and restore"
+  "加密备份与恢复": "Encrypted backup and restore",
+  "服务区域": "Khu vực máy chủ",
+  "美国（bitwarden.com）": "Hoa Kỳ (bitwarden.com)",
+  "欧洲（bitwarden.eu）": "Châu Âu (bitwarden.eu)",
+  "自托管": "Tự lưu trữ"
 }

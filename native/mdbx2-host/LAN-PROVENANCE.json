@@ -37,6 +37,27 @@
         "src/lib.rs": "77270d787196e3b77d103f22f41b9dec794d036379ed5aad9e161a69f5ace0d8",
         "src/replica.rs": "60125bbe9029b114c5189a5a7fdec03bcf03f9f02dbc679bfe25811881d64a82"
       }
+    },
+    {
+      "id": "extension-lan-hotspot",
+      "reason": "Record the previously verified phone-hotspot directed broadcast and per-socket Android binding changes. Preserve local-only discovery bounds, existing Noise handshake and wire/storage formats.",
+      "patch": "runtime-patches/extension-lan-hotspot.patch",
+      "patch_sha256": "8f89e055c2fc2f4407a2517ef1350e99b618377ab49b1bfac963df8b3df5ac14",
+      "base_files": {
+        "src/discovery.rs": "1cbbcf11ad7c2f0393705c17f67205996a2e3401327f19eb85493bd4bdd1a728",
+        "src/lib.rs": "77270d787196e3b77d103f22f41b9dec794d036379ed5aad9e161a69f5ace0d8",
+        "src/tests.rs": "209d64ac1d5229cf2dd317d82ae7251bf4f47c1d0f59185bfef37c465addc972",
+        "src/transport.rs": "c5ec5a14d06bed55ba2b55d230462832d0bf5d5bdc845ee89fbeafddf1890ec4"
+      },
+      "files": {
+        "src/discovery.rs": "c28152fb8b4d0b0aaff004ce8f500ec4c9a564c042782e672e8144da149cdb4e",
+        "src/lib.rs": "999047b04f8e227f69178de176d03b9632b77129d12df6ea2abacb9d9a2e2496",
+        "src/tests.rs": "4ec0acab14d5f059cd2003c589a3612947d940129f84076172a460161539ffcd",
+        "src/transport.rs": "675f8d6dfd0ba135bb987941e5cc191b95c971e7f3b0700f98538a975656dd9a"
+      },
+      "added_files": {
+        "src/network.rs": "f28bde761596fb7d50489ef42afaae67b2ecae6feb076062e3e09ac90abd8f43"
+      }
     }
   ]
 }

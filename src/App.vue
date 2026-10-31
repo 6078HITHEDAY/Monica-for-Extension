@@ -347,6 +347,25 @@ const loginCustomFieldEditor = createSecureCustomFieldEditor({ normalizeTypes: f
 const loginEditorTypeLabel = computed(() => createItemGroups().flatMap(group => group.items).find(item => item.kind === (form.loginType === "SSO" ? "PASSWORD" : form.loginType))?.label || tr('密码'));
 const webDavForm = reactive({ name: "Monica Android WebDAV", baseUrl: "", username: "", password: "", backupPassword: "", passwordConfigured: false, backupPasswordConfigured: false, isDefaultSaveTarget: false });
 const bitwardenForm = reactive({ name: "Bitwarden", vaultUrl: "https://vault.bitwarden.com", email: "", masterPassword: "", twoFactorCode: "", twoFactorProvider: 0, rememberTwoFactor: false, newDeviceOtp: "", ssoOrganizationIdentifier: "", isDefaultSaveTarget: false });
+const bitwardenCustomServerUrl = ref("");
+const bitwardenServerRegion = computed(() => {
+  const url = bitwardenForm.vaultUrl.trim().replace(/\/+$/, "").toLowerCase();
+  return url === "https://vault.bitwarden.com" ? "us" : url === "https://vault.bitwarden.eu" ? "eu" : "custom";
+});
+function selectBitwardenServerRegion(region: string) {
+  if (bitwardenServerRegion.value === "custom") bitwardenCustomServerUrl.value = bitwardenForm.vaultUrl;
+  if (region === "us") bitwardenForm.vaultUrl = "https://vault.bitwarden.com";
+  else if (region === "eu") bitwardenForm.vaultUrl = "https://vault.bitwarden.eu";
+  else if (region === "custom") bitwardenForm.vaultUrl = bitwardenCustomServerUrl.value;
+}
+watch(() => [bitwardenForm.vaultUrl, bitwardenForm.email], () => {
+  // Verification belongs to the submitted server/account, not whatever the form now contains.
+  bitwardenDeviceVerificationRequired.value = false;
+  bitwardenTwoFactorProviders.value = [];
+  bitwardenTwoFactorProviderData.value = undefined;
+  bitwardenForm.newDeviceOtp = bitwardenForm.twoFactorCode = "";
+  bitwardenError.value = "";
+});
 const keePassForm = reactive<KeePassFormState>({
   sourceMode: "local-file",
   name: "KeePass",
@@ -3394,8 +3413,9 @@ function errorCode(error: unknown): string | undefined {
 
     <div v-if="bitwardenDialogOpen" class="modal-backdrop" role="presentation" @mousedown.self="closeBitwardenDialog"><section class="editor-dialog" role="dialog" aria-modal="true" aria-labelledby="bitwarden-dialog-title"><header><div><h2 id="bitwarden-dialog-title">{{ editingBitwardenId ? tr('重新登录 Bitwarden') : tr('连接 Bitwarden') }}</h2><p>{{ tr('主密码只用于本次登录和密钥派生，不会保存。') }}</p></div><m3e-icon-button :aria-label="tr('关闭')" @click="closeBitwardenDialog"><m3e-icon name="close"></m3e-icon></m3e-icon-button></header><form class="editor-form" @submit.prevent="connectBitwarden">
       <m3e-form-field v-field-label variant="filled" hide-required-marker class="field"><label slot="label">{{ tr('显示名称') }}</label><input v-model="bitwardenForm.name" autocomplete="off" /></m3e-form-field>
-      <m3e-form-field v-field-label variant="filled" hide-required-marker hide-subscript="never" class="field"><label slot="label">{{ tr('服务器地址 *') }}</label><input v-model="bitwardenForm.vaultUrl" type="url" list="bitwarden-server-list" autocomplete="url" required /><datalist id="bitwarden-server-list"><option value="https://vault.bitwarden.com">Bitwarden US</option><option value="https://vault.bitwarden.eu">Bitwarden EU</option></datalist><small slot="hint">{{ tr('自托管请填写 Vault 根地址，例如 https://vault.example.com。') }}</small></m3e-form-field>
-      <m3e-form-field v-field-label variant="filled" hide-required-marker class="field"><label slot="label">{{ tr('邮箱 *') }}</label><input v-model="bitwardenForm.email" type="email" autocomplete="username" required /></m3e-form-field>
+      <m3e-form-field v-field-label variant="filled" hide-required-marker class="field"><label slot="label">{{ tr('服务区域') }}</label><component :is="materialSelectTag" id="bitwarden-server-region" :disabled="bitwardenBusy" @input="selectBitwardenServerRegion(($event.target as HTMLElement &amp; { value: string }).value)"><component :is="materialOptionTag" value="us" :selected.prop="bitwardenServerRegion === 'us'">{{ tr('美国（bitwarden.com）') }}</component><component :is="materialOptionTag" value="eu" :selected.prop="bitwardenServerRegion === 'eu'">{{ tr('欧洲（bitwarden.eu）') }}</component><component :is="materialOptionTag" value="custom" :selected.prop="bitwardenServerRegion === 'custom'">{{ tr('自托管') }}</component></component></m3e-form-field>
+      <m3e-form-field v-field-label variant="filled" hide-required-marker hide-subscript="never" class="field"><label slot="label">{{ tr('服务器地址 *') }}</label><input v-model="bitwardenForm.vaultUrl" type="url" autocomplete="url" required :disabled="bitwardenBusy" /><small slot="hint">{{ tr('自托管请填写 Vault 根地址，例如 https://vault.example.com。') }}</small></m3e-form-field>
+      <m3e-form-field v-field-label variant="filled" hide-required-marker class="field"><label slot="label">{{ tr('邮箱 *') }}</label><input v-model="bitwardenForm.email" type="email" autocomplete="username" required :disabled="bitwardenBusy" /></m3e-form-field>
       <m3e-form-field v-field-label variant="filled" hide-required-marker class="field"><label slot="label">{{ tr('主密码 *') }}</label><input v-model="bitwardenForm.masterPassword" type="password" autocomplete="current-password" required /></m3e-form-field>
       <m3e-form-field v-field-label variant="filled" hide-required-marker hide-subscript="never" class="field"><label slot="label">{{ tr('组织 SSO 标识（可选）') }}</label><input v-model="bitwardenForm.ssoOrganizationIdentifier" autocomplete="off" :placeholder="tr('仅企业 SSO 账户填写')" /><small slot="hint">{{ tr('填写后将通过 Bitwarden 官方 OAuth 窗口登录，回调只在后台校验。') }}</small></m3e-form-field>
       <m3e-form-field v-field-label variant="filled" hide-required-marker hide-subscript="never" v-if="bitwardenDeviceVerificationRequired" class="field"><label slot="label">{{ tr('新设备验证码 *') }}</label><input v-model="bitwardenForm.newDeviceOtp" inputmode="numeric" autocomplete="one-time-code" required autofocus /><small slot="hint">{{ tr('Bitwarden 已向账号邮箱发送新设备验证码，验证后即可连接。') }}</small></m3e-form-field>

@@ -1,6 +1,8 @@
-import { dialogContent } from "./fixtures/material";
-import { chromium, expect, test, type BrowserContext, type Route } from "@playwright/test";
+import { chooseOption, dialogContent } from "./fixtures/material";
+import { launchTestContext } from "./fixtures/edge";
+import { expect, test, type BrowserContext, type Route } from "@playwright/test";
 import path from "node:path";
+import fs from "node:fs/promises";
 import { BitwardenClient } from "../../src/providers/bitwarden/bitwarden-client";
 import { deriveBitwardenMasterKey, stretchBitwardenMasterKey, type BitwardenSymmetricKey } from "../../src/providers/bitwarden/bitwarden-crypto";
 
@@ -14,10 +16,12 @@ test("Bitwarden login completes current prelogin and new-device email verificati
   const vaultKey: BitwardenSymmetricKey = { encKey: new Uint8Array(32).fill(1), macKey: new Uint8Array(32).fill(2) };
   const protectedKey = await new BitwardenClient().protectVaultKey(vaultKey, stretchedKey, new Uint8Array(16));
   const requestedPaths: string[] = [];
+  let challengedDevice: string | undefined;
+  const submittedDevices: string[] = [];
   let context: BrowserContext | undefined;
 
   try {
-    context = await chromium.launchPersistentContext(testInfo.outputPath("bitwarden-auth-profile"), {
+    context = await launchTestContext(testInfo.outputPath("bitwarden-auth-profile"), {
       channel: "chromium",
       headless: true, locale: "zh-CN",
       viewport: { width: 1280, height: 900 },
@@ -32,7 +36,11 @@ test("Bitwarden login completes current prelogin and new-device email verificati
       if (requestUrl.pathname === "/identity/connect/token") {
         const form = new URLSearchParams(route.request().postData() || "");
         const otp = form.get("newDeviceOtp");
-        if (otp !== "654321") {
+        const device = form.get("deviceIdentifier") || "";
+        submittedDevices.push(device);
+        challengedDevice ??= device;
+        // Official-style verification is bound to the device receiving the challenge.
+        if (otp !== "654321" || device !== challengedDevice) {
           return jsonRoute(route, { ErrorModel: { Message: "new device verification required" }, DeviceVerified: false }, 400);
         }
         return jsonRoute(route, { access_token: "access", refresh_token: "refresh", expires_in: 3600, Key: protectedKey });
@@ -50,7 +58,16 @@ test("Bitwarden login completes current prelogin and new-device email verificati
     await page.getByRole("button", { name: /连接 Bitwarden/ }).click();
 
     const dialog = dialogContent(page, { name: "连接 Bitwarden" });
+    const region = dialog.locator("#bitwarden-server-region");
+    await chooseOption(region, "eu");
+    await expect(dialog.getByLabel("服务器地址 *")).toHaveValue("https://vault.bitwarden.eu");
+    await chooseOption(region, "us");
+    await expect(dialog.getByLabel("服务器地址 *")).toHaveValue("https://vault.bitwarden.com");
+    await chooseOption(region, "custom");
     await dialog.getByLabel("服务器地址 *").fill(VAULT_URL);
+    await chooseOption(region, "us");
+    await chooseOption(region, "custom");
+    await expect(dialog.getByLabel("服务器地址 *")).toHaveValue(VAULT_URL);
     await dialog.getByLabel("邮箱 *").fill(EMAIL);
     await dialog.getByLabel("主密码 *").fill(MASTER_PASSWORD);
     await dialog.getByRole("button", { name: "登录并连接" }).click();
@@ -61,6 +78,15 @@ test("Bitwarden login completes current prelogin and new-device email verificati
     await otp.fill("111111");
     await dialog.getByRole("button", { name: "验证新设备并连接" }).click();
     await expect(dialog.getByRole("alert")).toContainText("新设备验证码错误或已过期");
+    // Switching the server invalidates a code issued for the previous form binding.
+    await chooseOption(region, "eu");
+    await expect(otp).toHaveCount(0);
+    await chooseOption(region, "custom");
+    await dialog.getByRole("button", { name: "登录并连接" }).click();
+    await expect(otp).toBeVisible();
+    await expect(otp).toHaveValue("");
+    await fs.mkdir("docs/design/bitwarden-login-20261030", { recursive: true });
+    await page.screenshot({ path: "docs/design/bitwarden-login-20261030/edge-login.png", fullPage: true });
     await otp.fill("654321");
     await dialog.getByRole("button", { name: "验证新设备并连接" }).click();
 
@@ -68,6 +94,7 @@ test("Bitwarden login completes current prelogin and new-device email verificati
     await expect(page.getByText("Bitwarden 已连接；点击立即同步导入密码库。", { exact: true })).toBeVisible();
     expect(requestedPaths).toContain("/identity/accounts/prelogin/password");
     expect(requestedPaths).not.toContain("/identity/accounts/prelogin");
+    expect(new Set(submittedDevices).size).toBe(1);
   } finally {
     await context?.close();
   }

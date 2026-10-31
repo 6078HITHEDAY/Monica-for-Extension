@@ -50,6 +50,7 @@ import { readKeePassTransferResource } from '../providers/keepass/keepass-transf
 import { isLocalTransferItem, localTransferFolders, LOCAL_ATTACHMENT_MAX_BYTES } from '../core/local-transfer';
 import { listMdbx2TransferCollections } from '../providers/mdbx2/mdbx2-transfer-collections';
 import { BitwardenClient } from "../providers/bitwarden/bitwarden-client";
+import { BitwardenDeviceIdentity } from "../providers/bitwarden/bitwarden-device-identity";
 import type { BitwardenSessionConfig } from "../providers/bitwarden/bitwarden-client";
 import { BitwardenAttachmentDownloadService } from "../providers/bitwarden/bitwarden-attachments";
 import { BitwardenTransferAttachmentSource } from '../providers/bitwarden/bitwarden-transfer-attachments';
@@ -325,6 +326,7 @@ const providerAttachmentTransfers = new ProviderAttachmentTransferCoordinator();
 const providerAttachmentReads = new Map<string, { providerId: string; itemId: string; attachmentId: string; expiresAt: number }>();
 const bitwardenAttachmentReadRoutes = new Map<string, { providerId: string; itemId: string; attachmentId: string; expiresAt: number }>();
 const bitwardenClient = new BitwardenClient();
+const bitwardenDeviceIdentity = new BitwardenDeviceIdentity(chrome.storage.local);
 const bitwardenFolders = new BitwardenFolderService(bitwardenClient);
 const bitwardenCollections = new BitwardenCollectionService(bitwardenClient);
 const bitwardenSends = new BitwardenSendService(bitwardenClient);
@@ -1267,7 +1269,7 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
             vaultUrl: request.vaultUrl,
             email: request.email,
             masterPassword: request.masterPassword,
-            deviceId: typeof existing?.config.deviceId === "string" ? existing.config.deviceId : crypto.randomUUID(),
+            deviceId: await bitwardenDeviceIdentity.get(existing?.config.deviceId),
             twoFactorCode: webAuthnToken || duoToken || request.twoFactorCode,
             twoFactorProvider: request.twoFactorProvider,
             rememberTwoFactor: request.rememberTwoFactor,
@@ -1322,7 +1324,7 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
         vaultUrl: request.vaultUrl,
         email: request.email,
         masterPassword: request.masterPassword,
-        deviceId: typeof existing?.config.deviceId === "string" ? existing.config.deviceId : crypto.randomUUID()
+        deviceId: await bitwardenDeviceIdentity.get(existing?.config.deviceId)
       });
     }
     case "BITWARDEN_FOLDER_LIST": {
@@ -4956,7 +4958,7 @@ async function loginBitwardenWithSso(
   }
   const organizationIdentifier = request.ssoOrganizationIdentifier?.trim();
   if (!organizationIdentifier) throw new Error("请输入组织 SSO 标识。");
-  const deviceId = typeof existingDeviceId === "string" && existingDeviceId ? existingDeviceId : crypto.randomUUID();
+  const deviceId = await bitwardenDeviceIdentity.get(existingDeviceId);
   const prevalidated = await bitwardenClient.prevalidateSso(request.vaultUrl, organizationIdentifier);
   const verifier = base64UrlBytes(crypto.getRandomValues(new Uint8Array(32)));
   const challenge = base64UrlBytes(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))));

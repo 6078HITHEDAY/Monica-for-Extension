@@ -1,4 +1,9 @@
 {
+  "Bitwarden 服务器要求更新客户端才能登录，请更新 Monica 扩展；若已是最新版，请反馈此兼容问题。": "Bitwarden erfordert zum Anmelden einen neueren Client. Aktualisieren Sie die Monica-Erweiterung. Falls sie bereits aktuell ist, melden Sie dieses Kompatibilitätsproblem.",
+  "Bitwarden 服务器未收到客户端版本信息，请检查代理是否保留 Bitwarden-Client-Version 请求头。": "Bitwarden hat keine Client-Versionsinformation erhalten. Prüfen Sie, ob Ihr Proxy den Header Bitwarden-Client-Version beibehält.",
+  "Bitwarden 服务器未收到有效设备信息，请更新 Monica 扩展后重试。": "Bitwarden hat keine gültigen Geräteinformationen erhalten. Aktualisieren Sie die Monica-Erweiterung und versuchen Sie es erneut.",
+  "Bitwarden 服务器不接受当前客户端的登录请求，请更新 Monica 扩展；若官网可以登录，请反馈此兼容问题。": "Bitwarden hat die Anmeldeanfrage dieses Clients abgelehnt. Aktualisieren Sie die Monica-Erweiterung. Falls die offizielle Website funktioniert, melden Sie dieses Kompatibilitätsproblem.",
+  "Bitwarden 登录失败（HTTP 400）：服务器拒绝了登录请求。若官方网页可以正常登录，请反馈扩展登录兼容问题。": "Bitwarden-Anmeldung fehlgeschlagen (HTTP 400): Der Server hat die Anfrage abgelehnt. Falls die offizielle Website funktioniert, melden Sie ein Anmelde-Kompatibilitätsproblem der Erweiterung.",
   "KeePass 来源完整条目保留在原生回收站；云端发布确认后才完成移动。本地文件仍需导出 KDBX 并自行保存。": "Vollständige KeePass-Einträge bleiben im ursprünglichen Papierkorb erhalten. Cloud-Vorgänge werden erst nach bestätigtem Upload abgeschlossen. Lokale Dateien müssen als KDBX exportiert und selbst gespeichert werden.",
   "地址与其他信息": "Adresse und weitere Informationen",
   "上移自定义字段 {0}": "Benutzerdefiniertes Feld {0} nach oben verschieben",
@@ -3987,5 +3992,9 @@
   "加密文件参数无效。": "Invalid encrypted file parameters.",
   "无法识别 CSV 列名。": "Could not recognize the CSV column names.",
   "CSV 引号未闭合，未导入任何项目。": "CSV contains an unclosed quote. No items were imported.",
-  "加密备份与恢复": "Encrypted backup and restore"
+  "加密备份与恢复": "Encrypted backup and restore",
+  "服务区域": "Serverregion",
+  "美国（bitwarden.com）": "USA (bitwarden.com)",
+  "欧洲（bitwarden.eu）": "Europa (bitwarden.eu)",
+  "自托管": "Selbst gehostet"
 }
