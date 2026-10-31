@@ -221,6 +221,17 @@ export interface Mdbx2WebDavSettingsInput {
   remotePath: string;
 }
 
+export interface Mdbx2OneDriveSettingsInput {
+  remotePath: string;
+  /** Handle from ONEDRIVE_LOGIN. Optional when re-saving a provider that already holds a connection. */
+  loginId?: string;
+}
+
+/** Draft bootstrap download: WebDAV settings, or a OneDrive login that has not been saved yet. */
+export type Mdbx2BootstrapDownloadInput =
+  | ({ transport?: "webdav" } & Mdbx2WebDavSettingsInput)
+  | { transport: "onedrive"; driveId: string; remotePath: string; loginId: string };
+
 export interface Mdbx2ManagerSyncStatus {
   configured: boolean;
   registered: boolean;
@@ -438,7 +449,8 @@ export type ExtensionRequest =
   | { type: "MDBX2_VAULT_TIGA"; providerId: string }
   | { type: "MDBX2_VAULT_LOCK"; providerId: string }
   | { type: "MDBX2_WEBDAV_SAVE"; providerId: string; name: string; config: Mdbx2WebDavSettingsInput; isDefaultSaveTarget?: boolean }
-  | { type: "MDBX2_BOOTSTRAP_DOWNLOAD"; config: Mdbx2WebDavSettingsInput }
+  | { type: "MDBX2_ONEDRIVE_SAVE"; providerId: string; name: string; config: Mdbx2OneDriveSettingsInput; isDefaultSaveTarget?: boolean }
+  | { type: "MDBX2_BOOTSTRAP_DOWNLOAD"; config: Mdbx2BootstrapDownloadInput }
   | { type: "MDBX2_BOOTSTRAP_PUBLISH"; providerId: string }
   | { type: "MDBX2_BOOTSTRAP_REGISTER"; providerId: string }
   | { type: "MDBX2_SYNC_STATUS"; providerId: string }

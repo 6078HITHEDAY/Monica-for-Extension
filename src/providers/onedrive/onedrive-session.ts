@@ -3,6 +3,8 @@ import { sameProviderBinding } from "../../core/provider";
 import { OneDriveAuthClient, OneDriveAuthorizationError, MONICA_ONEDRIVE_CLIENT_ID } from "./onedrive-auth";
 import { OneDriveGraphClient, OneDriveKeePassFileClient, type OneDriveDrive, type OneDriveItem, type OneDriveItemIdentity, type OneDriveProfile } from "./onedrive-graph-client";
 import { OneDriveTokenManager, oneDriveConnectionBinding, parseOneDriveConnection, type OneDriveConnection } from "./onedrive-token-manager";
+import { Mdbx2OneDriveClient } from "../mdbx2/mdbx2-onedrive-client";
+import type { Mdbx2OneDriveSyncConfig } from "../mdbx2/mdbx2-remote-client";
 
 export interface OneDriveSessionVault {
   sessionId(): Promise<string | undefined>;
@@ -10,8 +12,10 @@ export interface OneDriveSessionVault {
   rotateOneDriveTokens(providerId: string, previous: OneDriveConnection, tokens: OneDriveConnection["tokens"], signal?: AbortSignal): Promise<void>;
 }
 export interface OneDriveLoginSummary { loginId: string; profile: OneDriveProfile; drive: OneDriveDrive }
-export interface OneDriveBrowserInput { loginId?: string; providerId?: string; parentId?: string }
+export interface OneDriveBrowserInput { loginId?: string; providerId?: string; parentId?: string; extensions?: string[] }
 export interface OneDriveBrowserPage { profile: OneDriveProfile; drive: OneDriveDrive; items: OneDriveItem[] }
+/** Draft flows may browse for these file kinds; saved KeePass browsing stays KDBX-only. */
+const BROWSE_EXTENSIONS = [".kdbx", ".mdbx"];
 interface PendingLogin {
   sessionId: string;
   expiresAt: number;
@@ -34,7 +38,10 @@ export class OneDriveSessionService {
     this.tokens = new OneDriveTokenManager({
       read: async id => {
         const account = await this.vault.getProvider(id);
-        return account?.enabled && account.kind === "keepass" && account.config.sourceMode === "onedrive" ? parseOneDriveConnection(account.config.oneDriveConnection) : undefined;
+        if (!account?.enabled) return undefined;
+        if (account.kind === "mdbx2") return parseOneDriveConnection(account.config.oneDriveConnection);
+        if (account.kind !== "keepass" || account.config.sourceMode !== "onedrive") return undefined;
+        return parseOneDriveConnection(account.config.oneDriveConnection);
       },
       rotate: (id, previous, tokens, signal) => this.vault.rotateOneDriveTokens(id, previous, tokens, signal)
     }, clientId => new OneDriveAuthClient(clientId, this.fetcher, this.now), now);
@@ -85,7 +92,7 @@ export class OneDriveSessionService {
     const sessionId = await this.requireSession();
     if (input.loginId) {
       const pending = await this.requirePending(input.loginId);
-      const items = await this.pendingGraph(input.loginId, pending).children(pending.drive!.id, input.parentId, pending.controller.signal);
+      const items = await this.pendingGraph(input.loginId, pending).children(pending.drive!.id, input.parentId, pending.controller.signal, normalizeBrowseExtensions(input.extensions));
       await this.assertPending(input.loginId, pending);
       return { profile: { ...pending.connection!.profile }, drive: { ...pending.drive! }, items };
     }
@@ -103,6 +110,12 @@ export class OneDriveSessionService {
   async connectionForLogin(loginId: string): Promise<OneDriveConnection> {
     const pending = await this.requirePending(loginId);
     return structuredClone(pending.connection!);
+  }
+
+  /** Internal only. Drive metadata captured during login, used to address MDBX2 sync paths. */
+  async driveForLogin(loginId: string): Promise<OneDriveDrive> {
+    const pending = await this.requirePending(loginId);
+    return { ...pending.drive! };
   }
 
   fileClient(account: ProviderAccount, identity: OneDriveItemIdentity): OneDriveKeePassFileClient {
@@ -128,8 +141,42 @@ export class OneDriveSessionService {
     return new OneDriveKeePassFileClient(identity, graph);
   }
 
-  private savedGraph(account: ProviderAccount, connection: OneDriveConnection, sessionId: string): OneDriveGraphClient {
-    const epoch = this.epoch;
+  /**
+   * OneDrive transport for MDBX2 cloud sync. The draft bootstrap flow addresses
+   * a pending login (loginId); everything after save is bound to the account
+   * (providerId) and revalidated per request like the KeePass file client.
+   */
+  mdbx2OneDriveClient(config: Mdbx2OneDriveSyncConfig): Mdbx2OneDriveClient {
+    const providerId = config.providerId;
+    if (providerId) {
+      const epoch = this.epoch;
+      let sessionId: string | undefined;
+      return new Mdbx2OneDriveClient(config.driveId, async signal => {
+        const account = await this.vault.getProvider(providerId);
+        if (!account?.enabled || account.kind !== "mdbx2") throw new OneDriveAuthorizationError("MDBX2 OneDrive 密码源已变化，请重新连接。");
+        const connection = parseOneDriveConnection(account.config.oneDriveConnection);
+        if (!connection || account.config.oneDriveDriveId !== config.driveId) throw new OneDriveAuthorizationError();
+        sessionId ||= await this.requireSession();
+        if (epoch !== this.epoch) throw new OneDriveAuthorizationError();
+        if (await this.vault.sessionId() !== sessionId) throw new OneDriveAuthorizationError("密码库会话已变化，请重新解锁。");
+        const token = await this.tokens.accessToken(providerId, oneDriveConnectionBinding(connection), signal);
+        if (epoch !== this.epoch) throw new OneDriveAuthorizationError();
+        return token;
+      }, this.fetcher);
+    }
+    const loginId = config.loginId;
+    if (!loginId) throw new OneDriveAuthorizationError("请先登录 OneDrive。");
+    const pending = this.pending.get(loginId);
+    if (!pending?.drive || pending.drive.id !== config.driveId) throw new OneDriveAuthorizationError("OneDrive 登录已失效，请重新登录。");
+    return new Mdbx2OneDriveClient(config.driveId, async signal => {
+      await this.assertPending(loginId, pending);
+      const connection = pending.connection;
+      if (!connection || connection.tokens.expiresAt <= this.now() + 60_000) throw new OneDriveAuthorizationError("OneDrive 登录已过期，请重新登录。");
+      return connection.tokens.accessToken;
+    }, this.fetcher);
+  }
+
+  private savedGraph(account: ProviderAccount, connection: OneDriveConnection, sessionId: string): OneDriveGraphClient {    const epoch = this.epoch;
     return new OneDriveGraphClient(async signal => {
       if (epoch !== this.epoch) throw new OneDriveAuthorizationError();
       await this.assertSaved(account, sessionId);
@@ -179,4 +226,13 @@ export class OneDriveSessionService {
     return session;
   }
   private expire(): void { for (const [id, pending] of this.pending) if (pending.expiresAt <= this.now()) this.cancel(id); }
+}
+
+function normalizeBrowseExtensions(value?: string[]): string[] | undefined {
+  if (!value) return undefined;
+  const normalized = value.map(entry => typeof entry === "string" ? entry.toLowerCase() : "");
+  if (!normalized.length || normalized.some(entry => !BROWSE_EXTENSIONS.includes(entry))) {
+    throw new Error("OneDrive 文件类型过滤无效。");
+  }
+  return normalized;
 }

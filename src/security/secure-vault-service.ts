@@ -4069,9 +4069,12 @@ function publicProviderAccount(provider: ProviderAccount): ProviderAccount {
         vaultHandle: stringConfig(provider, "vaultHandle") || undefined,
         runtimeBackend: mdbx2AccountBackend(provider),
         schemaVersion: typeof provider.config.schemaVersion === "number" ? provider.config.schemaVersion : undefined,
+        syncTransport: provider.config.syncTransport === "onedrive" ? "onedrive" : "webdav",
         webDavBaseUrl: stringConfig(provider, "webDavBaseUrl") || undefined,
         webDavUsername: stringConfig(provider, "webDavUsername") || undefined,
         webDavPasswordConfigured: Boolean(stringConfig(provider, "webDavPassword")),
+        oneDriveDriveId: stringConfig(provider, "oneDriveDriveId") || undefined,
+        ...publicOneDriveConnection(provider.config.oneDriveConnection),
         remotePath: stringConfig(provider, "remotePath") || undefined,
         syncConfigured: Boolean(stringConfig(provider, "syncStateHandle")),
         hostVerifiedAt: stringConfig(provider, "hostVerifiedAt") || undefined

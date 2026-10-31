@@ -750,9 +750,24 @@ function fingerprint(item: VaultItem): string {
 }
 
 function cloudSyncInput(account: ProviderAccount): Mdbx2CloudSyncInput | undefined {
-  const baseUrl = stringConfig(account, "webDavBaseUrl");
   const syncStateHandle = stringConfig(account, "syncStateHandle");
   const remotePath = stringConfig(account, "remotePath");
+  if (account.config.syncTransport === "onedrive") {
+    const driveId = stringConfig(account, "oneDriveDriveId");
+    if (!driveId && !syncStateHandle) return undefined;
+    if (!driveId) throw new Error("MDBX2 OneDrive 云盘未配置。");
+    if (!remotePath) throw new Error("MDBX2 OneDrive 远端文件位置未配置。");
+    if (!syncStateHandle) throw new Error("MDBX2 云同步尚未完成 bootstrap 注册。");
+    return {
+      transport: "onedrive",
+      driveId,
+      providerId: account.id,
+      remotePath,
+      syncStateHandle,
+      vaultHandle: vaultHandleOf(account)
+    };
+  }
+  const baseUrl = stringConfig(account, "webDavBaseUrl");
   const username = stringConfig(account, "webDavUsername");
   const password = stringConfig(account, "webDavPassword");
   if (!baseUrl && !syncStateHandle && !username && !password) return undefined;

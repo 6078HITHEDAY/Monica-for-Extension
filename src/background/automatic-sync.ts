@@ -3,7 +3,8 @@ import type { ProviderAccount } from "../core/model";
 
 /** Connection eligibility only; enabled, paused and unlocked gates remain outside. */
 export function mdbx2AutomaticSyncEligible(config: ProviderAccount["config"], hasPendingWrites = false): boolean {
-  return Boolean(config.vaultHandle && (config.webDavBaseUrl ? config.syncStateHandle && config.remotePath : hasPendingWrites));
+  const remoteConfigured = Boolean(config.webDavBaseUrl || (config.syncTransport === "onedrive" && config.oneDriveConnection));
+  return Boolean(config.vaultHandle && (remoteConfigured ? config.syncStateHandle && config.remotePath : hasPendingWrites));
 }
 
 export interface AutomaticSyncTarget { id: string; intervalMs: number }
