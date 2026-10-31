@@ -2,7 +2,7 @@
 
 Date: 2026-10-31. Extension 1.0.102, local unreleased changes on
 `codex/bitwarden-email-login-followup-20261031`, based on main `258b792`.
-Source build identity: `1abf4effe2ff7c8831ff`.
+Earlier source build identity: `1abf4effe2ff7c8831ff`.
 
 The user confirms that login still fails after submitting an email verification
 code. The exact error, server region and installed build have not yet been
@@ -101,3 +101,12 @@ commands now force the existing read-only build probe before sending secrets;
 the authentication requests themselves are never replayed. The initial combined
 run passed 713 tests and failed these two tests; after the fix, all 34 targeted
 response/runtime tests passed. The real-account report remains unconfirmed.
+
+The follow-up was integrated into PR #25 with first-run import PR #22. Final
+local source build identity is `bb1623b5d4dc4b4585af`. Eight actual Edge
+authentication cases pass in the initial combined 12-case run, including legacy
+and nested token responses. Full integrated unit testing passed 4,422 cases;
+subsequent import/runtime changes also passed their targeted tests. Remote
+publication of the branch/PR supersedes the earlier local-only status above;
+version 1.0.102 remains unchanged and unreleased follow-up notes stay separate
+from published release archives.

@@ -35,7 +35,7 @@ async function completeBackup(testInfo: { outputPath: (name: string) => string }
       } finally {
         await send({ type: "MDBX2_FILE_EXPORT_RELEASE", providerId: provider.id, downloadHandle: descriptor.downloadHandle });
       }
-    }).then(({ bytes, format }) => format === "zip" ? new Uint8Array(bytes) : zipSync({ "vault.mdbx": new Uint8Array(bytes) }));
+    }).then(({ bytes, format }) => format === "zip" ? new Uint8Array(bytes) : zipSync({ "vault.mdbx": new Uint8Array(bytes) }, { level: 0 }));
   } finally {
     await context.close();
   }
@@ -69,6 +69,8 @@ test("first-run shows three entries and keeps ordinary open locked", async ({}, 
     await expect(manager.getByRole("button", { name: "创建并解锁" })).toBeVisible();
     await manager.getByRole("tab", { name: "打开已有的密码库" }).click();
     await expect(manager.getByText("将在独立工作副本上升级为 MDBX-2。原始文件不会被修改。").first()).toBeVisible();
+    await mkdir("docs/design/first-run-import-20261031", { recursive: true });
+    await manager.screenshot({ path: "docs/design/first-run-import-20261031/edge-first-run.png", fullPage: true });
     await manager.getByRole("tab", { name: "恢复插件备份" }).click();
     await expect(manager.getByText("恢复插件状态（条目与密码源配置）。独立 MDBX 数据库需要单独的 MDBX 备份。").first()).toBeVisible();
     const locked = await manager.evaluate(async () => chrome.runtime.sendMessage({
@@ -101,7 +103,7 @@ test(`uninitialized manager imports ${container} with a plugin master password a
     await manager.locator('input[type="file"][accept*=".mdbx"]').setInputFiles(inputFile);
     await manager.getByLabel("MDBX 密码").fill("wrong-password");
     await manager.getByRole("button", { name: "打开并接入密码库" }).click();
-    await expect(manager.getByRole("alert")).toContainText(container === "zip" ? "完整备份失败" : "密码或安全密钥不正确。");
+    await expect(manager.getByRole("alert")).toContainText("密码或安全密钥不正确。");
     await manager.getByLabel("MDBX 密码").fill("mdbx1-golden-password");
     await manager.getByLabel("插件主密码", { exact: false }).fill("first-run-mdbx-master");
     await manager.getByLabel("确认主密码").fill("first-run-mdbx-master");

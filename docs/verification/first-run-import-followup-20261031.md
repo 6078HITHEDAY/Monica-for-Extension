@@ -43,13 +43,23 @@ remain intact.
   eight Bitwarden verification cases and four first-run cases. Expanded import
   acceptance checks incorrect passwords, retry, refresh, source-file hashes,
   retained provider handles, browser backend selection and login-attached OTPs.
+  Final expanded actual Edge run: all five cases passed in 27.0 seconds. A real
+  complete backup is generated through the production browser export interface
+  and reopened in a separate uninitialized profile. Both MDBX and ZIP retain a
+  single provider and the same handle after reload; the original golden hash is
+  unchanged. The KeePass case verifies actual username/password/OTP projection
+  and displays its code in the authenticator section.
+  The final screenshot capture repeated all five cases: 5 passed in 31.9 seconds,
+  and all six isolated profiles were removed. The actual first-run screen was
+  visually checked against the saved local draft.
 - Security audit: 230 runtime commands and manager ownership checks passed.
   Toolchain, lockfile, workflow/preview and native provenance checks pass.
   Production npm audit found zero vulnerabilities.
 
-The first expanded ZIP fixture merely compressed an MDBX-1 file and was rejected
-as an invalid complete backup. It was replaced with a migrated database exported
-through the production complete-backup interface. Its initial test decoder used
+The first expanded ZIP fixture used ordinary DEFLATE ZIP encoding, which the
+reviewed extractor rejects: complete backups use ZIP Stored. MDBX-1 itself is
+supported. The fixture now uses a migrated database exported through the
+production complete-backup interface and Stored encoding. Its initial decoder used
 an excessive spread-argument count; the test now collects bounded chunks without
 argument spreading. A KeePass locator initially matched both the precise error
 and the orphan-information alert; it now asserts the precise error. Those failed
