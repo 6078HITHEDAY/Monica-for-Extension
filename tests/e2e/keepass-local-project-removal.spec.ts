@@ -43,9 +43,9 @@ for (const version of [3, 4] as const) test(`local KDBX ${version} owner removal
     await send(page, { type: 'VAULT_SETUP', masterPassword: master });
     await page.evaluate(() => chrome.storage.local.set({ 'monica.sync.preferences.v1': { enabled: false } })); await page.reload();
     await page.getByRole('button', { name: '密码源', exact: true }).click();
-    await page.locator('m3e-list-action').filter({ hasText: '连接 KeePass' }).click();
+    await page.getByRole('button', { name: '连接 KeePass' }).click();
     const open = async (reopening: boolean, selected = file, secret = password, error?: RegExp) => {
-      const dialog = page.locator('.keepass-provider-dialog[role="dialog"]');
+      const dialog = dialogContent(page, { name: /KeePass/ });
       await dialog.getByLabel('显示名称', { exact: true }).fill('Local project source');
       await dialog.getByLabel('KeePass 数据库文件', { exact: true }).setInputFiles(selected);
       if (keyFile) await dialog.getByLabel('密钥文件（可选）', { exact: true }).setInputFiles({ name: 'synthetic.key', mimeType: 'application/octet-stream', buffer: Buffer.from(keyFile) });

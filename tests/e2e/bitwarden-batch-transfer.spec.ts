@@ -72,7 +72,10 @@ test('native Bitwarden graph copies through folder/Cipher HTTP loss and two comp
     const { providerId } = await send(page, { type: 'BITWARDEN_LOGIN', name: 'Synthetic batch', vaultUrl: host, email, masterPassword: password });
     await send(page, { type: 'PROVIDER_SYNC', providerId });
     let dialog = await transfer(page);
-    await expect(dialog.getByRole('radio', { name: /移动/ })).toBeDisabled();
+    // Source moves have been supported since before this refactor. This test
+    // exercises a copy, while the planner validates eligible move sources.
+    await expect(dialog.getByRole('radio', { name: /移动/ })).toBeEnabled();
+    await expect(dialog.getByRole('radio', { name: /复制/ })).toBeChecked();
     await dialog.getByRole('radio', { name: /Imports/ }).check(); await dialog.getByRole('checkbox', { name: /Linked SSO/ }).check();
     await dialog.getByRole('button', { name: '检查并生成计划', exact: true }).click();
     await expect(dialog.getByText('4 个可传输，0 个被阻断', { exact: true })).toBeVisible();

@@ -1,4 +1,4 @@
-import { auditRuntimeCommands } from './runtime-command-audit.mjs';
+import { auditRuntimeCommands, readRuntimeAuditSources } from './runtime-command-audit.mjs';
 import { readFile, readdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import ts from "typescript";
@@ -59,7 +59,8 @@ for (const name of scripts) {
 const background = await readFile(resolve(root, "dist/background.js"), "utf8");
 if (!background.includes("TRUSTED_CONTEXTS")) throw new Error("Session storage is not restricted to trusted contexts.");
 if (!background.includes("WEB_PAGE_REQUEST_TYPES") && !background.includes("CREDENTIAL_CAPTURE")) throw new Error("Background page-command allowlist is missing from the release.");
-const backgroundSource = await readFile(resolve(root, "src/background/index.ts"), "utf8");
+const runtimeSources = await readRuntimeAuditSources(root);
+const { declaredTypes, handlers, webTypes, allowlistBlock, productionSource: backgroundSource } = auditRuntimeCommands(runtimeSources);
 // onConnect APIs do not appear in ExtensionRequest. Audit their ownership separately.
 const nearbyOwnerSource = await readFile(resolve(root, 'src/background/nearby-owner.ts'), 'utf8');
 const nearbyContractSource = await readFile(resolve(root, 'src/nearby/manager-contract.ts'), 'utf8');
@@ -84,13 +85,6 @@ for (const hook of ['chrome.runtime.onConnect.addListener(port => nearbyOwner.at
 if (!backgroundSource.includes('if (isBrowserMdbxControlMessage(message)) return false;')) throw new Error('MDBX offscreen control messages must bypass the generic reply handler.');
 const messageSource = await readFile(resolve(root, "src/runtime/messages.ts"), "utf8");
 const accessSource = await readFile(resolve(root, 'src/background/request-access.ts'), 'utf8');
-const { declaredTypes, handlers, webTypes, allowlistBlock } = auditRuntimeCommands({
-  entry: backgroundSource, messages: messageSource, access: accessSource,
-  executor: await readFile(resolve(root, 'src/background/command-router.ts'), 'utf8'),
-  attachments: await readFile(resolve(root, 'src/background/attachment-runtime.ts'), 'utf8'),
-  sends: await readFile(resolve(root, 'src/background/bitwarden-send-runtime.ts'), 'utf8'),
-  sync: await readFile(resolve(root, 'src/background/provider-sync-runtime.ts'), 'utf8')
-});
 if (!handlers.has('MDBX2_HOST_STATUS') || handlers.has('MDBX_OPEN')) throw new Error('MDBX review requires MDBX2-only privileged commands.');
 for (const type of ["CREDENTIAL_CAPTURE", "CREDENTIAL_PENDING", "CREDENTIAL_ACCEPT", "CREDENTIAL_DISMISS", "PASSKEY_BEGIN", "PASSKEY_UNLOCK_CONTINUE", "PASSKEY_ACCEPT", "PASSKEY_DISMISS"]) {
   if (!webTypes.has(type)) throw new Error(`Page request allowlist is missing ${type}.`);

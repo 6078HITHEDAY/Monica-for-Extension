@@ -39,7 +39,7 @@ for (const interrupt of [false, true]) test(`KeePass destination UI copies a com
         value: JSON.stringify({ version: 1, projectId, groupId: projectId, passwordId: `82222222-2222-4222-8222-22222222222${n}`, label: 'Accounts', primary: n === 0, groupOrder: 0, passwordOrder: n }) }] }));
     await send(page, { type: 'VAULT_IMPORT_ITEMS', items: sources });
     await page.reload(); await page.getByRole('button', { name: '密码源', exact: true }).click();
-    await page.locator('m3e-list-action').filter({ hasText: '连接 KeePass' }).click();
+    await page.getByRole('button', { name: '连接 KeePass' }).click();
     const open = async (reopen = false) => {
       const dialog = dialogContent(page, { name: /KeePass/ });
       await dialog.getByLabel('显示名称', { exact: true }).fill('Synthetic destination');

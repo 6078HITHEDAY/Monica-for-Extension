@@ -15,7 +15,7 @@ export async function temporaryNativeHost(extensionId: string, output: string, o
   const hostName = options.hostName || "com.monica_pass.mdbx2";
   assert.match(hostName, /^[a-z0-9_.]+$/);
   const registry = `HKCU\\Software\\Microsoft\\Edge\\NativeMessagingHosts\\${hostName}`;
-  const executable = path.resolve(options.executable || "native/mdbx2-host/target/debug/monica-mdbx2-host.exe");
+  const executable = path.resolve(options.executable || process.env.MONICA_E2E_NATIVE_HOST_EXECUTABLE || "native/mdbx2-host/target/debug/monica-mdbx2-host.exe");
   await stat(executable);
   await mkdir(output, { recursive: true });
   const before = snapshot(registry);

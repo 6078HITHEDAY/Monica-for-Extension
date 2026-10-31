@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { commandHandler, createCommandExecutor, type CommandHandlers } from './command-router';
+import { commandHandler, createCommandDispatcher, createCommandExecutor, type CommandHandlers } from './command-router';
 import { ProviderOperationQueue } from './provider-operation-queue';
 import type { ExtensionRequest } from '../runtime/messages';
 
@@ -75,5 +75,20 @@ describe('actual command execution authorization and native exclusivity', () => 
     for (const type of ['__proto__', 'toString', 'UNKNOWN']) {
       expect(commandHandler(handlers, { type } as ExtensionRequest)).toBeUndefined();
     }
+  });
+
+  it('preserves native ownership through the actual dispatcher after authorization and recovery checks', async () => {
+    const f = fixture();
+    const dispatch = createCommandDispatcher({ PROVIDER_ATTACHMENT_UPLOAD_FINISH: f.handler } as unknown as CommandHandlers<ExtensionRequest>);
+    expect(await f.execute(f.request, manager, dispatch)).toBe('saved');
+    expect(f.events).toEqual(['move', 'nearby', 'handler']);
+    expect(f.handler).toHaveBeenCalledExactlyOnceWith(f.request, manager, true);
+  });
+
+  it('rejects unknown and prototype commands in the dispatcher without invoking an inherited function', () => {
+    const inherited = vi.fn();
+    const dispatch = createCommandDispatcher(Object.create({ UNKNOWN: inherited, toString: inherited }));
+    for (const type of ['UNKNOWN', 'toString', '__proto__']) expect(() => dispatch({ type } as ExtensionRequest, manager, false)).toThrow();
+    expect(inherited).not.toHaveBeenCalled();
   });
 });

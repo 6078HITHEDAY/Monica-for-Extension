@@ -5,14 +5,24 @@ import { mdbxDirectWriteProvider } from './mdbx-direct-write';
 import { assertExtensionPage, assertManagerPage, WEB_PAGE_REQUEST_TYPES } from './request-access';
 
 export type CommandHandlers<R extends ExtensionRequest> = {
-  [K in R['type']]: (request: Extract<R, { type: K }>, sender: chrome.runtime.MessageSender) => unknown;
+  [K in R['type']]: (request: Extract<R, { type: K }>, sender: chrome.runtime.MessageSender, nativeWriteLocked: boolean) => unknown;
 };
 
 /** Lookup preserves the request/handler discriminant relationship. Unknown
  * keys, including prototype properties, never select a handler. */
 export function commandHandler<R extends ExtensionRequest>(handlers: CommandHandlers<R>, request: ExtensionRequest) {
   if (!Object.prototype.hasOwnProperty.call(handlers, request.type)) return undefined;
-  return handlers[request.type as R['type']] as (request: R, sender: chrome.runtime.MessageSender) => unknown;
+  return handlers[request.type as R['type']] as (request: R, sender: chrome.runtime.MessageSender, nativeWriteLocked: boolean) => unknown;
+}
+
+/** The aggregate table is checked against the complete request union. Unknown
+ * messages still fail closed at runtime, before any handler is selected. */
+export function createCommandDispatcher(handlers: CommandHandlers<ExtensionRequest>) {
+  return function routeRequest(request: ExtensionRequest, sender: chrome.runtime.MessageSender, nativeWriteLocked: boolean): unknown {
+    const handler = commandHandler(handlers, request);
+    if (!handler) throw new Error('不支持的 Monica 运行时命令。');
+    return handler(request, sender, nativeWriteLocked);
+  };
 }
 
 /** Both browser messages and internal attachment operations cross the same

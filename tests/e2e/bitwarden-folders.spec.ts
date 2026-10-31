@@ -1,5 +1,6 @@
+import { launchTestContext } from './fixtures/edge';
 import { chooseOption, dialogContent } from "./fixtures/material";
-import { chromium, expect, test, type BrowserContext, type Page, type Route, type TestInfo } from "@playwright/test";
+import { expect, test, type BrowserContext, type Page, type Route, type TestInfo } from "@playwright/test";
 import path from "node:path";
 import { createLoginItem } from "../../src/core/model";
 import { encodeBitwardenCipher } from "../../src/providers/bitwarden/bitwarden-cipher-codec";
@@ -27,7 +28,7 @@ test("Bitwarden folders are encrypted, manager-only, conflict-aware, and route C
   const server = await createFolderServer();
   try {
     const extensionPath = path.resolve("dist");
-    context = await chromium.launchPersistentContext(testInfo.outputPath("bitwarden-folders-profile"), {
+    context = await launchTestContext(testInfo.outputPath("bitwarden-folders-profile"), {
       channel: "chromium",
       headless: true, locale: "zh-CN",
       colorScheme: "dark",

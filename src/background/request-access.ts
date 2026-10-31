@@ -1,3 +1,4 @@
+import { requireTrustedWebPageSender } from "../runtime/sender-policy";
 import type { ExtensionRequest } from '../runtime/messages';
 import { assertTrustedManagerPage, assertTrustedExtensionPage } from '../runtime/sender-policy';
 
@@ -24,4 +25,14 @@ export function assertManagerPage(sender: chrome.runtime.MessageSender): void {
 
 export function assertExtensionPage(sender: chrome.runtime.MessageSender): void {
   assertTrustedExtensionPage(sender, chrome.runtime.id, chrome.runtime.getURL(""));
+}
+
+export function assertWebPageSender(sender: chrome.runtime.MessageSender): {
+    tabId: number;
+    frameId: number;
+    documentId: string;
+    url: string;
+    origin: string;
+} {
+    return requireTrustedWebPageSender(sender, chrome.runtime.id);
 }

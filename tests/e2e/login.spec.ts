@@ -1,12 +1,13 @@
+import { launchTestContext } from './fixtures/edge';
 import { chooseOption, editContentSection } from "./fixtures/material";
-import { expect, test, chromium, type BrowserContext } from "@playwright/test";
+import { expect, test, type BrowserContext } from "@playwright/test";
 import path from "node:path";
 
 test("login popup fills username, password, and TOTP through the MV3 background boundary", async ({}, testInfo) => {
   const extensionPath = path.resolve("dist");
   let context: BrowserContext | undefined;
   try {
-    context = await chromium.launchPersistentContext(testInfo.outputPath("profile"), {
+    context = await launchTestContext(testInfo.outputPath("profile"), {
       channel: "chromium",
       headless: true, locale: "zh-CN",
       args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
@@ -72,7 +73,7 @@ test("manager saves a metadata-only SSO login with empty username, password, and
   const extensionPath = path.resolve("dist");
   let context: BrowserContext | undefined;
   try {
-    context = await chromium.launchPersistentContext(testInfo.outputPath("empty-sso-profile"), {
+    context = await launchTestContext(testInfo.outputPath("empty-sso-profile"), {
       channel: "chromium",
       headless: true, locale: "zh-CN",
       args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
@@ -107,7 +108,7 @@ test("popup shows top-level parent-RP Passkey status without exposing a signing 
   const extensionPath = path.resolve("dist");
   let context: BrowserContext | undefined;
   try {
-    context = await chromium.launchPersistentContext(testInfo.outputPath("passkey-status-profile"), { channel: "chromium", headless: true, locale: "zh-CN", args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`] });
+    context = await launchTestContext(testInfo.outputPath("passkey-status-profile"), { channel: "chromium", headless: true, locale: "zh-CN", args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`] });
     const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
     const extensionId = new URL(worker.url()).host;
     await context.route("https://login.accounts.example.co.uk/**", (route) => route.fulfill({ contentType: "text/html", body: "<!doctype html><title>Passkey-only site</title>" }));
@@ -167,7 +168,7 @@ test("login popup discovers and safely fills a cross-origin login frame", async 
   const extensionPath = path.resolve("dist");
   let context: BrowserContext | undefined;
   try {
-    context = await chromium.launchPersistentContext(testInfo.outputPath("frame-profile"), {
+    context = await launchTestContext(testInfo.outputPath("frame-profile"), {
       channel: "chromium",
       headless: true, locale: "zh-CN",
       args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
