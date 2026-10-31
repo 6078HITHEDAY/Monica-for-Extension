@@ -55,7 +55,9 @@ test("provider page is compact and decorated icon glyphs are centered", async ({
     await expect(mdbx2Dialog).toBeVisible();
     await expect(mdbx2Dialog).toHaveCSS("border-radius", "28px");
     await chooseOption(mdbx2Dialog.locator('m3e-select').first(), 'local');
-    await expect(mdbx2Dialog.getByLabel("MDBX2 可移植备份")).toBeVisible();
+    const portableBackup = mdbx2Dialog.getByLabel("MDBX 可移植备份", { exact: true });
+    await expect(portableBackup).toBeVisible();
+    await expect(portableBackup).toHaveAttribute("accept", /\.mdbx.*\.zip/);
     await chooseOption(mdbx2Dialog.locator('m3e-select').first(), 'remote');
     const remoteMdbx2Dialog = dialogContent(page, { name: "从 WebDAV 加入 MDBX2" });
     await expect(remoteMdbx2Dialog).toBeVisible();
@@ -587,7 +589,8 @@ test("MDBX2 conflict manager is flat explicit and usable at 375px with large tex
     await expect(confirm).toBeFocused();
     await expect(dialog.getByText("当前浏览器中的并发修改会被替换", { exact: false })).toBeVisible();
     await expectNoHorizontalOverflow(dialog);
-    await page.screenshot({ path: testInfo.outputPath("mdbx2-conflict-manager.png"), fullPage: true });
+    // Preserve the narrow dialog viewport before confirming the mutation.
+    await page.screenshot({ path: testInfo.outputPath("mdbx2-conflict-manager.png") });
     await confirm.click();
     await expect(dialog.getByText("没有待处理的同步冲突。")).toBeVisible();
   } finally { await context?.close(); }
@@ -708,7 +711,8 @@ test("MDBX2 snapshot manager is flat bounded and usable at 375px with large text
     const deleteConfirm = dialog.getByRole("button", { name: "确认永久删除快照" });
     await expect(deleteConfirm).toBeFocused();
     await expect(dialog.getByText("此快照及其加密内容将从本地保险库永久删除", { exact: false })).toBeVisible();
-    await page.screenshot({ path: testInfo.outputPath("mdbx2-snapshot-manager.png"), fullPage: true });
+    // Preserve the narrow dialog viewport before confirming the mutation.
+    await page.screenshot({ path: testInfo.outputPath("mdbx2-snapshot-manager.png") });
     await deleteConfirm.click();
     await expect(dialog.getByText("每日保留点", { exact: true })).toHaveCount(0);
   } finally { await context?.close(); }
