@@ -1,5 +1,6 @@
+import { launchTestContext } from './fixtures/edge';
 import { dialogContent } from "./fixtures/material";
-import { chromium, expect, test, type BrowserContext, type Download, type Page, type Route, type TestInfo } from "@playwright/test";
+import { expect, test, type BrowserContext, type Download, type Page, type Route, type TestInfo } from "@playwright/test";
 import path from "node:path";
 import { createLoginItem } from "../../src/core/model";
 import { encodeBitwardenCipher } from "../../src/providers/bitwarden/bitwarden-cipher-codec";
@@ -49,7 +50,7 @@ test("Bitwarden attachments are manager-only, encrypted end-to-end, and recover 
   const server = await createAttachmentServer();
   try {
     const extensionPath = path.resolve("dist");
-    context = await chromium.launchPersistentContext(testInfo.outputPath("bitwarden-attachments-profile"), {
+    context = await launchTestContext(testInfo.outputPath("bitwarden-attachments-profile"), {
       channel: "chromium",
       headless: true, locale: "zh-CN",
       acceptDownloads: true,

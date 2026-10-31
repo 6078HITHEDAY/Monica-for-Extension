@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import type { LoginItem, ProviderAccount } from "../core/model";
 import { ProviderAttachmentUploadStore } from "../providers/attachments/attachment-upload-store";
@@ -15,12 +14,6 @@ function setup(complete = true) {
   return { store, started, adapter: { addAttachment } };
 }
 describe("WebDAV attachment upload completion", () => {
-  it("is wired into the actual background FINISH branch", () => {
-    const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
-    const branch = source.split('case "PROVIDER_ATTACHMENT_UPLOAD_FINISH":')[1].split('case "PROVIDER_ATTACHMENT_UPLOAD_ABORT":')[0];
-    expect(branch).toContain('account.kind === "monica-webdav"');
-    expect(branch).toContain("finishWebDavAttachmentUpload");
-  });
   it("commits verified bytes through the existing encrypted adapter and replays a repeated finish", async () => {
     const { store, started, adapter } = setup();
     const request = { transferId: started.transferId, operationId };

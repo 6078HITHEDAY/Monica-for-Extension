@@ -1,7 +1,8 @@
+import { launchTestContext } from './fixtures/edge';
 import { createServer } from "node:http";
 import path from "node:path";
 import * as kdbxweb from "kdbxweb";
-import { chromium, expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { buildKeePassFixture, keePassCredentials } from "../../src/providers/keepass/keepass-fixture";
 import type { LoginItem } from "../../src/core/model";
 
@@ -45,7 +46,7 @@ test("WebDAV checks ETags, automatically receives and publishes KDBX edits, and 
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Synthetic WebDAV server failed");
   const extensionPath = path.resolve("dist");
-  const context = await chromium.launchPersistentContext(testInfo.outputPath("profile"), { channel: "chromium", headless: true, locale: "zh-CN", args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`] });
+  const context = await launchTestContext(testInfo.outputPath("profile"), { channel: "chromium", headless: true, locale: "zh-CN", args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`] });
   async function editOnPhone(title: string) {
     const database = await kdbx.Kdbx.load(bytes.slice().buffer, keePassCredentials(PASSWORD));
     const entry = database.getDefaultGroup().entries.find(entry => entry.fields.get("UserName") === "phone-user")!;

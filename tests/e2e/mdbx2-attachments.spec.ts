@@ -1,5 +1,6 @@
+import { launchTestContext } from './fixtures/edge';
 import { chooseOption, dialogContent } from "./fixtures/material";
-import { chromium, expect, test, type BrowserContext, type CDPSession, type Locator, type Page, type TestInfo } from "@playwright/test";
+import { expect, test, type BrowserContext, type CDPSession, type Locator, type Page, type TestInfo } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { installMdbx2TigaMock } from "./fixtures/mdbx2";
@@ -16,7 +17,7 @@ const KEEPASS_PROVIDER_ID = "88888888-8888-4888-8888-888888888888";
 
 async function launchExtension(testInfo: TestInfo, profileName: string, options: { dark?: boolean; viewport?: { width: number; height: number }; reducedMotion?: "reduce" | "no-preference" } = {}) {
   const extensionPath = path.resolve("dist");
-  const context = await chromium.launchPersistentContext(testInfo.outputPath(profileName), {
+  const context = await launchTestContext(testInfo.outputPath(profileName), {
     channel: "chromium",
     headless: true, locale: "zh-CN",
     colorScheme: options.dark ? "dark" : "light",

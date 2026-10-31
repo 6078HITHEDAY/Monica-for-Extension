@@ -1,3 +1,4 @@
+import type { ProviderSyncActivity } from './provider-sync-activity';
 import { sameProviderBinding } from '../core/provider';
 import type { SecureVaultService } from '../security/secure-vault-service';
 import type { PasswordProjectRemovalRunner } from './password-project-removal';
@@ -6,7 +7,7 @@ import type { PasswordProjectRemovalRunner } from './password-project-removal';
  * sync; a manager action owns its own slot in the shared abort/busy registry. */
 export class BitwardenProjectRemovalRuntime implements PasswordProjectRemovalRunner {
   constructor(private readonly vault: SecureVaultService, private readonly coordinator: PasswordProjectRemovalRunner,
-    private readonly active: Map<string, AbortController>, private readonly invalidate: (providerId: string) => void) {}
+    private readonly active: ProviderSyncActivity, private readonly invalidate: (providerId: string) => void) {}
 
   async resume(operationId: string, signal?: AbortSignal) {
     const record = (await this.vault.readPasswordProjectRemovals()).find(row => row.id === operationId);
@@ -18,9 +19,9 @@ export class BitwardenProjectRemovalRuntime implements PasswordProjectRemovalRun
     const account = await this.vault.getProvider(binding.id);
     if (!account?.enabled || !sameProviderBinding(account, binding)) throw new Error('Bitwarden 项目来源已变化，请检查恢复记录。');
     const owner = signal ? undefined : new AbortController();
-    if (owner && this.active.has(binding.id)) throw new Error('此密码源正在处理其他操作，请稍后重试。');
-    if (signal && this.active.get(binding.id)?.signal !== signal) throw new Error('密码源恢复必须由当前同步操作执行。');
-    if (owner) this.active.set(binding.id, owner);
+    if (owner && this.active.isBusy(binding.id)) throw new Error('此密码源正在处理其他操作，请稍后重试。');
+    if (signal && !this.active.owns(binding.id, signal)) throw new Error('密码源恢复必须由当前同步操作执行。');
+    if (owner) this.active.reserve(binding.id, owner);
     const operationSignal = signal || owner!.signal;
     try {
       operationSignal.throwIfAborted();
@@ -29,7 +30,7 @@ export class BitwardenProjectRemovalRuntime implements PasswordProjectRemovalRun
     } finally {
       // Copies/deletes can succeed remotely even if their response is lost.
       this.invalidate(binding.id);
-      if (owner && this.active.get(binding.id) === owner) this.active.delete(binding.id);
+      if (owner) this.active.release(binding.id, owner);
     }
   }
 }

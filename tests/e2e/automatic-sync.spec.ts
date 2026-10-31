@@ -1,10 +1,11 @@
+import { launchTestContext } from './fixtures/edge';
 import { dialogContent } from "./fixtures/material";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { MessageType } from "@microsoft/signalr";
 import { MessagePackHubProtocol } from "@microsoft/signalr-protocol-msgpack";
-import { chromium, expect, test, type Page, type TestInfo } from "@playwright/test";
+import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import type { LoginItem } from "../../src/core/model";
 import { BitwardenClient } from "../../src/providers/bitwarden/bitwarden-client";
 import { decodeBitwardenCipher, encodeBitwardenCipher } from "../../src/providers/bitwarden/bitwarden-cipher-codec";
@@ -129,7 +130,7 @@ async function send(page: Page, request: object): Promise<any> {
 async function openFixture(testInfo: TestInfo) {
   const mock = await bitwardenServer();
   const extensionPath = path.resolve("dist");
-  const context = await chromium.launchPersistentContext(testInfo.outputPath("profile"), { channel: "chromium", headless: true, locale: "zh-CN", args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`] });
+  const context = await launchTestContext(testInfo.outputPath("profile"), { channel: "chromium", headless: true, locale: "zh-CN", args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`] });
   try {
     const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
     const root = `chrome-extension://${new URL(worker.url()).host}`;
