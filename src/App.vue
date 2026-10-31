@@ -358,7 +358,7 @@ function selectBitwardenServerRegion(region: string) {
   else if (region === "eu") bitwardenForm.vaultUrl = "https://vault.bitwarden.eu";
   else if (region === "custom") bitwardenForm.vaultUrl = bitwardenCustomServerUrl.value;
 }
-watch(() => [bitwardenForm.vaultUrl, bitwardenForm.email], () => {
+watch(() => [bitwardenForm.vaultUrl, bitwardenForm.email, bitwardenForm.masterPassword], () => {
   // Verification belongs to the submitted server/account, not whatever the form now contains.
   bitwardenDeviceVerificationRequired.value = false;
   bitwardenTwoFactorProviders.value = [];
@@ -2644,14 +2644,15 @@ async function connectBitwarden() {
       twoFactorProvider: bitwardenTwoFactorProviders.value.length ? bitwardenForm.twoFactorProvider : undefined,
       twoFactorProviderData: bitwardenForm.twoFactorProvider === 5 ? bitwardenTwoFactorProviderData.value : undefined,
       rememberTwoFactor: bitwardenForm.rememberTwoFactor,
-      newDeviceOtp: bitwardenDeviceVerificationRequired.value ? bitwardenForm.newDeviceOtp : undefined,
+      // Like the official password-token request, retain the verified device code
+      // while completing any subsequent two-factor challenge in this dialog.
+      newDeviceOtp: bitwardenForm.newDeviceOtp || undefined,
       ssoOrganizationIdentifier: bitwardenForm.ssoOrganizationIdentifier.trim() || undefined,
       isDefaultSaveTarget: bitwardenForm.isDefaultSaveTarget
     });
     if (result.status === "device-verification-required") {
       const submittedCode = bitwardenDeviceVerificationRequired.value && Boolean(bitwardenForm.newDeviceOtp.trim());
       bitwardenDeviceVerificationRequired.value = true;
-      bitwardenTwoFactorProviders.value = [];
       bitwardenError.value = submittedCode ? tr('Bitwarden 新设备验证码错误或已过期，请获取新验证码后重试。') : "";
       return;
     }
@@ -2662,8 +2663,9 @@ async function connectBitwarden() {
       return;
     }
     if (result.status === "two-factor-required") {
+      const submittedCode = bitwardenTwoFactorProviders.value.length > 0 && Boolean(bitwardenForm.twoFactorCode.trim());
+      const previousProvider = bitwardenForm.twoFactorProvider;
       bitwardenDeviceVerificationRequired.value = false;
-      bitwardenForm.newDeviceOtp = "";
       const supported = result.providers.filter((provider) => provider === 0 || provider === 1 || provider === 2 || provider === 3 || provider === 4 || provider === 5);
       if (!supported.length) {
         bitwardenError.value = tr('此账号只启用了当前浏览器无法完成的两步验证方式。');
@@ -2671,8 +2673,9 @@ async function connectBitwarden() {
       }
       bitwardenTwoFactorProviders.value = supported;
       bitwardenTwoFactorProviderData.value = result.providerData;
-      bitwardenForm.twoFactorProvider = supported.includes(0) ? 0 : supported[0];
-      showNotice(bitwardenForm.twoFactorProvider === 5 ? tr('Bitwarden 需要 WebAuthn 验证，请继续完成硬件密钥或 Passkey 验证。') : bitwardenForm.twoFactorProvider === 2 || bitwardenForm.twoFactorProvider === 4 ? tr('Bitwarden 需要 Duo 验证，请在安全窗口中批准登录。') : tr('Bitwarden 需要两步验证，请输入代码后继续。'));
+      bitwardenForm.twoFactorProvider = supported.includes(previousProvider) ? previousProvider : supported.includes(0) ? 0 : supported[0];
+      if (submittedCode) bitwardenError.value = tr('Bitwarden 两步验证码错误或已过期，请获取新验证码后重试。');
+      else showNotice(bitwardenForm.twoFactorProvider === 5 ? tr('Bitwarden 需要 WebAuthn 验证，请继续完成硬件密钥或 Passkey 验证。') : bitwardenForm.twoFactorProvider === 2 || bitwardenForm.twoFactorProvider === 4 ? tr('Bitwarden 需要 Duo 验证，请在安全窗口中批准登录。') : tr('Bitwarden 需要两步验证，请输入代码后继续。'));
       return;
     }
     await refreshProviders();

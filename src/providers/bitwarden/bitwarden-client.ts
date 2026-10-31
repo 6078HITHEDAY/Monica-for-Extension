@@ -5,6 +5,7 @@ import { parseLosslessJson } from "../../core/lossless-json";
 import {
   decryptBitwardenSymmetricKey,
   deriveBitwardenMasterKey,
+  deriveBitwardenMasterKeyWithSalt,
   deriveBitwardenMasterPasswordHash,
   encryptBitwardenBytes,
   normalizeBitwardenEmail,
@@ -200,9 +201,12 @@ export class BitwardenClient {
     if (body.status !== "ok") return body;
     const tokenBody = body.body;
     const accessToken = stringValue(tokenBody, "access_token");
-    const protectedKey = stringValue(tokenBody, "Key", "key");
+    const unlock = masterPasswordUnlock(tokenBody);
+    const protectedKey = unlock?.protectedKey ?? stringValue(tokenBody, "Key", "key");
     if (!accessToken || !protectedKey) throw new Error("Bitwarden 登录响应缺少访问令牌或受保护密钥。");
-    const vaultKey = await decryptBitwardenSymmetricKey(protectedKey, stretchedKey);
+    const vaultKey = unlock && (unlock.salt !== email || !sameKdf(unlock.kdf, kdf))
+      ? await decryptMasterPasswordUnlock(input.masterPassword, unlock)
+      : await decryptBitwardenSymmetricKey(protectedKey, stretchedKey);
     const expiresIn = numberValue(tokenBody, "expires_in") || 3600;
     return {
       status: "authenticated",
@@ -349,11 +353,10 @@ export class BitwardenClient {
     if (body.status !== "ok") return body;
     const tokenBody = body.body;
     const accessToken = stringValue(tokenBody, "access_token");
-    const protectedKey = stringValue(tokenBody, "Key", "key");
+    const unlock = masterPasswordUnlock(tokenBody);
+    const protectedKey = unlock?.protectedKey ?? stringValue(tokenBody, "Key", "key");
     if (!accessToken || !protectedKey) throw new Error("Bitwarden SSO 登录响应缺少访问令牌或受保护密钥。");
-    const masterKey = await deriveBitwardenMasterKey(input.masterPassword, email, kdf);
-    const stretchedKey = await stretchBitwardenMasterKey(masterKey);
-    const vaultKey = await decryptBitwardenSymmetricKey(protectedKey, stretchedKey);
+    const vaultKey = await decryptMasterPasswordUnlock(input.masterPassword, unlock ?? { salt: email, kdf, protectedKey });
     const expiresIn = numberValue(tokenBody, "expires_in") || 3600;
     return {
       status: "authenticated",
@@ -892,6 +895,58 @@ export function inferBitwardenServerUrls(rawVaultUrl: string): BitwardenServerUr
   if (parsed.hostname === "vault.bitwarden.com") return { vault: "https://vault.bitwarden.com", api: "https://api.bitwarden.com", identity: "https://identity.bitwarden.com" };
   if (parsed.hostname === "vault.bitwarden.eu") return { vault: "https://vault.bitwarden.eu", api: "https://api.bitwarden.eu", identity: "https://identity.bitwarden.eu" };
   return { vault, api: `${vault}/api`, identity: `${vault}/identity` };
+}
+
+interface MasterPasswordUnlock {
+  salt: string;
+  kdf: BitwardenKdfConfig;
+  protectedKey: string;
+}
+
+function sameKdf(left: BitwardenKdfConfig, right: BitwardenKdfConfig): boolean {
+  return left.type === right.type && left.iterations === right.iterations
+    && (left.type === 0 || (right.type === 1 && left.memoryMb === right.memoryMb && left.parallelism === right.parallelism));
+}
+
+function masterPasswordUnlock(body: Record<string, unknown>): MasterPasswordUnlock | undefined {
+  const options = recordValue(body, "UserDecryptionOptions", "userDecryptionOptions");
+  const raw = options?.MasterPasswordUnlock ?? options?.masterPasswordUnlock;
+  // Older servers and non-password unlock options may omit this object.
+  if (raw === undefined || raw === null) return undefined;
+  const invalid = () => new Error("Bitwarden 会话配置不完整。");
+  if (typeof raw !== "object" || Array.isArray(raw)) throw invalid();
+  const data = raw as Record<string, unknown>;
+  const salt = stringValue(data, "Salt", "salt");
+  const protectedKey = stringValue(data, "MasterKeyEncryptedUserKey", "masterKeyEncryptedUserKey");
+  const config = recordValue(data, "Kdf", "kdf");
+  if (!salt || salt.length > 256 || !protectedKey || !config) throw invalid();
+  const integer = (upper: string, lower: string): number => {
+    const value = config[upper] ?? config[lower];
+    if (typeof value !== "number" || !Number.isSafeInteger(value)) throw invalid();
+    return value;
+  };
+  const type = integer("KdfType", "kdfType");
+  const iterations = integer("Iterations", "iterations");
+  if (type !== 0 && type !== 1) throw invalid();
+  const kdf: BitwardenKdfConfig = type === 0 ? { type, iterations } : {
+    type, iterations, memoryMb: integer("Memory", "memory"), parallelism: integer("Parallelism", "parallelism")
+  };
+  return { salt, protectedKey, kdf };
+}
+
+async function decryptMasterPasswordUnlock(password: string, unlock: MasterPasswordUnlock): Promise<BitwardenSymmetricKey> {
+  // Existing derivation bounds and CipherString MAC checks remain mandatory.
+  // Do not retry the legacy key if authenticated unlock metadata is invalid.
+  const masterKey = await deriveBitwardenMasterKeyWithSalt(password, unlock.salt, unlock.kdf);
+  let stretched: BitwardenSymmetricKey | undefined;
+  try {
+    stretched = await stretchBitwardenMasterKey(masterKey);
+    return await decryptBitwardenSymmetricKey(unlock.protectedKey, stretched);
+  } finally {
+    masterKey.fill(0);
+    stretched?.encKey.fill(0);
+    stretched?.macKey.fill(0);
+  }
 }
 
 function parseKdf(body: Record<string, unknown>): BitwardenKdfConfig {

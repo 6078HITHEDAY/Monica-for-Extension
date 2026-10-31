@@ -81,7 +81,8 @@ async function checkRuntime(force: boolean): Promise<void> {
 async function send<T>(request: ExtensionRequest): Promise<T> {
   if (typeof chrome === "undefined" || !chrome.runtime?.sendMessage) throw new Error("请在已安装的 Monica 浏览器插件中打开此页面。");
   // Share one initial check across UI reads; recheck before sending a password.
-  await checkRuntime(request.type === "VAULT_SETUP" || request.type === "VAULT_UNLOCK" || request.type === "VAULT_UNLOCK_HELLO" || request.type === 'VAULT_AUTHENTICATED_EXPORT');
+  await checkRuntime(request.type === "VAULT_SETUP" || request.type === "VAULT_UNLOCK" || request.type === "VAULT_UNLOCK_HELLO" || request.type === 'VAULT_AUTHENTICATED_EXPORT'
+    || request.type === 'BITWARDEN_LOGIN' || request.type === 'BITWARDEN_SEND_EMAIL_CODE');
   let response: ExtensionResponse<T>;
   try { response = await chrome.runtime.sendMessage(request); }
   catch (error) {

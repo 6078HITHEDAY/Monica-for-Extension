@@ -33,17 +33,21 @@ export const MAX_BITWARDEN_ARGON2_PARALLELISM = 4;
 export const MAX_BITWARDEN_ARGON2_WORK_UNITS = 512;
 
 export async function deriveBitwardenMasterKey(password: string, email: string, kdf: BitwardenKdfConfig): Promise<Uint8Array> {
-  const normalizedEmail = normalizeBitwardenEmail(email);
+  return deriveBitwardenMasterKeyWithSalt(password, normalizeBitwardenEmail(email), kdf);
+}
+
+/** Authenticated unlock metadata contains a salt, not necessarily an email. */
+export async function deriveBitwardenMasterKeyWithSalt(password: string, salt: string, kdf: BitwardenKdfConfig): Promise<Uint8Array> {
   if (!password) throw new Error("Bitwarden 主密码不能为空。");
   if (kdf.type === 0) {
     assertIntegerRange(kdf.iterations, 1, 10_000_000, "PBKDF2 迭代次数");
-    return pbkdf2(encoder.encode(password), encoder.encode(normalizedEmail), kdf.iterations, KEY_BYTES);
+    return pbkdf2(encoder.encode(password), encoder.encode(salt), kdf.iterations, KEY_BYTES);
   }
   assertIntegerRange(kdf.iterations, 1, 20, "Argon2 迭代次数");
   assertIntegerRange(kdf.memoryMb, 1, MAX_BITWARDEN_ARGON2_MEMORY_MB, "Argon2 内存");
   assertIntegerRange(kdf.parallelism, 1, MAX_BITWARDEN_ARGON2_PARALLELISM, "Argon2 并行度");
   if (kdf.memoryMb * kdf.iterations > MAX_BITWARDEN_ARGON2_WORK_UNITS) throw new Error("Argon2 总工作量超过安全上限。");
-  const saltHash = new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(normalizedEmail)));
+  const saltHash = new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(salt)));
   return argon2id({
     password: encoder.encode(password),
     salt: saltHash,

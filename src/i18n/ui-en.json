@@ -246,6 +246,7 @@
   "Bitwarden 已连接；点击立即同步导入密码库。": "Bitwarden connected. Select Sync now to import your vault.",
   "Bitwarden 文件夹 · {0}": "Bitwarden folders · {0}",
   "Bitwarden 新设备验证码错误或已过期，请获取新验证码后重试。": "The Bitwarden new-device code is incorrect or expired. Request a new code.",
+  "Bitwarden 两步验证码错误或已过期，请获取新验证码后重试。": "The Bitwarden two-step verification code is incorrect or expired. Request a new code and try again.",
   "Bitwarden 有 {0} 个附件操作待恢复": "Bitwarden has {0} attachment operations to recover",
   "Bitwarden 服务": "Bitwarden service",
   "Bitwarden 版本存在；浏览器版本已删除": "Bitwarden copy exists; browser copy was deleted",

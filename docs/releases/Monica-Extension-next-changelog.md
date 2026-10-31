@@ -4,6 +4,7 @@
 
 ## 中文
 
+- 修复 Bitwarden 新设备邮件验证与两步验证接续时丢失验证码的问题；两种验证按任意顺序出现均保留当前登录所需状态。验证码被拒绝后保留所选验证方式并明确提示，更换主密码、账号或服务器及关闭弹窗会清除旧验证码。此修复通过合成服务和实际 Edge 回归，反馈账号的官方云端登录仍待确认。
 - 合入社区贡献：修复 Vivaldi 工具栏弹窗尺寸，MDBX 批量移动按目标分组复用冲突扫描，并支持通过 OneDrive 连接与增量同步 MDBX 数据库。OneDrive 上传后核对实际内容，锁库或取消登录会中止请求；真实云账号互通仍需验证。
 - 修复旧版遗留本地只读导入项目无法删除的问题：可移入回收站、恢复或确认清空，原始内容保留到永久删除；远端未知类型继续由原密码源管理。新 Bitwarden 明文 JSON 导入仍转换为本地可编辑项目。
 - Windows Hello 不可用时提示检查 Windows 本机通行密钥保存设置，并提供公开 HRESULT、WebAuthn 错误名及 API 版本。保留本机平台验证器和强制用户验证；创建与验证请求使用 JSON 序列化并增加回归检查。尚未在反馈设备验证设置开启后的原平台参数。
@@ -14,6 +15,7 @@
 
 ## English
 
+- Fixed lost verification state when Bitwarden new-device email verification and two-step verification occur in either order. Rejected codes retain the selected verification method and show an explicit error. Changing the password, account or server, or closing the dialog clears previous codes. Synthetic service and actual Edge regressions pass; the reporting account's official-cloud login remains unconfirmed.
 - Integrated community fixes for Vivaldi toolbar popup sizing and per-collection MDBX move conflict scans, plus OneDrive connection and incremental synchronization for MDBX databases. Uploads verify stored content, and locking or cancelling login aborts requests. Real cloud-account interoperability remains unverified.
 - Old local readonly imports can now be moved to trash, restored, and explicitly purged, preserving their original payload until permanent deletion. Unknown remote records remain managed by their source. New plaintext Bitwarden JSON imports continue to become editable local items.
 - Unavailable Windows Hello errors explain the Windows setting for saving passkeys on this device and include public HRESULT, WebAuthn error name and API version diagnostics. The local platform authenticator and required user verification remain enforced. Creation and assertion client data use JSON serialization with regression tests. The original platform parameters with the setting enabled still need testing on the reporting device.

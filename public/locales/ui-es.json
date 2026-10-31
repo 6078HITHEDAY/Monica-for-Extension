@@ -214,6 +214,7 @@
   "Bitwarden 返回了无法验证的 Cipher 修订信息，未更新本地状态。": "Bitwarden devolvió datos de revisión de cifrado no verificables. El estado local no se actualizó.",
   "Bitwarden 返回空密码库，未更新本地文件夹路由。": "Bitwarden devolvió una bóveda de contraseña vacía. El enrutamiento de carpetas locales no se actualizó.",
   "Bitwarden 邮箱验证码已发送。": "Bitwarden código de correo electrónico enviado.",
+  "Bitwarden 两步验证码错误或已过期，请获取新验证码后重试。": "El código de verificación en dos pasos de Bitwarden es incorrecto o ha caducado. Solicita un código nuevo y vuelve a intentarlo.",
   "Bitwarden 附件上传目标与当前项目不一致。": "El destino de carga de archivos adjuntos Bitwarden no coincide con este elemento.",
   "Bitwarden 附件上传缺少可恢复的操作标识。": "A la carga del archivo adjunto Bitwarden le falta un ID de operación recuperable.",
   "Bitwarden 附件下载已过期，请重新开始。": "La descarga del archivo adjunto Bitwarden expiró.",
