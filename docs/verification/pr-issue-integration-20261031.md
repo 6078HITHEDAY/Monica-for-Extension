@@ -17,7 +17,7 @@ OneDrive review hardening: bind clients to the original provider/session/path, a
 - Snapshot CI fixture final retest: **1 passed**, 10.30 seconds. Give each snapshot a fresh eligibility timestamp; do not weaken production retention validation.
 - Pinned Emscripten 4.0.18 / Rust 1.97.0 browser WASM rebuilt from final native sources; final TypeScript and extension production build passed, including native-source and browser-artifact verification.
 - Actual Edge final focused run: **7 passed**, 53.4 seconds: issue #16, offscreen MDBX lifecycle, batch transfer, collections, OneDrive connection UI, and two Passkey/Hello fail-closed flows. Earlier Bitwarden authentication and shared security UI tests also passed. Browser fixtures are synthetic; these are not physical Hello or live-cloud tests.
-- Actual Chromium toolbar-action popup probe passed. Vivaldi-specific fallback was reviewed and unit-covered, but Vivaldi was not installed for local acceptance.
+- Actual Chromium toolbar-action popup probe passed. Vivaldi-specific fallback was reviewed, but Vivaldi was not installed for local acceptance.
 - Security audit passed (225 runtime commands, 24 manager-only project commands); production npm audit reported **0 vulnerabilities**; supply-chain checks passed.
 - Native Hello probe: supported=true, available=false, reason=platform-authenticator-unavailable, damagedBindingRejected=true, promptFree=true. No physical biometric enrollment was attempted.
 
@@ -33,4 +33,8 @@ PR #18's earlier Windows failure reused an eligibility timestamp for a later sna
 
 Detailed local logs use the `extension-integration-*20261031.log` names under the workspace `.codex-tmp/` directory. Local editable M3E sketches and browser screenshots remain in ignored design/test-output directories and are not committed. No Android files or AVDs were touched; no user vault data was cleared. GitHub CI and merge outcomes are recorded in the integration PR.
 
-New PR #22 and issue #23 appeared during final verification and are being reviewed separately; they are not covered by the test counts above.
+The first Linux integration CI run caught a platform cfg omission: the shared Hello JSON test helper referenced a Windows-only origin constant. The constant now compiles for Windows or tests, matching the helper. Windows-only biometric calls remain gated.
+
+The first new-branch push scanned full Git history and reported existing vendored test fixtures and brand-icon provenance entries. Its separate PR diff scan passed; no credential values were copied into this record. The next push and PR scans check the updated diff normally. This historical scan failure is not counted as passing.
+
+New PR #22 and issue #23 appeared during final verification. The pinned browser build of #22 fails with E0433 because shared runtime code uses rusqlite but the browser crate has no direct dependency. A supplementary regression extends the PR's existing registration/storage-failure test with cancel after successful registration: it fails because the registered vault handle is passed to discardVault (6 tests pass, 1 fails). A failed journal update leaves the persisted operation at committing without providerId, so both page-teardown cancellation and later stale recovery can delete the registered working copy. These are blocking review findings; #22/#23 remain open rather than risking user databases. This review used an isolated checkout and synthetic handles; no real vault was deleted.

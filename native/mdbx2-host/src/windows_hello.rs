@@ -16,7 +16,7 @@ use crate::runtime::RpcFailure;
 
 pub const HELLO_PROTOCOL_VERSION: u32 = 1;
 pub const HELLO_RP_ID: &str = "monica-extension.local";
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 const HELLO_ORIGIN: &str = "https://monica-extension.local";
 #[cfg(windows)]
 const HELLO_TIMEOUT_MS: u32 = 120_000;
