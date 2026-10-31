@@ -40,7 +40,7 @@ export async function sniffMdbxImportBlob(file: Blob): Promise<MdbxImportSniff> 
   const head = new Uint8Array(await file.slice(0, Math.min(64, file.size)).arrayBuffer());
   if (isSqliteHeader(head)) return baseSniff("mdbx-vault");
   if (isZipHeader(head)) return classifyImport(head, await listZipEntryNamesFromBlob(file));
-  const keepass = detectKeePassContainerFormat(head, file.name);
+  const keepass = detectKeePassContainerFormat(head, file instanceof File ? file.name : undefined);
   if (keepass === "kdbx") return { ...baseSniff("kdbx"), needsPasswordPrompt: true };
   if (keepass === "kdb-legacy") return { ...baseSniff("unknown"), incompatibilityReason: "kdb-legacy" };
   if (file.size > 64 * 1024 * 1024) {

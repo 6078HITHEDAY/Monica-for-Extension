@@ -126,7 +126,7 @@ describe("UI and background compatibility", () => {
     await expect(vaultClient.status()).resolves.toBe("locked");
   });
 
-  it.each(['login', 'email'] as const)('rechecks the build before Bitwarden %s after a cached status check', async action => {
+  it.each(['login', 'email', 'keepass'] as const)('rechecks the build before password/code action %s after a cached status check', async action => {
     let info = runtimeInfo;
     const sendMessage = vi.fn(async (request: { type: string }) => ({ ok: true, data: request.type === 'RUNTIME_INFO' ? info : 'locked' }));
     vi.stubGlobal('chrome', { runtime: { sendMessage } });
@@ -135,7 +135,8 @@ describe("UI and background compatibility", () => {
     info = { ...runtimeInfo, buildId: 'different-build-same-version' };
     const result = action === 'login'
       ? vaultClient.loginBitwarden({ name: 'Synthetic', vaultUrl: 'https://vault.bitwarden.com', email: 'synthetic@example.com', masterPassword: 'synthetic secret', newDeviceOtp: '654321' })
-      : vaultClient.sendBitwardenEmailCode('https://vault.bitwarden.com', 'synthetic@example.com', 'synthetic secret');
+      : action === 'email' ? vaultClient.sendBitwardenEmailCode('https://vault.bitwarden.com', 'synthetic@example.com', 'synthetic secret')
+      : vaultClient.openKeePass({ name: 'Synthetic', fileName: 'synthetic.kdbx', file: '', password: 'synthetic secret' });
     await expect(result).rejects.toMatchObject({ code: 'RUNTIME_RELOAD_REQUIRED' });
     expect(sendMessage.mock.calls.map(([request]) => request.type)).toEqual(['RUNTIME_INFO', 'VAULT_STATUS', 'RUNTIME_INFO']);
   });

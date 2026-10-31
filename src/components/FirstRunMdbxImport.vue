@@ -26,12 +26,6 @@ const busy = ref<"upload" | "prepare" | "commit" | "">("");
 const error = ref("");
 const pluginOrphan = ref(false);
 
-async function sendFirstRun<T>(request: Record<string, unknown>): Promise<T> {
-  const response = await chrome.runtime.sendMessage(request) as { ok?: boolean; data?: T; error?: string };
-  if (!response?.ok) throw new Error(response?.error || "插件后台没有返回有效响应。");
-  return response.data as T;
-}
-
 const isKdbx = computed(() => sniff.value?.kind === "kdbx");
 const isMdbx = computed(() => sniff.value?.kind === "mdbx-vault" || sniff.value?.kind === "mdbx-complete-backup-zip");
 const canUnlock = computed(() => Boolean((isMdbx.value || isKdbx.value) && sniff.value && !sniff.value.incompatibilityReason));
@@ -177,36 +171,32 @@ async function importKdbx() {
     const password = String(pluginPassword.value || "");
     const databasePassword = String(vaultPassword.value || "");
     let pluginCreated = false;
-    try {
-      await sendFirstRun({ type: "VAULT_SETUP", masterPassword: password });
+    if (await vaultClient.status() === "uninitialized") {
+      await vaultClient.setup(password);
       pluginCreated = true;
-    } catch (cause) {
-      if (!(cause instanceof Error) || cause.message !== "Vault has already been initialized") throw cause;
-      await sendFirstRun({ type: "VAULT_UNLOCK", masterPassword: password });
+    } else {
+      await vaultClient.unlock(password);
     }
     let opened: { account: { id: string } };
     try {
-      opened = await sendFirstRun<{ account: { id: string } }>({
-        type: "KEEPASS_OPEN",
-        input: {
+      opened = await vaultClient.openKeePass({
           name: file.value.name.replace(/\.kdbx$/i, "") || "KeePass",
           fileName: file.value.name,
           file: bytesToBase64(bytes),
           password: databasePassword,
           ...(keyFile ? { keyFile: bytesToBase64(keyFile) } : {}),
           isDefaultSaveTarget: true
-        }
       });
     } catch (cause) {
       if (pluginCreated) pluginOrphan.value = true;
       throw cause;
     }
     try {
-      await sendFirstRun({ type: "PROVIDER_SYNC", providerId: opened.account.id });
+      await vaultClient.syncProvider(opened.account.id);
     } catch {
       // KeePass is already attached; listing still finishes first-run.
     }
-    emit("completed", await sendFirstRun<VaultItem[]>({ type: "VAULT_LIST_ITEMS" }), password ? "master-password" : "device-key");
+    emit("completed", await vaultClient.listItems(), password ? "master-password" : "device-key");
   } catch (cause) {
     error.value = tr(cause instanceof Error ? cause.message : "KeePass 数据库导入失败。");
   } finally {

@@ -78,8 +78,8 @@ function vault(status: "uninitialized" | "locked" | "unlocked" = "uninitialized"
       return { items: [] };
     },
     listProviders: async () => [...providers.values()] as never,
-    getProvider: async (id) => providers.get(id) as never,
-    upsertProvider: async (account) => {
+    getProvider: async (id: string) => providers.get(id) as never,
+    upsertProvider: async (account: Parameters<MdbxImportVault["upsertProvider"]>[0]) => {
       plugin.upserts += 1;
       providers.set(account.id, account as never);
       return account;
@@ -102,6 +102,42 @@ function quotaStore(seed: MdbxImportOperation[] = []): MdbxImportStore {
 }
 
 describe("mdbx import coordinator", () => {
+  it("retains ownership evidence when registration persists then throws while the plugin is locked", async () => {
+    const store = memoryStore();
+    const runtime = native();
+    const plugin = vault("unlocked");
+    const listProviders = plugin.listProviders;
+    const upsertProvider = plugin.upsertProvider;
+    plugin.upsertProvider = async (...args) => {
+      await upsertProvider(...args);
+      plugin.listProviders = async () => { throw new Error("locked"); };
+      throw new Mdbx2NativeHostError("VAULT_LOCKED", "locked", true);
+    };
+    await prepareMdbxImport(store, runtime, {
+      operationId, source: { kind: "file", handle: fileHandle }, credential: { method: "password", password: "synthetic" }, name: "Golden"
+    });
+    await expect(commitMdbxImport(store, runtime, plugin, async () => undefined, { operationId, name: "Golden" })).rejects.toThrow();
+    expect(runtime.discarded).toEqual([]);
+    expect((await store.read())[0]).toMatchObject({ stage: "committing", vaultHandle });
+    await cancelMdbxImport(store, runtime, operationId, plugin);
+    expect(runtime.discarded).toEqual([]);
+    const stale = await store.read();
+    stale[0].updatedAt = 1;
+    await store.write(stale);
+    await recoverMdbxImports(store, runtime, plugin);
+    expect(runtime.discarded).toEqual([]);
+    const status = runtime.vaultStatus;
+    runtime.vaultStatus = async () => ({ open: false, available: true });
+    await expect(commitMdbxImport(store, runtime, plugin, async () => undefined, { operationId, name: "Golden" })).rejects.toMatchObject({ code: "vault-locked" });
+    expect((await store.read())[0]).toMatchObject({ stage: "committing", vaultHandle });
+    expect(runtime.discarded).toEqual([]);
+    runtime.vaultStatus = status;
+    plugin.listProviders = listProviders;
+    const retried = await commitMdbxImport(store, runtime, plugin, async () => undefined, { operationId, name: "Golden" });
+    expect(retried.operation.stage).toBe("completed");
+    expect(plugin.upserts).toBe(1);
+  });
+
   it("prepares a working copy once and cancels unregistered copies", async () => {
     const store = memoryStore();
     const runtime = native();

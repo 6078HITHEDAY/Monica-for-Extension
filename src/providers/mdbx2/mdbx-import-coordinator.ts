@@ -360,10 +360,20 @@ export async function commitMdbxImport(
     try {
       saved = await vault.upsertProvider(account, true, undefined, { sessionId });
     } catch (error) {
-      const owned = await registeredOwner(vault, operation);
-      if (!owned) await native.discardVault(operation.vaultHandle).catch(() => undefined);
-      credentials.delete(operationId);
+      const snapshot = await providersSnapshot(vault);
       const mapped = mapImportError(error);
+      credentials.delete(operationId);
+      if (snapshot === undefined) {
+        // Persistence can succeed before its caller sees a lock/storage error.
+        // Keep the handle and committing stage until ownership can be checked.
+        await saveOperation(store, {
+          ...operation, stage: "committing", pluginSetupCompleted,
+          lastError: { ...mapped, retryable: true }, updatedAt: Date.now()
+        });
+        throw toHostError(mapped);
+      }
+      const owned = ownerAmong(snapshot, operation.vaultHandle);
+      if (!owned) await native.discardVault(operation.vaultHandle).catch(() => undefined);
       await saveOperation(store, {
         ...operation,
         stage: owned ? "registered" : "failed",
@@ -572,10 +582,10 @@ async function failOperation(store: MdbxImportStore, operation: MdbxImportOperat
   credentials.delete(operation.operationId);
   await saveOperation(store, {
     ...operation,
-    stage: owned ? "registered" : "failed",
+    stage: owned ? "registered" : !discard && operation.vaultHandle ? operation.stage : "failed",
     providerId: owned?.id || operation.providerId,
     lastError: owned ? undefined : error,
-    vaultHandle: owned || operation.providerId ? operation.vaultHandle : undefined,
+    vaultHandle: !discard ? operation.vaultHandle : undefined,
     updatedAt: Date.now()
   });
 }
