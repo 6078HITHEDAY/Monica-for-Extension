@@ -61,6 +61,9 @@ import {
 } from "../providers/mdbx2/mdbx2-tiga";
 import { vaultClient } from "../runtime/client";
 import type { Mdbx2ManagerSyncStatus, Mdbx2WebDavSettingsInput } from "../runtime/messages";
+import { MDBX3_RUNTIME_NAME } from "../providers/mdbx2/native-contract";
+import { sniffMdbxImportBlob } from "../providers/mdbx2/mdbx-import-detect";
+import { mdbxImportUserMessage } from "../providers/mdbx2/mdbx-import-coordinator";
 
 type NewSourceMode = "create" | "local" | "remote";
 type BusyState = "" | "probe" | "upload" | "download" | "open" | "save" | "publish";
@@ -566,9 +569,19 @@ async function connectNewSource() {
   error.value = "";
   try {
     if (form.mode === 'create' && (!form.vaultPassword || form.vaultPassword !== form.confirmVaultPassword)) throw new Error(tr('请输入数据库密码，并确保两次输入一致。'));
+    let sniffedKind: "mdbx-vault" | "mdbx-complete-backup-zip" | undefined;
+    if (form.mode === 'local' && vaultFile.value) {
+      const sniffed = await sniffMdbxImportBlob(vaultFile.value);
+      if (sniffed.kind === 'plugin-backup-json') throw new Error(tr('恢复插件状态（条目与密码源配置）。独立 MDBX 数据库需要单独的 MDBX 备份。'));
+      if (sniffed.kind === 'android-project-zip') throw new Error(tr('这是安卓项目备份，不是 MDBX 密码库。') + ' ' + tr('已初始化后可在导入与导出中作为条目导入。'));
+      if (sniffed.kind === 'unknown') throw new Error(tr('无法识别此文件。'));
+      sniffedKind = sniffed.kind === "mdbx-complete-backup-zip" ? "mdbx-complete-backup-zip" : "mdbx-vault";
+    }
     const source = form.mode === 'create' ? undefined : form.mode === 'local' ? await stageLocalFile() : await stageRemoteBootstrap();
     busy.value = 'open';
-    const opened = form.mode === 'create'
+    const opened = form.mode === 'local'
+      ? await importLocalMdbx(source!, sniffedKind)
+      : form.mode === 'create'
       ? await vaultClient.createMdbx2Vault({ name: form.name, password: form.vaultPassword, isDefaultSaveTarget: form.isDefaultSaveTarget })
       : await vaultClient.openMdbx2Vault({ name: form.name, source: source!, credential: await buildCredential(), isDefaultSaveTarget: form.isDefaultSaveTarget });
     pendingSource.value = undefined;
@@ -589,7 +602,7 @@ async function connectNewSource() {
       syncStatus.value = await vaultClient.registerMdbx2Bootstrap(opened.account.id);
     }
 
-    const result = await vaultClient.syncProvider(opened.account.id);
+    const result = form.mode === "local" ? { warnings: [], conflicts: 0 } : await vaultClient.syncProvider(opened.account.id);
     emit("changed");
     emit("notice", syncNotice(result, form.mode === 'create' ? tr('MDBX 数据库已创建。') : form.mode === "remote" ? tr('MDBX2 WebDAV 已加入并同步。') : tr('MDBX2 本机保险库已打开并导入。')));
     clearSecrets();
@@ -1266,9 +1279,35 @@ function resetSnapshotStructures() {
   savedSnapshotStructure.value = emptySnapshotStructure();
 }
 
+async function importLocalMdbx(source: Mdbx2VaultSource, kind?: "mdbx-vault" | "mdbx-complete-backup-zip") {
+  const operationId = crypto.randomUUID();
+  try {
+    const detected = await vaultClient.detectMdbx2Import(source, kind);
+    inspection.value = detected.inspection;
+    if (detected.sniff.incompatibilityReason) throw new Error(mdbxImportUserMessage(detected.sniff.incompatibilityReason) || tr('无法识别此文件。'));
+    const prepared = await vaultClient.prepareMdbx2Import({
+      operationId,
+      source,
+      credential: await buildCredential(),
+      name: form.name,
+      kind: detected.sniff.kind === "mdbx-complete-backup-zip" ? "mdbx-complete-backup-zip" : "mdbx-vault"
+    });
+    const committed = await vaultClient.commitMdbx2Import({
+      operationId,
+      name: form.name,
+      isDefaultSaveTarget: form.isDefaultSaveTarget
+    });
+    if (!committed.account) throw new Error(committed.operation.lastError?.message || tr('MDBX 导入失败。'));
+    return { account: committed.account, session: prepared.session };
+  } catch (cause) {
+    await vaultClient.cancelMdbx2Import(operationId).catch(() => undefined);
+    throw cause;
+  }
+}
+
 async function stageLocalFile(): Promise<Mdbx2VaultSource> {
   const file = vaultFile.value;
-  if (!file || !/\.(mdbx|zip)$/i.test(file.name)) throw new Error(tr('请选择 MDBX2 数据库或 Monica 完整备份 ZIP。'));
+  if (!file || !/\.(mdbx|zip)$/i.test(file.name)) throw new Error(tr('请选择 MDBX 数据库或 Monica 完整备份 ZIP。'));
   if (/\.zip$/i.test(file.name) && !hostStatus.value?.capabilities?.supportsCompleteBackup) throw new Error(tr('请更新本机助手后使用 MDBX2 完整备份。'));
   if (/\.zip$/i.test(file.name) && file.size > 512 * 1024 * 1024) throw new Error(tr('完整备份 ZIP 及其内容合计不得超过 512 MiB。'));
   if (!file.size || file.size > MDBX2_MAX_INBOUND_FILE_BYTES) throw new Error(tr('MDBX2 文件为空或超过 2 GiB 安全上限。'));
@@ -1449,7 +1488,8 @@ function fileAsBase64(file: File): Promise<string> {
 }
 
 function errorMessage(cause: unknown): string {
-  return cause instanceof Error ? cause.message : tr('MDBX2 操作失败。');
+  const code = errorCode(cause);
+  return tr(mdbxImportUserMessage(code) || (cause instanceof Error ? cause.message : 'MDBX2 操作失败。'));
 }
 
 function errorCode(cause: unknown): string {
@@ -1576,7 +1616,7 @@ function conflictErrorMessage(cause: unknown): string {
         </template>
 
         <template v-if="!isExisting && form.mode === 'local'">
-          <div class="field field-wide"><span>{{ tr('MDBX2 可移植备份 *') }}</span><label class="file-action provider-file-action"><m3e-icon name="folder_open" /><span>{{ vaultFile?.name || tr('选择 MDBX 或完整备份 ZIP') }}</span><input type="file" accept=".mdbx,.zip,application/octet-stream,application/zip" :aria-label="tr('MDBX2 可移植备份')" @change="selectVaultFile" /></label><small>{{ tr('完整备份 ZIP 会同时恢复数据库和附件。MDBX1 不受支持。') }}</small></div>
+          <div class="field field-wide"><span>{{ tr('MDBX 可移植备份 *') }}</span><label class="file-action provider-file-action"><m3e-icon name="folder_open" /><span>{{ vaultFile?.name || tr('选择 MDBX 或完整备份 ZIP') }}</span><input type="file" accept=".mdbx,.zip,application/octet-stream,application/zip" :aria-label="tr('MDBX 可移植备份')" @change="selectVaultFile" /></label><small>{{ tr('完整备份 ZIP 会同时恢复数据库和附件。将在独立工作副本上升级为 MDBX-2。原始文件不会被修改。') }}</small></div>
         </template>
 
         <template v-if="form.mode === 'remote' || isExisting">
@@ -1601,10 +1641,12 @@ function conflictErrorMessage(cause: unknown): string {
         </template>
 
         <div v-if="inspection" class="mdbx2-inspection field-wide" role="status">
-          <span><strong>{{ inspection.formatVersion }}</strong><small>{{ tr('格式') }}</small></span>
+          <span><strong>{{ inspection.formatVersion }}</strong><small>{{ tr('文件格式') }}</small></span>
+          <span><strong>{{ MDBX3_RUNTIME_NAME }}</strong><small>{{ tr('运行时') }}</small></span>
           <span><strong>{{ inspection.schemaVersion ?? '—' }}</strong><small>Schema</small></span>
           <span><strong>{{ inspection.requiresUpgrade ? tr('需要迁移') : tr('当前版本') }}</strong><small>{{ tr('打开前检查') }}</small></span>
         </div>
+        <p v-if="inspection?.requiresUpgrade" class="supporting field-wide">{{ tr('将在独立工作副本上升级为 MDBX-2。原始文件不会被修改。') }}</p>
 
         <div v-if="isExisting" class="mdbx2-runtime-summary field-wide" :aria-label="tr('MDBX2 运行状态')">
           <span><strong>{{ runtimeStatus?.available ? tr('本机副本可用') : tr('本机副本缺失') }}</strong><small>{{ vaultOpen ? tr('当前已解锁') : tr('当前已锁定') }}</small></span>

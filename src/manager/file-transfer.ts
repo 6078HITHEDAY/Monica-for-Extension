@@ -16,6 +16,7 @@ import { createKeePassEntry } from '../providers/keepass/keepass-writer';
 import { installKdbxCryptoEngine } from '../providers/keepass/keepass-crypto';
 import { decodeKeePassPathSegments, encodeKeePassPathSegment } from '../providers/keepass/keepass-path-codec';
 import { safeUnzipSync } from '../providers/webdav/zip-safety';
+import { sniffMdbxImportFile } from '../providers/mdbx2/mdbx-import-detect';
 
 export type TransferFormat = 'auto' | 'json' | 'csv' | 'zip' | 'kdbx' | 'aegis' | 'stratum' | 'otp' | 'steam';
 export type ExportFormat = Exclude<TransferFormat, 'auto'>;
@@ -28,6 +29,9 @@ const portable = { allowPortablePasskeys: true, allowPortableAttachments: true }
 export async function previewImport(input: TransferInput): Promise<FileImportPreview> {
   if (!input.bytes.length || input.bytes.length > MAX_IMPORT_BYTES) throw new Error('文件为空或超过 64 MB。');
   if (input.keyFile && input.keyFile.length > 1024 * 1024) throw new Error('密钥文件超过 1 MB。');
+  const sniffed = sniffMdbxImportFile(input.bytes);
+  if (sniffed.kind === 'plugin-backup-json') throw new Error('这是插件加密整库备份，请在“加密备份与恢复”中恢复。');
+  if (sniffed.kind === 'mdbx-vault' || sniffed.kind === 'mdbx-complete-backup-zip') throw new Error('这是独立 MDBX 密码库，请在“打开已有的密码库”中导入。');
   const password = input.password || '', prefix = new TextDecoder().decode(input.bytes.subarray(0, 20));
   let format = input.format || 'auto';
   if (format === 'auto') {

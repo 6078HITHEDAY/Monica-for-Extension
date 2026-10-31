@@ -50,6 +50,21 @@ describe("login URL matching", () => {
       expect(loginMatchScore(item, "https://example.com/login")).toBe(0);
     }
   });
+
+  it("matches a hostname title when the login has no URL", () => {
+    expect(loginMatchScore(login("ctf.show", []), "https://ctf.show/login")).toBe(100);
+    expect(loginMatchScore(login("users.nexusmods.com", []), "https://users.nexusmods.com/auth/sign_in")).toBe(100);
+    expect(loginMatchScore(login("luogu.com.cn", []), "https://www.luogu.com.cn/auth/login")).toBe(100);
+    expect(loginMatchScore(login("luogu.com.cn", []), "https://login.luogu.com.cn/")).toBe(80);
+    expect(loginMatchScore(login("20.205.18.180", []), "http://20.205.18.180/")).toBe(100);
+  });
+
+  it("does not treat ordinary titles or an explicit other URL as a hostname", () => {
+    expect(loginMatchScore(login("GitHub", []), "https://github.com/login")).toBe(0);
+    expect(loginMatchScore(login("Notes", []), "https://ctf.show/login")).toBe(0);
+    expect(loginMatchScore(login("users.nexusmods.com", [{ uri: "https://gitlab.com", matchType: "base-domain" }]), "https://users.nexusmods.com/auth/sign_in")).toBe(0);
+    expect(loginMatchScore(login("example.com", [{ uri: "https://example.com", matchType: "never" }]), "https://example.com/login")).toBe(0);
+  });
 });
 
 function score(uri: string, matchType: LoginUriRule["matchType"], pageUrl: string): number {
