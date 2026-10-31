@@ -40,6 +40,18 @@ describe("OneDrive Graph read boundaries", () => {
     }
   });
 
+  it("streams /content when the drive never returns the capability annotation", async () => {
+    const meta = metadata({ "@microsoft.graph.downloadUrl": undefined });
+    const f = fixture([json(meta), content(), json(meta)]);
+    const snapshot = await f.file.read();
+    expect(snapshot).toMatchObject({ fileName: "Vault.kdbx", etag: '"v1"', sizeBytes: 4, bytes });
+    expect(f.fetcher).toHaveBeenCalledTimes(3);
+    const [, contentCall] = f.fetcher.mock.calls;
+    expect(String(contentCall![0])).toBe(`${itemUrl}/content`);
+    expect(new Headers(contentCall![1]!.headers).get("Authorization")).toBe("Bearer synthetic-bearer");
+    expect(contentCall![1]).toMatchObject({ redirect: "follow", credentials: "omit" });
+  });
+
   it.each([
     { eTag: '"changed"' }, { size: 3 }, { id: "different" }, { parentReference: { driveId: "different" } }
   ])("rejects a changed identity/version after download", async extra => {
@@ -130,6 +142,15 @@ describe("OneDrive file selection", () => {
     expect(result.map(item => item.itemId)).toEqual([identity.itemId, "folder", "item2"]);
     expect(JSON.stringify(result)).not.toContain("capability");
     expect(f.fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("honors the extension allowlist so MDBX portable vaults join KDBX in the browser", async () => {
+    const folder = metadata({ id: "folder", file: undefined, folder: {}, name: "Folder" });
+    const f = fixture([json({ value: [metadata(), folder, metadata({ id: "mdbx", name: "main.mdbx" }), metadata({ id: "mdbx-upper", name: "Backup.MDBX" }), metadata({ id: "text", name: "notes.txt" })] })]);
+    const result = await f.graph.children(identity.driveId, undefined, undefined, [".kdbx", ".mdbx"]);
+    expect(result.map(item => item.itemId)).toEqual([identity.itemId, "folder", "mdbx", "mdbx-upper"]);
+    await expect(f.graph.children(identity.driveId, undefined, undefined, [])).rejects.toThrow();
+    await expect(f.graph.children(identity.driveId, undefined, undefined, [".txt"])).rejects.toThrow();
   });
 
   it.each(["https://evil.example/folder", "https://graph.microsoft.com/v1.0/me/messages", "https://graph.microsoft.com/v1.0/drives/other/root/children",

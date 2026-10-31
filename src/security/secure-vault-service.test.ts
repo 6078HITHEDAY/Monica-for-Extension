@@ -320,9 +320,11 @@ describe("encrypted vault", () => {
       runtimeBackend: "native",
       vaultHandle: "11111111-1111-4111-8111-111111111111",
       schemaVersion: 17,
+      syncTransport: "webdav",
       webDavBaseUrl: "https://vault.example/dav",
       webDavUsername: "joyins",
       webDavPasswordConfigured: true,
+      oneDriveDriveId: undefined,
       remotePath: "vaults/main.mdbx",
       syncConfigured: true,
       hostVerifiedAt: "2026-08-01T00:00:00.000Z"

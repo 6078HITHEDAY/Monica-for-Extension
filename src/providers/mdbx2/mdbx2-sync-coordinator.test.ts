@@ -10,7 +10,7 @@ import {
   type Mdbx2TransferFinishResult
 } from "./native-contract";
 import { Mdbx2SyncCoordinator, type Mdbx2CloudRuntime } from "./mdbx2-sync-coordinator";
-import { mdbx2BlobPath, mdbx2SegmentPath } from "./mdbx2-sync-paths";
+import { mdbx2BlobPath, mdbx2BlobsRoot, mdbx2SegmentPath, mdbx2StreamsRoot } from "./mdbx2-sync-paths";
 
 interface Entry {
   directory: boolean;
@@ -397,5 +397,103 @@ describe("MDBX2 Android-compatible WebDAV coordinator", () => {
     expect(report).toMatchObject({ downloadedSegments: 1, downloadedBlobs: 1, appliedCommits: 1, blockedStreams: 0 });
     expect(applied).toBe(true);
     expect(acknowledged).toBe(true);
+  });
+});
+
+describe("MDBX2 OneDrive coordinator transport", () => {
+  it("computes a OneDrive remote binding separate from WebDAV and runs the sync flow through the injected client", async () => {
+    const onedriveCredentials = { transport: "onedrive" as const, driveId: "drive-1", remotePath: "vaults/main.mdbx" };
+    const expectedBinding = await sha256(`onedrive\ndrive-1\nvaults/main.mdbx`);
+    const legacyWebDavBinding = await sha256(`${credentials.baseUrl}\nvaults/main.mdbx`);
+    expect(expectedBinding).not.toBe(legacyWebDavBinding);
+
+    const bootstrapBytes = new TextEncoder().encode('onedrive-encrypted-bootstrap');
+    const bootstrapDigest = await sha256(bootstrapBytes);
+    const uploads: string[] = [];
+    const streamsRoot = "vaults/main.mdbx.sync/streams";
+    const remote = {
+      testConnection: vi.fn(async () => undefined),
+      stat: vi.fn(async (path: string) => {
+        if (path === onedriveCredentials.remotePath) return { path, isDirectory: false, sizeBytes: bootstrapBytes.length, etag: '"v1"' };
+        return undefined;
+      }),
+      list: vi.fn(async () => []),
+      ensureDirectory: vi.fn(async () => undefined),
+      download: vi.fn(async (path: string, _maximum: number, onChunk: (chunk: Uint8Array, offset: number) => Promise<void> | void) => {
+        await onChunk(bootstrapBytes, 0);
+        return { path, sizeBytes: bootstrapBytes.length, sha256: bootstrapDigest };
+      }),
+      putImmutable: vi.fn(async (path: string, body: Blob, expectedSha256: string) => {
+        expect(expectedSha256).toBe(bootstrapDigest);
+        uploads.push(path);
+        return { path, isDirectory: false, sizeBytes: body.size };
+      })
+    };
+    let registered: { vaultHandle: string; binding: string; stateHandle?: string } | undefined;
+    const runtime = {
+      syncStateStatus: vi.fn(async (_vault: string, _state: string, binding: string) => {
+        expect(binding).toBe(expectedBinding);
+        return { ...status('device-a'), initialized: Boolean(registered) };
+      }),
+      registerSyncState: vi.fn(async (vault: string, binding: string) => {
+        registered = { vaultHandle: vault, binding };
+        return { ...status('device-a'), initialized: true };
+      }),
+      prepareSyncBootstrap: vi.fn(async (_vault: string, binding: string) => {
+        expect(binding).toBe(expectedBinding);
+        return { stateHandle, vaultId: 'vault-a', deviceId: 'device-a', file: { fileHandle, purpose: 'sync-bootstrap' as const, sizeBytes: bootstrapBytes.length, sha256: bootstrapDigest } };
+      }),
+      readOutputFile: vi.fn(async () => ({ fileHandle, sizeBytes: bootstrapBytes.length, sha256: bootstrapDigest, offset: 0, nextOffset: bootstrapBytes.length, eof: true, dataBase64: bytesToBase64(bootstrapBytes) })),
+      commitSyncBootstrap: vi.fn(async () => status('device-a')),
+      prepareSyncSegment: vi.fn(async () => ({ hasSegment: false })),
+      listSyncStreams: vi.fn(async () => [])
+    };
+    const factory = vi.fn((input: { transport?: string }) => {
+      expect(input.transport).toBe("onedrive");
+      return remote;
+    });
+    const coordinator = new Mdbx2SyncCoordinator(runtime as unknown as Mdbx2CloudRuntime, undefined, factory as never);
+
+    const published = await coordinator.publishBootstrap({ ...onedriveCredentials, vaultHandle });
+    expect(published.stateHandle).toBe(stateHandle);
+    expect(uploads).toEqual([onedriveCredentials.remotePath]);
+    expect(remote.ensureDirectory).toHaveBeenCalledWith(mdbx2StreamsRoot(onedriveCredentials.remotePath), undefined);
+    expect(remote.ensureDirectory).toHaveBeenCalledWith(mdbx2BlobsRoot(onedriveCredentials.remotePath), undefined);
+    expect(factory).toHaveBeenCalled();
+
+    await coordinator.registerDownloadedBootstrap(vaultHandle, onedriveCredentials);
+    expect(registered?.binding).toBe(expectedBinding);
+
+    const report = await coordinator.synchronize({ ...onedriveCredentials, vaultHandle, syncStateHandle: stateHandle });
+    expect(report).toMatchObject({ uploadedSegments: 0, downloadedSegments: 0, conflicts: 0, blockedStreams: 0 });
+    expect(remote.stat).toHaveBeenCalledWith(streamsRoot, undefined);
+  });
+
+  it("downloads a draft OneDrive bootstrap through the injected client", async () => {
+    const bytes = new TextEncoder().encode('draft-remote-bootstrap');
+    const fileHandle = "55555555-5555-4555-8555-555555555555";
+    const transferId = "66666666-6666-4666-8666-666666666666";
+    const digest = await sha256(bytes);
+    const remote = {
+      testConnection: vi.fn(async () => undefined),
+      stat: vi.fn(async () => ({ path: "vaults/main.mdbx", isDirectory: false, sizeBytes: bytes.length })),
+      list: vi.fn(async () => []),
+      ensureDirectory: vi.fn(async () => undefined),
+      download: vi.fn(async (path: string, _maximum: number, onChunk: (chunk: Uint8Array, offset: number) => Promise<void> | void) => {
+        await onChunk(bytes, 0);
+        return { path, sizeBytes: bytes.length, sha256: digest };
+      }),
+      putImmutable: vi.fn(async () => { throw new Error("not used"); })
+    };
+    const runtime = {
+      beginInboundTransfer: vi.fn(async () => ({ transferId, purpose: 'vault-bootstrap' as const, sizeBytes: bytes.length })),
+      sendInboundChunk: vi.fn(async (_id: string, offset: number, chunk: Uint8Array) => ({ transferId, nextOffset: offset + chunk.length })),
+      finishInboundTransfer: vi.fn(async () => ({ fileHandle, purpose: 'vault-bootstrap' as const, sizeBytes: bytes.length, sha256: digest })),
+      abortInboundTransfer: vi.fn(async () => true),
+      releaseFile: vi.fn(async () => true)
+    };
+    const coordinator = new Mdbx2SyncCoordinator(runtime as unknown as Mdbx2CloudRuntime, undefined, (() => remote) as never);
+    const finished = await coordinator.downloadBootstrap({ transport: "onedrive", driveId: "drive-1", remotePath: "vaults/main.mdbx" });
+    expect(finished).toMatchObject({ fileHandle, purpose: 'vault-bootstrap', sizeBytes: bytes.length, sha256: digest });
   });
 });

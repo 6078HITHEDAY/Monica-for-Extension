@@ -957,8 +957,15 @@ function bitwardenPreloginTransportError(error: unknown, identityUrl: string): E
 }
 
 function isBitwardenDeviceVerificationRequired(body: Record<string, unknown>): boolean {
+  return bitwardenLoginErrorMessages(body).includes("new device verification required");
+}
+
+function bitwardenLoginErrorMessages(body: Record<string, unknown>): string[] {
   const errorModel = recordValue(body, "ErrorModel", "errorModel");
-  return stringValue(errorModel || {}, "Message", "message").toLocaleLowerCase("en-US") === "new device verification required";
+  // Only compare these fields against known protocol messages. Never display or
+  // attach arbitrary server text, which may echo credentials or tokens.
+  return [stringValue(body, "error_description"), stringValue(errorModel || {}, "Message", "message")]
+    .map((value) => value.trim().toLocaleLowerCase("en-US").replace(/\.$/, ""));
 }
 
 function normalizeBitwardenLoginCode(value: unknown, label: string): string | undefined {
@@ -981,22 +988,35 @@ function normalizeSsoValue(value: unknown, label: string): string {
 }
 
 function bitwardenSafeHttpMessage(prefix: string, status: number, body?: Record<string, unknown>): string | undefined {
-  if (prefix !== "Bitwarden 登录失败" || status !== 400 || !body) return undefined;
+  if (prefix !== "Bitwarden 登录失败" || status !== 400) return undefined;
+  if (!body) return undefined;
   const code = `${stringValue(body, "error")} ${stringValue(body, "error_description")}`.toLocaleLowerCase("en-US");
-  const errorModel = recordValue(body, "ErrorModel", "errorModel");
-  const officialMessage = stringValue(errorModel || {}, "Message", "message").toLocaleLowerCase("en-US");
-  if (code.includes("invalid_username_or_password") || officialMessage === "username or password is incorrect. try again.") {
+  const messages = bitwardenLoginErrorMessages(body);
+  if (code.includes("invalid_username_or_password") || messages.includes("username or password is incorrect. try again")) {
     return "Bitwarden 邮箱或主密码错误；请同时确认账号区域与服务器地址一致（US 或 EU）。";
   }
   if (
     code.includes("invalid_two_factor")
     || code.includes("two_factor_token_invalid")
-    || officialMessage.includes("two-step login code is invalid")
-    || officialMessage.includes("two factor token is invalid")
+    || messages.some((message) => message.includes("two-step login code is invalid") || message.includes("two factor token is invalid"))
   ) {
     return "Bitwarden 两步验证码错误或已过期，请获取新验证码后重试。";
   }
-  return undefined;
+  if (messages.includes("invalid new device otp")) {
+    return "Bitwarden 新设备验证码错误或已过期，请获取新验证码后重试。";
+  }
+  switch (stringValue(body, "error").trim().toLocaleLowerCase("en-US")) {
+    case "invalid_client_version":
+      return "Bitwarden 服务器要求更新客户端才能登录，请更新 Monica 扩展；若已是最新版，请反馈此兼容问题。";
+    case "version_header_missing":
+      return "Bitwarden 服务器未收到客户端版本信息，请检查代理是否保留 Bitwarden-Client-Version 请求头。";
+    case "invalid_client":
+      return "Bitwarden 服务器不接受当前客户端的登录请求，请更新 Monica 扩展；若官网可以登录，请反馈此兼容问题。";
+  }
+  if (messages.includes("no device information provided")) {
+    return "Bitwarden 服务器未收到有效设备信息，请更新 Monica 扩展后重试。";
+  }
+  return "Bitwarden 登录失败（HTTP 400）：服务器拒绝了登录请求。若官方网页可以正常登录，请反馈扩展登录兼容问题。";
 }
 
 function isLoopbackHost(hostname: string): boolean {

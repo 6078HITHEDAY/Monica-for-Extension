@@ -134,6 +134,17 @@ describe("Bitwarden auth client", () => {
     expect(JSON.stringify(error)).not.toContain("server-echo-secret");
   });
 
+  it("recognizes the actual Vaultwarden 1.37.3 invalid-password response without a final period", async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes("/accounts/prelogin")) return json({ kdf: 0, kdfIterations: 1 });
+      return json({ error: "", error_description: "", ErrorModel: { Message: "Username or password is incorrect. Try again" }, password: "server-echo-secret" }, 400);
+    }) as unknown as typeof fetch;
+    const error = await new BitwardenClient(fetcher).login({ vaultUrl: "http://127.0.0.1:18729", email: EMAIL, masterPassword: PASSWORD, deviceId: "device-1" }).catch((cause) => cause);
+    expect(error.message).toBe("Bitwarden 邮箱或主密码错误；请同时确认账号区域与服务器地址一致（US 或 EU）。");
+    expect(JSON.stringify(error)).not.toContain("server-echo-secret");
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
   it("reports an invalid or expired Bitwarden two-factor code without exposing response data", async () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
       if (String(input).includes("/accounts/prelogin")) return json({ kdf: 0, kdfIterations: 1 });
@@ -178,6 +189,35 @@ describe("Bitwarden auth client", () => {
       newDeviceOtp: " 654321 "
     })).resolves.toEqual({ status: "device-verification-required" });
     expect(submittedOtp).toBe("654321");
+  });
+
+  it("recognizes the official new-device challenge from error_description without ErrorModel", async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes("/accounts/prelogin")) return json({ kdf: 0, kdfIterations: 1 });
+      return json({ error: "device_error", error_description: "New device verification required" }, 400);
+    }) as unknown as typeof fetch;
+    await expect(new BitwardenClient(fetcher).login({ vaultUrl: "https://vault.bitwarden.com", email: EMAIL, masterPassword: PASSWORD, deviceId: "device-1" }))
+      .resolves.toEqual({ status: "device-verification-required" });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    [{ error: "device_error", error_description: "Invalid New Device OTP", ErrorModel: { Message: "invalid new device otp" } }, "Bitwarden 新设备验证码错误或已过期，请获取新验证码后重试。"],
+    [{ error: "invalid_client_version", error_description: "Please update your app to continue using Bitwarden" }, "Bitwarden 服务器要求更新客户端才能登录，请更新 Monica 扩展；若已是最新版，请反馈此兼容问题。"],
+    [{ error: "version_header_missing" }, "Bitwarden 服务器未收到客户端版本信息，请检查代理是否保留 Bitwarden-Client-Version 请求头。"],
+    [{ error: "device_error", ErrorModel: { Message: "no device information provided" } }, "Bitwarden 服务器未收到有效设备信息，请更新 Monica 扩展后重试。"],
+    [{ error: "invalid_client" }, "Bitwarden 服务器不接受当前客户端的登录请求，请更新 Monica 扩展；若官网可以登录，请反馈此兼容问题。"],
+    [{ error: "unexpected-server-echo-secret", error_description: "server-echo-secret", ErrorModel: { Message: "server-echo-secret" } }, "Bitwarden 登录失败（HTTP 400）：服务器拒绝了登录请求。若官方网页可以正常登录，请反馈扩展登录兼容问题。"]
+  ])("explains a rejected login safely without retrying: %j", async (response, message) => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes("/accounts/prelogin")) return json({ kdf: 0, kdfIterations: 1 });
+      return json({ ...response, access_token: "server-echo-secret", password: "server-echo-secret" }, 400);
+    }) as unknown as typeof fetch;
+    const error = await new BitwardenClient(fetcher).login({ vaultUrl: "https://vault.bitwarden.com", email: EMAIL, masterPassword: PASSWORD, deviceId: "device-1", newDeviceOtp: "654321" }).catch((cause) => cause);
+    expect(error).toMatchObject({ name: "ProviderTransportError", code: "client", status: 400, retryable: false, message });
+    expect(String(error)).not.toContain("server-echo-secret");
+    expect(JSON.stringify(error)).not.toContain("server-echo-secret");
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
   it("rejects oversized or control-character login codes before contacting Bitwarden", async () => {
