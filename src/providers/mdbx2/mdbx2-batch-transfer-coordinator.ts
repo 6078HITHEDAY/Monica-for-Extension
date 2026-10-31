@@ -236,6 +236,11 @@ interface PreparedContext {
   accountsByItemId: Map<string, ProviderAccount>;
   plan: Mdbx2BatchTransferPlan;
   publicPlan: Mdbx2BatchTransferPlanResult;
+  /** One lazily scanned `logical id -> objectId` index per target collection. */
+  conflictIndexes: Map<string, Promise<Map<string, string>>>;
+  /** Resolved target collection per (base collection, target path), reused across items. */
+  ensuredPaths: Map<string, string | undefined>;
+  rootCollectionId?: Promise<string>;
 }
 
 export class Mdbx2BatchTransferCoordinator {
@@ -460,19 +465,22 @@ export class Mdbx2BatchTransferCoordinator {
     reportTransferProgress(onProgress, context.operationId, "preparing", results, context.plan.items.length);
 
     const work: PreparedTransferWork[] = [];
+    let preparedCount = 0;
     for (const planItem of context.plan.items) {
       if (planItem.blockedReason) continue;
       try {
         work.push(await this.prepareWork(context, planItem));
+        preparedCount += 1;
       } catch (error) {
         const source = context.itemsById.get(planItem.sourceItemId)!;
         results.set(source.id, itemFailure(source, planItem.effectiveAction, error));
-        reportTransferProgress(onProgress, context.operationId, "preparing", results, context.plan.items.length);
       }
+      // Keep the progress bar advancing through the potentially long preparing phase.
+      reportTransferProgress(onProgress, context.operationId, "preparing", results, context.plan.items.length, results.size + preparedCount);
     }
 
     const writeable = await this.rejectReplicaConflicts(context, work, results);
-    reportTransferProgress(onProgress, context.operationId, "preparing", results, context.plan.items.length);
+    reportTransferProgress(onProgress, context.operationId, "preparing", results, context.plan.items.length, results.size + writeable.length);
     const groups: PreparedTransferWork[][] = [];
     for (const component of completeTransferComponents(context.components, writeable, entry => entry.sourceItem.id)) {
       if (component.complete) groups.push(component.entries);
@@ -822,7 +830,8 @@ export class Mdbx2BatchTransferCoordinator {
         if (!moveBindings.has(account.id)) moveBindings.set(account.id, await readMdbx2TransferBinding(this.nativeClient, account));
       }
     }
-    return { moveBindings, components, operationId, operationCreatedAt, request: { ...input, operationId, operationCreatedAt, targetCollectionId }, targetAccount, itemsById, accountsByItemId: sourceAccounts, plan, publicPlan };
+    return { moveBindings, components, operationId, operationCreatedAt, request: { ...input, operationId, operationCreatedAt, targetCollectionId }, targetAccount, itemsById, accountsByItemId: sourceAccounts, plan, publicPlan,
+      conflictIndexes: new Map(), ensuredPaths: new Map() };
   }
 
   private async verifyMoveFinalization(context: PreparedContext, source: ProviderAccount, targets: VaultItem[], providers: readonly ProviderAccount[]): Promise<void> {
@@ -874,16 +883,20 @@ export class Mdbx2BatchTransferCoordinator {
     const sourceAccount = context.accountsByItemId.get(sourceItem.id)!;
     const targetItem = structuredClone(planItem.targetItem!) as VaultItem;
     const pathKey = JSON.stringify(planItem.targetPath);
-    const ensured = await ensureMdbx2TransferCollectionPaths(this.nativeClient, {
-      operationId: context.operationId,
-      targetProviderId: context.request.targetProviderId,
-      vaultHandle: vaultHandleOf(context.targetAccount),
-      baseCollectionId: context.request.targetCollectionId,
-      paths: [planItem.targetPath]
-    });
-    targetItem.mdbxFolderId = ensured.collectionIdByPath.get(pathKey) || context.request.targetCollectionId;
+    const ensuredPathKey = JSON.stringify([context.request.targetCollectionId, planItem.targetPath]);
+    if (!context.ensuredPaths.has(ensuredPathKey)) {
+      const ensured = await ensureMdbx2TransferCollectionPaths(this.nativeClient, {
+        operationId: context.operationId,
+        targetProviderId: context.request.targetProviderId,
+        vaultHandle: vaultHandleOf(context.targetAccount),
+        baseCollectionId: context.request.targetCollectionId,
+        paths: [planItem.targetPath]
+      });
+      context.ensuredPaths.set(ensuredPathKey, ensured.collectionIdByPath.get(pathKey) || context.request.targetCollectionId);
+    }
+    targetItem.mdbxFolderId = context.ensuredPaths.get(ensuredPathKey);
     const targetCollectionIdForConflict = targetItem.mdbxFolderId || (planItem.effectiveAction === "move"
-      ? await this.targetRootCollectionId(context.targetAccount)
+      ? await this.targetRootCollectionIdCached(context)
       : undefined);
 
     const original = await this.originalMdbxPayload(sourceAccount, sourceItem);
@@ -922,19 +935,30 @@ export class Mdbx2BatchTransferCoordinator {
       }
       const logicalId = mdbx2LogicalObjectId(entry.targetItem);
       const sourceReference = referenceFor(entry.sourceItem, entry.sourceAccount.id);
-      const existing = await findLogicalObject(
-        this.nativeClient,
-        vaultHandleOf(context.targetAccount),
-        entry.targetCollectionIdForConflict || "",
-        logicalId
-      );
-      if (existing && !(entry.sourceAccount.id === context.request.targetProviderId && existing.objectId === sourceReference?.remoteId)) {
+      const existing = entry.targetCollectionIdForConflict
+        ? await this.targetConflictObjectId(context, entry.targetCollectionIdForConflict, logicalId)
+        : undefined;
+      if (existing && !(entry.sourceAccount.id === context.request.targetProviderId && existing === sourceReference?.remoteId)) {
         results.set(entry.sourceItem.id, itemFailure(entry.sourceItem, entry.planItem.effectiveAction, new Error("目标文件夹已存在相同逻辑项目。"), false));
         continue;
       }
       accepted.push(entry);
     }
     return accepted;
+  }
+
+  /** One paginated reveal pass per target collection; lookups reuse the cached index. */
+  private targetConflictObjectId(context: PreparedContext, collectionId: string, logicalId: string): Promise<string | undefined> {
+    let index = context.conflictIndexes.get(collectionId);
+    if (!index) {
+      index = scanLogicalObjectIndex(this.nativeClient, vaultHandleOf(context.targetAccount), collectionId);
+      context.conflictIndexes.set(collectionId, index);
+      // A transient scan failure must not poison the slot for later items.
+      void index.catch(() => {
+        if (context.conflictIndexes.get(collectionId) === index) context.conflictIndexes.delete(collectionId);
+      });
+    }
+    return index.then(map => map.get(logicalId));
   }
 
   private async originalMdbxPayload(account: ProviderAccount, item: VaultItem): Promise<{ payload: Record<string, unknown>; item: VaultItem } | undefined> {
@@ -974,6 +998,16 @@ export class Mdbx2BatchTransferCoordinator {
       .filter(isMdbx2RootCollection);
     if (roots.length !== 1) throw new Error("目标 MDBX2 根文件夹无法唯一识别，已阻止移动。");
     return roots[0].collectionId;
+  }
+
+  /** Resolve the move-to-root conflict target once per operation instead of once per item. */
+  private targetRootCollectionIdCached(context: PreparedContext): Promise<string> {
+    if (!context.rootCollectionId) {
+      context.rootCollectionId = this.targetRootCollectionId(context.targetAccount);
+      // A transient listing failure must not poison the memo for later items.
+      void context.rootCollectionId.catch(() => { context.rootCollectionId = undefined; });
+    }
+    return context.rootCollectionId;
   }
 
   private async deleteSource(operationId: string, account: ProviderAccount, item: VaultItem): Promise<void> {
@@ -1039,39 +1073,38 @@ function partitionWork(groups: readonly PreparedTransferWork[][], results: Map<s
   return chunks;
 }
 
-function findLogicalObject(
+/**
+ * Builds a `logical id -> objectId` map for one target collection in a single
+ * paginated reveal pass, replacing the previous per-item full rescan. Payloads
+ * are parsed and dropped immediately so plaintext never accumulates in memory;
+ * first match wins, mirroring the previous lookup semantics.
+ */
+async function scanLogicalObjectIndex(
   client: Mdbx2BatchTransferNativeClient,
   vaultHandle: string,
-  collectionId: string,
-  logicalId: string
-): Promise<{ objectId: string; record: Mdbx2ObjectRecord } | undefined> {
-  if (!collectionId) return Promise.resolve(undefined);
-  return findLogicalObjectPaged(client, vaultHandle, collectionId, logicalId);
-}
-
-async function findLogicalObjectPaged(
-  client: Mdbx2BatchTransferNativeClient,
-  vaultHandle: string,
-  collectionId: string,
-  logicalId: string
-): Promise<{ objectId: string; record: Mdbx2ObjectRecord } | undefined> {
+  collectionId: string
+): Promise<Map<string, string>> {
+  const index = new Map<string, string>();
   let cursor: string | undefined;
   const seen = new Set<string>();
   do {
     const page = await client.listObjects(vaultHandle, collectionId, { deleted: false, pageSize: 200, cursor });
     for (const summary of page.items) {
       const record = await client.revealObject(vaultHandle, summary.objectId);
-      if (record.objectTypeId === "api-token" && logicalId === `api-token:${record.objectId}`) return { objectId: summary.objectId, record };
+      if (record.objectTypeId === "api-token" && !index.has(`api-token:${record.objectId}`)) {
+        index.set(`api-token:${record.objectId}`, summary.objectId);
+      }
       let payload: Record<string, unknown>;
       try { payload = parseLosslessJson(record.payloadJson) as Record<string, unknown>; } catch { continue; }
-      if (payload.monica_entry_id === logicalId) return { objectId: summary.objectId, record };
+      const entryId = payload.monica_entry_id;
+      if (typeof entryId === "string" && entryId && !index.has(entryId)) index.set(entryId, summary.objectId);
     }
-    if (!page.nextCursor) return undefined;
+    if (!page.nextCursor) return index;
     if (!page.items.length || seen.has(page.nextCursor)) throw new Error("MDBX2 Object 分页游标没有前进。");
     seen.add(page.nextCursor);
     cursor = page.nextCursor;
   } while (cursor);
-  return undefined;
+  return index;
 }
 
 function vaultHandleOf(account: ProviderAccount): string {
@@ -1105,7 +1138,8 @@ function reportTransferProgress(
   operationId: string,
   phase: Mdbx2BatchTransferPhase,
   results: ReadonlyMap<string, Mdbx2BatchTransferItemResult>,
-  total: number
+  total: number,
+  processedOverride?: number
 ): void {
   if (!listener) return;
   const values = [...results.values()];
@@ -1113,7 +1147,7 @@ function reportTransferProgress(
     listener({
       operationId,
       phase,
-      processed: values.length,
+      processed: Math.max(processedOverride ?? 0, values.length),
       total,
       completedCount: values.filter((item) => item.status === "completed").length,
       blockedCount: values.filter((item) => item.status === "blocked").length,
