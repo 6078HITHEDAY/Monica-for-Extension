@@ -87,7 +87,8 @@ import { Mdbx2Provider } from "../providers/mdbx2/mdbx2-provider";
 import { Mdbx2BatchTransferCoordinator, type Mdbx2BatchTransferProgress, type Mdbx2BatchTransferStatus } from "../providers/mdbx2/mdbx2-batch-transfer-coordinator";
 import { assertMdbx2TransferOperationId } from "../providers/mdbx2/mdbx2-transfer-identity";
 import { Mdbx2TransferAttachmentService } from "../providers/mdbx2/mdbx2-transfer-attachments";
-import { Mdbx2SyncCoordinator, type Mdbx2CloudSyncInput, type Mdbx2WebDavSyncConfig } from "../providers/mdbx2/mdbx2-sync-coordinator";
+import { Mdbx2SyncCoordinator, type Mdbx2CloudSyncDraft, type Mdbx2CloudSyncInput, type Mdbx2RemoteClientFactory, type Mdbx2RemoteSyncConfig, type Mdbx2WebDavSyncConfig } from "../providers/mdbx2/mdbx2-sync-coordinator";
+import { Mdbx2WebDavClient } from "../providers/mdbx2/mdbx2-webdav-client";
 import { normalizeMdbx2RemotePath } from "../providers/mdbx2/mdbx2-sync-paths";
 import { KeePassProvider, type KeePassSessionSummary } from "../providers/keepass/keepass-provider";
 import { KeePassDurableSyncCoordinator } from "../providers/keepass/keepass-durable-sync";
@@ -99,6 +100,7 @@ import { isRemoteKeePassSource, hasLocalKeePassWorkingCopy } from "../providers/
 import { KeePassLocalWorkingCopyService, KEEPASS_LOCAL_SOURCE_HASH } from '../providers/keepass/keepass-local-working-copy';
 import { createKeePassCacheEncryptionKey, KEEPASS_CACHE_ENCRYPTION_KEY_CONFIG } from '../providers/keepass/keepass-receipt-crypto';
 import { OneDriveSessionService } from "../providers/onedrive/onedrive-session";
+import { parseOneDriveConnection, type OneDriveConnection } from "../providers/onedrive/onedrive-token-manager";
 import { OneDriveAuthorizationError } from "../providers/onedrive/onedrive-auth";
 import { OneDriveKeePassConnections } from "./onedrive-keepass-connection";
 import {
@@ -118,7 +120,7 @@ import { createProviderDiagnostic, redactProviderMessage } from "../providers/pr
 import { ProviderTransportError } from "../providers/provider-transport";
 import { createSourceRecord } from "../core/source-records";
 import { loginWebsiteOrigin } from "../core/website-icon";
-import type { CredentialCaptureInput, ExtensionRequest, ExtensionResponse, LoginMatchSummary, Mdbx2ManagerSyncStatus, Mdbx2WebDavSettingsInput, PasskeyMatchSummary, PasskeyPromptContext, PasskeyRequest, PasskeyResult, SavePromptContext, SavePromptProviderSummary, WalletFillKind, WalletFillPayload, WalletFillResult, WalletMatchSummary } from "../runtime/messages";
+import type { CredentialCaptureInput, ExtensionRequest, ExtensionResponse, LoginMatchSummary, Mdbx2BootstrapDownloadInput, Mdbx2ManagerSyncStatus, Mdbx2WebDavSettingsInput, PasskeyMatchSummary, PasskeyPromptContext, PasskeyRequest, PasskeyResult, SavePromptContext, SavePromptProviderSummary, WalletFillKind, WalletFillPayload, WalletFillResult, WalletMatchSummary } from "../runtime/messages";
 import { assertTrustedExtensionPage, assertTrustedManagerPage, isSecureSensitivePageUrl, requireTrustedWebPageSender } from "../runtime/sender-policy";
 import { createAssertion, createPasskey, normalizeRpId, validateRpId } from "../passkey/webauthn-core";
 import { validatePasskeyRequest } from "../passkey/request-policy";
@@ -190,7 +192,11 @@ const mdbx2LocalFileExports = new Mdbx2LocalFileExports(mdbx2NativeClient, async
   return { vaultHandle: account.config.vaultHandle, fileName: `${(account.name || "Monica").replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").slice(0, 100)}.mdbx` };
 });
 const windowsHelloNativeClient = new Mdbx2NativeClient(createChromeMdbx2NativeRuntime(), undefined, "com.monica_pass.windows_hello", "Monica Windows Hello");
-const mdbx2SyncCoordinator = new Mdbx2SyncCoordinator(mdbx2NativeClient);
+const mdbx2RemoteFactory: Mdbx2RemoteClientFactory = input => {
+  if (input.transport === "onedrive") return oneDriveSessions.mdbx2OneDriveClient(input);
+  return new Mdbx2WebDavClient({ baseUrl: normalizeServerUrl(input.baseUrl), username: input.username, password: input.password });
+};
+const mdbx2SyncCoordinator = new Mdbx2SyncCoordinator(mdbx2NativeClient, undefined, mdbx2RemoteFactory);
 const mdbx2Provider = new Mdbx2Provider(mdbx2NativeClient, mdbx2SyncCoordinator);
 providers.register(mdbx2Provider);
 
@@ -1656,6 +1662,7 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
         isDefaultSaveTarget: Boolean(request.isDefaultSaveTarget),
         config: {
           ...previous,
+          syncTransport: "webdav",
           webDavBaseUrl: config.baseUrl,
           webDavUsername: config.username,
           webDavPassword: config.password,
@@ -1666,9 +1673,57 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
         lastError: undefined
       });
     }
+    case "MDBX2_ONEDRIVE_SAVE": {
+      assertManagerPage(sender);
+      const account = await requireMdbx2Account(request.providerId);
+      const previous = account.config;
+      const remotePath = normalizeMdbx2RemotePath(request.config.remotePath);
+      const previousConnection = parseOneDriveConnection(previous.oneDriveConnection);
+      const previousDriveId = stringAccountConfig(account, "oneDriveDriveId");
+      const previousRemotePath = stringAccountConfig(account, "remotePath");
+      let connection: OneDriveConnection;
+      let driveId: string;
+      if (request.config.loginId) {
+        connection = await oneDriveSessions.connectionForLogin(request.config.loginId);
+        driveId = (await oneDriveSessions.driveForLogin(request.config.loginId)).id;
+      } else {
+        if (!previousConnection || !previousDriveId) throw new Error("请先登录 OneDrive。");
+        connection = previousConnection;
+        driveId = previousDriveId;
+      }
+      // A same-account reauthorization keeps the durable connection id, so token
+      // rotation stays bound to the stored provider.
+      const savedConnection = previousConnection && previousConnection.profile.id === connection.profile.id && previousConnection.clientId === connection.clientId
+        ? { ...connection, id: previousConnection.id } : connection;
+      const remoteBindingChanged = Boolean(previousRemotePath || previousDriveId)
+        && (previousDriveId !== driveId || previousRemotePath !== remotePath);
+      const saved = await service.upsertProvider({
+        ...account,
+        name: request.name.trim() || account.name || "Monica MDBX2",
+        isDefaultSaveTarget: Boolean(request.isDefaultSaveTarget),
+        config: {
+          ...previous,
+          syncTransport: "onedrive",
+          oneDriveConnection: savedConnection,
+          oneDriveDriveId: driveId,
+          remotePath,
+          syncStateHandle: remoteBindingChanged ? undefined : previous.syncStateHandle
+        },
+        lastSyncAt: remoteBindingChanged ? undefined : account.lastSyncAt,
+        lastError: undefined
+      });
+      if (request.config.loginId) oneDriveSessions.cancel(request.config.loginId);
+      return saved;
+    }
     case "MDBX2_BOOTSTRAP_DOWNLOAD": {
       assertManagerPage(sender);
-      return mdbx2SyncCoordinator.downloadBootstrap(effectiveMdbx2WebDavSettings(request.config));
+      const config: Mdbx2BootstrapDownloadInput = request.config;
+      if (config.transport === "onedrive") {
+        return mdbx2SyncCoordinator.downloadBootstrap({
+          transport: "onedrive", driveId: config.driveId, remotePath: config.remotePath, loginId: config.loginId
+        });
+      }
+      return mdbx2SyncCoordinator.downloadBootstrap(effectiveMdbx2WebDavSettings(config));
     }
     case "MDBX2_BOOTSTRAP_PUBLISH": {
       assertManagerPage(sender);
@@ -1684,7 +1739,7 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
     case "MDBX2_BOOTSTRAP_REGISTER": {
       assertManagerPage(sender);
       const account = await requireMdbx2Account(request.providerId);
-      const config = mdbx2WebDavSyncConfig(account);
+      const config = mdbx2RemoteSyncConfig(account);
       const vaultHandle = stringAccountConfig(account, "vaultHandle");
       if (!vaultHandle) throw new Error("MDBX2 密码源缺少本机工作副本。");
       const status = await mdbx2SyncCoordinator.registerDownloadedBootstrap(
@@ -1701,7 +1756,8 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
     case "MDBX2_SYNC_STATUS": {
       assertManagerPage(sender);
       const account = await requireMdbx2Account(request.providerId);
-      const configured = Boolean(stringAccountConfig(account, "webDavBaseUrl") && stringAccountConfig(account, "remotePath"));
+      const configured = Boolean((stringAccountConfig(account, "webDavBaseUrl") || account.config.syncTransport === "onedrive")
+        && stringAccountConfig(account, "remotePath"));
       const syncStateHandle = stringAccountConfig(account, "syncStateHandle");
       if (!configured || !syncStateHandle) return managerSyncStatus(undefined, configured, false);
       return managerSyncStatus(await mdbx2SyncCoordinator.status(mdbx2CloudSyncInput(account, true)), true, true);
@@ -3142,7 +3198,7 @@ async function afterRuntimeRequest(request: ExtensionRequest, data?: unknown): P
   const providerMutation = ["BITWARDEN_CIPHER_MOVE_FOLDER", "BITWARDEN_CIPHER_MOVE_COLLECTIONS", "PROVIDER_ATTACHMENT_UPLOAD_FINISH", "PROVIDER_ATTACHMENT_DELETE"].includes(type)
     || /^(?:BITWARDEN_(?:FOLDER|CIPHER)_|KEEPASS_(?:GROUP|HISTORY)_|MDBX2_(?:OBJECT|COLLECTION|HISTORY|CONFLICT|SNAPSHOT)_)/.test(type)
       && /(?:CREATE|RENAME|MOVE|DELETE|RESTORE|UPSERT|REVERT|RESOLVE)$/.test(type);
-  const connectionChange = ["BITWARDEN_LOGIN", "BITWARDEN_LOGOUT", "WEBDAV_SAVE", "PROVIDER_REMOVE", "MDBX2_VAULT_OPEN", "MDBX2_WEBDAV_SAVE", "MDBX2_BOOTSTRAP_PUBLISH", "MDBX2_BOOTSTRAP_REGISTER", "KEEPASS_WEBDAV_OPEN", "KEEPASS_ONEDRIVE_OPEN", "KEEPASS_OPEN", "KEEPASS_REMOTE_RESTORE"].includes(type);
+  const connectionChange = ["BITWARDEN_LOGIN", "BITWARDEN_LOGOUT", "WEBDAV_SAVE", "PROVIDER_REMOVE", "MDBX2_VAULT_OPEN", "MDBX2_WEBDAV_SAVE", "MDBX2_ONEDRIVE_SAVE", "MDBX2_BOOTSTRAP_PUBLISH", "MDBX2_BOOTSTRAP_REGISTER", "KEEPASS_WEBDAV_OPEN", "KEEPASS_ONEDRIVE_OPEN", "KEEPASS_OPEN", "KEEPASS_REMOTE_RESTORE"].includes(type);
   const unlocked = ["VAULT_SETUP", "VAULT_UNLOCK", "VAULT_UNLOCK_HELLO", "VAULT_RESTORE_ENCRYPTED"].includes(type);
   if (type === "KEEPASS_LOCK" || type === "MDBX2_VAULT_LOCK") {
     publishVaultChanged();
@@ -4272,27 +4328,34 @@ function mdbx2ExportOwner(sender: chrome.runtime.MessageSender): string {
   return sender.documentId;
 }
 
-function mdbx2WebDavSyncConfig(account: ProviderAccount): Mdbx2WebDavSyncConfig {
-  const baseUrl = stringAccountConfig(account, "webDavBaseUrl");
+function mdbx2RemoteSyncConfig(account: ProviderAccount): Mdbx2RemoteSyncConfig {
   const remotePath = stringAccountConfig(account, "remotePath");
+  if (!remotePath) throw new Error("MDBX2 远端文件位置未配置。");
+  const syncStateHandle = stringAccountConfig(account, "syncStateHandle") || undefined;
+  if (account.config.syncTransport === "onedrive") {
+    const driveId = stringAccountConfig(account, "oneDriveDriveId");
+    if (!driveId) throw new Error("MDBX2 OneDrive 云盘未配置。");
+    if (!parseOneDriveConnection(account.config.oneDriveConnection)) throw new Error("MDBX2 OneDrive 登录已失效，请重新连接。");
+    return { transport: "onedrive", driveId, remotePath, syncStateHandle, providerId: account.id };
+  }
+  const baseUrl = stringAccountConfig(account, "webDavBaseUrl");
   if (!baseUrl) throw new Error("MDBX2 WebDAV 地址未配置。");
-  if (!remotePath) throw new Error("MDBX2 WebDAV 远端文件位置未配置。");
   return {
     baseUrl,
     username: stringAccountConfig(account, "webDavUsername"),
     password: stringAccountConfig(account, "webDavPassword"),
     remotePath,
-    syncStateHandle: stringAccountConfig(account, "syncStateHandle") || undefined
+    syncStateHandle
   };
 }
 
 function mdbx2CloudSyncInput(account: ProviderAccount, requireState: true): Mdbx2CloudSyncInput;
-function mdbx2CloudSyncInput(account: ProviderAccount, requireState: false): Omit<Mdbx2CloudSyncInput, "syncStateHandle"> & { syncStateHandle?: string };
-function mdbx2CloudSyncInput(account: ProviderAccount, requireState: boolean): Mdbx2CloudSyncInput | (Omit<Mdbx2CloudSyncInput, "syncStateHandle"> & { syncStateHandle?: string }) {
-  const config = mdbx2WebDavSyncConfig(account);
+function mdbx2CloudSyncInput(account: ProviderAccount, requireState: false): Mdbx2CloudSyncDraft;
+function mdbx2CloudSyncInput(account: ProviderAccount, requireState: boolean): Mdbx2CloudSyncInput | Mdbx2CloudSyncDraft {
+  const config = mdbx2RemoteSyncConfig(account);
   const vaultHandle = stringAccountConfig(account, "vaultHandle");
   if (!vaultHandle) throw new Error("MDBX2 密码源缺少本机工作副本。");
-  if (requireState && !config.syncStateHandle) throw new Error("MDBX2 WebDAV 尚未完成 bootstrap 注册。");
+  if (requireState && !config.syncStateHandle) throw new Error("MDBX2 云同步尚未完成 bootstrap 注册。");
   return { ...config, vaultHandle, syncStateHandle: config.syncStateHandle };
 }
 

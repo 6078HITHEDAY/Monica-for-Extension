@@ -1,5 +1,4 @@
 import { createSHA256, sha256 } from "hash-wasm";
-import type { WebDavCredentials } from "../webdav/webdav-client";
 import { normalizeServerUrl } from "../webdav/webdav-client";
 import { base64ToBytes } from "../../security/encoding";
 import {
@@ -31,20 +30,28 @@ import {
   parseMdbx2RemoteSegmentPath,
   type Mdbx2RemoteSegmentDescriptor
 } from "./mdbx2-sync-paths";
-import { Mdbx2WebDavClient, type Mdbx2WebDavObject } from "./mdbx2-webdav-client";
+import { Mdbx2WebDavClient } from "./mdbx2-webdav-client";
+import {
+  defaultMdbx2RemoteClient,
+  type Mdbx2OneDriveSyncConfig,
+  type Mdbx2RemoteClient,
+  type Mdbx2RemoteClientFactory,
+  type Mdbx2RemoteDownloadResult,
+  type Mdbx2RemoteObject,
+  type Mdbx2RemoteSyncConfig,
+  type Mdbx2WebDavSyncConfig
+} from "./mdbx2-remote-client";
 
 const MAX_SEGMENTS_PER_SYNC = 10_000;
 const MAX_RECEIVE_PASSES = 4;
 
-export interface Mdbx2WebDavSyncConfig extends WebDavCredentials {
-  remotePath: string;
-  syncStateHandle?: string;
-}
+export type { Mdbx2OneDriveSyncConfig, Mdbx2RemoteClientFactory, Mdbx2RemoteSyncConfig, Mdbx2WebDavSyncConfig } from "./mdbx2-remote-client";
 
-export interface Mdbx2CloudSyncInput extends Mdbx2WebDavSyncConfig {
-  vaultHandle: string;
-  syncStateHandle: string;
-}
+/** Saved sync input over either transport. */
+export type Mdbx2CloudSyncInput = (Mdbx2WebDavSyncConfig | Mdbx2OneDriveSyncConfig) & { vaultHandle: string; syncStateHandle: string };
+
+/** publishBootstrap input: sync state may still be unregistered. */
+export type Mdbx2CloudSyncDraft = (Omit<Mdbx2WebDavSyncConfig, "syncStateHandle"> | Omit<Mdbx2OneDriveSyncConfig, "syncStateHandle">) & { vaultHandle: string; syncStateHandle?: string };
 
 export interface Mdbx2CloudSyncReport {
   uploadedSegments: number;
@@ -88,23 +95,24 @@ interface PreparedContext {
   input: Mdbx2CloudSyncInput;
   remotePath: string;
   remoteBinding: string;
-  webdav: Mdbx2WebDavClient;
+  remote: Mdbx2RemoteClient;
   status: Mdbx2SyncStateStatus;
 }
 
 export class Mdbx2SyncCoordinator {
   constructor(
     private readonly runtime: Mdbx2CloudRuntime,
-    private readonly fetcher: typeof fetch = globalThis.fetch.bind(globalThis)
+    private readonly fetcher: typeof fetch = globalThis.fetch.bind(globalThis),
+    private readonly remoteFactory?: Mdbx2RemoteClientFactory
   ) {}
 
-  async publishBootstrap(input: Omit<Mdbx2CloudSyncInput, "syncStateHandle"> & { syncStateHandle?: string }, signal?: AbortSignal,
+  async publishBootstrap(input: Mdbx2CloudSyncDraft, signal?: AbortSignal,
     retainPreparedState?: (stateHandle: string) => Promise<void>): Promise<{ stateHandle: string; status: Mdbx2SyncStateStatus }> {
     signal?.throwIfAborted();
     const remotePath = normalizeMdbx2RemotePath(input.remotePath);
     const remoteBinding = await mdbx2RemoteBinding(input, remotePath);
-    const webdav = this.webdav(input);
-    await webdav.testConnection(signal);
+    const remote = this.remote(input);
+    await remote.testConnection(signal);
     if (input.syncStateHandle) {
       const status = await this.runtime.syncStateStatus(input.vaultHandle, input.syncStateHandle, remoteBinding);
       // The durable commit can outlive its response or the manager page. Reuse
@@ -118,9 +126,9 @@ export class Mdbx2SyncCoordinator {
     signal?.throwIfAborted();
     try {
       const body = await this.readOutputBlob(input.vaultHandle, prepared.stateHandle, remoteBinding, prepared.file, signal);
-      await webdav.putImmutable(remotePath, body, prepared.file.sha256, signal);
-      await webdav.ensureDirectory(mdbx2StreamsRoot(remotePath), signal);
-      await webdav.ensureDirectory(mdbx2BlobsRoot(remotePath), signal);
+      await remote.putImmutable(remotePath, body, prepared.file.sha256, signal);
+      await remote.ensureDirectory(mdbx2StreamsRoot(remotePath), signal);
+      await remote.ensureDirectory(mdbx2BlobsRoot(remotePath), signal);
       const status = await this.runtime.commitSyncBootstrap(input.vaultHandle, prepared.stateHandle, remoteBinding, prepared.file.fileHandle);
       return { stateHandle: prepared.stateHandle, status };
     } catch (error) {
@@ -128,16 +136,16 @@ export class Mdbx2SyncCoordinator {
     }
   }
 
-  async downloadBootstrap(input: Mdbx2WebDavSyncConfig, signal?: AbortSignal): Promise<Mdbx2TransferFinishResult> {
+  async downloadBootstrap(input: Mdbx2RemoteSyncConfig, signal?: AbortSignal): Promise<Mdbx2TransferFinishResult> {
     signal?.throwIfAborted();
     const remotePath = normalizeMdbx2RemotePath(input.remotePath);
-    const webdav = this.webdav(input);
-    await webdav.testConnection(signal);
-    const remote = await requireRemoteFile(webdav, remotePath, MDBX2_MAX_INBOUND_FILE_BYTES, signal);
-    return this.downloadToHost(webdav, remote, "vault-bootstrap", signal);
+    const remote = this.remote(input);
+    await remote.testConnection(signal);
+    const bootstrap = await requireRemoteFile(remote, remotePath, MDBX2_MAX_INBOUND_FILE_BYTES, signal);
+    return this.downloadToHost(remote, bootstrap, "vault-bootstrap", signal);
   }
 
-  async registerDownloadedBootstrap(vaultHandle: string, input: Mdbx2WebDavSyncConfig): Promise<Mdbx2SyncStateStatus> {
+  async registerDownloadedBootstrap(vaultHandle: string, input: Mdbx2RemoteSyncConfig): Promise<Mdbx2SyncStateStatus> {
     const remotePath = normalizeMdbx2RemotePath(input.remotePath);
     return this.runtime.registerSyncState(vaultHandle, await mdbx2RemoteBinding(input, remotePath), input.syncStateHandle);
   }
@@ -181,13 +189,13 @@ export class Mdbx2SyncCoordinator {
     signal?.throwIfAborted();
     const remotePath = normalizeMdbx2RemotePath(input.remotePath);
     const remoteBinding = await mdbx2RemoteBinding(input, remotePath);
-    const webdav = this.webdav(input);
-    await webdav.testConnection(signal);
+    const remote = this.remote(input);
+    await remote.testConnection(signal);
     const status = await this.runtime.syncStateStatus(input.vaultHandle, input.syncStateHandle, remoteBinding);
-    if (!status.initialized) throw new Error("MDBX2 WebDAV 同步尚未注册可移植 bootstrap。");
-    const bootstrap = await webdav.stat(remotePath, signal);
-    if (!bootstrap || bootstrap.isDirectory || !bootstrap.sizeBytes) throw new Error("MDBX2 WebDAV 可移植 bootstrap 不存在或无效。");
-    return { input, remotePath, remoteBinding, webdav, status };
+    if (!status.initialized) throw new Error("MDBX2 云同步尚未注册可移植 bootstrap。");
+    const bootstrap = await remote.stat(remotePath, signal);
+    if (!bootstrap || bootstrap.isDirectory || !bootstrap.sizeBytes) throw new Error("MDBX2 云同步可移植 bootstrap 不存在或无效。");
+    return { input, remotePath, remoteBinding, remote, status };
   }
 
   private async publishLocal(context: PreparedContext, report: Mdbx2CloudSyncReport, signal?: AbortSignal): Promise<void> {
@@ -215,7 +223,7 @@ export class Mdbx2SyncCoordinator {
           prepared.segmentIndex,
           prepared.payloadSha256
         );
-        await context.webdav.putImmutable(path, body, prepared.file.sha256, signal);
+        await context.remote.putImmutable(path, body, prepared.file.sha256, signal);
         report.uploadedSegments += 1;
       }
       await this.runtime.commitSyncSegment(
@@ -245,14 +253,14 @@ export class Mdbx2SyncCoordinator {
         if (reference.state !== "available" || !reference.totalSize) throw new Error(`MDBX2 Blob ${reference.blobId} 在本机不可用。`);
         if (reference.remoteVerified) continue;
         const remotePath = mdbx2BlobPath(context.remotePath, reference.blobId);
-        const existing = await context.webdav.stat(remotePath, signal);
+        const existing = await context.remote.stat(remotePath, signal);
         if (existing) {
           if (existing.isDirectory || existing.sizeBytes !== undefined && existing.sizeBytes !== reference.totalSize) {
-            throw new Error(`MDBX2 WebDAV Blob 元数据不一致: ${reference.blobId}`);
+            throw new Error(`MDBX2 云同步 Blob 元数据不一致: ${reference.blobId}`);
           }
-          const verified = await context.webdav.download(remotePath, reference.totalSize, () => undefined, signal);
+          const verified = await context.remote.download(remotePath, reference.totalSize, () => undefined, signal);
           if (verified.sizeBytes !== reference.totalSize || verified.sha256 !== reference.blobId) {
-            throw new Error(`MDBX2 WebDAV Blob 内容摘要不一致: ${reference.blobId}`);
+            throw new Error(`MDBX2 云同步 Blob 内容摘要不一致: ${reference.blobId}`);
           }
           await this.runtime.markRemoteBlobVerified(
             context.input.vaultHandle,
@@ -264,7 +272,7 @@ export class Mdbx2SyncCoordinator {
           continue;
         }
         const body = await this.readExternalBlobBody(context, reference.blobId, reference.totalSize, signal);
-        await context.webdav.putImmutable(remotePath, body, reference.blobId, signal);
+        await context.remote.putImmutable(remotePath, body, reference.blobId, signal);
         await this.runtime.markRemoteBlobVerified(
           context.input.vaultHandle,
           context.input.syncStateHandle,
@@ -280,7 +288,7 @@ export class Mdbx2SyncCoordinator {
   }
 
   private async receiveRemote(context: PreparedContext, report: Mdbx2CloudSyncReport, signal?: AbortSignal, resumePendingOnly = false): Promise<void> {
-    const descriptors = (await listRemoteSegments(context.webdav, context.remotePath, signal))
+    const descriptors = (await listRemoteSegments(context.remote, context.remotePath, signal))
       .filter((descriptor) => descriptor.deviceId !== context.status.deviceId);
     let streams = new Map((await this.runtime.listSyncStreams(
       context.input.vaultHandle,
@@ -321,8 +329,8 @@ export class Mdbx2SyncCoordinator {
             streams.set(streamId, stream);
             break;
           }
-          const remote = await requireRemoteFile(context.webdav, descriptor.path, MDBX2_MAX_INBOUND_FILE_BYTES, signal);
-          const transferred = await this.downloadToHost(context.webdav, remote, "sync-segment", signal, context.input.vaultHandle);
+          const bootstrap = await requireRemoteFile(context.remote, descriptor.path, MDBX2_MAX_INBOUND_FILE_BYTES, signal);
+          const transferred = await this.downloadToHost(context.remote, bootstrap, "sync-segment", signal, context.input.vaultHandle);
           report.downloadedSegments += 1;
           try {
             const inspected = await this.runtime.inspectSyncSegment(context.input.vaultHandle, transferred.fileHandle);
@@ -389,8 +397,8 @@ export class Mdbx2SyncCoordinator {
         signal?.throwIfAborted();
         if (reference.state === "available" && reference.totalSize) continue;
         const remotePath = mdbx2BlobPath(context.remotePath, reference.blobId);
-        const remote = await requireRemoteFile(context.webdav, remotePath, MDBX2_MAX_REMOTE_BLOB_BYTES, signal);
-        if (reference.totalSize !== undefined && reference.totalSize !== remote.sizeBytes) throw new Error(`MDBX2 WebDAV Blob 大小不一致: ${reference.blobId}`);
+        const remote = await requireRemoteFile(context.remote, remotePath, MDBX2_MAX_REMOTE_BLOB_BYTES, signal);
+        if (reference.totalSize !== undefined && reference.totalSize !== remote.sizeBytes) throw new Error(`MDBX2 云同步 Blob 大小不一致: ${reference.blobId}`);
         let receive = await this.runtime.beginExternalBlobReceive(
           context.input.vaultHandle,
           context.input.syncStateHandle,
@@ -402,7 +410,7 @@ export class Mdbx2SyncCoordinator {
         const abortIncompleteReceive = () => this.runtime.abortExternalBlobReceive(
           context.input.vaultHandle, context.input.syncStateHandle, context.remoteBinding, reference.blobId
         ).catch(() => false);
-        const result = await context.webdav.download(remotePath, remote.sizeBytes, async (chunk, offset) => {
+        const result = await context.remote.download(remotePath, remote.sizeBytes, async (chunk, offset) => {
           const nextOffset = offset + chunk.length;
           try {
             receive = await this.runtime.writeExternalBlobReceiveChunk(
@@ -429,7 +437,7 @@ export class Mdbx2SyncCoordinator {
         }, signal);
         if (result.sha256 !== reference.blobId || result.sizeBytes !== remote.sizeBytes || !receive.complete) {
           await abortIncompleteReceive();
-          throw new Error(`MDBX2 WebDAV Blob 完整性检查失败: ${reference.blobId}`);
+          throw new Error(`MDBX2 云同步 Blob 完整性检查失败: ${reference.blobId}`);
         }
         downloaded += 1;
       }
@@ -495,18 +503,18 @@ export class Mdbx2SyncCoordinator {
   }
 
   private async downloadToHost(
-    webdav: Mdbx2WebDavClient,
-    remote: Required<Pick<Mdbx2WebDavObject, "path" | "sizeBytes">> & Mdbx2WebDavObject,
+    remote: Mdbx2RemoteClient,
+    target: Required<Pick<Mdbx2RemoteObject, "path" | "sizeBytes">> & Mdbx2RemoteObject,
     purpose: "vault-bootstrap" | "sync-segment",
     signal?: AbortSignal,
     ownerVaultHandle?: string
   ): Promise<Mdbx2TransferFinishResult> {
     const begun = ownerVaultHandle && this.runtime.beginInboundTransferForVault
-      ? await this.runtime.beginInboundTransferForVault(ownerVaultHandle, remote.sizeBytes, undefined, purpose)
-      : await this.runtime.beginInboundTransfer(remote.sizeBytes, undefined, purpose);
+      ? await this.runtime.beginInboundTransferForVault(ownerVaultHandle, target.sizeBytes, undefined, purpose)
+      : await this.runtime.beginInboundTransfer(target.sizeBytes, undefined, purpose);
     let finished = false;
     try {
-      const downloaded = await webdav.download(remote.path, remote.sizeBytes, async (chunk, offset) => {
+      const downloaded = await remote.download(target.path, target.sizeBytes, async (chunk, offset) => {
         const accepted = await this.runtime.sendInboundChunk(begun.transferId, offset, chunk);
         if (accepted.nextOffset < offset + chunk.length) throw new Error("MDBX2 Native Host 未完整接收下载分块。");
       }, signal);
@@ -514,7 +522,7 @@ export class Mdbx2SyncCoordinator {
       finished = true;
       if (result.purpose !== purpose || result.sizeBytes !== downloaded.sizeBytes || result.sha256 !== downloaded.sha256) {
         await this.runtime.releaseFile(result.fileHandle).catch(() => undefined);
-        throw new Error("MDBX2 WebDAV 下载与 Native Host 校验结果不一致。");
+        throw new Error("MDBX2 云同步下载与 Native Host 校验结果不一致。");
       }
       return result;
     } finally {
@@ -522,43 +530,46 @@ export class Mdbx2SyncCoordinator {
     }
   }
 
-  private webdav(input: WebDavCredentials): Mdbx2WebDavClient {
-    return new Mdbx2WebDavClient({
-      baseUrl: normalizeServerUrl(input.baseUrl),
-      username: input.username,
-      password: input.password
-    }, this.fetcher);
+  private remote(input: Mdbx2RemoteSyncConfig): Mdbx2RemoteClient {
+    if (this.remoteFactory) return this.remoteFactory(input);
+    return defaultMdbx2RemoteClient(input, this.fetcher, config => new Mdbx2WebDavClient({
+      baseUrl: normalizeServerUrl(config.baseUrl),
+      username: config.username,
+      password: config.password
+    }, this.fetcher));
   }
 }
 
-export async function mdbx2RemoteBinding(input: WebDavCredentials, remotePath: string): Promise<string> {
-  return sha256(`${normalizeServerUrl(input.baseUrl)}\n${normalizeMdbx2RemotePath(remotePath)}`);
+export async function mdbx2RemoteBinding(input: Mdbx2RemoteSyncConfig, remotePath: string): Promise<string> {
+  const normalized = normalizeMdbx2RemotePath(remotePath);
+  if (input.transport === "onedrive") return sha256(`onedrive\n${input.driveId}\n${normalized}`);
+  return sha256(`${normalizeServerUrl(input.baseUrl)}\n${normalized}`);
 }
 
 async function requireRemoteFile(
-  webdav: Mdbx2WebDavClient,
+  remote: Mdbx2RemoteClient,
   path: string,
   maximumBytes: number,
   signal?: AbortSignal
-): Promise<Required<Pick<Mdbx2WebDavObject, "path" | "sizeBytes">> & Mdbx2WebDavObject> {
-  const remote = await webdav.stat(path, signal);
-  if (!remote || remote.isDirectory || !remote.sizeBytes || remote.sizeBytes > maximumBytes) throw new Error(`MDBX2 WebDAV 文件不存在或超过安全上限: ${path}`);
-  return remote as Required<Pick<Mdbx2WebDavObject, "path" | "sizeBytes">> & Mdbx2WebDavObject;
+): Promise<Required<Pick<Mdbx2RemoteObject, "path" | "sizeBytes">> & Mdbx2RemoteObject> {
+  const target = await remote.stat(path, signal);
+  if (!target || target.isDirectory || !target.sizeBytes || target.sizeBytes > maximumBytes) throw new Error(`MDBX2 云同步文件不存在或超过安全上限: ${path}`);
+  return target as Required<Pick<Mdbx2RemoteObject, "path" | "sizeBytes">> & Mdbx2RemoteObject;
 }
 
-async function listRemoteSegments(webdav: Mdbx2WebDavClient, remotePath: string, signal?: AbortSignal): Promise<Mdbx2RemoteSegmentDescriptor[]> {
+async function listRemoteSegments(remote: Mdbx2RemoteClient, remotePath: string, signal?: AbortSignal): Promise<Mdbx2RemoteSegmentDescriptor[]> {
   const streamsRoot = mdbx2StreamsRoot(remotePath);
-  if (!(await webdav.stat(streamsRoot, signal))?.isDirectory) return [];
+  if (!(await remote.stat(streamsRoot, signal))?.isDirectory) return [];
   const descriptors: Mdbx2RemoteSegmentDescriptor[] = [];
-  for (const device of await webdav.list(streamsRoot, signal)) {
+  for (const device of await remote.list(streamsRoot, signal)) {
     if (!device.isDirectory) continue;
     normalizeMdbx2RemoteComponent(device.path.slice(`${streamsRoot}/`.length));
-    for (const generation of await webdav.list(device.path, signal)) {
+    for (const generation of await remote.list(device.path, signal)) {
       if (!generation.isDirectory) continue;
       normalizeMdbx2RemoteComponent(generation.path.slice(`${device.path}/`.length));
       const segmentsPath = `${generation.path}/segments`;
-      if (!(await webdav.stat(segmentsPath, signal))?.isDirectory) continue;
-      for (const segment of await webdav.list(segmentsPath, signal)) {
+      if (!(await remote.stat(segmentsPath, signal))?.isDirectory) continue;
+      for (const segment of await remote.list(segmentsPath, signal)) {
         if (segment.isDirectory) continue;
         const descriptor = parseMdbx2RemoteSegmentPath(remotePath, segment.path);
         if (!descriptor) continue;

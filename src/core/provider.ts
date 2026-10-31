@@ -84,7 +84,7 @@ export function sameProviderBinding(left: ProviderAccount, right: ProviderAccoun
   const keys = left.kind === "bitwarden" ? ["vaultUrl", "apiUrl", "identityUrl", "email", "deviceId", "vaultKeyEnc", "vaultKeyMac"]
     : left.kind === "monica-webdav" ? ["baseUrl", "username", "password", "backupPassword"]
     : left.kind === "keepass" ? ["sourceMode", "webDavBaseUrl", "webDavUsername", "webDavPassword", "remotePath", "databasePassword", "keyFile", "oneDriveDriveId", "oneDriveItemId"]
-    : left.kind === "mdbx2" ? ["vaultHandle", "syncStateHandle", "webDavBaseUrl", "webDavUsername", "webDavPassword", "remotePath"] : [];
+    : left.kind === "mdbx2" ? ["vaultHandle", "syncStateHandle", "webDavBaseUrl", "webDavUsername", "webDavPassword", "remotePath", "oneDriveDriveId"] : [];
   return keys.every(key => left.config[key] === right.config[key]);
 }
 

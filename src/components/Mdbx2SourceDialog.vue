@@ -60,9 +60,10 @@ import {
   presentMdbx2Tiga
 } from "../providers/mdbx2/mdbx2-tiga";
 import { vaultClient } from "../runtime/client";
-import type { Mdbx2ManagerSyncStatus, Mdbx2WebDavSettingsInput } from "../runtime/messages";
+import type { Mdbx2ManagerSyncStatus, Mdbx2OneDriveSettingsInput, Mdbx2WebDavSettingsInput } from "../runtime/messages";
 
 type NewSourceMode = "create" | "local" | "remote";
+type Mdbx2SyncTransport = "webdav" | "onedrive";
 type BusyState = "" | "probe" | "upload" | "download" | "open" | "save" | "publish";
 type SnapshotBusyState = "" | "list" | "structure" | "prune-plan" | "prune" | "create" | "delete" | "restore";
 type SnapshotStructureMode = "snapshot" | "compare";
@@ -196,6 +197,7 @@ const config = props.provider?.config || {};
 const form = reactive({
   mode: (props.provider ? "local" : props.initialMode || "local") as NewSourceMode,
   name: props.provider?.name || "Monica MDBX2",
+  syncTransport: (config.syncTransport === "onedrive" ? "onedrive" : "webdav") as Mdbx2SyncTransport,
   baseUrl: typeof config.webDavBaseUrl === "string" ? config.webDavBaseUrl : "",
   username: typeof config.webDavUsername === "string" ? config.webDavUsername : "",
   webDavPassword: "",
@@ -206,14 +208,20 @@ const form = reactive({
   confirmVaultPassword: "",
   isDefaultSaveTarget: props.provider?.isDefaultSaveTarget || false
 });
+const oneDriveLogin = ref<{ loginId: string; displayName: string; driveId: string } | undefined>();
 
 const isExisting = computed(() => Boolean(providerId.value));
 const hostReady = computed(() => hostStatus.value?.availability === "ready");
 const vaultOpen = computed(() => runtimeStatus.value?.open === true);
+/** New remote sources join over WebDAV; OneDrive sources are created in the OneDrive dialog and managed here. */
+const activeTransport = computed<Mdbx2SyncTransport>(() => form.syncTransport);
+const oneDriveConnected = computed(() => Boolean(oneDriveLogin.value || config.oneDriveDriveId));
+const oneDriveAccountLabel = computed(() => oneDriveLogin.value?.displayName || (typeof config.oneDriveDisplayName === "string" ? config.oneDriveDisplayName : ""));
 const diagnosticHealth = computed(() => vaultDiagnostics.value ? presentMdbx2Health(vaultDiagnostics.value.health) : undefined);
 const diagnosticGuidance = computed(() => vaultDiagnostics.value ? presentMdbx2HealthGuidance(vaultDiagnostics.value.health) : []);
 const tigaPresentation = computed(() => vaultTiga.value ? presentMdbx2Tiga(vaultTiga.value) : undefined);
-const remoteFieldsComplete = computed(() => Boolean(form.baseUrl.trim() && form.remotePath.trim()));
+const remoteFieldsComplete = computed(() => Boolean(form.remotePath.trim())
+  && (activeTransport.value === "onedrive" ? oneDriveConnected.value : Boolean(form.baseUrl.trim())));
 const needsSecurityKey = computed(() => form.unlockMethod !== "password");
 const canPublish = computed(() => isExisting.value && vaultOpen.value && remoteFieldsComplete.value && !syncStatus.value?.initialized);
 const selectedHistoryItem = computed(() => historyItems.value.find((item) => item.commitId === selectedCommitId.value));
@@ -561,6 +569,23 @@ function selectSecurityKey(event: Event) {
   error.value = "";
 }
 
+async function loginOneDrive() {
+  if (busy.value) return;
+  const loginId = crypto.randomUUID();
+  busy.value = "save";
+  error.value = "";
+  try {
+    const summary = await vaultClient.loginOneDrive(loginId);
+    oneDriveLogin.value = { loginId, displayName: summary.profile.displayName || summary.profile.username, driveId: summary.drive.id };
+    emit("notice", tr('OneDrive 登录成功：{0}', { 0: summary.profile.username }));
+  } catch (cause) {
+    await vaultClient.cancelOneDriveLogin(loginId).catch(() => undefined);
+    error.value = errorMessage(cause);
+  } finally {
+    busy.value = "";
+  }
+}
+
 async function connectNewSource() {
   if (!hostReady.value) return void (error.value = hostStatus.value?.message || tr('数据库暂未就绪，请重新打开后再试。'));
   error.value = "";
@@ -636,17 +661,19 @@ async function saveSettings() {
   busy.value = "save";
   error.value = "";
   try {
-    activeProvider.value = await vaultClient.saveMdbx2WebDav(
-      providerId.value,
-      form.name,
-      webDavSettings(),
-      form.isDefaultSaveTarget
-    );
+    if (activeTransport.value === "onedrive") {
+      activeProvider.value = await vaultClient.saveMdbx2OneDrive(providerId.value, form.name, oneDriveSettings(), form.isDefaultSaveTarget);
+      oneDriveLogin.value = undefined;
+    } else {
+      activeProvider.value = await vaultClient.saveMdbx2WebDav(providerId.value, form.name, webDavSettings(), form.isDefaultSaveTarget);
+    }
     form.webDavPassword = "";
     form.webDavPasswordConfigured = activeProvider.value.config.webDavPasswordConfigured === true;
     syncStatus.value = await vaultClient.mdbx2SyncStatus(providerId.value).catch(() => undefined);
     emit("changed");
-    emit("notice", tr('MDBX2 WebDAV 设置已保存到加密密码库。远端位置变化时旧 checkpoint 已解除绑定。'));
+    emit("notice", activeTransport.value === "onedrive"
+      ? tr('MDBX2 OneDrive 设置已保存到加密密码库。远端位置变化时旧 checkpoint 已解除绑定。')
+      : tr('MDBX2 WebDAV 设置已保存到加密密码库。远端位置变化时旧 checkpoint 已解除绑定。'));
   } catch (cause) {
     error.value = errorMessage(cause);
   } finally {
@@ -659,12 +686,12 @@ async function publishBootstrap() {
   busy.value = "publish";
   error.value = "";
   try {
-    activeProvider.value = await vaultClient.saveMdbx2WebDav(
-      providerId.value,
-      form.name,
-      webDavSettings(),
-      form.isDefaultSaveTarget
-    );
+    if (activeTransport.value === "onedrive") {
+      activeProvider.value = await vaultClient.saveMdbx2OneDrive(providerId.value, form.name, oneDriveSettings(), form.isDefaultSaveTarget);
+      oneDriveLogin.value = undefined;
+    } else {
+      activeProvider.value = await vaultClient.saveMdbx2WebDav(providerId.value, form.name, webDavSettings(), form.isDefaultSaveTarget);
+    }
     syncStatus.value = await vaultClient.publishMdbx2Bootstrap(providerId.value);
     form.webDavPassword = "";
     form.webDavPasswordConfigured = activeProvider.value.config.webDavPasswordConfigured === true;
@@ -1304,6 +1331,10 @@ async function stageRemoteBootstrap(): Promise<Mdbx2VaultSource> {
   return acceptPendingSource({ kind: "file", handle: finished.fileHandle }, originKey);
 }
 
+function oneDriveSettings(): Mdbx2OneDriveSettingsInput {
+  return { remotePath: form.remotePath.trim(), loginId: oneDriveLogin.value?.loginId };
+}
+
 async function acceptPendingSource(source: Mdbx2VaultSource, originKey: string): Promise<Mdbx2VaultSource> {
   pendingSource.value = source;
   pendingOriginKey.value = originKey;
@@ -1552,7 +1583,7 @@ function conflictErrorMessage(cause: unknown): string {
       <header>
         <div>
           <h2 id="mdbx2-dialog-title">{{ dialogTitle }}</h2>
-          <p>{{ tr('完整备份会保留数据库和附件；WebDAV 用于多设备同步。') }}</p>
+          <p>{{ tr('完整备份会保留数据库和附件；WebDAV 或 OneDrive 用于多设备同步。') }}</p>
         </div>
         <m3e-icon-button data-dialog-close :aria-label="tr('关闭 MDBX2 设置')" :disabled="dialogLocked" @click="closeDialog"><m3e-icon name="close"></m3e-icon></m3e-icon-button>
       </header>
@@ -1582,9 +1613,18 @@ function conflictErrorMessage(cause: unknown): string {
         <template v-if="form.mode === 'remote' || isExisting">
           <m3e-form-field v-field-label variant="filled" hide-required-marker v-if="isExisting" class="field"><label slot="label">{{ tr('显示名称') }}</label><input v-model="form.name" autocomplete="off" /></m3e-form-field>
           <label v-choice-label v-if="isExisting" class="favorite-row"><m3e-checkbox :checked.prop="form.isDefaultSaveTarget" @input="form.isDefaultSaveTarget = ($event.target as HTMLElement &amp; { checked: boolean }).checked"   /><span>{{ tr('设为新项目的默认保存目标') }}</span></label>
-          <m3e-form-field v-field-label variant="filled" hide-required-marker hide-subscript="never" class="field field-wide"><label slot="label">{{ tr('WebDAV 地址 *') }}</label><input v-model="form.baseUrl" type="url" autocomplete="url" placeholder="https://cloud.example.com/remote.php/dav/files/user" required /><small slot="hint">{{ tr('必须使用 HTTPS；开发环境仅允许回环 HTTP。地址中不能包含用户名、密码、查询参数或片段。') }}</small></m3e-form-field>
-          <m3e-form-field v-field-label variant="filled" hide-required-marker class="field"><label slot="label">{{ tr('用户名') }}</label><input v-model="form.username" autocomplete="username" /></m3e-form-field>
-          <m3e-form-field v-field-label variant="filled" hide-required-marker class="field"><label slot="label">{{ tr('WebDAV 密码') }}</label><input v-model="form.webDavPassword" type="password" autocomplete="current-password" :placeholder="form.webDavPasswordConfigured ? tr('已加密保存；留空保持不变') : ''" /></m3e-form-field>
+          <template v-if="activeTransport === 'webdav'">
+            <m3e-form-field v-field-label variant="filled" hide-required-marker hide-subscript="never" class="field field-wide"><label slot="label">{{ tr('WebDAV 地址 *') }}</label><input v-model="form.baseUrl" type="url" autocomplete="url" placeholder="https://cloud.example.com/remote.php/dav/files/user" required /><small slot="hint">{{ tr('必须使用 HTTPS；开发环境仅允许回环 HTTP。地址中不能包含用户名、密码、查询参数或片段。') }}</small></m3e-form-field>
+            <m3e-form-field v-field-label variant="filled" hide-required-marker class="field"><label slot="label">{{ tr('用户名') }}</label><input v-model="form.username" autocomplete="username" /></m3e-form-field>
+            <m3e-form-field v-field-label variant="filled" hide-required-marker class="field"><label slot="label">{{ tr('WebDAV 密码') }}</label><input v-model="form.webDavPassword" type="password" autocomplete="current-password" :placeholder="form.webDavPasswordConfigured ? tr('已加密保存；留空保持不变') : ''" /></m3e-form-field>
+          </template>
+          <template v-else>
+            <div class="field field-wide mdbx2-onedrive-row">
+              <m3e-button variant="tonal" type="button" :disabled="Boolean(busy)" @click="loginOneDrive">{{ oneDriveLogin ? tr('重新登录 OneDrive') : tr('登录 OneDrive') }}</m3e-button>
+              <span v-if="oneDriveAccountLabel" class="mdbx2-onedrive-account"><m3e-icon name="cloud_done" />{{ oneDriveAccountLabel }}</span>
+            </div>
+            <small class="supporting field-wide">{{ tr('登录 Microsoft 账号后，可移植数据库与增量段会保存在你的 OneDrive 里。') }}</small>
+          </template>
           <m3e-form-field v-field-label variant="filled" hide-required-marker hide-subscript="never" class="field field-wide"><label slot="label">{{ tr('Android 兼容远端位置 *') }}</label><input v-model="form.remotePath" autocomplete="off" placeholder="Monica/MDBX2/main.mdbx" required /><small slot="hint">{{ tr('此路径就是可移植 .mdbx 文件；日常同步对象自动写入同名') }}<code>.sync</code>{{ tr('目录。') }}</small></m3e-form-field>
         </template>
 
@@ -1608,7 +1648,7 @@ function conflictErrorMessage(cause: unknown): string {
 
         <div v-if="isExisting" class="mdbx2-runtime-summary field-wide" :aria-label="tr('MDBX2 运行状态')">
           <span><strong>{{ runtimeStatus?.available ? tr('本机副本可用') : tr('本机副本缺失') }}</strong><small>{{ vaultOpen ? tr('当前已解锁') : tr('当前已锁定') }}</small></span>
-          <span><strong>{{ syncStatus?.initialized ? tr('增量同步已注册') : syncStatus?.configured ? tr('WebDAV 已配置') : tr('仅本机模式') }}</strong><small>{{ syncStatus?.hasLocalChanges ? tr('存在待发布修改') : tr('checkpoint 已保存') }}</small></span>
+          <span><strong>{{ syncStatus?.initialized ? tr('增量同步已注册') : syncStatus?.configured ? (activeTransport === 'onedrive' ? tr('OneDrive 已配置') : tr('WebDAV 已配置')) : tr('仅本机模式') }}</strong><small>{{ syncStatus?.hasLocalChanges ? tr('存在待发布修改') : tr('checkpoint 已保存') }}</small></span>
           <span><strong>{{ tr('{0} 个受阻 stream', { 0: syncStatus?.blockedStreamCount || 0 }) }}</strong><small>{{ tr('{0} 个远端 stream', { 0: syncStatus?.remoteStreamCount || 0 }) }}</small></span>
         </div>
 
@@ -2411,6 +2451,9 @@ function conflictErrorMessage(cause: unknown): string {
 .mdbx2-host-row small { color: var(--app-muted); overflow-wrap: anywhere; }
 .mdbx2-host-row.ready { color: var(--md-sys-color-on-surface, var(--app-text)); }
 .mdbx2-host-row.attention { border-color: var(--md-sys-color-error, #ba1a1a); color: var(--md-sys-color-error, #ba1a1a); }
+.mdbx2-onedrive-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.mdbx2-onedrive-account { display: inline-flex; align-items: center; gap: 6px; color: var(--app-text); min-width: 0; overflow-wrap: anywhere; }
+.mdbx2-onedrive-account m3e-icon { --m3e-icon-size: 18px; }
 .mdbx2-mode-picker { border: 0; display: grid; gap: 8px; padding: 0; }
 .mdbx2-mode-picker legend { margin-bottom: 8px; font-weight: 700; }
 .mdbx2-mode-picker > div { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr)); gap: 8px; }
