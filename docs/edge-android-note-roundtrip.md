@@ -37,23 +37,23 @@ $env:MONICA_EDGE_NOTE_UI_RUN = "$PWD/.tmp/interop-315-edge/run-KHmXvB"
 $env:MONICA_MDBX2_INTEROP_SERIAL = 'emulator-5554'
 npx tsc -p tsconfig.interop.json --pretty false
 $env:MONICA_EDGE_NOTE_STAGE = 'prepare'
-npx vitest run --config vitest.android-edge-note.config.ts
+npx vitest run --config tests/interop/vitest/android.ts
 node scripts/interop-315-android-app.mjs build
 node scripts/interop-315-android-app.mjs install-test
 node scripts/interop-315-android-app.mjs edge-note-import
 $env:MONICA_EDGE_NOTE_STAGE = 'verify'
-npx vitest run --config vitest.android-edge-note.config.ts
+npx vitest run --config tests/interop/vitest/android.ts
 
 node scripts/interop-315-docker.mjs
 $env:MONICA_315_REAL_SERVICES_CONFIG = "$PWD/.tmp/interop-315-docker/services.json"
 $env:MONICA_EDGE_NOTE_STAGE = 'publish'
-npx vitest run --config vitest.android-edge-note.config.ts
+npx vitest run --config tests/interop/vitest/android.ts
 $env:MONICA_WEBDAV_NOTE_FIXTURE = "$PWD/.tmp/edge-note-android-20261002/return-edge-fixture.json"
 node scripts/interop-315-edge.mjs --webdav-note-return
 # Use the actual successful directory printed by the preceding command.
 $env:MONICA_EDGE_NOTE_RETURN_UI_RUN = "$PWD/.tmp/interop-315-edge/<actual-run>"
 $env:MONICA_EDGE_NOTE_STAGE = 'final'
-npx vitest run --config vitest.android-edge-note.config.ts
+npx vitest run --config tests/interop/vitest/android.ts
 node scripts/interop-315-docker.mjs --stop
 ```
 

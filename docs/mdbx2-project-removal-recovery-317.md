@@ -131,7 +131,7 @@ Replay in the extension directory:
 ```powershell
 $env:MONICA_317_REMOVAL_NATIVE_INPUT = (Resolve-Path .tmp/android-app-parity-20261001/android.mdbx).Path
 $env:MONICA_317_REMOVAL_NATIVE_OUTPUT = Join-Path (Get-Location) '.tmp/project-removal-durable-rerun'
-npx vitest run --config vitest.android-interop.config.ts tests/interop/android317-project-removal-durable.interop.ts
+npx vitest run --config tests/interop/vitest/android.ts tests/interop/android317-project-removal-durable.interop.ts
 ```
 
 ## Remaining work

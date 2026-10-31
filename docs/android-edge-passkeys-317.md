@@ -50,4 +50,4 @@ Android备份标志、系统认证入口及真实UV限制仍然存在。
 
 日志：`.codex-tasks/android-interop-315/raw/passkey-android-native-{first,final}.log`、`passkey-edge-android-{import,return}.log`、`passkey-android-native-ts.log`、`passkey-android-native-e2e-ts.log`。来源和产物摘要：同目录 `edge-passkey-evidence-manifest.json`。
 
-Edge 测试指定 `MONICA_317_PASSKEY_ANDROID_FIXTURE` 为上一轮实际 Android 产物目录，运行 `playwright test tests/e2e/passkey-android-native.spec.ts`。Android 沿用 `passkey-signatures` 专用测试集与 `passkey-signatures-import` 阶段，`MONICA_315_APP_FIXTURE` 使用新的隔离目录；输入 `extension-passkeys.mdbx` 必须是最终 Edge 输出的精确副本。独立返回测试通过 `vitest.android-edge-passkeys.config.ts` 运行，显式指定 `MONICA_317_PASSKEY_ANDROID_RETURN` 和 `MONICA_317_PASSKEY_EDGE_RESULT`。缺少输入时跳过，不能把跳过算作验收。
+Edge 测试指定 `MONICA_317_PASSKEY_ANDROID_FIXTURE` 为上一轮实际 Android 产物目录，运行 `playwright test tests/e2e/passkey-android-native.spec.ts`。Android 沿用 `passkey-signatures` 专用测试集与 `passkey-signatures-import` 阶段，`MONICA_315_APP_FIXTURE` 使用新的隔离目录；输入 `extension-passkeys.mdbx` 必须是最终 Edge 输出的精确副本。独立返回测试通过 `tests/interop/vitest/android.ts` 运行，显式指定 `MONICA_317_PASSKEY_ANDROID_RETURN` 和 `MONICA_317_PASSKEY_EDGE_RESULT`。缺少输入时跳过，不能把跳过算作验收。

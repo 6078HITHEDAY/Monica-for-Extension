@@ -119,6 +119,6 @@ separately and inspect its evidence before dependent steps:
 1. `node scripts/interop-315-android-app.mjs build`
 2. `node scripts/interop-315-android-app.mjs install-test`
 3. `node scripts/interop-315-android-app.mjs export`
-4. `npx vitest run --config vitest.android315-zip.config.ts tests/interop/android315-zip.interop.ts`
+4. `npx vitest run --config tests/interop/vitest/android.ts tests/interop/android315-zip.interop.ts`
 5. `node scripts/interop-315-android-app.mjs zip`
-6. `npx vitest run --config vitest.android315-zip.config.ts tests/interop/android316-zip-return.interop.ts`
+6. `npx vitest run --config tests/interop/vitest/android.ts tests/interop/android316-zip-return.interop.ts`

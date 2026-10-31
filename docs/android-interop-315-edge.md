@@ -89,7 +89,7 @@ node scripts/interop-315-edge.mjs --android-ui-return
 
 `run-D4Rqv9`：12 项完整功能、9 项生命周期通过。`run-L4aBDa`：6 类新建表单 × 桌面/420px，字段无横向越界、保存入口可见、取消后记录不变；3 类真实服务 UI 和9项生命周期通过。Native 注册均恢复。详情已对照 Android 连续分组，GPG/API Key 新建标题显示实际类型，自定义字段计数不再包含内部载体。服务独立读取 3/3 通过，见同目录 `real-services-independent-readback.json`。
 
-真实服务命令：设置 `MONICA_315_REAL_EDGE_FIXTURES` 指向实际服务测试生成的 `edge-fixtures.json` 后运行 `node scripts/interop-315-edge.mjs --layout --real-services`。以输出目录中的 `real-services-ui-return.json` 作为 `MONICA_315_REAL_EDGE_VERIFY`，运行 `npx vitest run --config vitest.real-services315.config.ts tests/interop/real-services315-verify.interop.ts`。
+真实服务命令：设置 `MONICA_315_REAL_EDGE_FIXTURES` 指向实际服务测试生成的 `edge-fixtures.json` 后运行 `node scripts/interop-315-edge.mjs --layout --real-services`。以输出目录中的 `real-services-ui-return.json` 作为 `MONICA_315_REAL_EDGE_VERIFY`，运行 `npx vitest run --config tests/interop/vitest/android.ts tests/interop/real-services315-verify.interop.ts`。
 
 ## Portrait KeePass source status
 

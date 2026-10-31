@@ -40,7 +40,7 @@
 
 ```powershell
 $env:MONICA_317_ZIP_WEBDAV_COUNTER_OUTPUT = Join-Path (Get-Location).Path '.tmp/zip-counter-new'
-npx vitest run --config vitest.zip-webdav-passkey-counters.config.ts
+npx vitest run --config tests/interop/vitest/webdav.ts
 $env:MONICA_317_WEBDAV_HISTORY_KIND = 'zip'
 $env:MONICA_317_WEBDAV_HISTORY_OUTPUT = Join-Path (Get-Location).Path '.tmp/zip-edge-new'
 npx playwright test tests/e2e/passkey-webdav-history.spec.ts --output=.tmp/zip-edge-new/results

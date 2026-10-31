@@ -41,10 +41,10 @@ node scripts/interop-315-android-app.mjs build
 node scripts/interop-315-android-app.mjs install-test
 node scripts/interop-315-android-app.mjs zip-note-export
 $env:MONICA_ZIP_NOTE_STAGE = 'forward'
-npx vitest run --config vitest.android-zip-note.config.ts
+npx vitest run --config tests/interop/vitest/android.ts
 node scripts/interop-315-android-app.mjs zip-note-import
 $env:MONICA_ZIP_NOTE_STAGE = 'return'
-npx vitest run --config vitest.android-zip-note.config.ts
+npx vitest run --config tests/interop/vitest/android.ts
 ```
 
 Stop at the first failure. Do not substitute hand-built fixtures for the Android

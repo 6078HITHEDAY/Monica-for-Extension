@@ -64,7 +64,7 @@ Android 的 `b64.` ID、追加备注、BE/BS 和 API34+ Credential Manager 实�
 
 ```powershell
 $env:MONICA_317_REAL_WEBDAV_COUNTER_OUTPUT = Join-Path (Get-Location).Path '.tmp/passkey-real-webdav-counters-new'
-npx vitest run --config vitest.webdav-passkey-counters.config.ts
+npx vitest run --config tests/interop/vitest/webdav.ts
 $env:MONICA_317_WEBDAV_HISTORY_OUTPUT = Join-Path (Get-Location).Path '.tmp/passkey-webdav-history-edge-new'
 npx playwright test tests/e2e/passkey-webdav-history.spec.ts --output=.tmp/passkey-webdav-history-edge-new/results
 ```

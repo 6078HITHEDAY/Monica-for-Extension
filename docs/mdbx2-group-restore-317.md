@@ -102,7 +102,7 @@ cases and actual Edge/current Android return, documented separately.
 ```powershell
 $env:MONICA_317_REMOVAL_NATIVE_INPUT = (Resolve-Path .tmp/android-app-parity-20261001/android.mdbx).Path
 $env:MONICA_317_REMOVAL_NATIVE_OUTPUT = Join-Path (Get-Location) '.tmp/group-restore-native-rerun'
-npx vitest run --config vitest.mdbx2-lifecycle.config.ts
+npx vitest run --config tests/interop/vitest/android.ts
 ```
 
 The first process run exposed service-lock reentry in the new coordinator.

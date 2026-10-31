@@ -7,6 +7,8 @@ playwright-report/
 test-results/
 .tmp/
 .artifacts/
+.jj/
+.omc/
 .codex-tasks/
 .slim/deepwork/
 *.log

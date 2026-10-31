@@ -64,12 +64,12 @@ generated fixture. The seed test prints/saves its fixture under
 node scripts/interop-315-docker.mjs
 $env:MONICA_315_REAL_SERVICES_CONFIG = "$PWD/.tmp/interop-315-docker/services.json"
 Remove-Item Env:MONICA_WEBDAV_NOTE_FIXTURE -ErrorAction SilentlyContinue
-npx vitest run --config vitest.webdav-note-ui.config.ts
+npx vitest run --config tests/interop/vitest/webdav.ts
 # Set to the fixture.json created by the preceding seed step.
 $env:MONICA_WEBDAV_NOTE_FIXTURE = 'ABSOLUTE_PATH_TO_GENERATED_FIXTURE_JSON'
 npm run build
 node scripts/interop-315-edge.mjs --webdav-notes
-npx vitest run --config vitest.webdav-note-ui.config.ts
+npx vitest run --config tests/interop/vitest/webdav.ts
 node scripts/interop-315-docker.mjs --stop
 ```
 

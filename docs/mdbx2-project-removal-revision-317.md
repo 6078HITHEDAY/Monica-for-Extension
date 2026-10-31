@@ -83,7 +83,7 @@ Reproduce against the preserved synthetic bootstrap after building the Host:
 ```powershell
 $env:MONICA_317_REMOVAL_NATIVE_INPUT = (Resolve-Path .tmp/android-app-parity-20261001/android.mdbx).Path
 $env:MONICA_317_REMOVAL_NATIVE_OUTPUT = Join-Path (Get-Location) '.tmp/project-removal-revision-rerun'
-npx vitest run --config vitest.android-interop.config.ts tests/interop/android317-project-removal-revision.interop.ts
+npx vitest run --config tests/interop/vitest/android.ts tests/interop/android317-project-removal-revision.interop.ts
 ```
 
 Next, persist the exact native deletion intent and revision in the encrypted

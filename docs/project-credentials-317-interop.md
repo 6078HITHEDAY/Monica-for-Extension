@@ -28,10 +28,10 @@ node scripts/interop-315-android-app.mjs build
 node scripts/interop-315-android-app.mjs install-test
 node scripts/interop-315-android-app.mjs project-credentials-export
 $env:MONICA_PROJECT_CREDENTIAL_STAGE='forward'
-npx vitest run --config vitest.android-project-credentials.config.ts
+npx vitest run --config tests/interop/vitest/android.ts
 node scripts/interop-315-android-app.mjs project-credentials-import
 $env:MONICA_PROJECT_CREDENTIAL_STAGE='return'
-npx vitest run --config vitest.android-project-credentials.config.ts
+npx vitest run --config tests/interop/vitest/android.ts
 node scripts/interop-315-edge.mjs --project-credentials-return
 ```
 

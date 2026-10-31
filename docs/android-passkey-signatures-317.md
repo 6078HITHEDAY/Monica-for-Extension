@@ -33,4 +33,4 @@ Android 改进至少需要：把凭据的显式 BE/BS 保留到可用的认证�
 - 首次编译成功，但原使用任务停止了模拟器，runner 将该轮标为设备来源校验失败；保留 `android-passkey-build-1.log`，没有算作 Android 测试通过。确认设备和进程均停止后，本任务重新启动同一公共 AVD。第二次构建和两个设备阶段来源校验全部通过。
 - 测试结束后，应用和测试包均恢复到启动本轮前备份的精确字节；`restored-packages.json` 记录两个 SHA-256。随后停止本任务启动的模拟器，保留配置和数据盘。未交付 APK，未提交或发布。
 
-测试入口为 `tests/interop/android-app/src/takagi/ru/monica/credentialexchange/ExtensionPasskeySignatureInteropTest.kt` 和 `tests/interop/android317-passkey-signatures.interop.ts`。设备阶段要求 `MONICA_APP_INTEROP_TEST_SET=passkey-signatures`；Native 阶段使用 `vitest.android-passkey-signatures.config.ts` 和 `MONICA_PASSKEY_INTEROP_PHASE=prepare/return`。`MONICA_315_APP_FIXTURE` 必须明确指向本次合成产物目录。安装前后需再次核对设备占用及包身份，不能覆盖另一任务的安装。
+测试入口为 `tests/interop/android-app/src/takagi/ru/monica/credentialexchange/ExtensionPasskeySignatureInteropTest.kt` 和 `tests/interop/android317-passkey-signatures.interop.ts`。设备阶段要求 `MONICA_APP_INTEROP_TEST_SET=passkey-signatures`；Native 阶段使用 `tests/interop/vitest/android.ts` 和 `MONICA_PASSKEY_INTEROP_PHASE=prepare/return`。`MONICA_315_APP_FIXTURE` 必须明确指向本次合成产物目录。安装前后需再次核对设备占用及包身份，不能覆盖另一任务的安装。

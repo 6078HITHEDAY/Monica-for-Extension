@@ -87,7 +87,7 @@ cargo test --locked --manifest-path native/mdbx2-host/vendor/mdbx/Cargo.toml -p 
 $env:MONICA_315_PROOF_SOURCE='C:/Users/joyins/Desktop/Monica-all/monica-extension/.tmp/android-app-parity-20261001/android.mdbx'
 $env:MONICA_315_PROOF_TARGET='C:/Users/joyins/Desktop/Monica-all/monica-extension/.tmp/android-app-interop-315/android-ui.mdbx'
 $env:MONICA_315_PROOF_OUTPUT='C:/Users/joyins/Desktop/Monica-all/monica-extension/.tmp/next-ai-attachment-check'
-npx vitest run --config vitest.android315-native.config.ts tests/interop/android315-attachment-proof.interop.ts
+npx vitest run --config tests/interop/vitest/android.ts tests/interop/android315-attachment-proof.interop.ts
 ```
 
 上述文件只作合成输入，runner 创建独立 Host 目录。不要换成用户实际密码库。默认 Vitest 全量不包含 `*.interop.ts`，不能用它代替真实 Native 验证。默认过高并发曾造成 5 秒超时，保留超时限制而用 `--maxWorkers=4` 后全量通过。

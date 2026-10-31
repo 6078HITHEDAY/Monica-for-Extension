@@ -104,7 +104,7 @@ npm run build
 $env:MONICA_KEEPASS_INTEROP_STANDALONE = '1'
 $env:MONICA_KEEPASS_INTEROP_KEEP = '1'
 $env:MONICA_ANDROID_API_JAR = 'D:/AndroidSDK/platforms/android-35/android.jar'
-npx vitest run --config vitest.keepass-interop.config.ts
+npx vitest run --config tests/interop/vitest/keepass.ts
 # Use the successful retained run printed by the preceding command.
 $env:MONICA_KEEPASS_TEXT_FIXTURE_ROOT = "$PWD/.tmp/keepass-android-interop/<actual-run>"
 $env:MONICA_KEEPASS_TEXT_PLAIN = '1'

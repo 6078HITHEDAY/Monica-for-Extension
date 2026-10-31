@@ -48,7 +48,7 @@
 | `npx vitest run src/manager` | 7 文件、41 通过 | 手动导入及相关 manager 功能 |
 | `npx tsc -b --pretty false` | 通过 | 当前拓展 TS |
 | `npx tsc -p tsconfig.interop.json --pretty false` | 通过 | 真实过程 runner 类型检查 |
-| `npx vitest run --config vitest.android315-native.config.ts`（forward） | 1 通过，0 失败；4.53 s | Android 应用真实导出 → 实际 Host + 拓展 Provider → 配套 bootstrap/Blob；非 Edge UI |
+| `npx vitest run --config tests/interop/vitest/android.ts`（forward） | 1 通过，0 失败；4.53 s | Android 应用真实导出 → 实际 Host + 拓展 Provider → 配套 bootstrap/Blob；非 Edge UI |
 | 附件上传前后父对象 revision 回归 | 1 通过 | 实际引擎确认附件 commit 不改变父 Object head；UI 不应把附件 commit 当父项 revision |
 | 真实 Android 单文件缺 Blob 故障测试 | 1 通过；名称过滤跳过 forward 1 项 | 3 个附件全部 `attachment-integrity-failed`，20 个对象内容/身份/修订不变；独立 `native-missing-blob-evidence.json` |
 | SecureItem 字段精细合并回归及 MDBX/钱包/KeePass/WebDAV | 23 文件、170 项通过 | 新增 3 个回归，先复现失败后修正；不能与前述包含关系重复相加 |
@@ -70,15 +70,15 @@ TDD 流程先复现了 Steam 未编辑字段重写、SecureItem Steam 被错误�
 
 ## Android 应用 fixture / Native Host 实进程往返
 
-可重复 runner：`tests/interop/android315-native-process.interop.ts`，独立配置 `vitest.android315-native.config.ts`。必须显式指定真实 Android fixture 目录，缺文件时显示 skip，不创建模拟替代数据、不启动 AVD。
+可重复 runner：`tests/interop/android315-native-process.interop.ts`，独立配置 `tests/interop/vitest/android.ts`。必须显式指定真实 Android fixture 目录，缺文件时显示 skip，不创建模拟替代数据、不启动 AVD。
 
 ```powershell
 $env:MONICA_315_APP_FIXTURE='C:/Users/joyins/Desktop/Monica-all/monica-extension/.tmp/android-app-interop-315'
 $env:MONICA_315_NATIVE_PHASE='forward'
-npx vitest run --config vitest.android315-native.config.ts
+npx vitest run --config tests/interop/vitest/android.ts
 # Android 读取 extension.mdbx + extension-blobs 后输出 android-return，再运行：
 $env:MONICA_315_NATIVE_PHASE='return'
-npx vitest run --config vitest.android315-native.config.ts
+npx vitest run --config tests/interop/vitest/android.ts
 ```
 
 runner 使用真实 Host EXE 的 Native Messaging 帧协议及独立 LOCALAPPDATA 子进程环境，不修改系统环境或用户 Host 工作区。forward 核对 Android app 导出 payload、通过拓展 Provider 逐项仅改标题、拒绝过期 revision、新建合成登录、锁定和进程重启/错密码/重开、附件明文字节哈希、引擎 bootstrap 与独立 Host 重读；return 核对 Android 后续编辑与其余字段。

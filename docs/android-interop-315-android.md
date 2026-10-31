@@ -174,10 +174,10 @@ node scripts/interop-315-android-app.mjs ui
 node scripts/interop-315-android-app.mjs edge-ui
 node scripts/interop-315-android-app.mjs failures
 $env:MONICA_315_APP_FIXTURE = 'C:/Users/joyins/Desktop/Monica-all/monica-extension/.tmp/android-app-interop-315'
-npx vitest run --config vitest.android-interop.config.ts tests/interop/android315-zip.interop.ts
+npx vitest run --config tests/interop/vitest/android.ts tests/interop/android315-zip.interop.ts
 # Read-only Android built-class diagnostic; exit 2 currently means two declared types downgrade.
 & tests/interop/android-app/probes/secure-type-probe.ps1 -GradleCache 'D:/GradleRepository' -JavaDirectory 'C:/jdk-17.0.1'
-npx vitest run --config vitest.android-interop.config.ts tests/interop/mdbx2-android-webdav.interop.ts
+npx vitest run --config tests/interop/vitest/android.ts tests/interop/mdbx2-android-webdav.interop.ts
 $env:MONICA_KEEPASS_INTEROP_STANDALONE = '1'
 $env:MONICA_ANDROID_API_JAR = 'D:/AndroidSDK/platforms/android-35/android.jar'
 $env:MONICA_KEEPASS_INTEROP_KEEP = '1'

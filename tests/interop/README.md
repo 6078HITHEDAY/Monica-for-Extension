@@ -1,5 +1,14 @@
 # MDBX2 Android and browser interoperability acceptance
 
+Interop Vitest runners live in `tests/interop/vitest/`:
+
+- `android.ts` — Android / MDBX2 / real-services suites (`bun run test:mdbx2-android-interop`)
+- `keepass.ts` — KeePass suites (`bun run test:keepass-interop`)
+- `bitwarden.ts` — Bitwarden contract (`bun run test:bitwarden-interop`)
+- `webdav.ts` — WebDAV note and passkey-counter suites
+
+Pass a file path to run one suite, for example `bunx vitest run --config tests/interop/vitest/android.ts tests/interop/mdbx2-android-webdav.interop.ts`.
+
 Run from the extension repository on Windows:
 
 ```powershell
@@ -35,7 +44,7 @@ It verifies MDBX2-only opening, the Android remote object names, Basic authentic
 The injected engine test uses only `x86_64` by default and writes build outputs to `.tmp/android-mdbx2-build`, avoiding multi-ABI installation pressure on the shared AVD and the Android checkout's existing Gradle output locks. To run just this engine exchange (the broad config also discovers the other interoperability suites):
 
 ```powershell
-npx vitest run --config vitest.android-interop.config.ts tests/interop/mdbx2-android-webdav.interop.ts
+npx vitest run --config tests/interop/vitest/android.ts tests/interop/mdbx2-android-webdav.interop.ts
 ```
 
 Set `MONICA_MDBX2_INTEROP_KEEP=1` to retain temporary evidence under `.tmp/mdbx2-android-interop`. Override `MONICA_MDBX2_INTEROP_AVD` only when the public AVD cannot cover a required API/ABI. `MONICA_MDBX2_INTEROP_SERIAL` selects a connected device. `MONICA_MDBX2_INTEROP_ADB_SERVER_PORT` may select an existing isolated ADB service; it must be the server that owns the selected emulator. Cleanup stops only an emulator launched by this invocation and never stops the global ADB server. Synthetic fixture cleanup removes only the runner-owned `files/mdbx2-extension-interop` tree in its instrumentation package, not app data.
@@ -95,12 +104,12 @@ node scripts/interop-315-android-app.mjs build
 node scripts/interop-315-android-app.mjs install-test
 node scripts/interop-315-android-app.mjs export
 $env:MONICA_315_APP_FIXTURE = 'C:/Users/joyins/Desktop/Monica-all/monica-extension/.tmp/android-app-interop-315'
-npx vitest run --config vitest.android315-native.config.ts
-npx vitest run --config vitest.android-interop.config.ts tests/interop/android315-zip.interop.ts
+npx vitest run --config tests/interop/vitest/android.ts
+npx vitest run --config tests/interop/vitest/android.ts tests/interop/android315-zip.interop.ts
 # After the extension has produced extension.mdbx / extension.zip in the same evidence directory:
 node scripts/interop-315-android-app.mjs import
 $env:MONICA_315_NATIVE_PHASE = 'return'
-npx vitest run --config vitest.android315-native.config.ts
+npx vitest run --config tests/interop/vitest/android.ts
 node scripts/interop-315-android-app.mjs zip
 node scripts/interop-315-android-app.mjs ui
 # After actual Edge UI editing exported edge-ui-return.mdbx into the evidence directory:
@@ -139,13 +148,13 @@ $env:MONICA_315_NOTE_BLOBS = '<original Android fixture directory containing and
 $env:MONICA_315_NOTE_PHASE = 'prepare'
 # When original and copied links coexist, select the copy's Native object ID:
 # $env:MONICA_315_NOTE_TARGET_ID = '<copied password remoteId from Edge evidence>'
-npx vitest run --config vitest.android315-native.config.ts tests/interop/android315-note-return.interop.ts
+npx vitest run --config tests/interop/vitest/android.ts tests/interop/android315-note-return.interop.ts
 # Reuse the shared AVD; build must finish before installing its instrumentation.
 node scripts/interop-315-android-app.mjs build
 node scripts/interop-315-android-app.mjs install-test
 node scripts/interop-315-android-app.mjs import
 $env:MONICA_315_NOTE_PHASE = 'return'
-npx vitest run --config vitest.android315-native.config.ts tests/interop/android315-note-return.interop.ts
+npx vitest run --config tests/interop/vitest/android.ts tests/interop/android315-note-return.interop.ts
 ```
 
 Keep the same optional target ID in both phases. The return assertion checks Android's actual Room relationship against the
@@ -160,7 +169,7 @@ and no instrumentation remains active.
 
 Set `MONICA_315_DELETE_FIXTURE` to a synthetic MDBX containing a stable linked
 password and note, and `MONICA_315_DELETE_OUTPUT` to an isolated evidence directory.
-Run `npx vitest run --config vitest.android315-native.config.ts tests/interop/android315-source-delete.interop.ts`.
+Run `npx vitest run --config tests/interop/vitest/android.ts tests/interop/android315-source-delete.interop.ts`.
 The actual Host imports a copy, checks that one stale revision prevents all
 deletion, drops a successful batch response, and verifies receipt recovery and
 same-commit tombstones. The input file stays unchanged. Deleted payloads cannot
@@ -180,10 +189,10 @@ node scripts/interop-315-android-app.mjs build
 node scripts/interop-315-android-app.mjs install-test
 node scripts/interop-315-android-app.mjs password-encoding-export
 $env:MONICA_PASSWORD_ENCODING_PHASE = 'prepare'
-npx vitest run --config vitest.android-interop.config.ts tests/interop/android317-password-encoding.interop.ts
+npx vitest run --config tests/interop/vitest/android.ts tests/interop/android317-password-encoding.interop.ts
 node scripts/interop-315-android-app.mjs password-encoding-import
 $env:MONICA_PASSWORD_ENCODING_PHASE = 'return'
-npx vitest run --config vitest.android-interop.config.ts tests/interop/android317-password-encoding.interop.ts
+npx vitest run --config tests/interop/vitest/android.ts tests/interop/android317-password-encoding.interop.ts
 ```
 
 Android creates an authentic install-encrypted string. The extension writes that
