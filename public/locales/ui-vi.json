@@ -4008,5 +4008,8 @@
   "服务区域": "Khu vực máy chủ",
   "美国（bitwarden.com）": "Hoa Kỳ (bitwarden.com)",
   "欧洲（bitwarden.eu）": "Châu Âu (bitwarden.eu)",
-  "自托管": "Tự lưu trữ"
+  "自托管": "Tự lưu trữ",
+  "Windows Hello 当前不可用。请在 Windows 设置中检查是否允许将通行密钥保存到此设备；面容或指纹登录可用不代表已启用本机通行密钥（{0}，HRESULT {1}，WebAuthn API {2}）。": "Windows Hello hiện không khả dụng. Trong Cài đặt Windows, hãy kiểm tra xem có cho phép lưu khóa truy cập trên thiết bị này hay không; đăng nhập bằng khuôn mặt hoặc vân tay không tự bật khóa truy cập cục bộ ({0}, HRESULT {1}, WebAuthn API {2}).",
+  "Windows Hello 被取消、超时或设备不可用（{0}，HRESULT {1}，WebAuthn API {2}）。": "Windows Hello đã bị hủy, hết thời gian chờ hoặc thiết bị không khả dụng ({0}, HRESULT {1}, WebAuthn API {2}).",
+  "Windows Hello 操作失败（{0}，HRESULT {1}，WebAuthn API {2}）。": "Thao tác Windows Hello thất bại ({0}, HRESULT {1}, WebAuthn API {2})."
 }

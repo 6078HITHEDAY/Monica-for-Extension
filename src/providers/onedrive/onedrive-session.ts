@@ -151,18 +151,22 @@ export class OneDriveSessionService {
     if (providerId) {
       const epoch = this.epoch;
       let sessionId: string | undefined;
+      let boundAccount: ProviderAccount | undefined;
       return new Mdbx2OneDriveClient(config.driveId, async signal => {
         const account = await this.vault.getProvider(providerId);
         if (!account?.enabled || account.kind !== "mdbx2") throw new OneDriveAuthorizationError("MDBX2 OneDrive 密码源已变化，请重新连接。");
         const connection = parseOneDriveConnection(account.config.oneDriveConnection);
-        if (!connection || account.config.oneDriveDriveId !== config.driveId) throw new OneDriveAuthorizationError();
+        if (!connection || account.config.oneDriveDriveId !== config.driveId || account.config.remotePath !== config.remotePath) throw new OneDriveAuthorizationError();
+        boundAccount ||= account;
         sessionId ||= await this.requireSession();
+        await this.assertSaved(boundAccount, sessionId);
         if (epoch !== this.epoch) throw new OneDriveAuthorizationError();
         if (await this.vault.sessionId() !== sessionId) throw new OneDriveAuthorizationError("密码库会话已变化，请重新解锁。");
         const token = await this.tokens.accessToken(providerId, oneDriveConnectionBinding(connection), signal);
+        await this.assertSaved(boundAccount, sessionId);
         if (epoch !== this.epoch) throw new OneDriveAuthorizationError();
         return token;
-      }, this.fetcher);
+      }, this.fetcher, undefined, undefined, this.lifetime.signal);
     }
     const loginId = config.loginId;
     if (!loginId) throw new OneDriveAuthorizationError("请先登录 OneDrive。");
@@ -173,10 +177,11 @@ export class OneDriveSessionService {
       const connection = pending.connection;
       if (!connection || connection.tokens.expiresAt <= this.now() + 60_000) throw new OneDriveAuthorizationError("OneDrive 登录已过期，请重新登录。");
       return connection.tokens.accessToken;
-    }, this.fetcher);
+    }, this.fetcher, undefined, undefined, pending.controller.signal);
   }
 
-  private savedGraph(account: ProviderAccount, connection: OneDriveConnection, sessionId: string): OneDriveGraphClient {    const epoch = this.epoch;
+  private savedGraph(account: ProviderAccount, connection: OneDriveConnection, sessionId: string): OneDriveGraphClient {
+    const epoch = this.epoch;
     return new OneDriveGraphClient(async signal => {
       if (epoch !== this.epoch) throw new OneDriveAuthorizationError();
       await this.assertSaved(account, sessionId);

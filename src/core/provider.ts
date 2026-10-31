@@ -76,7 +76,8 @@ export function sameProviderBinding(left: ProviderAccount, right: ProviderAccoun
   if (left.kind === 'mdbx2' && (left.config.runtimeBackend ?? 'native') !== (right.config.runtimeBackend ?? 'native')) return false;
   if (left.kind === 'keepass' && (left.config.sourceMode === 'local-file' || right.config.sourceMode === 'local-file') &&
       left.config.localFileSourceSha256 !== right.config.localFileSourceSha256) return false;
-  if (left.kind === "keepass" && (left.config.sourceMode === "onedrive" || right.config.sourceMode === "onedrive")) {
+  if ((left.kind === "keepass" && (left.config.sourceMode === "onedrive" || right.config.sourceMode === "onedrive"))
+    || left.kind === "mdbx2" && (left.config.oneDriveConnection || right.config.oneDriveConnection)) {
     const a = oneDriveConnectionBinding(left.config.oneDriveConnection);
     const b = oneDriveConnectionBinding(right.config.oneDriveConnection);
     if (!a || !b || a !== b) return false;

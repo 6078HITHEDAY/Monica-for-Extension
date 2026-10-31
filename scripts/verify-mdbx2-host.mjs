@@ -124,9 +124,12 @@ for (const required of ['"conflict.list"', '"conflict.resolve"', 'MAX_CONFLICT_P
 for (const required of ['"attachment.list"', '"attachment.read.begin"', '"attachment.upload.begin"', '"attachment.delete"', 'MAX_ATTACHMENT_BYTES', 'MAX_ATTACHMENT_MEMORY_BYTES', '"supportsAttachmentManagement": true', 'Zeroizing<Vec<u8>>']) {
   if (!runtime.includes(required)) throw new Error(`MDBX2 Host attachment boundary is missing ${required}.`);
 }
-for (const required of ["GetForegroundWindow", "hello-window-unavailable", "binding-record-invalid", "credential_bytes", "confirmation-required"]) {
+for (const required of ["GetForegroundWindow", "hello-window-unavailable", "binding-record-invalid", "credential_bytes", "confirmation-required", "hello_native_failure", "hello_client_data"]) {
   if (!windowsHello.includes(required)) throw new Error(`MDBX2 Host Windows Hello boundary is missing ${required}.`);
 }
+if ((windowsHello.match(/dwAuthenticatorAttachment: WEBAUTHN_AUTHENTICATOR_ATTACHMENT_PLATFORM/g) || []).length !== 2
+  || (windowsHello.match(/dwUserVerificationRequirement: WEBAUTHN_USER_VERIFICATION_REQUIREMENT_REQUIRED/g) || []).length !== 2
+  || windowsHello.includes("WEBAUTHN_AUTHENTICATOR_ATTACHMENT_ANY")) throw new Error("Windows Hello must require the local platform authenticator and user verification for enrollment and unlock.");
 for (const required of ["MDBX2_MAX_HISTORY_PAGE_SIZE", "MDBX2_MAX_HISTORY_RESULT_BYTES", "MDBX2_MAX_HISTORY_REVERT_ITEMS", "supportsHistoryDiff: true", "supportsHistoryRevert: true"]) {
   if (!contract.includes(required)) throw new Error(`MDBX2 extension history contract is missing ${required}.`);
 }

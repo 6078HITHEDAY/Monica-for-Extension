@@ -30,7 +30,8 @@ export class Mdbx2OneDriveClient implements Mdbx2RemoteClient {
     private readonly accessToken: OneDriveAccessTokenProvider,
     private readonly fetcher: typeof fetch = globalThis.fetch.bind(globalThis),
     private readonly policy: ProviderTransportPolicy = {},
-    simpleUploadMaxBytes = SIMPLE_UPLOAD_MAX_BYTES
+    simpleUploadMaxBytes = SIMPLE_UPLOAD_MAX_BYTES,
+    private readonly scope?: AbortSignal
   ) {
     this.driveId = identityPart(driveId);
     if (!Number.isSafeInteger(simpleUploadMaxBytes) || simpleUploadMaxBytes < 1 || simpleUploadMaxBytes > SIMPLE_UPLOAD_MAX_BYTES) {
@@ -129,6 +130,8 @@ export class Mdbx2OneDriveClient implements Mdbx2RemoteClient {
     onChunk: (chunk: Uint8Array, offset: number) => Promise<void> | void,
     signal?: AbortSignal
   ): Promise<Mdbx2RemoteDownloadResult> {
+    signal = this.scopedSignal(signal);
+    signal?.throwIfAborted();
     const normalized = normalizeMdbx2RemotePath(path);
     if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1 || maximumBytes > MDBX2_MAX_INBOUND_FILE_BYTES) {
       throw new Error("MDBX2 OneDrive 下载上限无效。");
@@ -163,7 +166,7 @@ export class Mdbx2OneDriveClient implements Mdbx2RemoteClient {
     // The preauthenticated capability URL is fetched without the bearer token,
     // cookies, or redirects, exactly like the KeePass OneDrive transport.
     return resilientFetch(downloadUrl, { method: "GET", signal, credentials: "omit", redirect: "error", cache: "no-store", referrerPolicy: "no-referrer" }, {
-      ...this.policy, operation: `MDBX2 OneDrive 下载 ${normalized}`, fetcher: this.fetcher, idempotent: true, timeoutMs: this.policy.timeoutMs ?? 600_000
+      ...this.policy, operation: `MDBX2 OneDrive 下载 ${normalized}`, fetcher: this.fetcher, idempotent: true, maxAttempts: 1, timeoutMs: this.policy.timeoutMs ?? 600_000
     }, (response, requestSignal) => this.consumeDownload(response, requestSignal, normalized, expectedSize, maximumBytes, onChunk));
   }
 
@@ -184,7 +187,7 @@ export class Mdbx2OneDriveClient implements Mdbx2RemoteClient {
       method: "GET", headers: { Authorization: `Bearer ${token}`, Accept: "*/*" }, signal,
       credentials: "omit", redirect: "follow", cache: "no-store", referrerPolicy: "no-referrer"
     }, {
-      ...this.policy, operation: `MDBX2 OneDrive 下载 ${normalized}`, fetcher: this.fetcher, idempotent: true, timeoutMs: this.policy.timeoutMs ?? 600_000
+      ...this.policy, operation: `MDBX2 OneDrive 下载 ${normalized}`, fetcher: this.fetcher, idempotent: true, maxAttempts: 1, timeoutMs: this.policy.timeoutMs ?? 600_000
     }, (response, requestSignal) => {
       if (!response.ok) throw providerHttpError(`MDBX2 OneDrive 下载 ${normalized} 失败`, response);
       return this.consumeDownload(response, requestSignal, normalized, expectedSize, maximumBytes, onChunk);
@@ -192,6 +195,8 @@ export class Mdbx2OneDriveClient implements Mdbx2RemoteClient {
   }
 
   async putImmutable(path: string, body: Blob, expectedSha256: string, signal?: AbortSignal): Promise<Mdbx2RemoteObject> {
+    signal = this.scopedSignal(signal);
+    signal?.throwIfAborted();
     const normalized = normalizeMdbx2RemotePath(path);
     const digest = normalizeDigest(expectedSha256);
     if (!(body instanceof Blob) || body.size < 1 || body.size > MDBX2_MAX_INBOUND_FILE_BYTES) throw new Error("MDBX2 OneDrive 上传大小超过安全上限。");
@@ -200,7 +205,9 @@ export class Mdbx2OneDriveClient implements Mdbx2RemoteClient {
     try {
       if (body.size <= this.simpleUploadMaxBytes) await this.simpleUpload(normalized, body, signal);
       else await this.sessionUpload(normalized, body, signal);
-      return await this.stat(normalized, signal) || { path: normalized, isDirectory: false, sizeBytes: body.size };
+      const uploaded = await this.stat(normalized, signal);
+      if (!uploaded) throw invalidMetadata();
+      return await this.requireIdentical(normalized, uploaded, body.size, digest, signal);
     } catch (error) {
       if (!(error instanceof ProviderTransportError) || error.code !== "conflict") throw error;
       const raced = await this.stat(normalized, signal);
@@ -211,7 +218,7 @@ export class Mdbx2OneDriveClient implements Mdbx2RemoteClient {
 
   private async simpleUpload(normalized: string, body: Blob, signal?: AbortSignal): Promise<void> {
     const url = `${itemPathUrl(this.driveId, normalized)}/content?@microsoft.graph.conflictBehavior=fail`;
-    await this.request(url, { method: "PUT", headers: { "Content-Type": "application/octet-stream" }, body, signal },
+    await this.request(url, { method: "PUT", headers: { "Content-Type": "application/octet-stream", "If-None-Match": "*" }, body, signal },
       `MDBX2 OneDrive 上传 ${normalized}`, async (response, requestSignal) => {
         if (!response.ok) throw providerHttpError(`MDBX2 OneDrive 上传 ${normalized} 失败`, response);
         const raw = await readBoundedJsonObject(response, MAX_METADATA_BYTES, "MDBX2 OneDrive 上传结果", requestSignal);
@@ -250,10 +257,14 @@ export class Mdbx2OneDriveClient implements Mdbx2RemoteClient {
       ...this.policy, operation: "MDBX2 OneDrive 上传分块", fetcher: this.fetcher, maxAttempts: 1, timeoutMs: this.policy.timeoutMs ?? 300_000
     }, async (response, requestSignal) => {
       if (!response.ok) throw providerHttpError("MDBX2 OneDrive 上传分块失败", response);
-      if (end === total) return;
+      if (end === total) {
+        if (response.status !== 200 && response.status !== 201) throw invalidMetadata();
+        return;
+      }
+      if (response.status !== 202) throw invalidMetadata();
       const raw = await readBoundedJsonObject(response, MAX_METADATA_BYTES, "MDBX2 OneDrive 上传分块结果", requestSignal);
       const ranges = Array.isArray(raw.nextExpectedRanges) ? raw.nextExpectedRanges : [];
-      if (!ranges.some(range => typeof range === "string" && range.startsWith(String(end)))) throw invalidMetadata();
+      if (!ranges.some(range => typeof range === "string" && /^\d+-\d*$/.test(range) && Number(range.split("-")[0]) === end)) throw invalidMetadata();
     });
   }
 
@@ -265,9 +276,11 @@ export class Mdbx2OneDriveClient implements Mdbx2RemoteClient {
     maximumBytes: number,
     onChunk: (chunk: Uint8Array, offset: number) => Promise<void> | void
   ): Promise<Mdbx2RemoteDownloadResult> {
+    requestSignal.throwIfAborted();
     if (response.status !== 200) throw providerHttpError(`MDBX2 OneDrive 下载 ${normalized} 失败`, response);
     const declared = contentLength(response.headers.get("content-length"), maximumBytes);
     const hasher = await createSHA256();
+    requestSignal.throwIfAborted();
     hasher.init();
     let offset = 0;
     let received = 0;
@@ -344,6 +357,7 @@ export class Mdbx2OneDriveClient implements Mdbx2RemoteClient {
   }
 
   private async request<T>(url: string, init: RequestInit, operation: string, consume: ProviderResponseConsumer<T>): Promise<T> {
+    init = { ...init, signal: this.scopedSignal(init.signal || undefined) };
     assertGraphUrl(url);
     init.signal?.throwIfAborted();
     const token = await this.accessToken(init.signal || undefined);
@@ -358,6 +372,10 @@ export class Mdbx2OneDriveClient implements Mdbx2RemoteClient {
       // Never replay a write after an ambiguous result; putImmutable reconciles actual bytes.
       ...(!isRead ? { maxAttempts: 1, timeoutMs: this.policy.timeoutMs ?? 300_000 } : {})
     }, consume);
+  }
+
+  private scopedSignal(signal?: AbortSignal): AbortSignal | undefined {
+    return this.scope ? AbortSignal.any(signal ? [this.scope, signal] : [this.scope]) : signal;
   }
 }
 

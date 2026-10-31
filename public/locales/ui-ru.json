@@ -4008,5 +4008,8 @@
   "服务区域": "Регион сервера",
   "美国（bitwarden.com）": "США (bitwarden.com)",
   "欧洲（bitwarden.eu）": "Европа (bitwarden.eu)",
-  "自托管": "Свой сервер"
+  "自托管": "Свой сервер",
+  "Windows Hello 当前不可用。请在 Windows 设置中检查是否允许将通行密钥保存到此设备；面容或指纹登录可用不代表已启用本机通行密钥（{0}，HRESULT {1}，WebAuthn API {2}）。": "Windows Hello недоступен. Проверьте в параметрах Windows, разрешено ли сохранять ключи доступа на этом устройстве; вход по лицу или отпечатку сам по себе не включает локальные ключи доступа ({0}, HRESULT {1}, WebAuthn API {2}).",
+  "Windows Hello 被取消、超时或设备不可用（{0}，HRESULT {1}，WebAuthn API {2}）。": "Windows Hello отменён, время ожидания истекло или устройство недоступно ({0}, HRESULT {1}, WebAuthn API {2}).",
+  "Windows Hello 操作失败（{0}，HRESULT {1}，WebAuthn API {2}）。": "Операция Windows Hello завершилась ошибкой ({0}, HRESULT {1}, WebAuthn API {2})."
 }

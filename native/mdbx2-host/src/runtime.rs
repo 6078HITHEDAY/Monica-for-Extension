@@ -9939,15 +9939,16 @@ mod tests {
         let (root, mut runtime) = runtime();
         let vault_handle = open_test_vault(&mut runtime, "snapshot-prune-password");
         let vault = runtime.require_open_vault(&vault_handle).unwrap();
-        let retention_eligible_at = test_rfc3339_after(2);
         let automatic_a = vault
             .create_automatic_snapshot(
-                retention_eligible_at.clone(),
+                test_rfc3339_after(2),
                 browser_snapshot_device_context(),
             )
             .unwrap();
         let automatic_b = vault
-            .create_automatic_snapshot(retention_eligible_at, browser_snapshot_device_context())
+            // The preceding snapshot may take more than two seconds on CI.
+            // Bind this snapshot's eligibility to its own creation time.
+            .create_automatic_snapshot(test_rfc3339_after(2), browser_snapshot_device_context())
             .unwrap();
         let manual = vault
             .create_manual_snapshot(

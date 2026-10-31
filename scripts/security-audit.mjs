@@ -139,7 +139,9 @@ for (const type of mdbx2Types) {
 }
 if (!backgroundSource.includes('chrome.runtime.getURL("index.html")')) throw new Error("MDBX2 manager-page origin check is missing.");
 if (
-  !backgroundSource.includes("const mdbx2SyncCoordinator = new Mdbx2SyncCoordinator(mdbx2NativeClient);")
+  !backgroundSource.includes("const mdbx2SyncCoordinator = new Mdbx2SyncCoordinator(mdbx2NativeClient, undefined, mdbx2RemoteFactory);")
+  || !backgroundSource.includes('if (input.transport === "onedrive") return oneDriveSessions.mdbx2OneDriveClient(input);')
+  || !backgroundSource.includes('return new Mdbx2WebDavClient({ baseUrl: normalizeServerUrl(input.baseUrl), username: input.username, password: input.password });')
   || !backgroundSource.includes("const mdbx2Provider = new Mdbx2Provider(mdbx2NativeClient, mdbx2SyncCoordinator);")
   || !backgroundSource.includes("providers.register(mdbx2Provider);")
 ) {

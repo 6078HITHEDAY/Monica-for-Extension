@@ -208,6 +208,53 @@ function client(graph: MemoryGraph, simpleUploadMaxBytes?: number): Mdbx2OneDriv
 }
 
 describe("MDBX2 OneDrive transport", () => {
+  it("rejects a successful upload whose stored bytes differ from the expected digest", async () => {
+    const graph = new MemoryGraph();
+    const bytes = new TextEncoder().encode("segment");
+    await expect(client(graph).putImmutable("sync/segment", new Blob([bytes]), await digest(new Uint8Array(bytes.length))))
+      .rejects.toThrow("内容碰撞");
+    expect(graph.puts).toEqual(["sync/segment"]);
+  });
+
+  it("aborts an active capability stream when the owning vault locks", async () => {
+    const graph = new MemoryGraph();
+    graph.add("vaults/main.mdbx", new Uint8Array(64));
+    const scope = new AbortController();
+    let started!: () => void;
+    const began = new Promise<void>(resolve => { started = resolve; });
+    let cancelled = false;
+    const fetcher: typeof fetch = async (url, init) => {
+      if (String(url).includes("/capability/")) return new Response(new ReadableStream({ start() { started(); }, cancel() { cancelled = true; } }));
+      return graph.fetch(url, init);
+    };
+    const transport = new Mdbx2OneDriveClient(DRIVE, async () => TOKEN, fetcher, {}, undefined, scope.signal);
+    const download = transport.download("vaults/main.mdbx", 64, () => undefined);
+    const failure = expect(download).rejects.toMatchObject({ code: "cancelled" });
+    await began; scope.abort(); await failure;
+    expect(cancelled).toBe(true);
+  });
+
+  it("does not replay streamed chunks after a response body fails", async () => {
+    const graph = new MemoryGraph();
+    const bytes = new Uint8Array(1024 * 1024);
+    graph.add("vaults/main.mdbx", bytes);
+    let downloads = 0;
+    const offsets: number[] = [];
+    const fetcher: typeof fetch = async (url, init) => {
+      if (!String(url).includes("/capability/")) return graph.fetch(url, init);
+      downloads++;
+      let pulls = 0;
+      return new Response(new ReadableStream({ pull(controller) {
+        if (pulls++ === 0) controller.enqueue(bytes);
+        else controller.error(new TypeError("synthetic stream interruption"));
+      } }));
+    };
+    const transport = new Mdbx2OneDriveClient(DRIVE, async () => TOKEN, fetcher);
+    await expect(transport.download("vaults/main.mdbx", bytes.length, (_chunk, offset) => { offsets.push(offset); })).rejects.toMatchObject({ code: "network" });
+    expect(downloads).toBe(1);
+    expect(offsets.length).toBeGreaterThan(0);
+    expect(new Set(offsets).size).toBe(offsets.length);
+  });
   it("stats files and folders and treats missing or foreign items as absent", async () => {
     const graph = new MemoryGraph();
     const bytes = new TextEncoder().encode("vault-bytes");

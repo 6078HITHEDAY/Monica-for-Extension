@@ -28,6 +28,44 @@ function fixture() {
 }
 
 describe("OneDrive interactive session binding", () => {
+  it("binds MDBX clients to their saved account and rejects later source changes", async () => {
+    const f = fixture();
+    const account: ProviderAccount = { ...f.account, kind: "mdbx2", config: { ...f.account.config, remotePath: "vaults/main.mdbx", vaultHandle: "handle1" } };
+    f.accounts.set(account.id, account);
+    f.fetcher.mockImplementation(async () => Response.json(drive));
+    const client = f.service.mdbx2OneDriveClient({ transport: "onedrive", driveId: drive.id, remotePath: "vaults/main.mdbx", providerId: account.id });
+    await client.testConnection();
+    expect(f.fetcher).toHaveBeenCalledTimes(1);
+    account.config.oneDriveConnection = { ...account.config.oneDriveConnection as object, id: "replaced-login" };
+    await expect(client.testConnection()).rejects.toThrow();
+    expect(f.fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts an MDBX response stream on vault lock and rejects a captured client after unlock", async () => {
+    const f = fixture();
+    const account = { ...f.account, kind: "mdbx2" as const, config: { ...f.account.config, remotePath: "vaults/main.mdbx" } };
+    f.accounts.set(account.id, account);
+    let started!: () => void;
+    const began = new Promise<void>(resolve => { started = resolve; });
+    const cancel = vi.fn();
+    f.fetcher.mockImplementationOnce(async () => new Response(new ReadableStream({ start() { started(); }, cancel })));
+    const client = f.service.mdbx2OneDriveClient({ transport: "onedrive", driveId: drive.id, remotePath: "vaults/main.mdbx", providerId: account.id });
+    const failure = expect(client.testConnection()).rejects.toMatchObject({ code: "cancelled" });
+    await began; f.service.clear(); f.setSession("new-session"); await failure;
+    expect(cancel).toHaveBeenCalled();
+    await expect(client.testConnection()).rejects.toThrow();
+    expect(f.fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("revokes a draft MDBX client when its login is cancelled", async () => {
+    const f = fixture();
+    await f.service.login(loginId, redirect, f.launch);
+    const client = f.service.mdbx2OneDriveClient({ transport: "onedrive", driveId: drive.id, remotePath: "main.mdbx", loginId });
+    f.service.cancel(loginId);
+    f.fetcher.mockClear();
+    await expect(client.testConnection()).rejects.toThrow();
+    expect(f.fetcher).not.toHaveBeenCalled();
+  });
   it("exposes only an expiring login handle, account display and file identities", async () => {
     const f = fixture();
     expect(await f.service.login(loginId, redirect, f.launch)).toEqual({ loginId, profile, drive });
