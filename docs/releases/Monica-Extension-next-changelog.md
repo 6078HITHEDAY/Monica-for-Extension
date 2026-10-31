@@ -4,6 +4,7 @@
 
 ## 中文
 
+- 更新 Vite、Vitest、Undici 与字体构建 Brotli 依赖，修复已知依赖漏洞。
 - 首次使用可打开独立 MDBX、完整 MDBX ZIP 备份和 KeePass KDBX；MDBX 在独立工作副本上升级，原文件保留。插件保护与数据库解锁分别设置。注册期间取消、日志写入失败或锁定时保留已接入副本，解锁后核验归属再重试。
 - 登录项附带的动态验证码同时显示在“动态验证码”；没有显式网址且标题为有效主机名的登录项参与网站匹配，已有网址规则及禁止匹配规则仍优先。
 - Bitwarden 密码与 SSO 登录兼容新版嵌套密钥响应，按服务端原始盐值和 KDF 解密；无效参数或密钥校验失败仍拒绝连接。Bitwarden 登录、发送邮件验证码及首次数据库导入前检查页面与后台构建是否一致。
@@ -18,6 +19,7 @@
 
 ## English
 
+- Updated Vite, Vitest, Undici and the Brotli font-build dependency to address known dependency vulnerabilities.
 - First run can open standalone MDBX files, complete MDBX ZIP backups and KeePass KDBX databases. MDBX upgrades use independent working copies and preserve source files; extension protection and database unlock remain separate. Cancellation, journal failures and locks during registration preserve attached working copies until ownership can be checked and retried.
 - Login-attached OTPs also appear under authenticators. A valid hostname title can match websites when no explicit URL exists; explicit URLs and never-match rules retain priority.
 - Bitwarden password and SSO login accept newer nested unlock metadata, using the exact server salt and KDF while rejecting invalid parameters or failed key authentication. Bitwarden login, email-code sending and first-run database import check that the page and background build agree.

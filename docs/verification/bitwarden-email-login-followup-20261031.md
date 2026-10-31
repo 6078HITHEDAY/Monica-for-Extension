@@ -110,3 +110,10 @@ subsequent import/runtime changes also passed their targeted tests. Remote
 publication of the branch/PR supersedes the earlier local-only status above;
 version 1.0.102 remains unchanged and unreleased follow-up notes stay separate
 from published release archives.
+
+The final dependency-security follow-up uses source build identity
+`74ff7189bd356afffed7`. The complete Vitest suite passes 4,423 cases, and the
+actual Edge authentication/import suite passes all 13 cases. See
+[the integration security record](extension-integration-security-20261031.md)
+for updated dependency and browser-runner evidence; the real-account limitation
+is unchanged.

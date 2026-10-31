@@ -76,3 +76,9 @@ Bitwarden's reporting official account and Windows Hello issue #17 still require
 reporting-device evidence. The new authentication response tests are synthetic;
 they do not establish the cause of that account's failure. No version change,
 Release, tag or package delivery is part of this follow-up.
+
+The final dependency-security follow-up supersedes the earlier local build:
+source identity `74ff7189bd356afffed7`, full 4,423-test Vitest regression and
+13-case actual Edge authentication/import run pass. Detailed dependency,
+historical scanner attribution and corrected browser-runner evidence are in
+[the integration security record](extension-integration-security-20261031.md).

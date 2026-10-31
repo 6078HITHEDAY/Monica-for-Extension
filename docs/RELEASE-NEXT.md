@@ -9,8 +9,8 @@ New changes go here; the next development version has not been selected. Publish
 
 ## 中文
 
-- 暂无新增改动。
+- [下一版改动记录](releases/Monica-Extension-next-changelog.md)，包含首次打开已有密码库、Bitwarden 登录、社区贡献及依赖安全更新。
 
 ## English
 
-- No new changes yet.
+- [Next-release changelog](releases/Monica-Extension-next-changelog.md), covering first-run vault opening, Bitwarden login, community contributions and dependency security updates.
