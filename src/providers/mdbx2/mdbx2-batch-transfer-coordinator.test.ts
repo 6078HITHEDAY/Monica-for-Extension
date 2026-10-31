@@ -83,7 +83,7 @@ class FakeNative implements Mdbx2BatchTransferNativeClient, Mdbx2RuntimeClient {
     return { operationId, commitId: collection.headCommitId, alreadyCommitted, collection: { ...collection } };
   }
 
-  async listObjects(_vaultHandle: string, collectionId: string) {
+  async listObjects(_vaultHandle: string, collectionId: string, _input?: { objectTypeId?: string; deleted?: boolean; pageSize?: number; cursor?: string }) {
     const items: Mdbx2ObjectSummary[] = [...this.records.values()]
       .filter((record) => record.collectionId === collectionId && !record.deleted)
       .map((record) => ({
@@ -1000,6 +1000,117 @@ describe("MDBX2 batch transfer coordinator", () => {
     expect(result.items[0].error).toContain("相同逻辑项目");
     expect(native.deleted).toEqual([]);
     expect(await service.getItem(source.id)).toMatchObject({ providerRefs: [expect.objectContaining({ providerId: sourceProvider.id })] });
+  });
+
+  it("scans each target collection once for replica conflicts across a multi-item move", async () => {
+    const { service, target } = await setupVault();
+    const items: VaultItem[] = [];
+    for (const title of ["Alpha", "Beta", "Gamma"]) {
+      items.push(await service.upsertItem(createLoginItem({ title, password: `pw-${title}` })));
+    }
+    const native = new FakeNative();
+    const preExisting = ["88888888-8888-4888-8888-888888888888", "88888888-8888-4888-8888-888888888889"];
+    preExisting.forEach((objectId, index) => native.records.set(objectId, {
+      objectId,
+      collectionId: TARGET_COLLECTION,
+      objectTypeId: "login",
+      title: `Existing ${index}`,
+      payloadJson: JSON.stringify({ kind: "password", monica_entry_id: `password:existing-${index}` }),
+      payloadSchemaVersion: 1,
+      deleted: false
+    }));
+    const listCalls: Array<{ handle: string; collectionId: string }> = [];
+    const revealCount = new Map<string, number>();
+    const baseList = native.listObjects.bind(native);
+    native.listObjects = async (handle, collectionId, input) => {
+      listCalls.push({ handle, collectionId });
+      return baseList(handle, collectionId, input);
+    };
+    const baseReveal = native.revealObject.bind(native);
+    native.revealObject = async (handle, objectId) => {
+      revealCount.set(objectId, (revealCount.get(objectId) || 0) + 1);
+      return baseReveal(handle, objectId);
+    };
+    const progressReports: Mdbx2BatchTransferProgress[] = [];
+    const coordinator = new Mdbx2BatchTransferCoordinator(service, new EmptyRegistry(), new Mdbx2Provider(native), native, noAttachments);
+    const result = await coordinator.execute({ itemIds: items.map(item => item.id), targetProviderId: target.id, targetCollectionId: TARGET_COLLECTION,
+      action: "move", confirmed: true, preserveCategories: false, operationId: OPERATION_ID, operationCreatedAt: OPERATION_TIME },
+      progress => progressReports.push({ ...progress }));
+
+    expect(result.completedCount).toBe(3);
+    // One conflict scan for the whole batch instead of one full rescan per moved item.
+    expect(listCalls).toEqual([{ handle: TARGET_HANDLE, collectionId: TARGET_COLLECTION }]);
+    for (const objectId of preExisting) expect(revealCount.get(objectId)).toBe(1);
+    // Preparing progress advances item by item and never regresses within the phase.
+    const preparingProcessed = progressReports.filter(row => row.phase === "preparing").map(row => row.processed);
+    expect(preparingProcessed).toEqual([...preparingProcessed].sort((left, right) => left - right));
+    expect(preparingProcessed.some(value => value > 0 && value < 3)).toBe(true);
+    expect(progressReports[progressReports.length - 1]).toMatchObject({ phase: "completed", processed: 3 });
+    for (const item of items) {
+      expect(await service.getItem(item.id)).toMatchObject({ providerRefs: [expect.objectContaining({ providerId: target.id })] });
+    }
+  });
+
+  it("rejects a local move whose logical identity already exists in the target collection", async () => {
+    const { service, target } = await setupVault();
+    const first = await service.upsertItem(createLoginItem({ title: "Conflicting", password: "pw" }));
+    const second = await service.upsertItem(createLoginItem({ title: "Fresh", password: "pw" }));
+    const native = new FakeNative();
+    native.records.set("77777777-7777-4777-8777-777777777777", {
+      objectId: "77777777-7777-4777-8777-777777777777",
+      collectionId: TARGET_COLLECTION,
+      objectTypeId: "login",
+      title: "Existing replica",
+      payloadJson: JSON.stringify({ kind: "password", monica_entry_id: `password:${first.id}` }),
+      payloadSchemaVersion: 1,
+      deleted: false
+    });
+    native.records.set("77777777-7777-4777-8777-777777777778", {
+      objectId: "77777777-7777-4777-8777-777777777778",
+      collectionId: TARGET_COLLECTION,
+      objectTypeId: "login",
+      title: "Unparsable",
+      payloadJson: "not-json{",
+      payloadSchemaVersion: 1,
+      deleted: false
+    });
+    const coordinator = new Mdbx2BatchTransferCoordinator(service, new EmptyRegistry(), new Mdbx2Provider(native), native, noAttachments);
+    const result = await coordinator.execute({ itemIds: [first.id, second.id], targetProviderId: target.id, targetCollectionId: TARGET_COLLECTION,
+      action: "move", confirmed: true, preserveCategories: false, operationId: OPERATION_ID, operationCreatedAt: OPERATION_TIME });
+
+    const byId = new Map(result.items.map(row => [row.sourceItemId, row]));
+    expect(byId.get(first.id)).toMatchObject({ status: "failed", retryable: false });
+    expect(byId.get(first.id)!.error).toContain("相同逻辑项目");
+    expect(byId.get(second.id)).toMatchObject({ status: "completed" });
+    expect(native.deleted).toEqual([]);
+    expect(await service.getItem(first.id)).toEqual(first);
+    expect((await service.getItem(second.id))!.providerRefs[0].providerId).toBe(target.id);
+  });
+
+  it("resolves a shared target folder path once for the whole batch", async () => {
+    const { service, target } = await setupVault();
+    const items: VaultItem[] = [];
+    for (const title of ["Alpha", "Beta", "Gamma"]) {
+      items.push(await service.upsertItem({ ...createLoginItem({ title, password: "pw" }), categoryName: "Work" }));
+    }
+    const native = new FakeNative();
+    let listCollectionCalls = 0;
+    const baseListCollections = native.listCollections.bind(native);
+    native.listCollections = async handle => {
+      listCollectionCalls += 1;
+      return baseListCollections(handle);
+    };
+    const coordinator = new Mdbx2BatchTransferCoordinator(service, new EmptyRegistry(), new Mdbx2Provider(native), native, noAttachments);
+    const result = await coordinator.execute({ itemIds: items.map(item => item.id), targetProviderId: target.id, targetCollectionId: TARGET_COLLECTION,
+      action: "move", confirmed: true, preserveCategories: true, operationId: OPERATION_ID, operationCreatedAt: OPERATION_TIME });
+
+    expect(result.completedCount).toBe(3);
+    // One ensure pass for the shared "Work" path; the folder is created exactly once.
+    expect(listCollectionCalls).toBe(1);
+    expect(native.events.filter(event => event === "collection:Work")).toHaveLength(1);
+    const folderIds = new Set([...native.records.values()].map(record => record.collectionId));
+    expect(folderIds.size).toBe(1);
+    expect([...folderIds][0]).not.toBe(TARGET_COLLECTION);
   });
 });
 
