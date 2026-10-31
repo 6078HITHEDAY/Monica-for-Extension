@@ -64,11 +64,12 @@ function native(overrides: Partial<MdbxImportNative> = {}): MdbxImportNative & {
   };
 }
 
-function vault(status: "uninitialized" | "locked" | "unlocked" = "uninitialized"): MdbxImportVault {
+function vault(status: "uninitialized" | "locked" | "unlocked" = "uninitialized"): MdbxImportVault & { upserts: number } {
   let current = status;
   let session = status === "unlocked" ? "session" : undefined;
   const providers = new Map<string, { id: string; kind: "mdbx2"; name: string; enabled: true; isDefaultSaveTarget: boolean; config: Record<string, unknown> }>();
-  return {
+  const plugin = {
+    upserts: 0,
     status: async () => current,
     passkeySessionId: async () => session,
     setup: async () => {
@@ -76,10 +77,26 @@ function vault(status: "uninitialized" | "locked" | "unlocked" = "uninitialized"
       session = "session";
       return { items: [] };
     },
+    listProviders: async () => [...providers.values()] as never,
     getProvider: async (id) => providers.get(id) as never,
     upsertProvider: async (account) => {
+      plugin.upserts += 1;
       providers.set(account.id, account as never);
       return account;
+    }
+  };
+  return plugin;
+}
+
+function quotaStore(seed: MdbxImportOperation[] = []): MdbxImportStore {
+  const inner = memoryStore(seed);
+  return {
+    read: () => inner.read(),
+    async write(operations) {
+      if (operations.some((row) => row.stage === "registered" || row.stage === "syncing" || row.stage === "completed")) {
+        throw new Error("quota");
+      }
+      await inner.write(operations);
     }
   };
 }
@@ -96,7 +113,7 @@ describe("mdbx import coordinator", () => {
     });
     expect(first.operation.stage).toBe("prepared");
     expect(second.operation.vaultHandle).toBe(first.operation.vaultHandle);
-    await cancelMdbxImport(store, runtime, operationId);
+    await cancelMdbxImport(store, runtime, operationId, vault("uninitialized"));
     expect(runtime.discarded).toContain(vaultHandle);
   });
 
@@ -167,7 +184,7 @@ describe("mdbx import coordinator", () => {
       { operationId: "66666666-6666-4666-8666-666666666666", stage: "registered", kind: "mdbx-vault", source: { kind: "vault", handle: vaultHandle }, name: "B", vaultHandle, providerId: "provider", createdAt: 1, updatedAt: 1 }
     ]);
     const runtime = native();
-    const recovered = await recoverMdbxImports(store, runtime);
+    const recovered = await recoverMdbxImports(store, runtime, vault("unlocked"));
     expect(runtime.discarded).toContain(vaultHandle);
     expect(recovered.find((row) => row.operationId === operationId)?.stage).toBe("cancelled");
     expect(recovered.find((row) => row.providerId === "provider")?.stage).toBe("syncing");
@@ -178,31 +195,111 @@ describe("mdbx import coordinator", () => {
       { operationId, stage: "prepared", kind: "mdbx-vault", source: { kind: "vault", handle: vaultHandle }, name: "Live", vaultHandle, createdAt: Date.now(), updatedAt: Date.now() }
     ]);
     const runtime = native();
-    const recovered = await recoverMdbxImports(store, runtime);
+    const recovered = await recoverMdbxImports(store, runtime, vault("uninitialized"));
     expect(runtime.discarded).toEqual([]);
     expect(recovered[0]?.stage).toBe("prepared");
   });
 
   it("keeps the working copy if provider registration succeeds but operation storage fails", async () => {
-    const inner = memoryStore();
-    const store: MdbxImportStore = {
-      read: () => inner.read(),
-      async write(operations) {
-        if (operations.some((row) => row.stage === "registered" || row.stage === "syncing" || row.stage === "completed")) {
-          throw new Error("quota");
-        }
-        await inner.write(operations);
-      }
-    };
+    const store = quotaStore();
     const runtime = native();
+    const plugin = vault("uninitialized");
     await prepareMdbxImport(store, runtime, {
       operationId, source: { kind: "file", handle: fileHandle }, credential: { method: "password", password: "mdbx1-golden-password" }, name: "Golden"
     });
-    const committed = await commitMdbxImport(store, runtime, vault("uninitialized"), async () => undefined, {
+    const committed = await commitMdbxImport(store, runtime, plugin, async () => undefined, {
       operationId, name: "Golden", pluginMasterPassword: "plugin-master"
     });
     expect(runtime.discarded).toEqual([]);
     expect(committed.account?.kind).toBe("mdbx2");
     expect(committed.operation.stage).toBe("registered");
+    await cancelMdbxImport(store, runtime, operationId, plugin);
+    expect(runtime.discarded).toEqual([]);
+    const retried = await commitMdbxImport(store, runtime, plugin, async () => undefined, {
+      operationId, name: "Golden", pluginMasterPassword: "plugin-master"
+    });
+    expect(plugin.upserts).toBe(1);
+    expect(retried.account?.id).toBe(committed.account?.id);
+  });
+
+  it("does not discard a registered vault after cancel or stale recover races commit", async () => {
+    const store = quotaStore();
+    const runtime = native();
+    const plugin = vault("uninitialized");
+    let release!: () => void;
+    const hold = new Promise<void>((resolve) => { release = resolve; });
+    let entered = false;
+    const innerUpsert = plugin.upsertProvider.bind(plugin);
+    plugin.upsertProvider = async (account, activity, expected, guard) => {
+      entered = true;
+      await hold;
+      return innerUpsert(account, activity, expected, guard);
+    };
+    await prepareMdbxImport(store, runtime, {
+      operationId, source: { kind: "file", handle: fileHandle }, credential: { method: "password", password: "mdbx1-golden-password" }, name: "Golden"
+    });
+    const commit = commitMdbxImport(store, runtime, plugin, async () => undefined, {
+      operationId, name: "Golden", pluginMasterPassword: "plugin-master"
+    });
+    while (!entered) await Promise.resolve();
+    const cancel = cancelMdbxImport(store, runtime, operationId, plugin);
+    const recover = recoverMdbxImports(store, runtime, plugin).catch(() => [] as Awaited<ReturnType<typeof recoverMdbxImports>>);
+    release();
+    const [committed] = await Promise.all([commit, cancel, recover]);
+    expect(runtime.discarded).toEqual([]);
+    expect(committed.account?.kind).toBe("mdbx2");
+    const stale = memoryStore([{
+      operationId,
+      stage: "committing",
+      kind: "mdbx-complete-backup-zip",
+      source: { kind: "vault", handle: vaultHandle },
+      name: "Golden",
+      vaultHandle,
+      createdAt: 1,
+      updatedAt: 1
+    }]);
+    const restarted = await recoverMdbxImports(stale, native(), plugin);
+    expect(restarted[0]?.stage).toBe("syncing");
+    expect(restarted[0]?.providerId).toBe(committed.account?.id);
+  });
+
+  it("keeps a committing working copy when the plugin vault is locked after restart", async () => {
+    const store = memoryStore([{
+      operationId,
+      stage: "committing",
+      kind: "mdbx-vault",
+      source: { kind: "vault", handle: vaultHandle },
+      name: "Golden",
+      vaultHandle,
+      createdAt: 1,
+      updatedAt: 1
+    }]);
+    const runtime = native();
+    const locked = vault("locked");
+    locked.listProviders = async () => { throw new Error("locked"); };
+    locked.getProvider = async () => { throw new Error("locked"); };
+    const recovered = await recoverMdbxImports(store, runtime, locked);
+    expect(runtime.discarded).toEqual([]);
+    expect(recovered[0]?.stage).toBe("committing");
+  });
+
+  it("prepares a complete backup and maps a wrong password without discarding later registered copies", async () => {
+    const store = memoryStore();
+    const runtime = native({
+      inspectVault: async () => ({ ...inspection(), formatVersion: "MDBX-2", requiresUpgrade: false })
+    });
+    const prepared = await prepareMdbxImport(store, runtime, {
+      operationId, source: { kind: "file", handle: fileHandle }, credential: { method: "password", password: "mdbx1-golden-password" }, name: "Backup", kind: "mdbx-complete-backup-zip"
+    });
+    expect(prepared.operation.kind).toBe("mdbx-complete-backup-zip");
+    await expect(prepareMdbxImport(memoryStore(), native({
+      openVault: async () => { throw new Mdbx2NativeHostError("vault-unlock-incorrect-credential", "bad", false); }
+    }), {
+      operationId: "55555555-5555-4555-8555-555555555555",
+      source: { kind: "file", handle: fileHandle },
+      credential: { method: "password", password: "wrong" },
+      name: "Wrong",
+      kind: "mdbx-complete-backup-zip"
+    })).rejects.toMatchObject({ code: "vault-unlock-incorrect-credential" });
   });
 });

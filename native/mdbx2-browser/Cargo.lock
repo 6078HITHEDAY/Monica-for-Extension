@@ -726,6 +726,7 @@ dependencies = [
  "md-5",
  "mdbx-core",
  "mdbx-ffi",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",

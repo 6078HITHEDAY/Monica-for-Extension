@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { strToU8 } from 'fflate';
+import { strToU8, zipSync } from 'fflate';
 import { createLoginItem, type TotpItem, type VaultItem } from '../core/model';
 import { createTransferExport, independentItems, previewImport, MAX_IMPORT_BYTES, type ExportFormat } from './file-transfer';
 import { generateOtpWithParameters } from '../core/totp';
@@ -104,5 +104,10 @@ describe('manual file migration', () => {
     const sqlite = new Uint8Array(32);
     new TextEncoder().encodeInto('SQLite format 3\0', sqlite);
     await expect(previewImport({ name: 'vault.mdbx', bytes: sqlite })).rejects.toThrow('打开已有的密码库');
+    const complete = zipSync({
+      'vault.mdbx': sqlite,
+      [`vault.mdbx.blobs/aa/aa/${'a'.repeat(64)}`]: new Uint8Array([1])
+    });
+    await expect(previewImport({ name: 'vault.mdbx-backup.zip', bytes: complete })).rejects.toThrow('打开已有的密码库');
   });
 });

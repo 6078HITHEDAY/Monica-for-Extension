@@ -688,7 +688,7 @@ async function initialize() {
     const status = await vaultClient.status();
     if (revision !== vaultViewRevision) return;
     lifecycle.value = status;
-    if (status === "uninitialized" || status === "locked") void vaultClient.recoverMdbx2Imports().catch(() => undefined);
+    void vaultClient.recoverMdbx2Imports().catch(() => undefined);
     // Native capability discovery must not block access to the encrypted vault.
     // Its own controls remain busy until the native host responds.
     void refreshWindowsHelloStatus();

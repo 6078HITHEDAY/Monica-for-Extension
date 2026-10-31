@@ -630,6 +630,7 @@ chrome.runtime.onStartup.addListener(() => {
   void chrome.alarms.create(AUTO_LOCK_ALARM, { periodInMinutes: 1 });
   void chrome.alarms.create(AUTO_SYNC_ALARM, { periodInMinutes: 1 });
   void purgeExpiredPasskeySessionState().catch(() => undefined);
+  void recoverMdbxImports(mdbx2ImportStore, mdbx2NativeClient, service).catch(() => undefined);
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -1544,10 +1545,10 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
       return commitMdbxImport(mdbx2ImportStore, mdbx2NativeClient, service, (providerId) => synchronizeProvider(providerId), request);
     case "MDBX2_IMPORT_CANCEL":
       assertManagerPage(sender);
-      return cancelMdbxImport(mdbx2ImportStore, mdbx2NativeClient, request.operationId);
+      return cancelMdbxImport(mdbx2ImportStore, mdbx2NativeClient, request.operationId, service);
     case "MDBX2_IMPORT_RECOVER":
       assertManagerPage(sender);
-      return recoverMdbxImports(mdbx2ImportStore, mdbx2NativeClient);
+      return recoverMdbxImports(mdbx2ImportStore, mdbx2NativeClient, service);
     case "MDBX2_VAULT_OPEN": {
       assertManagerPage(sender);
       const sessionId = await service.passkeySessionId();
