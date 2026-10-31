@@ -650,6 +650,7 @@ impl HostRuntime {
             "transfer.abort" => self.transfer_abort(params),
             "vault.inspect" => self.vault_inspect(params),
             "vault.open" => self.vault_open(params),
+            "vault.discard" => self.vault_discard(params),
             "vault.status" => self.vault_status(params),
             "vault.writeRevision" => self.vault_write_revision(params),
             "vault.diagnostics" => self.vault_diagnostics(params),
@@ -1123,8 +1124,9 @@ impl HostRuntime {
         let mut params = take_object(params, "vault.inspect params must be an object.")?;
         let source = self.take_vault_source(&mut params)?;
         reject_unknown(params)?;
-        let info = inspect_exact_mdbx2(&source.path)?;
-        Ok(migration_json(&source, &info))
+        let info = inspect_importable_mdbx(&source.path)?;
+        let unlock_methods = inspect_unlock_method_types(&source.path);
+        Ok(migration_json(&source, &info, &unlock_methods))
     }
 
     fn vault_open(&mut self, params: Value) -> Result<Value, RpcFailure> {
@@ -1132,7 +1134,7 @@ impl HostRuntime {
         let source = self.take_vault_source(&mut params)?;
         let credential = take_credential(&mut params)?;
         reject_unknown(params)?;
-        let before = inspect_exact_mdbx2(&source.path)?;
+        let before = inspect_importable_mdbx(&source.path)?;
 
         let is_import = source.kind == "file";
         let vault_handle = if is_import {
@@ -1201,15 +1203,11 @@ impl HostRuntime {
         };
         let vault = match opened {
             Ok(vault) => vault,
-            Err(_) => {
+            Err(error) => {
                 if created_working_copy {
                     let _ = fs::remove_dir_all(&vault_directory);
                 }
-                return Err(RpcFailure::new(
-                    "vault-unlock-failed",
-                    "MDBX2 vault could not be unlocked with the supplied method.",
-                    false,
-                ));
+                return Err(vault_unlock_failure(error));
             }
         };
         if is_import && source.path.file_name().and_then(|v| v.to_str()) == Some("vault.mdbx") {
@@ -1221,7 +1219,18 @@ impl HostRuntime {
                 return Err(error);
             }
         }
-        let after = inspect_exact_mdbx2(&working_path)?;
+        let after = inspect_importable_mdbx(&working_path)?;
+        if after.format_version.as_deref() != Some(MDBX_FORMAT_VERSION) {
+            drop(vault);
+            if created_working_copy {
+                let _ = fs::remove_dir_all(&vault_directory);
+            }
+            return Err(RpcFailure::new(
+                "vault-invalid",
+                "Working copy did not finish migrating to MDBX-2.",
+                false,
+            ));
+        }
         let info = vault.info();
         let schema_version = after.schema_version.ok_or_else(|| {
             RpcFailure::new(
@@ -1260,6 +1269,38 @@ impl HostRuntime {
             .retain(|_, session| session.vault_handle != vault_handle);
         self.content_writes.retain(|_, session| !session.belongs_to(&vault_handle));
         Ok(json!({ "locked": locked }))
+    }
+
+    fn vault_discard(&mut self, params: Value) -> Result<Value, RpcFailure> {
+        let mut params = take_object(params, "vault.discard params must be an object.")?;
+        let vault_handle = take_uuid(&mut params, "vaultHandle")?;
+        reject_unknown(params)?;
+        if let Some(vault) = self.vaults.remove(&vault_handle) {
+            self.local_exports.clear_vault(&vault);
+        }
+        self.attachment_reads
+            .retain(|_, session| session.vault_handle != vault_handle);
+        self.attachment_uploads
+            .retain(|_, session| session.vault_handle != vault_handle);
+        self.content_writes
+            .retain(|_, session| !session.belongs_to(&vault_handle));
+        let directory = self.root.join("vaults").join(&vault_handle);
+        if directory.exists() {
+            let parent = self.root.join("vaults");
+            let canonical = fs::canonicalize(&directory).map_err(|_| {
+                RpcFailure::storage("Native Host could not locate the vault working copy.")
+            })?;
+            let parent = fs::canonicalize(&parent).map_err(|_| {
+                RpcFailure::storage("Native Host could not locate the vault working copy.")
+            })?;
+            if !canonical.starts_with(&parent) {
+                return Err(RpcFailure::invalid("Vault working copy path is invalid."));
+            }
+            fs::remove_dir_all(&canonical).map_err(|_| {
+                RpcFailure::storage("Native Host could not discard the vault working copy.")
+            })?;
+        }
+        Ok(json!({ "discarded": true }))
     }
 
     fn vault_status(&self, params: Value) -> Result<Value, RpcFailure> {
@@ -5580,39 +5621,158 @@ fn valid_transfer_metadata(metadata: &TransferMetadata) -> bool {
         && metadata.sha256.as_deref().is_none_or(valid_sha256)
 }
 
-fn inspect_exact_mdbx2(path: &Path) -> Result<MdbxMigrationInfo, RpcFailure> {
-    let info = mdbx_ffi::inspect_vault_migration(path_string(path)?).map_err(|_| {
+const IMPORTABLE_MDBX_FORMATS: &[&str] = &["MDBX-1", "MDBX-1-DRAFT", MDBX_FORMAT_VERSION];
+
+fn inspect_migration_failure(error: mdbx_ffi::MdbxFfiError) -> RpcFailure {
+    let message = error.to_string();
+    if message.contains("unsupported MDBX format version") {
         RpcFailure::new(
-            "vault-invalid",
-            "File is not a readable MDBX2 vault.",
+            "mdbx-format-unsupported",
+            "This MDBX format version cannot be imported.",
             false,
         )
-    })?;
+    } else {
+        RpcFailure::new(
+            "vault-invalid",
+            "File is not a readable MDBX vault.",
+            false,
+        )
+    }
+}
+
+fn inspect_importable_mdbx(path: &Path) -> Result<MdbxMigrationInfo, RpcFailure> {
+    let info = mdbx_ffi::inspect_vault_migration(path_string(path)?).map_err(inspect_migration_failure)?;
     if !info.initialized {
         return Err(RpcFailure::new(
             "vault-uninitialized",
-            "File is not an initialized MDBX2 vault.",
+            "File is not an initialized MDBX vault.",
             false,
         ));
     }
-    if info.format_version.as_deref() != Some(MDBX_FORMAT_VERSION) {
+    if !info
+        .format_version
+        .as_deref()
+        .is_some_and(|format| IMPORTABLE_MDBX_FORMATS.contains(&format))
+    {
         return Err(RpcFailure::new(
             "mdbx-format-unsupported",
-            "Monica Extension supports MDBX beginning with MDBX-2.",
+            "This MDBX format version cannot be imported.",
             false,
         ));
     }
     if info.unknown_critical_extensions {
         return Err(RpcFailure::new(
             "mdbx-critical-extension-unsupported",
-            "MDBX2 vault requires an unsupported critical extension.",
+            "MDBX vault requires an unsupported critical extension.",
             false,
         ));
     }
     Ok(info)
 }
 
-fn migration_json(source: &VaultSource, info: &MdbxMigrationInfo) -> Value {
+fn inspect_exact_mdbx2(path: &Path) -> Result<MdbxMigrationInfo, RpcFailure> {
+    let info = inspect_importable_mdbx(path)?;
+    if info.format_version.as_deref() != Some(MDBX_FORMAT_VERSION) {
+        return Err(RpcFailure::new(
+            "mdbx-format-unsupported",
+            "Live MDBX working copies must be MDBX-2.",
+            false,
+        ));
+    }
+    Ok(info)
+}
+
+fn inspect_unlock_method_types(path: &Path) -> Vec<String> {
+    let Ok(connection) = rusqlite::Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    ) else {
+        return Vec::new();
+    };
+    let methods = inspect_unlock_method_table(&connection);
+    if !methods.is_empty() {
+        return methods;
+    }
+    inspect_unlock_method_meta(&connection)
+}
+
+fn inspect_unlock_method_table(connection: &rusqlite::Connection) -> Vec<String> {
+    let Ok(mut statement) = connection.prepare("SELECT method_type FROM unlock_methods") else {
+        return Vec::new();
+    };
+    let Ok(rows) = statement.query_map([], |row| row.get::<_, String>(0)) else {
+        return Vec::new();
+    };
+    dedupe_unlock_methods(rows.flatten().filter_map(|method| map_unlock_method_type(&method)))
+}
+
+fn inspect_unlock_method_meta(connection: &rusqlite::Connection) -> Vec<String> {
+    let Ok(text) = connection.query_row(
+        "SELECT unlock_methods FROM vault_meta LIMIT 1",
+        [],
+        |row| row.get::<_, String>(0),
+    ) else {
+        return Vec::new();
+    };
+    dedupe_unlock_methods(
+        text.split(|character: char| character == ',' || character == ';' || character.is_whitespace())
+            .filter_map(|token| map_unlock_method_type(token.trim())),
+    )
+}
+
+fn map_unlock_method_type(method: &str) -> Option<String> {
+    match method {
+        "pin" => Some("pin".to_string()),
+        "password" => Some("password".to_string()),
+        "security_key" | "security-key" => Some("security-key".to_string()),
+        "password_security_key" | "password-security-key" => Some("password-security-key".to_string()),
+        _ => None,
+    }
+}
+
+fn dedupe_unlock_methods(methods: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut unique = Vec::new();
+    for method in methods {
+        if !unique.contains(&method) {
+            unique.push(method);
+        }
+    }
+    unique
+}
+
+fn vault_unlock_failure(error: mdbx_ffi::MdbxFfiError) -> RpcFailure {
+    let message = error.to_string();
+    if message.contains("incorrect credential") {
+        RpcFailure::new(
+            "vault-unlock-incorrect-credential",
+            "The supplied MDBX credential is incorrect.",
+            false,
+        )
+    } else if message.contains("no password unlock method configured") {
+        RpcFailure::new(
+            "vault-unlock-method-missing",
+            "This MDBX vault has no password unlock method.",
+            false,
+        )
+    } else if message.contains("no security key unlock method configured") {
+        RpcFailure::new(
+            "vault-unlock-security-key-missing",
+            "This MDBX vault has no security-key unlock method.",
+            false,
+        )
+    } else {
+        RpcFailure::new(
+            "vault-unlock-failed",
+            "MDBX vault could not be unlocked with the supplied method.",
+            false,
+        )
+    }
+}
+
+fn migration_json(source: &VaultSource, info: &MdbxMigrationInfo, unlock_methods: &[String]) -> Value {
+    let portable_unlock_available = unlock_methods
+        .iter()
+        .any(|method| method == "password" || method == "pin");
     json!({
         "source": { "kind": source.kind, "handle": source.handle },
         "initialized": info.initialized,
@@ -5623,7 +5783,9 @@ fn migration_json(source: &VaultSource, info: &MdbxMigrationInfo) -> Value {
         "requiresUpgrade": info.requires_upgrade,
         "unknownCriticalExtensions": info.unknown_critical_extensions,
         "targetFormatVersion": info.target_format_version,
-        "targetSchemaVersion": info.target_schema_version
+        "targetSchemaVersion": info.target_schema_version,
+        "unlockMethods": unlock_methods,
+        "portableUnlockAvailable": portable_unlock_available
     })
 }
 
@@ -8901,7 +9063,7 @@ mod tests {
     }
 
     #[test]
-    fn vault_inspection_rejects_mdbx1_before_open_can_upgrade_it() {
+    fn vault_inspection_accepts_mdbx1_as_a_migratable_import() {
         let (_root, mut runtime) = runtime();
         let file_handle = fresh_uuid();
         let path = runtime.import_file_path(&file_handle);
@@ -8918,13 +9080,15 @@ mod tests {
             .unwrap();
         drop(connection);
 
-        let error = runtime
-            .handle(
-                "vault.inspect",
-                json!({ "source": { "kind": "file", "handle": file_handle } }),
-            )
-            .unwrap_err();
-        assert_eq!(error.code, "mdbx-format-unsupported");
+        let inspection = call(
+            &mut runtime,
+            "vault.inspect",
+            json!({ "source": { "kind": "file", "handle": file_handle } }),
+        );
+        assert_eq!(inspection["formatVersion"], "MDBX-1");
+        assert_eq!(inspection["requiresUpgrade"], true);
+        assert_eq!(inspection["targetFormatVersion"], "MDBX-2");
+        assert_eq!(inspection["portableUnlockAvailable"], false);
         let connection = Connection::open(&path).unwrap();
         let format: String = connection
             .query_row("SELECT format_version FROM vault_meta", [], |row| {
@@ -8932,6 +9096,182 @@ mod tests {
             })
             .unwrap();
         assert_eq!(format, "MDBX-1");
+    }
+
+    #[test]
+    fn vault_inspection_accepts_mdbx1_draft_as_a_migratable_import() {
+        let (_root, mut runtime) = runtime();
+        let file_handle = fresh_uuid();
+        let path = runtime.import_file_path(&file_handle);
+        let connection = Connection::open(&path).unwrap();
+        mdbx_storage::schema::v1::create_all_tables(&connection).unwrap();
+        connection
+            .execute(
+                "INSERT INTO vault_meta (vault_id, format_version, created_at, updated_at,
+             default_tiga_mode, active_key_epoch_id, compat_flags, critical_extensions)
+             VALUES ('draft-vault', 'MDBX-1-DRAFT', '2026-01-01T00:00:00Z',
+             '2026-01-01T00:00:00Z', 'multi', 'epoch-1', '', '')",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+
+        let inspection = call(
+            &mut runtime,
+            "vault.inspect",
+            json!({ "source": { "kind": "file", "handle": file_handle } }),
+        );
+        assert_eq!(inspection["formatVersion"], "MDBX-1-DRAFT");
+        assert_eq!(inspection["requiresUpgrade"], true);
+    }
+
+    #[test]
+    fn vault_inspection_projects_unlock_methods_from_table_or_vault_meta() {
+        let (_root, mut runtime) = runtime();
+        let table_handle = fresh_uuid();
+        let table_path = runtime.import_file_path(&table_handle);
+        let connection = Connection::open(&table_path).unwrap();
+        mdbx_storage::schema::v1::create_all_tables(&connection).unwrap();
+        connection
+            .execute(
+                "INSERT INTO vault_meta (vault_id, format_version, created_at, updated_at,
+             default_tiga_mode, active_key_epoch_id, compat_flags, critical_extensions)
+             VALUES ('table-vault', 'MDBX-1', '2026-01-01T00:00:00Z',
+             '2026-01-01T00:00:00Z', 'multi', 'epoch-1', '', '')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO unlock_methods (
+                    method_id, method_type, kdf_profile_id, kdf_params_ct,
+                    wrapped_vault_key_ct, created_at, updated_at
+                 ) VALUES ('method-1', 'password', 'kdf', X'00', X'00',
+                 '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute("ALTER TABLE vault_meta ADD COLUMN unlock_methods TEXT", [])
+            .unwrap();
+        connection
+            .execute("UPDATE vault_meta SET unlock_methods = 'pin'", [])
+            .unwrap();
+        drop(connection);
+        let table = call(
+            &mut runtime,
+            "vault.inspect",
+            json!({ "source": { "kind": "file", "handle": table_handle } }),
+        );
+        assert_eq!(table["unlockMethods"], json!(["password"]));
+        assert_eq!(table["portableUnlockAvailable"], true);
+
+        let meta_handle = fresh_uuid();
+        let meta_path = runtime.import_file_path(&meta_handle);
+        let connection = Connection::open(&meta_path).unwrap();
+        mdbx_storage::schema::v1::create_all_tables(&connection).unwrap();
+        connection
+            .execute(
+                "INSERT INTO vault_meta (vault_id, format_version, created_at, updated_at,
+             default_tiga_mode, active_key_epoch_id, compat_flags, critical_extensions)
+             VALUES ('meta-vault', 'MDBX-1', '2026-01-01T00:00:00Z',
+             '2026-01-01T00:00:00Z', 'multi', 'epoch-1', '', '')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute("ALTER TABLE vault_meta ADD COLUMN unlock_methods TEXT", [])
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE vault_meta SET unlock_methods = 'password, security_key'",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+        let meta = call(
+            &mut runtime,
+            "vault.inspect",
+            json!({ "source": { "kind": "file", "handle": meta_handle } }),
+        );
+        assert_eq!(
+            meta["unlockMethods"],
+            json!(["password", "security-key"])
+        );
+    }
+
+    #[test]
+    fn opens_mdbx1_golden_on_a_working_copy_without_changing_the_source() {
+        let (root, mut runtime) = runtime();
+        const GOLDEN: &[u8] =
+            include_bytes!("../vendor/mdbx/crates/mdbx-storage/test-data/mdbx1-release-1.0.mdbx");
+        let original = root.0.join("original-mdbx1.mdbx");
+        fs::write(&original, GOLDEN).unwrap();
+        let before = sha256_bytes(&fs::read(&original).unwrap());
+        let file_handle = fresh_uuid();
+        fs::copy(&original, runtime.import_file_path(&file_handle)).unwrap();
+
+        let inspection = call(
+            &mut runtime,
+            "vault.inspect",
+            json!({ "source": { "kind": "file", "handle": file_handle } }),
+        );
+        assert_eq!(inspection["formatVersion"], "MDBX-1");
+        assert_eq!(inspection["requiresUpgrade"], true);
+        assert!(inspection["unlockMethods"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|method| method == "password"));
+
+        let opened = call(
+            &mut runtime,
+            "vault.open",
+            json!({
+                "source": { "kind": "file", "handle": file_handle },
+                "credential": { "method": "password", "password": "mdbx1-golden-password" }
+            }),
+        );
+        assert_eq!(opened["formatVersion"], "MDBX-2");
+        assert_eq!(opened["migrated"], true);
+        assert_eq!(opened["preUpgradeBackupCreated"], true);
+        assert_eq!(sha256_bytes(&fs::read(&original).unwrap()), before);
+        let vault_handle = opened["vaultHandle"].as_str().unwrap().to_string();
+        let discarded = call(
+            &mut runtime,
+            "vault.discard",
+            json!({ "vaultHandle": vault_handle }),
+        );
+        assert_eq!(discarded["discarded"], true);
+        assert!(!root.0.join("vaults").join(&vault_handle).exists());
+    }
+
+    #[test]
+    fn wrong_password_is_not_a_generic_unlock_failure() {
+        let (_root, mut runtime) = runtime();
+        let source_path = runtime.root.join("source.mdbx");
+        let source = mdbx_ffi::create_vault(
+            path_string(&source_path).unwrap(),
+            "correct-password".to_string(),
+            "fixture-device".to_string(),
+        )
+        .unwrap();
+        let file_handle = fresh_uuid();
+        source
+            .create_backup(path_string(&runtime.import_file_path(&file_handle)).unwrap())
+            .unwrap();
+        drop(source);
+
+        let error = runtime
+            .handle(
+                "vault.open",
+                json!({
+                    "source": { "kind": "file", "handle": file_handle },
+                    "credential": { "method": "password", "password": "wrong-password" }
+                }),
+            )
+            .unwrap_err();
+        assert_eq!(error.code, "vault-unlock-incorrect-credential");
     }
 
     #[test]

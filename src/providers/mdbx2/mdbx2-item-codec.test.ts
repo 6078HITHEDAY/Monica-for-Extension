@@ -82,6 +82,30 @@ describe("MDBX2 Android item codec", () => {
     });
   });
 
+  it("reads independent MDBX login url and totp_seed into website and authenticator fields", () => {
+    const record: Mdbx2ObjectRecord = {
+      objectId: "11111111-1111-4111-8111-111111111111",
+      collectionId: "22222222-2222-4222-8222-222222222222",
+      objectTypeId: "login",
+      title: "Gmail",
+      payloadSchemaVersion: 1,
+      deleted: false,
+      payloadJson: JSON.stringify({
+        username: "tester.monica@example.com",
+        password: "secret",
+        url: "https://accounts.google.com",
+        totp_seed: "otpauth://totp/Gmail:tester.monica@example.com?secret=JBSWY3DPEHPK3PXP"
+      })
+    };
+    const decoded = decodeMdbx2Object(record, META, "mdbx-provider");
+    expect(decoded.item).toMatchObject({
+      kind: "login",
+      username: "tester.monica@example.com",
+      uris: ["https://accounts.google.com"],
+      totpSecret: "otpauth://totp/Gmail:tester.monica@example.com?secret=JBSWY3DPEHPK3PXP"
+    });
+  });
+
   it("preserves unknown nested Android wallet fields when one mapped value changes", () => {
     const record: Mdbx2ObjectRecord = {
       objectId: "11111111-1111-4111-8111-111111111111",

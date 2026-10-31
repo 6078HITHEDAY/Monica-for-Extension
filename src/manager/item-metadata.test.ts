@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LoginItem, VaultItem } from "../core/model";
-import { itemIcon, itemKindLabel, itemSafeSummary, itemSearchText, itemSection } from "./item-metadata";
+import { itemCarriesAuthenticator, itemIcon, itemKindLabel, itemMatchesManagerSection, itemSafeSummary, itemSearchText, itemSection } from "./item-metadata";
 
 const now = "2026-07-15T00:00:00.000Z";
 const base = { id: "id", title: "Title", favorite: false, notes: "", createdAt: now, updatedAt: now, providerRefs: [] };
@@ -19,6 +19,18 @@ describe("manager item metadata", () => {
   it("maps every vault kind to a usable category label and icon", () => {
     expect(items.map((item) => itemSection(item))).toEqual(["passwords", "wallet", "wallet", "wallet", "wallet", "notes", "totp", "passkeys"]);
     for (const item of items) { expect(itemKindLabel(item.kind)).not.toBe(""); expect(itemIcon(item.kind)).not.toBe(""); }
+  });
+
+  it("lists KeePass login authenticators in the totp section without moving them out of passwords", () => {
+    const login = items[0] as LoginItem;
+    const withOtp: LoginItem = { ...login, totpSecret: "otpauth://totp/Example:joy?secret=JBSWY3DPEHPK3PXP" };
+    expect(itemSection(withOtp)).toBe("passwords");
+    expect(itemCarriesAuthenticator(withOtp)).toBe(true);
+    expect(itemCarriesAuthenticator(login)).toBe(false);
+    expect(itemMatchesManagerSection(withOtp, "totp")).toBe(true);
+    expect(itemMatchesManagerSection(withOtp, "passwords")).toBe(true);
+    expect(itemMatchesManagerSection(login, "totp")).toBe(false);
+    expect(itemMatchesManagerSection(items[6], "totp")).toBe(true);
   });
 
   it("masks card and document numbers in summaries", () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { strToU8 } from 'fflate';
+import { strToU8, zipSync } from 'fflate';
 import { createLoginItem, type TotpItem, type VaultItem } from '../core/model';
 import { createTransferExport, independentItems, previewImport, MAX_IMPORT_BYTES, type ExportFormat } from './file-transfer';
 import { generateOtpWithParameters } from '../core/totp';
@@ -83,10 +83,31 @@ describe('manual file migration', () => {
     const output = await createTransferExport([{ ...login, username: '  ', password: '   ' }], 'csv');
     expect((await previewImport({ name: 'spaces.csv', bytes: output.bytes })).items[0]).toMatchObject({ username: '  ', password: '   ' });
   });
+  it('imports JSON vaults that use null for unused required fields', async () => {
+    const result = await previewImport(input({
+      items: [
+        { kind: 'login', id: 'good', title: 'Good', username: 'alice', password: 'secret', uris: ['https://example.invalid'] },
+        { kind: 'login', id: 'nulls', title: 'Sparse', username: 'bob', password: null, notes: null, uris: null, customFields: null }
+      ]
+    }));
+    expect(result.items).toHaveLength(2);
+    expect(result.items.map(item => item.kind)).toEqual(['login', 'login']);
+    expect(result.items[1]).toMatchObject({ title: 'Sparse', username: 'bob', password: '', notes: '', uris: [] });
+    expect(result.warnings.some(warning => warning.includes('只读'))).toBe(false);
+  });
+
   it('rejects oversized, malformed and encrypted Bitwarden inputs', async () => {
     await expect(previewImport({ name: 'huge.json', bytes: new Uint8Array(MAX_IMPORT_BYTES + 1) })).rejects.toThrow('64 MB');
     await expect(previewImport(input('name,password\n"unclosed', 'broken.csv'))).rejects.toThrow('引号');
     await expect(previewImport(input({ encrypted: true, items: [] }))).rejects.toThrow('Bitwarden');
     await expect(previewImport(input({ magic: 'MONICA_EXTENSION_BACKUP' }))).rejects.toThrow('整库备份');
+    const sqlite = new Uint8Array(32);
+    new TextEncoder().encodeInto('SQLite format 3\0', sqlite);
+    await expect(previewImport({ name: 'vault.mdbx', bytes: sqlite })).rejects.toThrow('打开已有的密码库');
+    const complete = zipSync({
+      'vault.mdbx': sqlite,
+      [`vault.mdbx.blobs/aa/aa/${'a'.repeat(64)}`]: new Uint8Array([1])
+    });
+    await expect(previewImport({ name: 'vault.mdbx-backup.zip', bytes: complete })).rejects.toThrow('打开已有的密码库');
   });
 });

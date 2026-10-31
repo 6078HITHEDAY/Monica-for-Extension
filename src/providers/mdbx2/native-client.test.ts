@@ -607,7 +607,7 @@ describe("MDBX2 Native Messaging client", () => {
     let requestNumber = 0;
     const client = new Mdbx2NativeClient(runtime, () => `collection-request-${++requestNumber}`);
 
-    await expect(client.listCollections(vaultHandle, { excludeRoot: true, pageSize: 50 })).resolves.toMatchObject({ items: [{ collectionId }] });
+    await expect(client.listCollections(vaultHandle, { excludeRoot: true, pageSize: 50 })).resolves.toMatchObject({ items: [{ collectionId, groupId: parentCollectionId }] });
     await expect(client.createCollection(vaultHandle, operationId, collectionId, "  Accounts  ", parentCollectionId)).resolves.toMatchObject({ operationId, collection: { title: "Accounts" } });
     await expect(client.renameCollection(vaultHandle, operationId, collectionId, "Work")).resolves.toMatchObject({ collection: { title: "Work" } });
     await expect(client.moveCollection(vaultHandle, operationId, collectionId)).resolves.toMatchObject({ collection: { groupId: undefined } });
@@ -620,6 +620,30 @@ describe("MDBX2 Native Messaging client", () => {
     expect(requests[0].params).toMatchObject({ deleted: false, excludeRoot: true, pageSize: 50, cursor: null });
     expect(requests[1].params).toMatchObject({ operationId, collectionId, title: "Accounts", parentCollectionId });
     expect(requests[3].params).toMatchObject({ parentCollectionId: null });
+    client.close();
+  });
+
+  it("keeps legacy MDBX collection group labels that are not UUIDs", async () => {
+    const runtime = new FakeRuntime();
+    const handle = "11111111-1111-4111-8111-111111111111";
+    runtime.port.onPost = (message) => {
+      const request = message as { requestId: string };
+      runtime.port.onMessage.emit({
+        protocol: MDBX2_NATIVE_PROTOCOL_VERSION,
+        requestId: request.requestId,
+        ok: true,
+        result: {
+          items: [{
+            collectionId: handle, title: "Golden", collectionTypeId: null, profileSchemaVersion: null,
+            groupId: "golden", iconRef: null, favorite: false, archived: false, attachmentCount: 0,
+            headCommitId: "commit-1", deleted: false, updatedAt: "2026-08-02T00:00:00Z"
+          }],
+          nextCursor: null
+        }
+      } as never);
+    };
+    const client = new Mdbx2NativeClient(runtime, () => crypto.randomUUID());
+    await expect(client.listCollections(handle)).resolves.toMatchObject({ items: [{ collectionId: handle, groupId: "golden" }] });
     client.close();
   });
 
@@ -822,7 +846,7 @@ describe("MDBX2 Native Messaging client", () => {
     await expect(client.beginInboundTransfer(3, "a".repeat(64))).resolves.toMatchObject({ transferId: handle, nextOffset: 0 });
     await expect(client.sendInboundChunk(handle, 0, new Uint8Array([1, 2, 3]))).resolves.toMatchObject({ nextOffset: 3, acceptedBytes: 3 });
     await expect(client.finishInboundTransfer(handle)).resolves.toMatchObject({ fileHandle: handle, sizeBytes: 3 });
-    await expect(client.inspectVault({ kind: "file", handle })).resolves.toMatchObject({ formatVersion: "MDBX-2", schemaVersion: 17 });
+    await expect(client.inspectVault({ kind: "file", handle })).resolves.toMatchObject({ formatVersion: "MDBX-2", schemaVersion: 17, unlockMethods: [], portableUnlockAvailable: false });
     await expect(client.openVault({ kind: "file", handle }, { method: "password", password: "" })).resolves.toMatchObject({ vaultHandle: handle, health: { healthy: true } });
     await expect(client.vaultStatus(handle)).resolves.toEqual({ vaultHandle: handle, open: true, available: true });
     await expect(client.vaultDiagnostics(handle)).resolves.toMatchObject({ fileSizeBytes: 4096, health: { issueCount: 0 }, diagnostics: { folderCount: 0 } });
@@ -865,6 +889,50 @@ describe("MDBX2 Native Messaging client", () => {
       credential: { method: "password", password: "" }
     });
     client.close();
+  });
+
+  it("parses migratable MDBX-1 inspection without claiming live MDBX1 support", async () => {
+    const runtime = new FakeRuntime();
+    const handle = "11111111-1111-4111-8111-111111111111";
+    runtime.port.onPost = (message) => {
+      const request = message as { requestId: string };
+      runtime.port.onMessage.emit({
+        protocol: MDBX2_NATIVE_PROTOCOL_VERSION,
+        requestId: request.requestId,
+        ok: true,
+        result: {
+          source: { kind: "file", handle }, initialized: true, formatVersion: "MDBX-1", schemaVersion: 1,
+          requiresUpgrade: true, unknownCriticalExtensions: false, targetFormatVersion: MDBX2_FORMAT_VERSION,
+          targetSchemaVersion: 17, unlockMethods: ["password"], portableUnlockAvailable: true
+        }
+      } as never);
+    };
+    const client = new Mdbx2NativeClient(runtime, () => crypto.randomUUID());
+    await expect(client.inspectVault({ kind: "file", handle })).resolves.toMatchObject({
+      formatVersion: "MDBX-1", requiresUpgrade: true, targetFormatVersion: "MDBX-2", unlockMethods: ["password"]
+    });
+  });
+
+  it("accepts inspection with no listed unlock methods", async () => {
+    const runtime = new FakeRuntime();
+    const handle = "11111111-1111-4111-8111-111111111111";
+    runtime.port.onPost = (message) => {
+      const request = message as { requestId: string };
+      runtime.port.onMessage.emit({
+        protocol: MDBX2_NATIVE_PROTOCOL_VERSION,
+        requestId: request.requestId,
+        ok: true,
+        result: {
+          source: { kind: "file", handle }, initialized: true, formatVersion: "MDBX-1",
+          requiresUpgrade: true, unknownCriticalExtensions: false, targetFormatVersion: MDBX2_FORMAT_VERSION,
+          targetSchemaVersion: 17, unlockMethods: []
+        }
+      } as never);
+    };
+    const client = new Mdbx2NativeClient(runtime, () => crypto.randomUUID());
+    await expect(client.inspectVault({ kind: "file", handle })).resolves.toMatchObject({
+      formatVersion: "MDBX-1", unlockMethods: [], portableUnlockAvailable: false
+    });
   });
 
   it("plans and applies bounded identifier-free health repair through exact requests", async () => {

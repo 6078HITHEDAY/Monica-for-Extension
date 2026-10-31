@@ -23,6 +23,17 @@ export function itemIcon(kind: VaultItemKind): string { return KIND_META[kind].i
 export function itemSection(item: VaultItem): VaultManagerSection { return KIND_META[item.kind].section; }
 export function itemKindSection(kind: VaultItemKind): VaultManagerSection { return KIND_META[kind].section; }
 
+/** KeePass stores many authenticators on the login (`otp` / `totpSecret`), not as a standalone totp item. */
+export function itemCarriesAuthenticator(item: VaultItem): boolean {
+  return item.kind === "totp" || (item.kind === "login" && Boolean(item.totpSecret));
+}
+
+export function itemMatchesManagerSection(item: VaultItem, section: string): boolean {
+  if (section === "vault") return true;
+  if (section === "totp") return itemCarriesAuthenticator(item);
+  return itemSection(item) === section;
+}
+
 /** Home cards never render a login URI: imported otpauth URLs can contain secrets. */
 export function homeItemSummary(item: VaultItem): string {
   return item.kind === "login" ? item.username.trim() || itemKindLabel(item.kind) : itemSafeSummary(item);

@@ -9,7 +9,7 @@ import AuthenticatedExportDialog from './AuthenticatedExportDialog.vue';
 import SettingsPasswordField from './SettingsPasswordField.vue';
 
 const props = defineProps<{ items: VaultItem[]; mode: 'master-password' | 'device-key' | 'unknown'; helloAvailable: boolean }>();
-const emit = defineEmits<{ imported: []; busy: [value: boolean]; backup: [] }>();
+const emit = defineEmits<{ imported: []; busy: [value: boolean]; backup: []; mdbx: [] }>();
 const file = shallowRef<File>(), keyFile = shallowRef<File>();
 const sourceFormat = ref<TransferFormat>('auto'), destinationFormat = ref<ExportFormat>('zip');
 const password = ref(''), exportPassword = ref(''), exportConfirmation = ref('');
@@ -133,7 +133,8 @@ async function finishExport(result: VaultExportResult) {
       </fieldset>
     </section>
     <p v-if="error" class="form-error" role="alert">{{ error }}</p><p v-if="status" class="transfer-status" role="status">{{ status }}</p>
-    <button class="transfer-backup" @click="emit('backup')"><m3e-icon name="encrypted" /><span><strong>{{ tr('加密备份与恢复') }}</strong><small>{{ tr('完整备份插件，包括附件文件与连接配置。') }}</small></span><m3e-icon name="chevron_right" /></button>
+    <button class="transfer-backup" @click="emit('mdbx')"><m3e-icon name="database" /><span><strong>{{ tr('打开 MDBX 密码库') }}</strong><small>{{ tr('导入独立 MDBX 或完整备份 ZIP，作为新的密码源。原始文件不会被修改。') }}</small></span><m3e-icon name="chevron_right" /></button>
+    <button class="transfer-backup" @click="emit('backup')"><m3e-icon name="encrypted" /><span><strong>{{ tr('加密备份与恢复') }}</strong><small>{{ tr('恢复插件状态（条目与密码源配置）。独立 MDBX 数据库需要单独的 MDBX 备份。') }}</small></span><m3e-icon name="chevron_right" /></button>
     <AuthenticatedExportDialog v-if="authenticating" format="plaintext" :mode="mode" :hello-available="helloAvailable" :count="count" :title="tr('验证身份并导出')" :description="tr('此格式将导出 {0} / {1} 个项目。', { 0: count, 1: total }) + ' ' + tr(selectedFormat.hint)" @close="closeAuthentication" @exported="finishExport" />
   </div>
 </template>

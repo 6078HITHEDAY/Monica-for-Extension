@@ -8,6 +8,7 @@ test-results/
 .tmp/
 .artifacts/
 .codex-tasks/
+.omc/
 .slim/deepwork/
 *.log
 *.tsbuildinfo

@@ -85,6 +85,23 @@ describe("manager vault import", () => {
     }
   });
 
+  it("treats required JSON nulls as missing fields instead of readonly items", () => {
+    const login = normalizeImportedVaultItem({
+      kind: "login", id: "login-nulls", title: "Account",
+      notes: null, password: null, uris: null, customFields: null, username: "alice"
+    });
+    expect(login).toMatchObject({ kind: "login", title: "Account", username: "alice", password: "", notes: "", uris: [], customFields: [] });
+    expect(normalizeImportedVaultItem({ kind: "identity", id: "id-null", title: "Person", middleName: null, firstName: "Alice" })).toMatchObject({
+      kind: "identity", firstName: "Alice", middleName: ""
+    });
+    expect(normalizeImportedVaultItem({ kind: "billing-address", id: "addr-null", title: "Home", apartment: null, city: "Shanghai" })).toMatchObject({
+      kind: "billing-address", city: "Shanghai", apartment: ""
+    });
+    expect(normalizeImportedVaultItem({ kind: "payment-account", id: "pay-null", title: "Bank", iban: null, accountName: "Alice" })).toMatchObject({
+      kind: "payment-account", accountName: "Alice", iban: ""
+    });
+  });
+
   it("does not convert unknown exact numbers into rounded cache values", async () => {
     const { parseLosslessJson } = await import("../core/lossless-json");
     const raw = parseLosslessJson('{"kind":"login","future":{"counter":9007199254740993,"precise":0.1234567890123456789}}');

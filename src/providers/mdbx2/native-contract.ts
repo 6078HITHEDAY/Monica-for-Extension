@@ -3,6 +3,10 @@ export const MDBX2_NATIVE_PROTOCOL_VERSION = 2;
 export const MDBX2_CORE_REVISION = "90005c8c608c952093a4522ffa507a562e2e39a4";
 export const MDBX2_ENGINE_VERSION = "0.2.0";
 export const MDBX2_FORMAT_VERSION = "MDBX-2";
+export const MDBX3_RUNTIME_NAME = "MDBX3";
+export const MDBX_IMPORTABLE_FORMAT_VERSIONS = ["MDBX-1", "MDBX-1-DRAFT", MDBX2_FORMAT_VERSION] as const;
+export type MdbxImportableFormatVersion = typeof MDBX_IMPORTABLE_FORMAT_VERSIONS[number];
+export type MdbxInspectedUnlockMethod = "pin" | "password" | "security-key" | "password-security-key";
 export const MDBX2_SYNC_PROTOCOL_VERSION = 2;
 export const MDBX2_MAX_BINARY_CHUNK_BYTES = 256 * 1024;
 export const MDBX2_MAX_INBOUND_FILE_BYTES = 2 * 1024 * 1024 * 1024;
@@ -112,6 +116,7 @@ export type Mdbx2NativeMethod =
   | "transfer.abort"
   | "vault.inspect"
   | "vault.open"
+  | "vault.discard"
   | "vault.create"
   | "vault.status"
   | "vault.writeRevision"
@@ -349,7 +354,7 @@ export interface Mdbx2ExternalBlobReceiveState {
 export interface Mdbx2VaultInspection {
   source: Mdbx2VaultSource;
   initialized: true;
-  formatVersion: typeof MDBX2_FORMAT_VERSION;
+  formatVersion: MdbxImportableFormatVersion;
   schemaVersion?: number;
   minReaderVersion?: string;
   minWriterVersion?: string;
@@ -357,6 +362,8 @@ export interface Mdbx2VaultInspection {
   unknownCriticalExtensions: false;
   targetFormatVersion: typeof MDBX2_FORMAT_VERSION;
   targetSchemaVersion: number;
+  unlockMethods: MdbxInspectedUnlockMethod[];
+  portableUnlockAvailable: boolean;
 }
 
 export interface Mdbx2VaultDiagnosticsSummary {
@@ -1110,6 +1117,8 @@ export function validateMdbx2HostCapabilities(input: unknown): Mdbx2HostCapabili
   if (value.mdbxCoreRevision !== MDBX2_CORE_REVISION) throw incompatible("Native Host 使用了未经审核的 MDBX2 核心版本。");
   if (value.mdbxEngineVersion !== MDBX2_ENGINE_VERSION) throw incompatible("Native Host MDBX2 引擎版本与插件不一致。");
   if (value.mdbxFormatVersion !== MDBX2_FORMAT_VERSION) throw incompatible("Native Host 未声明 MDBX-2 格式支持。");
+  // Runtime identity stays MDBX-2-only. Importable MDBX-1 / DRAFT files are a
+  // working-copy migration path, not a live writable format.
   if (value.supportsMdbx1 !== false) throw incompatible("Native Host 错误声明了 MDBX1 支持。");
   if (value.maxBinaryChunkBytes !== MDBX2_MAX_BINARY_CHUNK_BYTES) throw incompatible("Native Host 二进制分块限制与插件不一致。");
   if (value.maxInboundFileBytes !== MDBX2_MAX_INBOUND_FILE_BYTES) throw incompatible("Native Host 文件大小限制与插件不一致。");

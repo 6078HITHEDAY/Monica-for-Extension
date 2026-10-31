@@ -4,7 +4,7 @@ import type { M3eMenuElement } from "@m3e/web/menu";
 import { computed, onBeforeUnmount, ref, useId, watch } from "vue";
 import type { LoginItem, TotpItem, VaultItem } from "../core/model";
 import { websiteOrigin } from "../core/website-icon";
-import { documentLabel, itemIcon, itemKindLabel, maskedSuffix } from "../manager/item-metadata";
+import { documentLabel, itemCarriesAuthenticator, itemIcon, itemKindLabel, maskedSuffix } from "../manager/item-metadata";
 import { tr } from "../i18n";
 import TotpCodeCell from "./TotpCodeCell.vue";
 import WebsiteIcon from "./WebsiteIcon.vue";
@@ -48,6 +48,7 @@ const metadata = computed(() => {
     case "billing-address": return { subtitle: itemKindLabel(item.kind), primary: [item.city, item.country].filter(Boolean).join(" · ") || tr('地址信息'), secondary: item.fullName, accessory: "" };
     case "payment-account": return { subtitle: item.provider || item.paymentType || itemKindLabel(item.kind), primary: maskedSuffix(item.maskedAccountNumber || item.linkedCardLast4 || "") || item.accountName || tr('支付账号'), secondary: item.accountHolderName || item.accountName, accessory: item.currency };
     case "totp": return { subtitle: item.accountName || item.issuer || (item.otpType === "STEAM" ? "Steam Guard" : item.otpType || "TOTP"), primary: "", secondary: "", accessory: "" };
+    case "login": return { subtitle: item.username.trim() || itemKindLabel(item.kind), primary: "", secondary: "", accessory: "" };
     default: return { subtitle: itemKindLabel(item.kind), primary: "", secondary: "", accessory: "" };
   }
 });
@@ -65,6 +66,7 @@ const iconItem = computed(() => {
     favorite: item.favorite,
     iconOrigin: item.kind === "totp"
       ? websiteOrigin(item.link || "") || issuerSites[(item.issuer || "").trim().toLowerCase()] || (item.otpType === "STEAM" ? issuerSites.steam : websiteOrigin(item.issuer || ""))
+      : item.kind === "login" ? websiteOrigin(item.uris[0] || "") || websiteOrigin(item.title || "")
       : ""
   };
 });
@@ -118,7 +120,7 @@ onBeforeUnmount(() => {
           <m3e-menu-trigger :for="menuId" />
         </m3e-icon-button>
       </header>
-      <div v-if="item.kind === 'totp'" class="vault-tile-code" :inert="selection?.active" data-selection-ignore @click.stop>
+      <div v-if="itemCarriesAuthenticator(item)" class="vault-tile-code" :inert="selection?.active" data-selection-ignore @click.stop>
         <TotpCodeCell :item="item" layout="tile" allow-use :hide-timer="Boolean(sharedPeriod)" :consume-code="consumeOtp" />
       </div>
       <div v-else-if="!['card', 'identity', 'billing-address'].includes(item.kind)" class="wallet-tile-preview">

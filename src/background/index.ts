@@ -78,6 +78,7 @@ import { mdbxDirectWriteProvider } from './mdbx-direct-write';
 import { readMdbx2TransferBinding } from '../providers/mdbx2/mdbx2-transfer-verification';
 import { prepareMdbx2TransferSourceDeletion, deleteMdbx2TransferSources } from '../providers/mdbx2/mdbx2-transfer-source-delete';
 import { MDBX2_MAX_BINARY_CHUNK_BYTES, MDBX2_WINDOWS_HELLO_PROTOCOL_VERSION, MDBX2_WINDOWS_HELLO_RP_ID, Mdbx2NativeHostError, type Mdbx2SyncStateStatus, type Mdbx2WindowsHelloStatus } from "../providers/mdbx2/native-contract";
+import { cancelMdbxImport, chromeMdbxImportStore, commitMdbxImport, detectMdbxImport, prepareMdbxImport, recoverMdbxImports } from "../providers/mdbx2/mdbx-import-coordinator";
 import { ClipboardLifecycle } from './clipboard';
 import { currentFrameDocument } from '../runtime/document-target';
 import { isFirefoxExtension } from '../runtime/browser-platform';
@@ -193,6 +194,7 @@ const mdbx2LocalFileExports = new Mdbx2LocalFileExports(mdbx2NativeClient, async
   return { vaultHandle: account.config.vaultHandle, fileName: `${(account.name || "Monica").replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").slice(0, 100)}.mdbx` };
 });
 const windowsHelloNativeClient = new Mdbx2NativeClient(createChromeMdbx2NativeRuntime(), undefined, "com.monica_pass.windows_hello", "Monica Windows Hello");
+const mdbx2ImportStore = chromeMdbxImportStore();
 const mdbx2RemoteFactory: Mdbx2RemoteClientFactory = input => {
   if (input.transport === "onedrive") return oneDriveSessions.mdbx2OneDriveClient(input);
   return new Mdbx2WebDavClient({ baseUrl: normalizeServerUrl(input.baseUrl), username: input.username, password: input.password });
@@ -636,6 +638,7 @@ chrome.runtime.onStartup.addListener(() => {
   void chrome.alarms.create(AUTO_LOCK_ALARM, { periodInMinutes: 1 });
   void chrome.alarms.create(AUTO_SYNC_ALARM, { periodInMinutes: 1 });
   void purgeExpiredPasskeySessionState().catch(() => undefined);
+  void recoverMdbxImports(mdbx2ImportStore, mdbx2NativeClient, service).catch(() => undefined);
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -1539,6 +1542,21 @@ async function handleRequest(request: ExtensionRequest, sender: chrome.runtime.M
     case "MDBX2_VAULT_INSPECT":
       assertManagerPage(sender);
       return mdbx2NativeClient.inspectVault(request.source);
+    case "MDBX2_IMPORT_DETECT":
+      assertManagerPage(sender);
+      return detectMdbxImport(mdbx2NativeClient, request.source, request.kind);
+    case "MDBX2_IMPORT_PREPARE":
+      assertManagerPage(sender);
+      return prepareMdbxImport(mdbx2ImportStore, mdbx2NativeClient, request);
+    case "MDBX2_IMPORT_COMMIT":
+      assertManagerPage(sender);
+      return commitMdbxImport(mdbx2ImportStore, mdbx2NativeClient, service, (providerId) => synchronizeProvider(providerId), request);
+    case "MDBX2_IMPORT_CANCEL":
+      assertManagerPage(sender);
+      return cancelMdbxImport(mdbx2ImportStore, mdbx2NativeClient, request.operationId, service);
+    case "MDBX2_IMPORT_RECOVER":
+      assertManagerPage(sender);
+      return recoverMdbxImports(mdbx2ImportStore, mdbx2NativeClient, service);
     case "MDBX2_VAULT_OPEN": {
       assertManagerPage(sender);
       const sessionId = await service.passkeySessionId();
@@ -3200,8 +3218,8 @@ async function afterRuntimeRequest(request: ExtensionRequest, data?: unknown): P
   const providerMutation = ["BITWARDEN_CIPHER_MOVE_FOLDER", "BITWARDEN_CIPHER_MOVE_COLLECTIONS", "PROVIDER_ATTACHMENT_UPLOAD_FINISH", "PROVIDER_ATTACHMENT_DELETE"].includes(type)
     || /^(?:BITWARDEN_(?:FOLDER|CIPHER)_|KEEPASS_(?:GROUP|HISTORY)_|MDBX2_(?:OBJECT|COLLECTION|HISTORY|CONFLICT|SNAPSHOT)_)/.test(type)
       && /(?:CREATE|RENAME|MOVE|DELETE|RESTORE|UPSERT|REVERT|RESOLVE)$/.test(type);
-  const connectionChange = ["BITWARDEN_LOGIN", "BITWARDEN_LOGOUT", "WEBDAV_SAVE", "PROVIDER_REMOVE", "MDBX2_VAULT_OPEN", "MDBX2_WEBDAV_SAVE", "MDBX2_ONEDRIVE_SAVE", "MDBX2_BOOTSTRAP_PUBLISH", "MDBX2_BOOTSTRAP_REGISTER", "KEEPASS_WEBDAV_OPEN", "KEEPASS_ONEDRIVE_OPEN", "KEEPASS_OPEN", "KEEPASS_REMOTE_RESTORE"].includes(type);
-  const unlocked = ["VAULT_SETUP", "VAULT_UNLOCK", "VAULT_UNLOCK_HELLO", "VAULT_RESTORE_ENCRYPTED"].includes(type);
+  const connectionChange = ["BITWARDEN_LOGIN", "BITWARDEN_LOGOUT", "WEBDAV_SAVE", "PROVIDER_REMOVE", "MDBX2_VAULT_OPEN", "MDBX2_IMPORT_COMMIT", "MDBX2_WEBDAV_SAVE", "MDBX2_ONEDRIVE_SAVE", "MDBX2_BOOTSTRAP_PUBLISH", "MDBX2_BOOTSTRAP_REGISTER", "KEEPASS_WEBDAV_OPEN", "KEEPASS_ONEDRIVE_OPEN", "KEEPASS_OPEN", "KEEPASS_REMOTE_RESTORE"].includes(type);
+  const unlocked = ["VAULT_SETUP", "VAULT_UNLOCK", "VAULT_UNLOCK_HELLO", "VAULT_RESTORE_ENCRYPTED", "MDBX2_IMPORT_COMMIT"].includes(type);
   if (type === "KEEPASS_LOCK" || type === "MDBX2_VAULT_LOCK") {
     publishVaultChanged();
     return;

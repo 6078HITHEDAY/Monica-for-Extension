@@ -18,6 +18,7 @@ mdbx-core = { path = "vendor/mdbx/crates/mdbx-core" }
 mdbx-ffi = { path = "vendor/mdbx/crates/mdbx-ffi" }
 monica-lan-sync = { path = "vendor/monica-lan-sync" }
 serde = { version = "1", features = ["derive"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
 serde_json = { version = "1", features = ["arbitrary_precision", "raw_value"] }
 sha2 = "0.10"
 uniffi = "=0.31.1"
