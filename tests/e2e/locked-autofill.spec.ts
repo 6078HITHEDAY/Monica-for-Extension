@@ -1,7 +1,7 @@
 import { launchEdgeContext } from "./fixtures/edge";
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 import path from "node:path";
-import { dialogContent } from "./fixtures/material";
+import { dialogContent, editContentSection } from "./fixtures/material";
 import { projectLogins } from './fixtures/project-logins';
 
 const masterPassword = "locked autofill test master password";
@@ -147,8 +147,9 @@ test("editor opt-in fills only the selected password while locked, survives brow
     await row.getByRole("button", { name: "编辑登录项", exact: true }).click();
     const editor = fixture.manager.locator("m3e-dialog.material-editor-dialog");
     await expect(editor.getByRole("heading", { name: /^编辑/ })).toBeVisible();
-    await editor.locator(".editor-disclosure [slot=\"header\"]").filter({ hasText: "更多选项" }).click();
-    await editor.getByRole("checkbox", { name: /允许免解锁填写/ }).check();
+    await editContentSection(fixture.manager, "更多选项", async section => {
+      await section.getByRole("checkbox", { name: /允许免解锁填写/ }).check();
+    });
     await editor.getByRole("button", { name: "加密保存", exact: true }).click();
     await expect(editor).toBeHidden();
     await expect(row.locator(".locked-autofill-badge")).toContainText("免解锁填写");

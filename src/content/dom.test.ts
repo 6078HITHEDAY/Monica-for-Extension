@@ -232,6 +232,30 @@ describe("content autofill DOM engine", () => {
     expect([username.value, password.value, otp.value]).toEqual(["shadow-user", "shadow-secret", "123456"]);
   });
 
+  it("fills a login form that only links to register and forgot-password", () => {
+    const dom = new JSDOM(`<form>
+      <label>Email or Username <input id="user_login" autocomplete="email"></label>
+      <input id="password" type="password" name="user[password]">
+      <a href="/password/new">Forgot your Password?</a>
+      <input type="submit" value="Log in">
+      <p>Need an account? <a href="/register">Register here</a></p>
+    </form>`, { url: "https://users.nexusmods.com/auth/sign_in", pretendToBeVisual: true });
+    showLightInputs(dom);
+    expect(fillCredential({ username: "joy@example.com", password: "existing-secret" }, dom.window.document))
+      .toMatchObject({ ok: true, filledUsername: true, filledPassword: true });
+    expect(dom.window.document.querySelector<HTMLInputElement>("#user_login")!.value).toBe("joy@example.com");
+    expect(dom.window.document.querySelector<HTMLInputElement>("#password")!.value).toBe("existing-secret");
+  });
+
+  it("still skips an unannotated password on a reset-password path", () => {
+    const dom = new JSDOM('<form id="reset-password"><input id="password" type="password"></form>', {
+      url: "https://example.test/reset-password", pretendToBeVisual: true
+    });
+    showLightInputs(dom);
+    expect(fillCredential({ password: "existing-secret" }, dom.window.document)).toMatchObject({ ok: false });
+    expect(dom.window.document.querySelector<HTMLInputElement>("#password")!.value).toBe("");
+  });
+
   it("does not claim access to a closed shadow root", () => {
     const dom = page('<div id="closed-host"></div>');
     const closed = dom.window.document.querySelector("#closed-host")!.attachShadow({ mode: "closed" });

@@ -64,8 +64,8 @@ function likelyNewPasswordScope(root: ParentNode): boolean {
   const view = ownerDocument?.defaultView;
   const element = view && root instanceof view.Element ? root : undefined;
   const documentPath = ownerDocument?.location?.pathname || "";
-  const semantics = [documentPath, element?.id, element?.getAttribute("name"), element?.getAttribute("action"), element?.getAttribute("aria-label"), element?.textContent?.slice(0, 500)]
-    .filter(Boolean).join(" ").toLocaleLowerCase().replace(/[^\p{L}\p{N}-]/gu, "");
+  const semantics = [documentPath, element?.id, element?.getAttribute("name"), element?.getAttribute("action"), element?.getAttribute("aria-label")]
+    .filter(Boolean).join(" ").toLocaleLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
   return NEW_PASSWORD_SCOPE.test(semantics);
 }
 

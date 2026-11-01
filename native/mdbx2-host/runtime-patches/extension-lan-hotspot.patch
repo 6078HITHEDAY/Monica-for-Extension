@@ -1,0 +1,354 @@
+diff --git a/src/discovery.rs b/src/discovery.rs
+index 3851442..cec4a4b 100644
+--- a/src/discovery.rs
++++ b/src/discovery.rs
+@@ -12,7 +12,7 @@ const PROBE: &[u8] = b"monica-lan-discover/1";
+ #[derive(Default)]
+ struct Registry {
+     next: u64,
+-    offers: HashMap<u64, (Offer, bool)>,
++    offers: HashMap<u64, (Offer, bool, network::Bindings)>,
+     running: bool,
+ }
+ static REGISTRY: OnceLock<Mutex<Registry>> = OnceLock::new();
+@@ -56,7 +56,11 @@ fn response_socket() -> Result<UdpSocket> {
+     Ok(socket.into())
+ }
+ 
+-pub(super) fn register(offer: Offer, follow_interfaces: bool) -> Registration {
++pub(super) fn register(
++    offer: Offer,
++    follow_interfaces: bool,
++    bindings: network::Bindings,
++) -> Registration {
+     let Ok(mut state) = registry().lock() else {
+         return Registration(None);
+     };
+@@ -70,7 +74,9 @@ pub(super) fn register(offer: Offer, follow_interfaces: bool) -> Registration {
+     };
+     state.next += 1;
+     let id = state.next;
+-    state.offers.insert(id, (offer, follow_interfaces));
++    state
++        .offers
++        .insert(id, (offer, follow_interfaces, bindings));
+     if let Some(socket) = socket {
+         state.running = true;
+         std::thread::spawn(move || respond(socket));
+@@ -109,7 +115,7 @@ fn respond(socket: UdpSocket) {
+                 }
+             }
+             if let Ok(mut state) = registry().lock() {
+-                for (offer, follow_interfaces) in state.offers.values_mut() {
++                for (offer, follow_interfaces, _) in state.offers.values_mut() {
+                     if *follow_interfaces {
+                         offer.addresses = current.clone();
+                     }
+@@ -135,9 +141,17 @@ fn respond(socket: UdpSocket) {
+                 let Ok(state) = registry().lock() else { return };
+                 // A unicast datagram reaches one UDP socket. Reply with every active offer,
+                 // rather than letting several per-peer sockets compete for it.
+-                for (offer, _) in state.offers.values() {
++                for (offer, _, bindings) in state.offers.values() {
+                     if let Ok(message) = serde_json::to_vec(offer) {
+-                        let _ = socket.send_to(&message, peer);
++                        let handle = match peer.ip() {
++                            IpAddr::V4(ip) => network::handle(bindings, ip),
++                            _ => 0,
++                        };
++                        if handle == 0 {
++                            let _ = socket.send_to(&message, peer);
++                        } else if let Ok(reply) = probe_socket(handle) {
++                            let _ = reply.send_to(&message, &peer.into());
++                        }
+                     }
+                 }
+             }
+@@ -150,7 +164,7 @@ fn respond(socket: UdpSocket) {
+     }
+ }
+ 
+-fn probe_socket() -> Result<Socket> {
++fn probe_socket(network_handle: u64) -> Result<Socket> {
+     let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))
+         .map_err(|_| "discovery_unavailable")?;
+     socket
+@@ -162,26 +176,72 @@ fn probe_socket() -> Result<Socket> {
+     socket
+         .set_multicast_ttl_v4(1)
+         .map_err(|_| "discovery_unavailable")?;
++    socket
++        .set_broadcast(true)
++        .map_err(|_| "discovery_unavailable")?;
++    network::bind(&socket, network_handle)?;
+     Ok(socket)
+ }
+ 
++fn broadcast_addresses() -> Vec<Ipv4Addr> {
++    let mut addresses: Vec<_> = if_addrs::get_if_addrs()
++        .unwrap_or_default()
++        .into_iter()
++        .filter_map(|interface| match interface.addr {
++            if_addrs::IfAddr::V4(address)
++                if address.ip.is_private() || address.ip.is_link_local() =>
++            {
++                address
++                    .broadcast
++                    .filter(|ip| ip.is_private() || ip.is_link_local())
++            }
++            _ => None,
++        })
++        .collect();
++    addresses.sort();
++    addresses.dedup();
++    addresses.truncate(MAX_INVITATION_ADDRESSES);
++    addresses
++}
++
+ pub(super) fn discover(
+     duration: Duration,
+-    targets: Vec<Ipv4Addr>,
++    mut targets: Vec<Ipv4Addr>,
+     multicast: bool,
++    broadcast: bool,
++    bindings: network::Bindings,
+ ) -> Result<Vec<Offer>> {
++    // Hotspots may filter multicast. Probe only actual interface broadcasts,
++    // never a guessed subnet or the global 255.255.255.255 broadcast address.
++    if broadcast {
++        targets.extend(broadcast_addresses());
++    }
++    targets.sort();
++    targets.dedup();
++    targets.truncate(64);
+     let mut sockets: Vec<UdpSocket> = Vec::new();
+     if !targets.is_empty() {
+-        let socket = probe_socket()?;
++        let mut networks: HashMap<u64, Vec<Ipv4Addr>> = HashMap::new();
+         for address in targets {
+-            let _ = socket.send_to(PROBE, &SocketAddr::from((address, PORT)).into());
++            networks
++                .entry(network::handle(&bindings, address))
++                .or_default()
++                .push(address);
++        }
++        for (handle, targets) in networks {
++            let socket = probe_socket(handle)?;
++            for address in targets {
++                let _ = socket.send_to(PROBE, &SocketAddr::from((address, PORT)).into());
++            }
++            sockets.push(socket.into());
+         }
+-        sockets.push(socket.into());
+     }
+     if multicast {
+         // Each outgoing socket stays attached to its interface, including while replies arrive.
+         for address in addresses() {
+-            let Ok(socket) = probe_socket() else { continue };
++            let Ok(socket) = probe_socket(network::handle(&bindings, address)) else {
++                continue;
++            };
+             if socket.set_multicast_if_v4(&address).is_err() {
+                 continue;
+             }
+@@ -193,7 +253,7 @@ pub(super) fn discover(
+             }
+         }
+         if sockets.is_empty() {
+-            let socket = probe_socket()?;
++            let socket = probe_socket(0)?;
+             let _ = socket.send_to(PROBE, &SocketAddr::from((GROUP, PORT)).into());
+             sockets.push(socket.into());
+         }
+diff --git a/src/lib.rs b/src/lib.rs
+index 8cbee69..43a8c07 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -3,6 +3,7 @@
+ 
+ mod assets;
+ mod discovery;
++mod network;
+ mod peering;
+ mod replica;
+ mod storage;
+@@ -245,9 +246,11 @@ struct Prepared {
+     device: Option<peering::DeviceHello>,
+     secrets: peering::PairSecrets,
+     expected_device: Option<String>,
++    network_bindings: network::Bindings,
+ }
+ 
+ fn prepare(value: &Value) -> Result<Prepared> {
++    let network_bindings = network::read(value)?;
+     let protocol = value.get("protocol").and_then(Value::as_u64).unwrap_or(1);
+     if !matches!(protocol, 1 | 2) {
+         return Err("unsupported_protocol");
+@@ -351,6 +354,7 @@ fn prepare(value: &Value) -> Result<Prepared> {
+         device,
+         secrets,
+         expected_device,
++        network_bindings,
+     })
+ }
+ 
+@@ -461,7 +465,11 @@ fn start(value: &Value) -> Result<Value> {
+     let job = Job::new("waiting");
+     let handle = register(job.clone())?;
+     let invitations = invitation_links(prepared.protocol, &local_addresses, port, &code);
+-    let discovery = discovery::register(offer, listen_address.is_unspecified());
++    let discovery = discovery::register(
++        offer,
++        listen_address.is_unspecified(),
++        prepared.network_bindings.clone(),
++    );
+     let discovery_available = discovery.available();
+     std::thread::spawn(move || {
+         let incoming = prepared.incoming.clone();
+@@ -566,7 +574,13 @@ fn request(value: Value) -> Result<Value> {
+                 .get("multicast")
+                 .and_then(Value::as_bool)
+                 .unwrap_or(true);
+-            Ok(json!({"devices":discovery::discover(Duration::from_secs(2), targets, multicast)?}))
++            let broadcast = value
++                .get("broadcast")
++                .and_then(Value::as_bool)
++                .unwrap_or(multicast);
++            Ok(
++                json!({"devices":discovery::discover(Duration::from_secs(2), targets, multicast, broadcast, network::read(&value)?)?}),
++            )
+         }
+         "progress" => {
+             let job = job(value
+diff --git a/src/tests.rs b/src/tests.rs
+index d60ae6b..2bf2e38 100644
+--- a/src/tests.rs
++++ b/src/tests.rs
+@@ -225,6 +225,35 @@ fn unicast_discovery_without_multicast_returns_every_active_pairing_listener() {
+     }
+ }
+ 
++#[test]
++fn directed_broadcast_discovery_works_without_multicast_or_remembered_addresses() {
++    let _guard = serial_sessions();
++    let has_local_broadcast =
++        if_addrs::get_if_addrs()
++            .unwrap_or_default()
++            .iter()
++            .any(|interface| {
++                matches!(&interface.addr, if_addrs::IfAddr::V4(address)
++            if address.ip.is_private() && address.broadcast.is_some_and(|ip| ip.is_private()))
++            });
++    if !has_local_broadcast {
++        return;
++    } // Loopback-only hosts cannot exercise interface broadcasts.
++    let root = TestDirectory::new();
++    let out = root.directory("out");
++    std::fs::write(out.join("changes.mdbxsync"), b"synthetic hotspot bundle").unwrap();
++    let host = call(
++        json!({"operation":"start", "protocol":2, "vault_id":"hotspot-test",
++        "outgoing_directory":out, "incoming_directory":root.directory("in"),
++        "device":{"device_id":"hotspot-broadcast", "name":"Fixture"}}),
++    );
++    let found = request(json!({"operation":"discover", "multicast":false, "broadcast":true}));
++    call(json!({"operation":"release", "handle":host["handle"]}));
++    let found = found.unwrap();
++    assert!(found["devices"].as_array().unwrap().iter().any(|device| device["device_id"] == "hotspot-broadcast"),
++        "Directed broadcast must discover the listener when mDNS/multicast and old addresses are unavailable");
++}
++
+ fn serial_sessions() -> std::sync::MutexGuard<'static, ()> {
+     SESSION_TESTS
+         .lock()
+diff --git a/src/transport.rs b/src/transport.rs
+index 2260ea3..fbce875 100644
+--- a/src/transport.rs
++++ b/src/transport.rs
+@@ -67,7 +67,7 @@ pub(super) fn connect(
+             p.phase = "connecting";
+             p.connection_attempt += 1;
+         });
+-        let stream = match TcpStream::connect_timeout(&address, Duration::from_secs(2)) {
++        let stream = match network::connect(&address, &prepared.network_bindings) {
+             Ok(stream) => stream,
+             Err(_) => continue,
+         };
+diff --git a/src/network.rs b/src/network.rs
+new file mode 100644
+--- /dev/null
++++ b/src/network.rs
+@@ -0,0 +1,74 @@
++//! Bind only LAN sockets to the caller's Wi-Fi network when its subnet matches.
++//! Android may otherwise send traffic over cellular when a hotspot has no internet.
++use super::*;
++use socket2::Socket;
++
++pub(super) type Bindings = HashMap<Ipv4Addr, u64>;
++
++pub(super) fn read(value: &Value) -> Result<Bindings> {
++    let bindings: Bindings =
++        serde_json::from_value(value.get("network_handles").cloned().unwrap_or(json!({})))
++            .map_err(|_| "invalid_request")?;
++    if bindings.len() > MAX_INVITATION_ADDRESSES
++        || bindings.keys().any(|ip| !local_ip(IpAddr::V4(*ip)))
++    {
++        return Err("local_network_only");
++    }
++    Ok(bindings)
++}
++
++pub(super) fn handle(bindings: &Bindings, target: Ipv4Addr) -> u64 {
++    if target.is_loopback() || bindings.is_empty() {
++        return 0;
++    }
++    if let Some(handle) = bindings.get(&target) {
++        return *handle;
++    }
++    if_addrs::get_if_addrs()
++        .unwrap_or_default()
++        .into_iter()
++        .find_map(|interface| {
++            let if_addrs::IfAddr::V4(address) = interface.addr else {
++                return None;
++            };
++            let handle = bindings.get(&address.ip)?;
++            let mask = u32::from(address.netmask);
++            (u32::from(address.ip) & mask == u32::from(target) & mask).then_some(*handle)
++        })
++        .unwrap_or(0)
++}
++
++#[cfg(target_os = "android")]
++pub(super) fn bind(socket: &Socket, handle: u64) -> Result<()> {
++    use std::os::fd::AsRawFd;
++    #[link(name = "android")]
++    extern "C" {
++        fn android_setsocknetwork(network: u64, fd: i32) -> i32;
++    }
++    if handle != 0 && unsafe { android_setsocknetwork(handle, socket.as_raw_fd()) } != 0 {
++        return Err("discovery_unavailable");
++    }
++    Ok(())
++}
++
++#[cfg(not(target_os = "android"))]
++pub(super) fn bind(_socket: &Socket, _handle: u64) -> Result<()> {
++    Ok(())
++}
++
++pub(super) fn connect(address: &SocketAddr, bindings: &Bindings) -> Result<std::net::TcpStream> {
++    let socket = Socket::new(
++        socket2::Domain::IPV4,
++        socket2::Type::STREAM,
++        Some(socket2::Protocol::TCP),
++    )
++    .map_err(|_| "connection_failed")?;
++    let IpAddr::V4(ip) = address.ip() else {
++        return Err("local_network_only");
++    };
++    bind(&socket, handle(bindings, ip))?;
++    socket
++        .connect_timeout(&(*address).into(), Duration::from_secs(2))
++        .map_err(|_| "connection_failed")?;
++    Ok(socket.into())
++}

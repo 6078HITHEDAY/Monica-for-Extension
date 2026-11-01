@@ -37,6 +37,77 @@
         "src/lib.rs": "77270d787196e3b77d103f22f41b9dec794d036379ed5aad9e161a69f5ace0d8",
         "src/replica.rs": "60125bbe9029b114c5189a5a7fdec03bcf03f9f02dbc679bfe25811881d64a82"
       }
+    },
+    {
+      "id": "extension-lan-hotspot",
+      "reason": "Record the previously verified phone-hotspot directed broadcast and per-socket Android binding changes. Preserve local-only discovery bounds, existing Noise handshake and wire/storage formats.",
+      "patch": "runtime-patches/extension-lan-hotspot.patch",
+      "patch_sha256": "8f89e055c2fc2f4407a2517ef1350e99b618377ab49b1bfac963df8b3df5ac14",
+      "base_files": {
+        "src/discovery.rs": "1cbbcf11ad7c2f0393705c17f67205996a2e3401327f19eb85493bd4bdd1a728",
+        "src/lib.rs": "77270d787196e3b77d103f22f41b9dec794d036379ed5aad9e161a69f5ace0d8",
+        "src/tests.rs": "209d64ac1d5229cf2dd317d82ae7251bf4f47c1d0f59185bfef37c465addc972",
+        "src/transport.rs": "c5ec5a14d06bed55ba2b55d230462832d0bf5d5bdc845ee89fbeafddf1890ec4"
+      },
+      "files": {
+        "src/discovery.rs": "c28152fb8b4d0b0aaff004ce8f500ec4c9a564c042782e672e8144da149cdb4e",
+        "src/lib.rs": "999047b04f8e227f69178de176d03b9632b77129d12df6ea2abacb9d9a2e2496",
+        "src/tests.rs": "4ec0acab14d5f059cd2003c589a3612947d940129f84076172a460161539ffcd",
+        "src/transport.rs": "675f8d6dfd0ba135bb987941e5cc191b95c971e7f3b0700f98538a975656dd9a"
+      },
+      "added_files": {
+        "src/network.rs": "f28bde761596fb7d50489ef42afaae67b2ecae6feb076062e3e09ac90abd8f43"
+      }
+    },
+    {
+      "id": "extension-lan-android324",
+      "reason": "Align optional authenticated incremental records, encrypted resume and deletion review with frozen local Android 1.0.324 sources. Preserve the existing extension lossless JSON and directed-hotspot adaptations; original protocol baseline and licenses remain pinned.",
+      "patch": "runtime-patches/extension-lan-android324.patch",
+      "patch_sha256": "017689fc5efae3c1de82110322402b363acecf27a5116eca2788900686197ae4",
+      "base_files": {
+        "src/lib.rs": "999047b04f8e227f69178de176d03b9632b77129d12df6ea2abacb9d9a2e2496",
+        "src/peering.rs": "2fb3908df0470a516883f2694e7c487a2a212a5a96effefa40ef28852e39d047",
+        "src/replica.rs": "60125bbe9029b114c5189a5a7fdec03bcf03f9f02dbc679bfe25811881d64a82",
+        "src/storage.rs": "91178c438853299bc9a57a3ad6bc8a30acc66ccf8660aa65b454d5995ba974e7",
+        "src/tests.rs": "4ec0acab14d5f059cd2003c589a3612947d940129f84076172a460161539ffcd",
+        "src/transport.rs": "675f8d6dfd0ba135bb987941e5cc191b95c971e7f3b0700f98538a975656dd9a"
+      },
+      "files": {
+        "src/lib.rs": "2bf9ab7c8b97143b2fee4318713b852ef75ade39b623b7d556e78f437dbe7b7a",
+        "src/peering.rs": "55ba561427f19cc89325056fa5f5ce5d30ccde0a02e9de254a4a59eeaa5de340",
+        "src/replica.rs": "244ac510a94744215c115444d68785af2f5e422903e6e3ae3bbc8b83e75a55b2",
+        "src/storage.rs": "53af8c82e45563e261a4cf69399b84ef4d2b228c872dbf7c5cdf8d5b1e9e74c2",
+        "src/tests.rs": "48cbd1e2496a2e41385fbed5e2b3aa9d7339e6cac1323028ad1de0e6b23b8557",
+        "src/transport.rs": "96324fe5f48379af432ee0d3546855bcf091fbf64284024c8408d61a1e2533f6"
+      },
+      "added_files": {
+        "src/incremental.rs": "311fa38aeefd1908dcff4d29f385d83faca55de442c6866197f1684c2127f5b7",
+        "src/incremental_transfer_tests.rs": "9420460afb4688037e178a334cbf539d66be354fa9eca419b7be9f39c1cf16c2",
+        "src/resume.rs": "f405bdd8a2c9ac9187587371e9af831a0e28f2d0b242611af4fa20b95716370e",
+        "src/resume_transfer_tests.rs": "fccb3c78c57e4c98e7d5c02385f848283f4d58d4c4b0f349b78d44cf6a99a403"
+      },
+      "origin": {
+        "repository": "https://github.com/Monica-Pass/Monica",
+        "commit": "a8f61e778af8fbb490f3fd59c8d84aa9b6a6351b",
+        "working_tree_clean": false,
+        "captured": "2026-11-01",
+        "source_files": {
+          "Cargo.toml": "beb21c5a36e110b4934e922949a97c0af08d69109f7fe44009f6da22ea86d21b",
+          "src/assets.rs": "f0f089cf3c637f732dffc50dea311f23a305613a68438c807340c192eab889f2",
+          "src/discovery.rs": "c28152fb8b4d0b0aaff004ce8f500ec4c9a564c042782e672e8144da149cdb4e",
+          "src/incremental.rs": "4b8583e34190ec88fbca4c1e9b014f4a84d0cca8de375f8dad8e9be47a2a1c6c",
+          "src/incremental_transfer_tests.rs": "9420460afb4688037e178a334cbf539d66be354fa9eca419b7be9f39c1cf16c2",
+          "src/lib.rs": "2ff66b05236e7a869481de97beadf5d781c28c15ee91a5f07472236afc801355",
+          "src/network.rs": "f28bde761596fb7d50489ef42afaae67b2ecae6feb076062e3e09ac90abd8f43",
+          "src/peering.rs": "55ba561427f19cc89325056fa5f5ce5d30ccde0a02e9de254a4a59eeaa5de340",
+          "src/replica.rs": "f4975edddf0f0f94dd546816f810b79299d4eade85c8c816e805ffe39c333b5c",
+          "src/resume.rs": "7d8e961618dd5b293e1b9755e0db9d8398d1f507cc98a0b94eb044537fa141fa",
+          "src/resume_transfer_tests.rs": "fccb3c78c57e4c98e7d5c02385f848283f4d58d4c4b0f349b78d44cf6a99a403",
+          "src/storage.rs": "91178c438853299bc9a57a3ad6bc8a30acc66ccf8660aa65b454d5995ba974e7",
+          "src/tests.rs": "48cbd1e2496a2e41385fbed5e2b3aa9d7339e6cac1323028ad1de0e6b23b8557",
+          "src/transport.rs": "96324fe5f48379af432ee0d3546855bcf091fbf64284024c8408d61a1e2533f6"
+        }
+      }
     }
   ]
 }

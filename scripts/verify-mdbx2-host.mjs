@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 
@@ -30,16 +30,24 @@ if (lanProvenance.source.commit !== "15b5ec7203c1ba51e19e298aebf2daca82fa55c2" |
 if (!manifest.includes('monica-lan-sync = { path = "vendor/monica-lan-sync" }')) throw new Error("Nearby Host must use the pinned local Android protocol core.");
 if (Object.keys(lanProvenance.files).length !== 11) throw new Error("Nearby source inventory differs.");
 const lanExtensionHashes = {};
+const lanAddedHashes = {};
 for (const overlay of lanProvenance.extension_overlays || []) {
   if (!overlay.patch?.startsWith('runtime-patches/') || overlay.patch.includes('..')) throw new Error('Invalid nearby extension overlay path.');
   if (sha256(await readFile(resolve(hostRoot, overlay.patch))) !== overlay.patch_sha256) throw new Error(`Nearby extension overlay hash differs: ${overlay.id}.`);
   if (Object.keys(overlay.files).length !== Object.keys(overlay.base_files).length) throw new Error('Nearby extension overlay file inventory differs.');
   for (const [path, hash] of Object.entries(overlay.files)) {
-    if (!lanProvenance.files[path] || (lanExtensionHashes[path] || lanProvenance.files[path]) !== overlay.base_files[path]) throw new Error(`Nearby extension overlay baseline differs: ${path}.`);
+    if (!(lanProvenance.files[path] || lanAddedHashes[path]) || (lanExtensionHashes[path] || lanProvenance.files[path] || lanAddedHashes[path]) !== overlay.base_files[path]) throw new Error(`Nearby extension overlay baseline differs: ${path}.`);
     lanExtensionHashes[path] = hash;
   }
+  for (const [path, hash] of Object.entries(overlay.added_files || {})) {
+    if (!/^src\/[a-z_]+\.rs$/.test(path) || lanProvenance.files[path] || lanAddedHashes[path] || !/^[a-f0-9]{64}$/.test(hash)) throw new Error(`Invalid nearby added source: ${path}.`);
+    lanAddedHashes[path] = hash;
+  }
 }
-for (const [path, expected] of Object.entries(lanProvenance.files)) {
+const lanFinalFiles = { ...lanProvenance.files, ...lanAddedHashes };
+const lanSourceNames = await readdir(resolve(hostRoot, 'vendor', 'monica-lan-sync', 'src'));
+if (lanSourceNames.some(name => !lanFinalFiles[`src/${name}`]) || lanSourceNames.length !== Object.keys(lanFinalFiles).filter(path => path.startsWith('src/')).length) throw new Error('Nearby compiled source inventory differs.');
+for (const [path, expected] of Object.entries(lanFinalFiles)) {
   if (!/^(?:Cargo\.(?:toml|lock)|LICENSE|src\/[a-z_]+\.rs)$/.test(path)) throw new Error("Invalid nearby provenance path.");
   if (sha256(normalize(path, await readFile(resolve(hostRoot, "vendor", "monica-lan-sync", path)))) !== (lanExtensionHashes[path] || expected)) throw new Error(`Nearby source differs from its recorded baseline/overlay: ${path}.`);
 }
@@ -116,9 +124,12 @@ for (const required of ['"conflict.list"', '"conflict.resolve"', 'MAX_CONFLICT_P
 for (const required of ['"attachment.list"', '"attachment.read.begin"', '"attachment.upload.begin"', '"attachment.delete"', 'MAX_ATTACHMENT_BYTES', 'MAX_ATTACHMENT_MEMORY_BYTES', '"supportsAttachmentManagement": true', 'Zeroizing<Vec<u8>>']) {
   if (!runtime.includes(required)) throw new Error(`MDBX2 Host attachment boundary is missing ${required}.`);
 }
-for (const required of ["GetForegroundWindow", "hello-window-unavailable", "binding-record-invalid", "credential_bytes", "confirmation-required"]) {
+for (const required of ["GetForegroundWindow", "hello-window-unavailable", "binding-record-invalid", "credential_bytes", "confirmation-required", "hello_native_failure", "hello_client_data"]) {
   if (!windowsHello.includes(required)) throw new Error(`MDBX2 Host Windows Hello boundary is missing ${required}.`);
 }
+if ((windowsHello.match(/dwAuthenticatorAttachment: WEBAUTHN_AUTHENTICATOR_ATTACHMENT_PLATFORM/g) || []).length !== 2
+  || (windowsHello.match(/dwUserVerificationRequirement: WEBAUTHN_USER_VERIFICATION_REQUIREMENT_REQUIRED/g) || []).length !== 2
+  || windowsHello.includes("WEBAUTHN_AUTHENTICATOR_ATTACHMENT_ANY")) throw new Error("Windows Hello must require the local platform authenticator and user verification for enrollment and unlock.");
 for (const required of ["MDBX2_MAX_HISTORY_PAGE_SIZE", "MDBX2_MAX_HISTORY_RESULT_BYTES", "MDBX2_MAX_HISTORY_REVERT_ITEMS", "supportsHistoryDiff: true", "supportsHistoryRevert: true"]) {
   if (!contract.includes(required)) throw new Error(`MDBX2 extension history contract is missing ${required}.`);
 }

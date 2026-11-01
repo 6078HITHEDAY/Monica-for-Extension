@@ -31,6 +31,15 @@ const native = (execute: (method: string, params: Record<string, unknown>) => Pr
 };
 
 describe("nearby native boundary", () => {
+  it.each([undefined, 1, '1', true, 2])('uses only an exact optional host capability and keeps old-v2 compatibility (%s)', async capability => {
+    const client = { request: vi.fn(async (method: string) => method === 'host.hello'
+      ? { nearbyTransportVersion: 2, nearbyIncrementalSync: capability } : pack({ ready: true })), close: vi.fn() };
+    const transport = new NearbyNativeTransport(client);
+    expect(transport.supportsIncrementalSync).toBe(false);
+    expect(await transport.call('replica_revision', { handle: uuid })).toEqual({ ready: true });
+    expect(transport.supportsIncrementalSync).toBe(capability === 1);
+    expect(client.close).not.toHaveBeenCalled();
+  });
   it('preserves numeric lexemes and literal marker keys through both directions, including small uploads', async () => {
     const json = '{"clock":{"peer":9007199254740993},"decimal":1.00000000000000001,"huge":1e999,"zero":-0,"__proto__":{"safe":true},"$serde_json::private::Number":"literal"}';
     const source = parseLosslessJson(json) as Record<string, unknown>;

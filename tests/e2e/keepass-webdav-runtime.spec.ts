@@ -1,4 +1,5 @@
-import { chromium, expect, test, type BrowserContext, type Page, type TestInfo } from "@playwright/test";
+import { launchTestContext } from './fixtures/edge';
+import { expect, test, type BrowserContext, type Page, type TestInfo } from "@playwright/test";
 import * as kdbxweb from "kdbxweb";
 import path from "node:path";
 import { buildKeePassFixture, keePassCredentials } from "../../src/providers/keepass/keepass-fixture";
@@ -34,7 +35,7 @@ interface KeePassOpenResult {
 
 async function launchExtension(testInfo: TestInfo): Promise<{ context: BrowserContext; extensionId: string; manager: Page }> {
   const extensionPath = path.resolve("dist");
-  const context = await chromium.launchPersistentContext(testInfo.outputPath("p"), {
+  const context = await launchTestContext(testInfo.outputPath("p"), {
     channel: "chromium",
     headless: true, locale: "zh-CN",
     args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]

@@ -75,7 +75,14 @@ test('production Wi-Fi coordinator receives into bundled MDBX and returns native
     await runtime(a,{type:'PROVIDER_ATTACHMENT_UPLOAD_FINISH',providerId:localProvider,itemId:login.id,transferId:upload.transferId});
     await connect(a);await connect(b);
     const p=await command(b,{type:'preferences'});await command(b,{type:'update',epoch:p.epoch,change:{kind:'source',providerId}});
-    const complete=async()=>expect.poll(async()=>{const result=await Promise.all([command(a,{type:'progress'}),command(b,{type:'progress'})]);return result.map(v=>v.phase);},{timeout:45000}).toEqual(['completed','completed']);
+    const complete=async(includeReceived=false)=>expect.poll(async()=>{
+      const pages=[a,b], result=await Promise.all(pages.map(page=>command(page,{type:'progress'})));
+      for(let i=0;i<result.length;i++) if(result[i].deletionReview?.incoming){
+        expect(result[i].phase).toBe('review'); expect(result[i].deletionReview.count).toBe(1);
+        await command(pages[i],{type:'confirm-deletions',reviewId:result[i].deletionReview.id,choice:includeReceived?'include':'omit'});
+      }
+      return result.map(v=>v.phase);
+    },{timeout:45000}).toEqual(['completed','completed']);
     const pair=await command(a,{type:'pair'});await command(b,{type:'pair',invitation:pair.pairing.invitations[0]});await complete();
     const peerA=(await command(a,{type:'status'})).peerId,peerB=(await command(b,{type:'status'})).peerId;
     const exchange=async(automaticDiscovery=false,includeDeletions=false)=>{
@@ -84,7 +91,7 @@ test('production Wi-Fi coordinator receives into bundled MDBX and returns native
         if(v.deletionReview)v=await command(page,{type:'confirm-deletions',reviewId:v.deletionReview.id,choice:includeDeletions?'include':'omit'});
         expect(v.phase).toBe('ready');}
       const aListens=peerB>peerA;
-      const transfer=await command(aListens?a:b,{type:'start'});await command(aListens?b:a,{type:'start',...(!automaticDiscovery?{endpoint:transfer.endpoint}:{})});await complete();
+      const transfer=await command(aListens?a:b,{type:'start'});await command(aListens?b:a,{type:'start',...(!automaticDiscovery?{endpoint:transfer.endpoint}:{})});await complete(includeDeletions);
     };
     await exchange();
     const collections=await runtime(b,{type:'MDBX2_COLLECTION_LIST',providerId});expect(collections.items.length).toBeGreaterThan(0);

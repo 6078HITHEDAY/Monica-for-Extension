@@ -12,12 +12,77 @@ import { nearbyLocalItemToWire } from './application-codec';
 import type { NearbyIncomingRecord } from './local-adoption';
 import { localNearbySource } from './source-adapter';
 import { NearbyDataError } from './wire-shape';
+import { nearbySha256 } from './native-transport';
 
 const handle = '11111111-1111-4111-8111-111111111111';
 const peer = { deviceId: 'phone', name: 'Synthetic phone', pairId: 'pair-one', trustedKey: Buffer.alloc(32, 9).toString('base64url'),
   lastSyncedAt: 0, sentRevision: '', receivedRevision: '', receivedRequest: '0' };
 const discovered = { protocol: 'monica-lan', version: 2, session: peer.pairId, name: 'Synthetic phone', port: 5555,
   address: '192.168.1.20', addresses: ['192.168.1.20', '10.0.0.7'], device_id: peer.deviceId, trusted: true, revision: 'r:0::0' };
+
+describe('authenticated incremental receive and resume lifecycle', () => {
+  it.each(['valid', 'corrupt', 'wrong-size', 'changed-source', 'missing', 'legacy'] as const)('validates locally retained incremental assets (%s)', async mode => {
+    const f = await fixture(); f.transport.supportsIncrementalSync = mode !== 'legacy';
+    await f.coordinator.prepare(peer.deviceId); await f.coordinator.start();
+    const bytes = new Uint8Array([17, 31, 49]), id = await nearbySha256(bytes);
+    const original = await f.service.captureNearbyLocalRecords();
+    const readAsset = vi.fn(async () => mode === 'corrupt' ? new Uint8Array([0, 0, 0]) : bytes.slice());
+    (f.coordinator as any).source.capture = vi.fn(async () => ({
+      sourceHash: mode === 'changed-source' ? 'changed' : original.sourceHash,
+      records: mode === 'missing' ? [] : [{ data: { assets: [{ id, size: mode === 'wrong-size' ? 4 : 3 }] } }], readAsset
+    }));
+    const call = f.transport.call.getMockImplementation()!;
+    f.transport.call.mockImplementation(async (op, params) => op === 'asset_list' ? { items: [] } : call(op, params));
+    const result = (f.coordinator as any).readIncomingAsset({ id, size: 3 });
+    if (mode === 'valid') expect(await result).toEqual(bytes);
+    else await expect(result).rejects.toThrow();
+    if (mode === 'missing' || mode === 'legacy' || mode === 'changed-source' || mode === 'wrong-size') expect(readAsset).not.toHaveBeenCalled();
+    expect(f.operations).not.toContain('acknowledge'); f.coordinator.close();
+  });
+  async function receiving() {
+    const f = await fixture(); f.transport.supportsIncrementalSync = true;
+    await f.coordinator.prepare(peer.deviceId); await f.coordinator.start();
+    const original = f.transport.call.getMockImplementation()!;
+    const remote = { device_id: peer.deviceId, name: peer.name, revision: 'remote', content_type: 'vault', vault_content_version: 2,
+      receive_content: true, send_content: true, pairing: {}, sync_request: 0, interval_seconds: 60, settings_version: 0, settings_writer: '' };
+    f.transport.call.mockImplementation(async (op, params) => op === 'progress' ? { phase: 'received', peer: remote }
+      : op === 'replica_merge_preview' ? { deletions: 1, review_revision: 'c'.repeat(64) } : original(op, params));
+    return f;
+  }
+  it.each(['omit', 'include'] as const)('waits for receive deletion review and actual application before acknowledging (%s)', async choice => {
+    const f = await receiving(), before = await f.service.nearbyLocalSnapshotHash();
+    const review = await f.coordinator.poll();
+    expect(review).toMatchObject({ phase: 'review', deletionReview: { count: 1, incoming: true } });
+    expect(f.operations).not.toContain('replica_merge'); expect(f.operations).not.toContain('acknowledge');
+    expect(await f.service.nearbyLocalSnapshotHash()).toBe(before);
+    expect((await f.coordinator.poll()).deletionReview?.id).toBe(review.deletionReview!.id);
+    await f.coordinator.confirmDeletions(review.deletionReview!.id, choice);
+    const merge = f.operations.indexOf('replica_merge'), ack = f.operations.indexOf('acknowledge');
+    expect(f.params[merge]).toMatchObject({ deletion_policy: choice, review_revision: 'c'.repeat(64) });
+    expect(ack).toBeGreaterThan(merge);
+    expect((await f.service.nearbySessionPreferences(f.sessionId)).peers[0].lastSyncedAt).toBe(0);
+  });
+  it('revokes a pending receive review on vault lock without an apply or receipt', async () => {
+    const f = await receiving(), view = await f.coordinator.poll(); await f.service.lock();
+    await expect(f.coordinator.confirmDeletions(view.deletionReview!.id, 'include')).rejects.toThrow();
+    expect(f.operations).not.toContain('replica_merge'); expect(f.operations).not.toContain('acknowledge');
+  });
+  it('rejects a changed native review without publishing an applied receipt', async () => {
+    const f = await receiving(), review = await f.coordinator.poll(), original = f.transport.call.getMockImplementation()!;
+    f.transport.call.mockImplementation(async (op, params) => { if (op === 'replica_merge') throw Error('review_changed'); return original(op, params); });
+    await expect(f.coordinator.confirmDeletions(review.deletionReview!.id, 'include')).rejects.toThrow();
+    expect(f.operations).not.toContain('acknowledge'); expect(f.transport.close).toHaveBeenCalled();
+  });
+  it('unwraps Android hotspot hints without sending Wi-Fi credentials to the native host', async () => {
+    const f = await fixture(), link = `monica-lan:2:192.168.43.1:12345:${peer.trustedKey}`;
+    const encode = (s: string) => Buffer.from(s).toString('base64url');
+    await f.coordinator.pair(`monica-hotspot:1:${encode('Monica synthetic')}:${encode('synthetic-pass')}:${encode(link)}`);
+    const params = f.params[f.operations.indexOf('connect')];
+    expect(params.invitation).toBe(link);
+    expect(JSON.stringify(f.params)).not.toContain('synthetic-pass');
+    expect(JSON.stringify(f.params)).not.toContain('Monica synthetic');
+  });
+});
 
 it('keeps a manual request while the paired phone is still preparing its listener', async () => {
   const f = await fixture();
@@ -63,7 +128,7 @@ async function fixture(items: VaultItem[] = [createLoginItem({ title: 'Original'
   const preferences = await service.nearbySessionPreferences(sessionId);
   await service.updateNearbyPreferences({ kind: 'remember', peer: saved, enrollment: true }, preferences.epoch, sessionId);
   const operations: string[] = [], params: Record<string, unknown>[] = [];
-  const transport = { close: vi.fn(), call: vi.fn(async (operation: NearbyOperation, input: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
+  const transport = { supportsIncrementalSync: false, close: vi.fn(), call: vi.fn(async (operation: NearbyOperation, input: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
     operations.push(operation); params.push(input);
     switch (operation) {
       case 'snapshot_pairing': return { handle, revision: 'pairing-only-v1', asset_ids: [], pending: false };

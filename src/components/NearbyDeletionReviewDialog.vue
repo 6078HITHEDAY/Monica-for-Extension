@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { tr } from '../i18n';
 
-defineProps<{ count: number; peerName?: string; busy: boolean }>();
+defineProps<{ count: number; peerName?: string; busy: boolean; incoming?: boolean }>();
 const emit = defineEmits<{ choose: [choice: 'omit' | 'include']; cancel: [] }>();
 </script>
 
@@ -9,9 +9,9 @@ const emit = defineEmits<{ choose: [choice: 'omit' | 'include']; cancel: [] }>()
   <m3e-dialog v-material-dialog open class="material-dialog deletion-review-dialog" :close-label="tr('取消同步')" @closed.self="emit('cancel')">
     <h2 slot="header">{{ tr('发现历史删除记录') }}</h2>
     <div class="deletion-review" data-nearby-deletion-review>
-      <p>{{ tr('待发送内容中有 {0} 条历史删除记录。尚未开始传输，请选择本次如何处理。', { 0: count }) }}</p>
-      <p v-if="peerName">{{ tr('发送到：{0}', { 0: peerName }) }}</p>
-      <p>{{ tr('跳过删除可保留另一端的内容；包含删除可能将另一端对应的密码或验证码移入回收站。此选择仅对本次同步有效。') }}</p>
+      <p>{{ tr(incoming ? '收到 {0} 条历史删除记录。尚未修改本机内容，请选择本次如何处理。' : '待发送内容中有 {0} 条历史删除记录。尚未开始传输，请选择本次如何处理。', { 0: count }) }}</p>
+      <p v-if="peerName">{{ tr(incoming ? '来自：{0}' : '发送到：{0}', { 0: peerName }) }}</p>
+      <p>{{ tr(incoming ? '跳过删除可保留本机内容；包含删除可能将本机对应的密码或验证码移入回收站。此选择仅对本次同步有效。' : '跳过删除可保留另一端的内容；包含删除可能将另一端对应的密码或验证码移入回收站。此选择仅对本次同步有效。') }}</p>
     </div>
     <div slot="actions" class="deletion-review-actions">
       <m3e-button variant="filled" :disabled="busy" @click="emit('choose', 'omit')">{{ tr('跳过删除，继续同步') }}</m3e-button>

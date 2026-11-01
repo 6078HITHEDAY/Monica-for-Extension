@@ -16,7 +16,7 @@ import { providerSourceRecordsFor, replaceProviderSourceRecords, validProviderMu
 import { sourceRecordsBudgetError } from "../core/source-records";
 import { applyLocalTransferBatch, isLocalTransferItem, prepareLocalTransferBatch, type LocalTransferBatch, type LocalTransferRequest, type LocalTransferResource } from '../core/local-transfer';
 import { applyLocalAttachmentMutation, localAttachmentOwner, type LocalAttachmentMutation } from '../core/local-attachments';
-import { isLocalTrashItem } from '../core/local-trash';
+import { isLocalTrashItem, isLocalOnlyVaultItem } from '../core/local-trash';
 import { readKeePassTransfers, assertKeePassTransferBindings, keePassTransferSnapshotHash, keePassTransferResult, type KeePassTransferIntent } from '../core/keepass-transfer-journal';
 import { readBitwardenCipherCopies, validateBitwardenCopyFiles, advanceBitwardenCipherCopy, assertBitwardenCopyTarget,
   bitwardenCopySourceHash, bitwardenCopyIntent, type BitwardenCipherCopyRecord } from '../core/bitwarden-transfer-journal';
@@ -3514,6 +3514,7 @@ export class SecureVaultService {
       const { state, envelope, key } = await this.mutableContext();
       const item = state.items.find((candidate) => candidate.id === itemId);
       if (!item) throw new Error("回收站项目不存在。");
+      if (item.kind === "opaque" && !isLocalOnlyVaultItem(item, state.providers)) throw new Error("此原生类型或版本仅可读取，请使用支持它的客户端管理。");
       if (!item.deletedAt) return structuredClone(item);
       if (item.providerRefs.some(ref => state.providers.some(provider => provider.id === ref.providerId && provider.kind === 'mdbx2')))
         throw new Error('MDBX 项目必须通过原生恢复流程确认后才能移出回收站。');
@@ -3644,7 +3645,7 @@ export class SecureVaultService {
     const now = new Date(this.now()).toISOString();
     const item = state.items.find((candidate) => candidate.id === itemId);
     if (!item) return;
-    if (item.kind === "opaque") throw new Error("此原生类型或版本仅可读取，请使用支持它的客户端管理。");
+    if (item.kind === "opaque" && !isLocalOnlyVaultItem(item, state.providers)) throw new Error("此原生类型或版本仅可读取，请使用支持它的客户端管理。");
     state.items = state.items.map((candidate) => (candidate.id === itemId ? { ...candidate, deletedAt: now, updatedAt: now } : candidate)) as VaultItem[];
     queueProviderMutations(state, item, "delete", now);
     state.updatedAt = now;
@@ -4069,9 +4070,12 @@ function publicProviderAccount(provider: ProviderAccount): ProviderAccount {
         vaultHandle: stringConfig(provider, "vaultHandle") || undefined,
         runtimeBackend: mdbx2AccountBackend(provider),
         schemaVersion: typeof provider.config.schemaVersion === "number" ? provider.config.schemaVersion : undefined,
+        syncTransport: provider.config.syncTransport === "onedrive" ? "onedrive" : "webdav",
         webDavBaseUrl: stringConfig(provider, "webDavBaseUrl") || undefined,
         webDavUsername: stringConfig(provider, "webDavUsername") || undefined,
         webDavPasswordConfigured: Boolean(stringConfig(provider, "webDavPassword")),
+        oneDriveDriveId: stringConfig(provider, "oneDriveDriveId") || undefined,
+        ...publicOneDriveConnection(provider.config.oneDriveConnection),
         remotePath: stringConfig(provider, "remotePath") || undefined,
         syncConfigured: Boolean(stringConfig(provider, "syncStateHandle")),
         hostVerifiedAt: stringConfig(provider, "hostVerifiedAt") || undefined

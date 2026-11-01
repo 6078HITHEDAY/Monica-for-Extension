@@ -10,11 +10,12 @@ import { bytesToBase64 } from "../security/encoding";
 import { MONICA_ONEDRIVE_CLIENT_ID } from "../providers/onedrive/onedrive-auth";
 
 const props = defineProps<{ provider?: ProviderAccount }>();
-const emit = defineEmits<{ close: []; connected: [result: KeePassOneDriveConnectResult] }>();
+const emit = defineEmits<{ close: []; connected: [result: KeePassOneDriveConnectResult]; changed: [] }>();
 const name = ref(props.provider?.name || "KeePass OneDrive");
 const password = ref("");
 const keyFile = ref<File>();
 const revealPassword = ref(false);
+const nameEdited = ref(Boolean(props.provider));
 const defaultTarget = ref(props.provider?.isDefaultSaveTarget || false);
 const clientId = ref(String(props.provider?.config.oneDriveClientId || MONICA_ONEDRIVE_CLIENT_ID));
 const login = ref<OneDriveLoginSummary>();
@@ -31,7 +32,13 @@ const loginHandle = ref("");
 let generation = 0;
 const items = computed(() => (page.value?.items || []).filter(item => item.name.toLocaleLowerCase().includes(query.value.toLocaleLowerCase())));
 const accountLabel = computed(() => login.value?.profile.username || login.value?.profile.displayName || props.provider?.config.oneDriveUsername || props.provider?.config.oneDriveDisplayName || "");
-const canConnect = computed(() => !busy.value && !!selected.value && (!!login.value || !!props.provider));
+/** The picked file decides the kind: .mdbx connects an MDBX2 vault, everything selectable otherwise is KDBX. */
+const selectedKind = computed<"keepass" | "mdbx2" | undefined>(() => {
+  if (!selected.value) return undefined;
+  return selected.value.name.toLowerCase().endsWith(".mdbx") ? "mdbx2" : "keepass";
+});
+const selectedPath = computed(() => selected.value ? [...folders.value.map(folder => folder.name), selected.value.name].join("/") : "");
+const canConnect = computed(() => !busy.value && !!selected.value && (!!login.value || (!!props.provider && selectedKind.value === "keepass")));
 const redirectUri = typeof chrome !== "undefined" && chrome.identity ? chrome.identity.getRedirectURL("onedrive") : "";
 
 function invalidateLogin() {
@@ -70,7 +77,7 @@ async function browse(path: Array<{ id: string; name: string }>) {
   const revision = generation;
   busy.value = "browse"; error.value = "";
   try {
-    const result = await vaultClient.browseOneDrive({ loginId: login.value.loginId, parentId: path.at(-1)?.id });
+    const result = await vaultClient.browseOneDrive({ loginId: login.value.loginId, parentId: path.at(-1)?.id, extensions: [".kdbx", ".mdbx"] });
     if (revision !== generation) return;
     page.value = result; folders.value = path; query.value = "";
   } catch (cause) {
@@ -81,13 +88,28 @@ async function browse(path: Array<{ id: string; name: string }>) {
 function choose(item: OneDriveItem) {
   if (busy.value) return;
   if (item.kind === "folder") void browse([...folders.value, { id: item.itemId, name: item.name }]);
-  else { selected.value = item; if (name.value === "KeePass OneDrive") name.value = item.name.replace(/\.kdbx$/i, ""); }
+  else {
+    selected.value = item;
+    if (!nameEdited.value) name.value = item.name.replace(/\.(?:kdbx|mdbx)$/i, "") || (item.name.toLowerCase().endsWith(".mdbx") ? "MDBX2 OneDrive" : "KeePass OneDrive");
+  }
 }
 
 async function connect() {
   if (!canConnect.value) return;
   const revision = generation;
   busy.value = "connect"; error.value = "";
+  try {
+    if (selectedKind.value === "mdbx2") {
+      await connectMdbx2(revision);
+    } else {
+      await connectKeePass(revision);
+    }
+  } catch (cause) {
+    if (revision === generation) error.value = cause instanceof Error ? cause.message : tr("无法连接数据库，请重试。");
+  } finally { if (revision === generation) busy.value = ""; }
+}
+
+async function connectKeePass(revision: number): Promise<void> {
   let encodedKey: string | undefined;
   try {
     if (keyFile.value) {
@@ -103,16 +125,38 @@ async function connect() {
     loginHandle.value = "";
     password.value = ""; keyFile.value = undefined;
     emit("connected", result); emit("close");
+  } finally { encodedKey = undefined; }
+}
+
+/** Downloads the portable bootstrap, imports it as the local working copy, then binds OneDrive sync. */
+async function connectMdbx2(revision: number): Promise<void> {
+  const loginId = login.value?.loginId;
+  if (!loginId) throw new Error(tr("请先登录 OneDrive。"));
+  const remotePath = selectedPath.value;
+  const finished = await vaultClient.downloadMdbx2Bootstrap({ transport: "onedrive", driveId: selected.value!.driveId, remotePath, loginId });
+  try {
+    if (revision !== generation) return;
+    const opened = await vaultClient.openMdbx2Vault({ name: name.value, source: { kind: "file", handle: finished.fileHandle },
+      credential: { method: "password", password: password.value }, isDefaultSaveTarget: defaultTarget.value });
+    await vaultClient.saveMdbx2OneDrive(opened.account.id, name.value, { remotePath, loginId }, defaultTarget.value);
+    await vaultClient.registerMdbx2Bootstrap(opened.account.id);
+    await vaultClient.syncProvider(opened.account.id);
+    if (revision !== generation) return;
+    loginHandle.value = "";
+    password.value = "";
+    emit("changed"); emit("close");
   } catch (cause) {
-    if (revision === generation) error.value = cause instanceof Error ? cause.message : tr("无法连接数据库，请重试。");
-  } finally { encodedKey = undefined; if (revision === generation) busy.value = ""; }
+    // The staged import is consumed by a successful open; otherwise release it.
+    await vaultClient.releaseMdbx2File(finished.fileHandle).catch(() => undefined);
+    throw cause;
+  }
 }
 </script>
 
 <template>
   <div class="modal-backdrop" role="presentation" @mousedown.self="close">
     <section class="editor-dialog provider-dialog onedrive-dialog" role="dialog" aria-modal="true" aria-labelledby="onedrive-title">
-      <header><div><h2 id="onedrive-title">{{ provider ? tr('管理 OneDrive 数据库') : tr('连接 OneDrive 数据库') }}</h2><p>{{ tr('登录 Microsoft 账号，选择与 Android 共用的 KDBX 文件。') }}</p></div><m3e-icon-button data-dialog-close :aria-label="tr('关闭 OneDrive 设置')" :disabled="busy === 'connect'" @click="close"><m3e-icon name="close" /></m3e-icon-button></header>
+      <header><div><h2 id="onedrive-title">{{ provider ? tr('管理 OneDrive 数据库') : tr('连接 OneDrive 数据库') }}</h2><p>{{ tr('登录 Microsoft 账号，选择与 Android 共用的 KDBX 或 MDBX 文件。') }}</p></div><m3e-icon-button data-dialog-close :aria-label="tr('关闭 OneDrive 设置')" :disabled="busy === 'connect'" @click="close"><m3e-icon name="close" /></m3e-icon-button></header>
       <form class="onedrive-form" @submit.prevent="connect">
         <section class="onedrive-account" :aria-label="tr('Microsoft 账号')">
           <m3e-icon name="cloud" aria-hidden="true" /><div><strong>{{ accountLabel || tr('尚未登录') }}</strong><p>{{ login ? tr('已登录，选择数据库后保存连接。') : provider ? tr('重新登录会保留本机未同步的修改。') : tr('连接后可自动同步密码、Passkey 和附件。') }}</p></div>
@@ -123,23 +167,27 @@ async function connect() {
           <div class="onedrive-path"><m3e-icon-button :aria-label="tr('上一级文件夹')" :disabled="Boolean(busy) || !folders.length" @click="browse(folders.slice(0, -1))"><m3e-icon name="arrow_back" /></m3e-icon-button><strong>{{ folders.at(-1)?.name || tr('我的文件') }}</strong><m3e-icon-button :aria-label="tr('刷新文件列表')" :disabled="Boolean(busy)" @click="browse(folders)"><m3e-icon name="refresh" /></m3e-icon-button></div>
           <m3e-form-field v-field-label variant="filled" hide-subscript="always"><label slot="label">{{ tr('搜索当前文件夹') }}</label><m3e-icon slot="leading-icon" name="search" /><input v-model="query" type="search" :disabled="Boolean(busy)" /></m3e-form-field>
           <p v-if="busy === 'browse'" role="status">{{ tr('正在读取文件…') }}</p>
-          <div v-else class="onedrive-files" role="group" :aria-label="tr('文件夹与 KDBX 文件')">
-            <button v-for="item in items" :key="item.itemId" class="onedrive-file" type="button" :disabled="Boolean(busy)" :aria-pressed="item.kind === 'file' ? selected?.itemId === item.itemId : undefined" @click="choose(item)"><m3e-icon :name="item.kind === 'folder' ? 'folder' : 'key'" aria-hidden="true" /><span>{{ item.name }}</span><m3e-icon :name="item.kind === 'folder' ? 'chevron_right' : selected?.itemId === item.itemId ? 'check_circle' : 'radio_button_unchecked'" aria-hidden="true" /></button>
-            <p v-if="!items.length">{{ query ? tr('没有匹配的文件。') : tr('此文件夹中没有可选择的 KDBX 文件或文件夹。') }}</p>
+          <div v-else class="onedrive-files" role="group" :aria-label="tr('文件夹与 KDBX/MDBX 文件')">
+            <button v-for="item in items" :key="item.itemId" class="onedrive-file" type="button" :disabled="Boolean(busy)" :aria-pressed="item.kind === 'file' ? selected?.itemId === item.itemId : undefined" @click="choose(item)"><m3e-icon :name="item.kind === 'folder' ? 'folder' : item.name.toLowerCase().endsWith('.mdbx') ? 'database' : 'key'" aria-hidden="true" /><span>{{ item.name }}</span><m3e-icon :name="item.kind === 'folder' ? 'chevron_right' : selected?.itemId === item.itemId ? 'check_circle' : 'radio_button_unchecked'" aria-hidden="true" /></button>
+            <p v-if="!items.length">{{ query ? tr('没有匹配的文件。') : tr('此文件夹中没有可选择的 KDBX 或 MDBX 文件或文件夹。') }}</p>
           </div>
         </section>
 
-        <div v-if="selected" class="onedrive-selection" role="status"><m3e-icon name="encrypted" aria-hidden="true" /><div><strong>{{ tr('已选数据库') }}</strong><p>{{ selected.name }}</p></div></div>
+        <div v-if="selected" class="onedrive-selection" role="status"><m3e-icon :name="selectedKind === 'mdbx2' ? 'database' : 'encrypted'" aria-hidden="true" /><div><strong>{{ tr('已选数据库') }}</strong><p>{{ selectedKind === 'mdbx2' ? selectedPath : selected.name }}</p></div></div>
         <template v-if="selected">
-          <m3e-form-field v-field-label variant="filled" hide-subscript="always"><label slot="label">{{ tr('密码源名称') }}</label><input v-model="name" :disabled="Boolean(busy)" maxlength="256" /></m3e-form-field>
-          <m3e-form-field v-field-label variant="filled" hide-subscript="never"><label slot="label">{{ tr('数据库密码（可留空）') }}</label><input v-model="password" :disabled="Boolean(busy)" :type="revealPassword ? 'text' : 'password'" autocomplete="current-password" :placeholder="provider?.config.databaseCredentialStored ? tr('已加密保存；留空保持不变') : ''" /><m3e-button slot="suffix" variant="text" type="button" @click="revealPassword = !revealPassword">{{ revealPassword ? tr('隐藏') : tr('显示') }}</m3e-button><small slot="hint">{{ tr('使用这个 KDBX 文件的密码。登录凭据和数据库密码会加密保存。') }}</small></m3e-form-field>
-          <label class="onedrive-keyfile"><span>{{ tr('密钥文件（可选）') }}</span><input type="file" :disabled="Boolean(busy)" @change="keyFile = ($event.target as HTMLInputElement).files?.[0]" /><small v-if="provider?.config.keyFileConfigured">{{ tr('已加密保存；选择新文件可替换') }}</small></label>
+          <m3e-form-field v-field-label variant="filled" hide-subscript="always"><label slot="label">{{ tr('密码源名称') }}</label><input v-model="name" :disabled="Boolean(busy)" maxlength="256" @input="nameEdited = true" /></m3e-form-field>
+          <template v-if="selectedKind === 'keepass'">
+            <m3e-form-field v-field-label variant="filled" hide-subscript="never"><label slot="label">{{ tr('数据库密码（可留空）') }}</label><input v-model="password" :disabled="Boolean(busy)" :type="revealPassword ? 'text' : 'password'" autocomplete="current-password" :placeholder="provider?.config.databaseCredentialStored ? tr('已加密保存；留空保持不变') : ''" /><m3e-button slot="suffix" variant="text" type="button" @click="revealPassword = !revealPassword">{{ revealPassword ? tr('隐藏') : tr('显示') }}</m3e-button><small slot="hint">{{ tr('使用这个 KDBX 文件的密码。登录凭据和数据库密码会加密保存。') }}</small></m3e-form-field>
+            <label class="onedrive-keyfile"><span>{{ tr('密钥文件（可选）') }}</span><input type="file" :disabled="Boolean(busy)" @change="keyFile = ($event.target as HTMLInputElement).files?.[0]" /><small v-if="provider?.config.keyFileConfigured">{{ tr('已加密保存；选择新文件可替换') }}</small></label>
+          </template>
+          <m3e-form-field v-else v-field-label variant="filled" hide-subscript="never"><label slot="label">{{ tr('保险库密码（可留空）') }}</label><input v-model="password" :disabled="Boolean(busy)" :type="revealPassword ? 'text' : 'password'" autocomplete="current-password" /><m3e-button slot="suffix" variant="text" type="button" @click="revealPassword = !revealPassword">{{ revealPassword ? tr('隐藏') : tr('显示') }}</m3e-button><small slot="hint">{{ tr('密码只用于解锁导入后的本机副本，不会上传到 OneDrive。') }}</small></m3e-form-field>
           <label class="onedrive-default"><input v-model="defaultTarget" type="checkbox" :disabled="Boolean(busy)" /><span>{{ tr('设为默认保存位置') }}</span></label>
         </template>
 
         <p v-if="error" class="form-error" role="alert">{{ error }}</p>
+        <p v-if="selected && !login && !provider" class="onedrive-pending-hint" role="status">{{ tr('请先登录 Microsoft 账号，再连接所选文件。') }}</p>
         <details v-if="error" class="onedrive-help"><summary>{{ tr('OneDrive 登录设置') }}</summary><p>{{ tr('若 Microsoft 提示重定向地址未注册，请由应用管理员将下方地址添加为 SPA 重定向地址。') }}</p><code>{{ redirectUri }}</code><m3e-form-field v-field-label variant="filled" hide-subscript="never"><label slot="label">{{ tr('Microsoft 应用 ID') }}</label><input v-model="clientId" :disabled="Boolean(busy) || Boolean(provider)" /><small slot="hint">{{ tr('使用自己的应用注册时可在此填写公共应用 ID，无需客户端密钥。') }}</small></m3e-form-field></details>
-        <footer><m3e-button variant="text" type="button" :disabled="busy === 'connect'" @click="close">{{ tr('取消') }}</m3e-button><m3e-button variant="filled" type="submit" :disabled="!canConnect">{{ busy === 'connect' ? tr('正在验证并解锁…') : provider ? tr('保存并继续同步') : tr('连接并解锁') }}</m3e-button></footer>
+        <footer><m3e-button variant="text" type="button" :disabled="busy === 'connect'" @click="close">{{ tr('取消') }}</m3e-button><m3e-button variant="filled" type="submit" :disabled="!canConnect">{{ busy === 'connect' ? (selectedKind === 'mdbx2' ? tr('正在下载并导入…') : tr('正在验证并解锁…')) : provider ? tr('保存并继续同步') : tr('连接并解锁') }}</m3e-button></footer>
       </form>
     </section>
   </div>
@@ -147,7 +195,7 @@ async function connect() {
 
 <style scoped>
 .onedrive-dialog { width: min(620px, 100%); }
-.onedrive-form { display: grid; gap: 20px; min-width: 0; }
+.onedrive-form { display: grid; gap: 20px; min-width: 0; flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-right: 4px; }
 .onedrive-account, .onedrive-selection { display: grid; grid-template-columns: 32px minmax(0, 1fr); align-items: center; gap: 12px; padding: 16px; background: var(--md-sys-color-surface-container-high, var(--app-surface-2)); border-radius: 24px; }
 .onedrive-account m3e-button { grid-column: 2; justify-self: start; }
 .onedrive-account strong, .onedrive-selection p, .onedrive-path strong { overflow-wrap: anywhere; }
@@ -168,9 +216,10 @@ async function connect() {
 .onedrive-default { display: flex; align-items: center; gap: 12px; min-height: 48px; }
 .onedrive-default input { width: 22px; height: 22px; accent-color: var(--md-sys-color-primary); }
 .onedrive-help { min-width: 0; color: var(--app-muted); font-size: 14px; }
+.onedrive-pending-hint { margin: 0; color: var(--app-muted); font-size: 14px; }
 .onedrive-help code { display: block; overflow-wrap: anywhere; margin-block: 12px; }
 .onedrive-help summary { cursor: pointer; min-height: 48px; align-content: center; }
-.onedrive-form footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 12px; }
+.onedrive-form footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 12px; position: sticky; bottom: 0; z-index: 1; padding: 12px 0 0; background: var(--md-sys-color-surface-container-high, var(--app-surface)); border-top: 1px solid var(--md-sys-color-outline-variant, var(--app-outline)); }
 .onedrive-form m3e-form-field { min-width: 0; width: 100%; }
 @media (max-width: 580px) {
   .onedrive-dialog { padding: 20px 12px; }

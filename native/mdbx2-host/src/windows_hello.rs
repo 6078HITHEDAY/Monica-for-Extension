@@ -16,7 +16,7 @@ use crate::runtime::RpcFailure;
 
 pub const HELLO_PROTOCOL_VERSION: u32 = 1;
 pub const HELLO_RP_ID: &str = "monica-extension.local";
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 const HELLO_ORIGIN: &str = "https://monica-extension.local";
 #[cfg(windows)]
 const HELLO_TIMEOUT_MS: u32 = 120_000;
@@ -414,6 +414,31 @@ fn platform_revoke(_: &[u8]) -> Result<(), RpcFailure> {
     ))
 }
 
+#[cfg(any(windows, test))]
+fn hello_client_data(kind: &str, challenge: &[u8]) -> Vec<u8> {
+    json!({ "type": kind, "challenge": URL_SAFE_NO_PAD.encode(challenge), "origin": HELLO_ORIGIN })
+        .to_string()
+        .into_bytes()
+}
+
+#[cfg(any(windows, test))]
+fn hello_native_failure(hr: i32, name: &str, api_version: u32) -> RpcFailure {
+    // Only fixed WebAuthn error names and numeric system diagnostics cross IPC.
+    let safe_name = match name {
+        "NotAllowedError" | "NotSupportedError" | "ConstraintError" | "InvalidStateError"
+        | "SecurityError" | "UnknownError" => name,
+        _ => "UnknownError",
+    };
+    let diagnostic = format!("{safe_name}，HRESULT 0x{:08X}，WebAuthn API {api_version}", hr as u32);
+    if safe_name == "NotAllowedError" {
+        return RpcFailure::new("hello-cancelled", format!("Windows Hello 被取消、超时或设备不可用（{diagnostic}）。"), false);
+    }
+    if matches!(safe_name, "NotSupportedError" | "ConstraintError") || hr as u32 == 0x80090027 {
+        return RpcFailure::new("hello-unavailable", format!("Windows Hello 当前不可用。请在 Windows 设置中检查是否允许将通行密钥保存到此设备；面容或指纹登录可用不代表已启用本机通行密钥（{diagnostic}）。"), false);
+    }
+    RpcFailure::new("hello-native-error", format!("Windows Hello 操作失败（{diagnostic}）。"), true)
+}
+
 #[cfg(windows)]
 mod windows_platform {
     use super::*;
@@ -429,39 +454,20 @@ mod windows_platform {
         OsStr::new(value).encode_wide().chain(once(0)).collect()
     }
 
-    fn error_for(hr: HRESULT, action: &str) -> RpcFailure {
+    fn error_for(hr: HRESULT, _action: &str) -> RpcFailure {
         let name = unsafe {
             let pointer = WebAuthNGetErrorName(hr);
             if pointer.is_null() {
                 String::new()
             } else {
                 let mut length = 0usize;
-                while *pointer.add(length) != 0 && length < 128 {
+                while length < 128 && *pointer.add(length) != 0 {
                     length += 1;
                 }
                 String::from_utf16_lossy(std::slice::from_raw_parts(pointer, length))
             }
         };
-        let lowered = name.to_ascii_lowercase();
-        if lowered == "notallowederror" {
-            return RpcFailure::new(
-                "hello-cancelled",
-                format!("Windows Hello {action} 被取消、超时或设备不可用。"),
-                false,
-            );
-        }
-        if lowered == "notsupportederror" || lowered == "constrainterror" {
-            return RpcFailure::new(
-                "hello-unavailable",
-                format!("Windows Hello {action} 当前不可用。"),
-                false,
-            );
-        }
-        RpcFailure::new(
-            "hello-native-error",
-            format!("Windows Hello {action} 失败。"),
-            true,
-        )
+        hello_native_failure(hr, &name, unsafe { WebAuthNGetApiVersionNumber() })
     }
 
     fn supported_api_version() -> u32 {
@@ -523,11 +529,7 @@ mod windows_platform {
             cCredentialParameters: 1,
             pCredentialParameters: &mut credential_parameter,
         };
-        let challenge = URL_SAFE_NO_PAD.encode(Uuid::new_v4().as_bytes());
-        let mut client_json = format!(
-            r#"{{"type":"webauthn.create","challenge":"{challenge}","origin":"{HELLO_ORIGIN}"}}"#
-        )
-        .into_bytes();
+        let mut client_json = hello_client_data("webauthn.create", Uuid::new_v4().as_bytes());
         let hash_alg = wide("SHA-256");
         let client_data = WEBAUTHN_CLIENT_DATA {
             dwVersion: WEBAUTHN_CLIENT_DATA_CURRENT_VERSION,
@@ -594,8 +596,7 @@ mod windows_platform {
     pub fn verify(_: &str, challenge: &[u8], credential_id: &[u8]) -> Result<(), RpcFailure> {
         let window = interaction_window("验证")?;
         let rp_id = wide(HELLO_RP_ID);
-        let challenge_encoded = URL_SAFE_NO_PAD.encode(challenge);
-        let mut client_json = format!(r#"{{"type":"webauthn.get","challenge":"{challenge_encoded}","origin":"{HELLO_ORIGIN}"}}"#).into_bytes();
+        let mut client_json = hello_client_data("webauthn.get", challenge);
         let hash_alg = wide("SHA-256");
         let client_data = WEBAUTHN_CLIENT_DATA {
             dwVersion: WEBAUTHN_CLIENT_DATA_CURRENT_VERSION,
@@ -699,6 +700,33 @@ fn platform_revoke(credential_id: &[u8]) -> Result<(), RpcFailure> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn client_data_is_valid_json_for_creation_and_assertion() {
+        for kind in ["webauthn.create", "webauthn.get"] {
+            let challenge = [0, 127, 128, 255];
+            let value: Value = serde_json::from_slice(&hello_client_data(kind, &challenge)).unwrap();
+            assert_eq!(value["type"], kind);
+            assert_eq!(value["origin"], HELLO_ORIGIN);
+            assert_eq!(URL_SAFE_NO_PAD.decode(value["challenge"].as_str().unwrap()).unwrap(), challenge);
+            assert_eq!(value.as_object().unwrap().len(), 3);
+        }
+    }
+
+    #[test]
+    fn native_errors_expose_only_numeric_diagnostics_and_known_names() {
+        let failure = hello_native_failure(0x80090027u32 as i32, "NotSupportedError", 9);
+        assert_eq!(failure.code, "hello-unavailable");
+        assert!(!failure.retryable);
+        assert!(failure.message.contains("0x80090027"));
+        assert!(failure.message.contains("WebAuthn API 9"));
+        assert!(failure.message.contains("通行密钥保存到此设备"));
+        assert_eq!(hello_native_failure(-1, "NotAllowedError", 9).code, "hello-cancelled");
+        let unknown = hello_native_failure(-1, "synthetic secret / local path", 9);
+        assert_eq!(unknown.code, "hello-native-error");
+        assert!(!unknown.message.contains("synthetic"));
+        assert!(unknown.message.contains("UnknownError"));
+    }
 
     #[test]
     fn rejects_unknown_and_malformed_parameters_before_platform_calls() {

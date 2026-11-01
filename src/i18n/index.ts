@@ -1,11 +1,8 @@
 import { ref } from "vue";
-import { en } from "./en";
-import { zhCN } from "./zh-CN";
 import { browserLocale, getUiLocale, getUiLocalePreference, initializeUiLocale, localeOptions, observeUiLocale, selectUiLocale, tr as translateUi, UI_LOCALE_KEY, updateUiLocale, validLocalePreference, type UiLocale, type UiLocalePreference } from "./runtime";
 
 export type Locale = UiLocale;
 export type LocalePreference = UiLocalePreference;
-export type MessageKey = keyof typeof en;
 
 const storageKey = UI_LOCALE_KEY;
 
@@ -32,11 +29,6 @@ export async function initializeI18n() {
   await initializeUiLocale(legacyPreference);
 }
 export function tr(source: string, params: Record<string, unknown> = {}): string { return translateUi(source, params, locale.value); }
-
-export function t(key: MessageKey, params: Record<string, string | number> = {}) {
-  const template = locale.value === "en" ? en[key] : translateUi(zhCN[key] ?? key, {}, locale.value);
-  return Object.entries(params).reduce((text, [name, value]) => text.split(`{${name}}`).join(String(value)), template);
-}
 
 function readPreference(): LocalePreference {
   if (typeof window === "undefined") return getUiLocalePreference();

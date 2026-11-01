@@ -337,7 +337,7 @@ function androidRawRecord(
   if (record.objectTypeId === "login") {
     return {
       ...common,
-      website: payload.website ?? "",
+      website: payload.website || payload.url || "",
       username: payload.username ?? "",
       password: payload.password_plain ?? payload.password ?? "",
       appPackageName: payload.app_package_name ?? payload.appPackageName ?? "",
@@ -345,7 +345,7 @@ function androidRawRecord(
       customIconType: payload.custom_icon_type ?? payload.customIconType,
       customIconValue: payload.custom_icon_value ?? payload.customIconValue,
       customIconUpdatedAt: payload.custom_icon_updated_at ?? payload.customIconUpdatedAt,
-      authenticatorKey: payload.authenticator_key ?? "",
+      authenticatorKey: payload.authenticator_key || payload.totp_seed || "",
       passkeyBindings: payload.passkey_bindings ?? "",
       boundNoteId: payload.bound_note_room_id ?? null,
       loginType: payload.login_type ?? "PASSWORD",

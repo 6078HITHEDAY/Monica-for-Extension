@@ -1,3 +1,4 @@
+import { ProviderSyncActivity } from './provider-sync-activity';
 import { expect, it, vi } from 'vitest';
 import { createLoginItem, type LoginItem, type ProviderKind } from '../core/model';
 import { PROJECT_CREDENTIAL_FIELD } from '../core/project-credentials';
@@ -29,7 +30,7 @@ async function fixture(kind: ProviderKind = 'mdbx2', bitwardenEnabled = false) {
   const removal = { resume: vi.fn(async () => (await vault.readPasswordProjectRemovals())[0]) };
   const restore = { restore: vi.fn() };
   const bitwarden = { resume: vi.fn(async (_id: string, _signal?: AbortSignal) => (await vault.readPasswordProjectRemovals())[0]) };
-  const active = new Map<string, AbortController>(), invalidate = vi.fn();
+  const active = new ProviderSyncActivity(), invalidate = vi.fn();
   const runtime = new BitwardenProjectRemovalRuntime(vault, bitwarden, active, invalidate);
   const workflow = new PasswordProjectRemovalWorkflow(vault, removal, restore, queue, changed, bitwardenEnabled ? runtime : undefined);
   return { vault, input, queue, removal, restore, workflow, changed, bitwarden, active, invalidate, runtime };
@@ -126,7 +127,7 @@ it('routes Bitwarden to its own abortable coordinator and invalidates only that 
   expect(f.removal.resume).not.toHaveBeenCalled();
   expect(f.bitwarden.resume).toHaveBeenCalledWith(f.input.operationId, expect.any(AbortSignal));
   expect(f.invalidate.mock.calls).toEqual([['bitwarden'], ['bitwarden']]);
-  expect(f.active.size).toBe(0);
+  expect(f.active.isBusy('bitwarden')).toBe(false);
   expect(JSON.stringify(await f.workflow.pending())).not.toContain('private-');
 });
 
@@ -150,19 +151,19 @@ it('aborts the same in-flight request on source lock while keeping the encrypted
   });
   const stage = f.workflow.stage(f.input), rejected = expect(stage).rejects.toThrow('Synthetic lock');
   await started.promise;
-  f.active.get('bitwarden')!.abort(new DOMException('Synthetic lock', 'AbortError'));
+  f.active.abort('bitwarden', new DOMException('Synthetic lock', 'AbortError'));
   await rejected;
-  expect(f.active.size).toBe(0);
+  expect(f.active.isBusy('bitwarden')).toBe(false);
   expect(f.invalidate).toHaveBeenCalledTimes(2);
   expect(await f.workflow.pending()).toEqual([expect.objectContaining({ status: 'preparing', canCancel: true })]);
 });
 
 it('does not overlap an active Passkey assertion and leaves a staged request recoverable', async () => {
   const f = await fixture('bitwarden', true), assertion = new AbortController();
-  f.active.set('bitwarden', assertion);
+  f.active.reserve('bitwarden', assertion);
   await expect(f.workflow.stage(f.input)).rejects.toThrow('其他操作');
   expect(f.bitwarden.resume).not.toHaveBeenCalled();
-  expect(f.active.get('bitwarden')).toBe(assertion);
+  expect(f.active.owns('bitwarden', assertion.signal)).toBe(true);
   expect(await f.workflow.pending()).toHaveLength(1);
 });
 
@@ -178,14 +179,14 @@ it('recovers inside the existing sync slot and returns refreshed credentials bef
   const f = await fixture('bitwarden', true);
   await f.vault.stagePasswordProjectRemoval(f.input);
   const old = (await f.vault.getProvider('bitwarden'))!, sync = new AbortController();
-  f.active.set('bitwarden', sync);
+  f.active.reserve('bitwarden', sync);
   f.bitwarden.resume.mockImplementation(async () => {
     await f.vault.upsertProvider({ ...old, config: { ...old.config, accessToken: 'synthetic-new-token' } }, false);
     return f.vault.cancelPasswordProjectRemovalPreparation(f.input.operationId);
   });
   const current = await f.queue.run('bitwarden', () => f.workflow.recoverBeforeSync(old, sync.signal));
   expect(current.config.accessToken).toBe('synthetic-new-token');
-  expect(f.active.get('bitwarden')).toBe(sync);
+  expect(f.active.owns('bitwarden', sync.signal)).toBe(true);
   expect(f.invalidate.mock.calls).toEqual([['bitwarden'], ['bitwarden']]);
 });
 
@@ -194,7 +195,7 @@ it('stops ordinary sync when recovery remains pending or its signal does not own
   await f.vault.stagePasswordProjectRemoval(f.input);
   const account = (await f.vault.getProvider('bitwarden'))!, sync = new AbortController();
   await expect(f.workflow.recoverBeforeSync(account, sync.signal)).rejects.toThrow('当前同步');
-  f.active.set('bitwarden', sync);
+  f.active.reserve('bitwarden', sync);
   await expect(f.workflow.recoverBeforeSync(account, sync.signal)).rejects.toThrow('未处理');
   sync.abort(new DOMException('Synthetic sync cancellation', 'AbortError'));
   await expect(f.workflow.recoverBeforeSync(account, sync.signal)).rejects.toThrow('Synthetic sync cancellation');

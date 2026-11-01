@@ -1,6 +1,6 @@
 [package]
 name = "monica-mdbx2-host"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 license = "GPL-3.0-only"
 publish = false
@@ -18,6 +18,7 @@ mdbx-core = { path = "vendor/mdbx/crates/mdbx-core" }
 mdbx-ffi = { path = "vendor/mdbx/crates/mdbx-ffi" }
 monica-lan-sync = { path = "vendor/monica-lan-sync" }
 serde = { version = "1", features = ["derive"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
 serde_json = { version = "1", features = ["arbitrary_precision", "raw_value"] }
 sha2 = "0.10"
 uniffi = "=0.31.1"
@@ -27,7 +28,7 @@ tempfile = "3"
 zip = { version = "=2.4.2", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Networking_WindowsWebServices", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Networking_WindowsWebServices", "Win32_UI_WindowsAndMessaging", "Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
 mdbx-storage = { path = "vendor/mdbx/crates/mdbx-storage", default-features = false, features = ["core", "filesystem-blob-store"] }

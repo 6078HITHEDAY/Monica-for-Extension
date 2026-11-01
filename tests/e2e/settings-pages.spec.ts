@@ -71,6 +71,9 @@ test('common settings act directly while grouped configuration pages retain focu
     await expect(modeRow).toHaveCSS('outline-style', 'none');
     await expect(mode).toBeFocused();
     await language.click();
+    await expect(language).toHaveAttribute('aria-expanded', 'true');
+    const languagePanel = page.locator(`[id="${await language.getAttribute('aria-controls')}"]`);
+    await expect(languagePanel).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(language).toHaveAttribute('aria-expanded', 'false');
     await page.keyboard.press('Tab');

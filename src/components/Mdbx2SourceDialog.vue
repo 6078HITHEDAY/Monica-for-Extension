@@ -60,9 +60,13 @@ import {
   presentMdbx2Tiga
 } from "../providers/mdbx2/mdbx2-tiga";
 import { vaultClient } from "../runtime/client";
-import type { Mdbx2ManagerSyncStatus, Mdbx2WebDavSettingsInput } from "../runtime/messages";
+import type { Mdbx2ManagerSyncStatus, Mdbx2OneDriveSettingsInput, Mdbx2WebDavSettingsInput } from "../runtime/messages";
+import { MDBX3_RUNTIME_NAME } from "../providers/mdbx2/native-contract";
+import { sniffMdbxImportBlob } from "../providers/mdbx2/mdbx-import-detect";
+import { mdbxImportUserMessage } from "../providers/mdbx2/mdbx-import-coordinator";
 
 type NewSourceMode = "create" | "local" | "remote";
+type Mdbx2SyncTransport = "webdav" | "onedrive";
 type BusyState = "" | "probe" | "upload" | "download" | "open" | "save" | "publish";
 type SnapshotBusyState = "" | "list" | "structure" | "prune-plan" | "prune" | "create" | "delete" | "restore";
 type SnapshotStructureMode = "snapshot" | "compare";
@@ -196,6 +200,7 @@ const config = props.provider?.config || {};
 const form = reactive({
   mode: (props.provider ? "local" : props.initialMode || "local") as NewSourceMode,
   name: props.provider?.name || "Monica MDBX2",
+  syncTransport: (config.syncTransport === "onedrive" ? "onedrive" : "webdav") as Mdbx2SyncTransport,
   baseUrl: typeof config.webDavBaseUrl === "string" ? config.webDavBaseUrl : "",
   username: typeof config.webDavUsername === "string" ? config.webDavUsername : "",
   webDavPassword: "",
@@ -206,14 +211,20 @@ const form = reactive({
   confirmVaultPassword: "",
   isDefaultSaveTarget: props.provider?.isDefaultSaveTarget || false
 });
+const oneDriveLogin = ref<{ loginId: string; displayName: string; driveId: string } | undefined>();
 
 const isExisting = computed(() => Boolean(providerId.value));
 const hostReady = computed(() => hostStatus.value?.availability === "ready");
 const vaultOpen = computed(() => runtimeStatus.value?.open === true);
+/** New remote sources join over WebDAV; OneDrive sources are created in the OneDrive dialog and managed here. */
+const activeTransport = computed<Mdbx2SyncTransport>(() => form.syncTransport);
+const oneDriveConnected = computed(() => Boolean(oneDriveLogin.value || config.oneDriveDriveId));
+const oneDriveAccountLabel = computed(() => oneDriveLogin.value?.displayName || (typeof config.oneDriveDisplayName === "string" ? config.oneDriveDisplayName : ""));
 const diagnosticHealth = computed(() => vaultDiagnostics.value ? presentMdbx2Health(vaultDiagnostics.value.health) : undefined);
 const diagnosticGuidance = computed(() => vaultDiagnostics.value ? presentMdbx2HealthGuidance(vaultDiagnostics.value.health) : []);
 const tigaPresentation = computed(() => vaultTiga.value ? presentMdbx2Tiga(vaultTiga.value) : undefined);
-const remoteFieldsComplete = computed(() => Boolean(form.baseUrl.trim() && form.remotePath.trim()));
+const remoteFieldsComplete = computed(() => Boolean(form.remotePath.trim())
+  && (activeTransport.value === "onedrive" ? oneDriveConnected.value : Boolean(form.baseUrl.trim())));
 const needsSecurityKey = computed(() => form.unlockMethod !== "password");
 const canPublish = computed(() => isExisting.value && vaultOpen.value && remoteFieldsComplete.value && !syncStatus.value?.initialized);
 const selectedHistoryItem = computed(() => historyItems.value.find((item) => item.commitId === selectedCommitId.value));
@@ -561,14 +572,41 @@ function selectSecurityKey(event: Event) {
   error.value = "";
 }
 
+async function loginOneDrive() {
+  if (busy.value) return;
+  const loginId = crypto.randomUUID();
+  busy.value = "save";
+  error.value = "";
+  try {
+    const summary = await vaultClient.loginOneDrive(loginId);
+    oneDriveLogin.value = { loginId, displayName: summary.profile.displayName || summary.profile.username, driveId: summary.drive.id };
+    emit("notice", tr('OneDrive 登录成功：{0}', { 0: summary.profile.username }));
+  } catch (cause) {
+    await vaultClient.cancelOneDriveLogin(loginId).catch(() => undefined);
+    error.value = errorMessage(cause);
+  } finally {
+    busy.value = "";
+  }
+}
+
 async function connectNewSource() {
   if (!hostReady.value) return void (error.value = hostStatus.value?.message || tr('数据库暂未就绪，请重新打开后再试。'));
   error.value = "";
   try {
     if (form.mode === 'create' && (!form.vaultPassword || form.vaultPassword !== form.confirmVaultPassword)) throw new Error(tr('请输入数据库密码，并确保两次输入一致。'));
+    let sniffedKind: "mdbx-vault" | "mdbx-complete-backup-zip" | undefined;
+    if (form.mode === 'local' && vaultFile.value) {
+      const sniffed = await sniffMdbxImportBlob(vaultFile.value);
+      if (sniffed.kind === 'plugin-backup-json') throw new Error(tr('恢复插件状态（条目与密码源配置）。独立 MDBX 数据库需要单独的 MDBX 备份。'));
+      if (sniffed.kind === 'android-project-zip') throw new Error(tr('这是安卓项目备份，不是 MDBX 密码库。') + ' ' + tr('已初始化后可在导入与导出中作为条目导入。'));
+      if (sniffed.kind === 'unknown') throw new Error(tr('无法识别此文件。'));
+      sniffedKind = sniffed.kind === "mdbx-complete-backup-zip" ? "mdbx-complete-backup-zip" : "mdbx-vault";
+    }
     const source = form.mode === 'create' ? undefined : form.mode === 'local' ? await stageLocalFile() : await stageRemoteBootstrap();
     busy.value = 'open';
-    const opened = form.mode === 'create'
+    const opened = form.mode === 'local'
+      ? await importLocalMdbx(source!, sniffedKind)
+      : form.mode === 'create'
       ? await vaultClient.createMdbx2Vault({ name: form.name, password: form.vaultPassword, isDefaultSaveTarget: form.isDefaultSaveTarget })
       : await vaultClient.openMdbx2Vault({ name: form.name, source: source!, credential: await buildCredential(), isDefaultSaveTarget: form.isDefaultSaveTarget });
     pendingSource.value = undefined;
@@ -589,7 +627,7 @@ async function connectNewSource() {
       syncStatus.value = await vaultClient.registerMdbx2Bootstrap(opened.account.id);
     }
 
-    const result = await vaultClient.syncProvider(opened.account.id);
+    const result = form.mode === "local" ? { warnings: [], conflicts: 0 } : await vaultClient.syncProvider(opened.account.id);
     emit("changed");
     emit("notice", syncNotice(result, form.mode === 'create' ? tr('MDBX 数据库已创建。') : form.mode === "remote" ? tr('MDBX2 WebDAV 已加入并同步。') : tr('MDBX2 本机保险库已打开并导入。')));
     clearSecrets();
@@ -636,17 +674,19 @@ async function saveSettings() {
   busy.value = "save";
   error.value = "";
   try {
-    activeProvider.value = await vaultClient.saveMdbx2WebDav(
-      providerId.value,
-      form.name,
-      webDavSettings(),
-      form.isDefaultSaveTarget
-    );
+    if (activeTransport.value === "onedrive") {
+      activeProvider.value = await vaultClient.saveMdbx2OneDrive(providerId.value, form.name, oneDriveSettings(), form.isDefaultSaveTarget);
+      oneDriveLogin.value = undefined;
+    } else {
+      activeProvider.value = await vaultClient.saveMdbx2WebDav(providerId.value, form.name, webDavSettings(), form.isDefaultSaveTarget);
+    }
     form.webDavPassword = "";
     form.webDavPasswordConfigured = activeProvider.value.config.webDavPasswordConfigured === true;
     syncStatus.value = await vaultClient.mdbx2SyncStatus(providerId.value).catch(() => undefined);
     emit("changed");
-    emit("notice", tr('MDBX2 WebDAV 设置已保存到加密密码库。远端位置变化时旧 checkpoint 已解除绑定。'));
+    emit("notice", activeTransport.value === "onedrive"
+      ? tr('MDBX2 OneDrive 设置已保存到加密密码库。远端位置变化时旧 checkpoint 已解除绑定。')
+      : tr('MDBX2 WebDAV 设置已保存到加密密码库。远端位置变化时旧 checkpoint 已解除绑定。'));
   } catch (cause) {
     error.value = errorMessage(cause);
   } finally {
@@ -659,12 +699,12 @@ async function publishBootstrap() {
   busy.value = "publish";
   error.value = "";
   try {
-    activeProvider.value = await vaultClient.saveMdbx2WebDav(
-      providerId.value,
-      form.name,
-      webDavSettings(),
-      form.isDefaultSaveTarget
-    );
+    if (activeTransport.value === "onedrive") {
+      activeProvider.value = await vaultClient.saveMdbx2OneDrive(providerId.value, form.name, oneDriveSettings(), form.isDefaultSaveTarget);
+      oneDriveLogin.value = undefined;
+    } else {
+      activeProvider.value = await vaultClient.saveMdbx2WebDav(providerId.value, form.name, webDavSettings(), form.isDefaultSaveTarget);
+    }
     syncStatus.value = await vaultClient.publishMdbx2Bootstrap(providerId.value);
     form.webDavPassword = "";
     form.webDavPasswordConfigured = activeProvider.value.config.webDavPasswordConfigured === true;
@@ -1266,9 +1306,35 @@ function resetSnapshotStructures() {
   savedSnapshotStructure.value = emptySnapshotStructure();
 }
 
+async function importLocalMdbx(source: Mdbx2VaultSource, kind?: "mdbx-vault" | "mdbx-complete-backup-zip") {
+  const operationId = crypto.randomUUID();
+  try {
+    const detected = await vaultClient.detectMdbx2Import(source, kind);
+    inspection.value = detected.inspection;
+    if (detected.sniff.incompatibilityReason) throw new Error(mdbxImportUserMessage(detected.sniff.incompatibilityReason) || tr('无法识别此文件。'));
+    const prepared = await vaultClient.prepareMdbx2Import({
+      operationId,
+      source,
+      credential: await buildCredential(),
+      name: form.name,
+      kind: detected.sniff.kind === "mdbx-complete-backup-zip" ? "mdbx-complete-backup-zip" : "mdbx-vault"
+    });
+    const committed = await vaultClient.commitMdbx2Import({
+      operationId,
+      name: form.name,
+      isDefaultSaveTarget: form.isDefaultSaveTarget
+    });
+    if (!committed.account) throw new Error(committed.operation.lastError?.message || tr('MDBX 导入失败。'));
+    return { account: committed.account, session: prepared.session };
+  } catch (cause) {
+    await vaultClient.cancelMdbx2Import(operationId).catch(() => undefined);
+    throw cause;
+  }
+}
+
 async function stageLocalFile(): Promise<Mdbx2VaultSource> {
   const file = vaultFile.value;
-  if (!file || !/\.(mdbx|zip)$/i.test(file.name)) throw new Error(tr('请选择 MDBX2 数据库或 Monica 完整备份 ZIP。'));
+  if (!file || !/\.(mdbx|zip)$/i.test(file.name)) throw new Error(tr('请选择 MDBX 数据库或 Monica 完整备份 ZIP。'));
   if (/\.zip$/i.test(file.name) && !hostStatus.value?.capabilities?.supportsCompleteBackup) throw new Error(tr('请更新本机助手后使用 MDBX2 完整备份。'));
   if (/\.zip$/i.test(file.name) && file.size > 512 * 1024 * 1024) throw new Error(tr('完整备份 ZIP 及其内容合计不得超过 512 MiB。'));
   if (!file.size || file.size > MDBX2_MAX_INBOUND_FILE_BYTES) throw new Error(tr('MDBX2 文件为空或超过 2 GiB 安全上限。'));
@@ -1302,6 +1368,10 @@ async function stageRemoteBootstrap(): Promise<Mdbx2VaultSource> {
   busy.value = "download";
   const finished = await vaultClient.downloadMdbx2Bootstrap(settings);
   return acceptPendingSource({ kind: "file", handle: finished.fileHandle }, originKey);
+}
+
+function oneDriveSettings(): Mdbx2OneDriveSettingsInput {
+  return { remotePath: form.remotePath.trim(), loginId: oneDriveLogin.value?.loginId };
 }
 
 async function acceptPendingSource(source: Mdbx2VaultSource, originKey: string): Promise<Mdbx2VaultSource> {
@@ -1449,7 +1519,8 @@ function fileAsBase64(file: File): Promise<string> {
 }
 
 function errorMessage(cause: unknown): string {
-  return cause instanceof Error ? cause.message : tr('MDBX2 操作失败。');
+  const code = errorCode(cause);
+  return tr(mdbxImportUserMessage(code) || (cause instanceof Error ? cause.message : 'MDBX2 操作失败。'));
 }
 
 function errorCode(cause: unknown): string {
@@ -1552,7 +1623,7 @@ function conflictErrorMessage(cause: unknown): string {
       <header>
         <div>
           <h2 id="mdbx2-dialog-title">{{ dialogTitle }}</h2>
-          <p>{{ tr('完整备份会保留数据库和附件；WebDAV 用于多设备同步。') }}</p>
+          <p>{{ tr('完整备份会保留数据库和附件；WebDAV 或 OneDrive 用于多设备同步。') }}</p>
         </div>
         <m3e-icon-button data-dialog-close :aria-label="tr('关闭 MDBX2 设置')" :disabled="dialogLocked" @click="closeDialog"><m3e-icon name="close"></m3e-icon></m3e-icon-button>
       </header>
@@ -1576,15 +1647,24 @@ function conflictErrorMessage(cause: unknown): string {
         </template>
 
         <template v-if="!isExisting && form.mode === 'local'">
-          <div class="field field-wide"><span>{{ tr('MDBX2 可移植备份 *') }}</span><label class="file-action provider-file-action"><m3e-icon name="folder_open" /><span>{{ vaultFile?.name || tr('选择 MDBX 或完整备份 ZIP') }}</span><input type="file" accept=".mdbx,.zip,application/octet-stream,application/zip" :aria-label="tr('MDBX2 可移植备份')" @change="selectVaultFile" /></label><small>{{ tr('完整备份 ZIP 会同时恢复数据库和附件。MDBX1 不受支持。') }}</small></div>
+          <div class="field field-wide"><span>{{ tr('MDBX 可移植备份 *') }}</span><label class="file-action provider-file-action"><m3e-icon name="folder_open" /><span>{{ vaultFile?.name || tr('选择 MDBX 或完整备份 ZIP') }}</span><input type="file" accept=".mdbx,.zip,application/octet-stream,application/zip" :aria-label="tr('MDBX 可移植备份')" @change="selectVaultFile" /></label><small>{{ tr('完整备份 ZIP 会同时恢复数据库和附件。将在独立工作副本上升级为 MDBX-2。原始文件不会被修改。') }}</small></div>
         </template>
 
         <template v-if="form.mode === 'remote' || isExisting">
           <m3e-form-field v-field-label variant="filled" hide-required-marker v-if="isExisting" class="field"><label slot="label">{{ tr('显示名称') }}</label><input v-model="form.name" autocomplete="off" /></m3e-form-field>
           <label v-choice-label v-if="isExisting" class="favorite-row"><m3e-checkbox :checked.prop="form.isDefaultSaveTarget" @input="form.isDefaultSaveTarget = ($event.target as HTMLElement &amp; { checked: boolean }).checked"   /><span>{{ tr('设为新项目的默认保存目标') }}</span></label>
-          <m3e-form-field v-field-label variant="filled" hide-required-marker hide-subscript="never" class="field field-wide"><label slot="label">{{ tr('WebDAV 地址 *') }}</label><input v-model="form.baseUrl" type="url" autocomplete="url" placeholder="https://cloud.example.com/remote.php/dav/files/user" required /><small slot="hint">{{ tr('必须使用 HTTPS；开发环境仅允许回环 HTTP。地址中不能包含用户名、密码、查询参数或片段。') }}</small></m3e-form-field>
-          <m3e-form-field v-field-label variant="filled" hide-required-marker class="field"><label slot="label">{{ tr('用户名') }}</label><input v-model="form.username" autocomplete="username" /></m3e-form-field>
-          <m3e-form-field v-field-label variant="filled" hide-required-marker class="field"><label slot="label">{{ tr('WebDAV 密码') }}</label><input v-model="form.webDavPassword" type="password" autocomplete="current-password" :placeholder="form.webDavPasswordConfigured ? tr('已加密保存；留空保持不变') : ''" /></m3e-form-field>
+          <template v-if="activeTransport === 'webdav'">
+            <m3e-form-field v-field-label variant="filled" hide-required-marker hide-subscript="never" class="field field-wide"><label slot="label">{{ tr('WebDAV 地址 *') }}</label><input v-model="form.baseUrl" type="url" autocomplete="url" placeholder="https://cloud.example.com/remote.php/dav/files/user" required /><small slot="hint">{{ tr('必须使用 HTTPS；开发环境仅允许回环 HTTP。地址中不能包含用户名、密码、查询参数或片段。') }}</small></m3e-form-field>
+            <m3e-form-field v-field-label variant="filled" hide-required-marker class="field"><label slot="label">{{ tr('用户名') }}</label><input v-model="form.username" autocomplete="username" /></m3e-form-field>
+            <m3e-form-field v-field-label variant="filled" hide-required-marker class="field"><label slot="label">{{ tr('WebDAV 密码') }}</label><input v-model="form.webDavPassword" type="password" autocomplete="current-password" :placeholder="form.webDavPasswordConfigured ? tr('已加密保存；留空保持不变') : ''" /></m3e-form-field>
+          </template>
+          <template v-else>
+            <div class="field field-wide mdbx2-onedrive-row">
+              <m3e-button variant="tonal" type="button" :disabled="Boolean(busy)" @click="loginOneDrive">{{ oneDriveLogin ? tr('重新登录 OneDrive') : tr('登录 OneDrive') }}</m3e-button>
+              <span v-if="oneDriveAccountLabel" class="mdbx2-onedrive-account"><m3e-icon name="cloud_done" />{{ oneDriveAccountLabel }}</span>
+            </div>
+            <small class="supporting field-wide">{{ tr('登录 Microsoft 账号后，可移植数据库与增量段会保存在你的 OneDrive 里。') }}</small>
+          </template>
           <m3e-form-field v-field-label variant="filled" hide-required-marker hide-subscript="never" class="field field-wide"><label slot="label">{{ tr('Android 兼容远端位置 *') }}</label><input v-model="form.remotePath" autocomplete="off" placeholder="Monica/MDBX2/main.mdbx" required /><small slot="hint">{{ tr('此路径就是可移植 .mdbx 文件；日常同步对象自动写入同名') }}<code>.sync</code>{{ tr('目录。') }}</small></m3e-form-field>
         </template>
 
@@ -1601,14 +1681,16 @@ function conflictErrorMessage(cause: unknown): string {
         </template>
 
         <div v-if="inspection" class="mdbx2-inspection field-wide" role="status">
-          <span><strong>{{ inspection.formatVersion }}</strong><small>{{ tr('格式') }}</small></span>
+          <span><strong>{{ inspection.formatVersion }}</strong><small>{{ tr('文件格式') }}</small></span>
+          <span><strong>{{ MDBX3_RUNTIME_NAME }}</strong><small>{{ tr('运行时') }}</small></span>
           <span><strong>{{ inspection.schemaVersion ?? '—' }}</strong><small>Schema</small></span>
           <span><strong>{{ inspection.requiresUpgrade ? tr('需要迁移') : tr('当前版本') }}</strong><small>{{ tr('打开前检查') }}</small></span>
         </div>
+        <p v-if="inspection?.requiresUpgrade" class="supporting field-wide">{{ tr('将在独立工作副本上升级为 MDBX-2。原始文件不会被修改。') }}</p>
 
         <div v-if="isExisting" class="mdbx2-runtime-summary field-wide" :aria-label="tr('MDBX2 运行状态')">
           <span><strong>{{ runtimeStatus?.available ? tr('本机副本可用') : tr('本机副本缺失') }}</strong><small>{{ vaultOpen ? tr('当前已解锁') : tr('当前已锁定') }}</small></span>
-          <span><strong>{{ syncStatus?.initialized ? tr('增量同步已注册') : syncStatus?.configured ? tr('WebDAV 已配置') : tr('仅本机模式') }}</strong><small>{{ syncStatus?.hasLocalChanges ? tr('存在待发布修改') : tr('checkpoint 已保存') }}</small></span>
+          <span><strong>{{ syncStatus?.initialized ? tr('增量同步已注册') : syncStatus?.configured ? (activeTransport === 'onedrive' ? tr('OneDrive 已配置') : tr('WebDAV 已配置')) : tr('仅本机模式') }}</strong><small>{{ syncStatus?.hasLocalChanges ? tr('存在待发布修改') : tr('checkpoint 已保存') }}</small></span>
           <span><strong>{{ tr('{0} 个受阻 stream', { 0: syncStatus?.blockedStreamCount || 0 }) }}</strong><small>{{ tr('{0} 个远端 stream', { 0: syncStatus?.remoteStreamCount || 0 }) }}</small></span>
         </div>
 
@@ -2411,6 +2493,9 @@ function conflictErrorMessage(cause: unknown): string {
 .mdbx2-host-row small { color: var(--app-muted); overflow-wrap: anywhere; }
 .mdbx2-host-row.ready { color: var(--md-sys-color-on-surface, var(--app-text)); }
 .mdbx2-host-row.attention { border-color: var(--md-sys-color-error, #ba1a1a); color: var(--md-sys-color-error, #ba1a1a); }
+.mdbx2-onedrive-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.mdbx2-onedrive-account { display: inline-flex; align-items: center; gap: 6px; color: var(--app-text); min-width: 0; overflow-wrap: anywhere; }
+.mdbx2-onedrive-account m3e-icon { --m3e-icon-size: 18px; }
 .mdbx2-mode-picker { border: 0; display: grid; gap: 8px; padding: 0; }
 .mdbx2-mode-picker legend { margin-bottom: 8px; font-weight: 700; }
 .mdbx2-mode-picker > div { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr)); gap: 8px; }

@@ -28,7 +28,7 @@ test('production UI creates and reopens MDBX in the browser without an installed
     context = await launchEdgeContext(profile, { locale: 'zh-CN', viewport: { width: 1180, height: 950 }, env: { ...process.env, APPDATA: appData, LOCALAPPDATA: appData }, args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`] });
     evidence.edgeVersion = context.browser()?.version();
     const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
-    const page = await context.newPage(); page.on('pageerror', error => errors.push(error.message));
+    const page = await context.newPage(); page.setDefaultTimeout(15_000); page.on('pageerror', error => errors.push(error.message));
     await page.goto(`chrome-extension://${new URL(worker.url()).host}/index.html`); return page;
   };
   try {
@@ -51,7 +51,7 @@ test('production UI creates and reopens MDBX in the browser without an installed
     await send(page, { type: 'VAULT_RESTORE_ENCRYPTED', backup, backupPassword: master });
     await page.evaluate(() => chrome.storage.local.set({ 'monica.sync.preferences.v1': { enabled: false } })); await page.reload();
     await page.getByRole('button', { name: '密码源', exact: true }).click();
-    await page.locator('m3e-list-action').filter({ hasText: '连接 MDBX2 保险库' }).click();
+    await page.getByRole('button', { name: /^连接 MDBX2 保险库/ }).click();
     let dialog = page.locator('.mdbx2-dialog[role="dialog"]');
     await expect(dialog.getByText('已内置，无需安装组件。数据保存在此浏览器。', { exact: true })).toBeVisible();
     await dialog.getByLabel('显示名称', { exact: true }).fill('内置 MDBX 验收');
@@ -99,10 +99,10 @@ test('production UI creates and reopens MDBX in the browser without an installed
     expect(legacy.config).toMatchObject({ vaultHandle: legacyHandle, runtimeBackend: 'native' });
     await dialog.getByRole('button', { name: '关闭 MDBX2 设置', exact: true }).click();
     // Import the actual exported encrypted file through the user-facing picker.
-    await page.locator('m3e-list-action').filter({ hasText: '连接 MDBX2 保险库' }).click(); dialog = page.locator('.mdbx2-dialog[role="dialog"]');
+    await page.getByRole('button', { name: /^连接 MDBX2 保险库/ }).click(); dialog = page.locator('.mdbx2-dialog[role="dialog"]');
     await chooseOption(dialog.locator('m3e-select').first(), 'local');
     await dialog.getByLabel('显示名称', { exact: true }).fill('内置 MDBX 备份导入');
-    await dialog.getByLabel('MDBX2 可移植备份', { exact: true }).setInputFiles(exported);
+    await dialog.getByLabel('MDBX 可移植备份', { exact: true }).setInputFiles(exported);
     await dialog.getByLabel('保险库密码（可留空）', { exact: true }).fill(password);
     await dialog.getByRole('button', { name: '验证、解锁并导入', exact: true }).click(); await expect(dialog).toHaveCount(0, { timeout: 60000 });
     const imported = ((await send(page, { type: 'PROVIDER_LIST' })) as ProviderAccount[]).find(p => p.name === '内置 MDBX 备份导入')!;

@@ -207,7 +207,10 @@ struct Transfer {
     incoming: BackupScratch,
     // Keeps all encrypted output alive until the native worker has stopped.
     _snapshot: Arc<Snapshot>,
+    // The cache lease must outlive cancelled workers, including port shutdown.
+    _resume: Arc<BackupScratch>,
     replica: Option<String>,
+    discard_resume: bool,
 }
 struct Buffer {
     bytes: Zeroizing<Vec<u8>>,
@@ -228,6 +231,8 @@ pub(crate) struct Nearby {
     input: HashMap<String, Buffer>,
     output: HashMap<String, Buffer>,
     discoveries: HashMap<String, Discovery>,
+    resume: Arc<BackupScratch>,
+    resume_pruned: Instant,
 }
 
 impl Nearby {
@@ -236,7 +241,9 @@ impl Nearby {
         directory(&root)?;
         directory(&root.join("replicas"))?;
         directory(&root.join("scratch"))?;
-        crate::backup_scratch::scavenge(&root.join("scratch"))?;
+        crate::backup_scratch::scavenge_nearby(&root.join("scratch"))?;
+        let resume = Arc::new(BackupScratch::new(&root.join("scratch"))?);
+        directory(&resume.path().join("resume"))?;
         Ok(Self {
             root,
             replicas: HashMap::new(),
@@ -245,6 +252,8 @@ impl Nearby {
             input: HashMap::new(),
             output: HashMap::new(),
             discoveries: HashMap::new(),
+            resume,
+            resume_pruned: Instant::now(),
         })
     }
 
@@ -486,7 +495,11 @@ impl Nearby {
             "asset_append" => self.append_asset(params),
             "start" | "connect" => self.start(&operation, params),
             "progress" | "cancel" | "release" | "acknowledge" => self.session(&operation, params),
-            "replica_merge" => self.merge(params),
+            "replica_merge" | "replica_merge_preview" => self.merge(&operation, params),
+            "resume_prune" | "resume_clear" => {
+                args(params, &[])?;
+                engine(json!({"operation":operation,"root":self.resume.path().join("resume")}))
+            }
             "asset_list" | "asset_read" => self.read_asset(&operation, params),
             "discover" => {
                 let p = args(params, &["targets", "multicast"])?;
@@ -835,6 +848,22 @@ impl Nearby {
         device.insert("revision".into(), json!(snapshot.revision));
         device.insert("content_type".into(), json!("vault"));
         device.insert("vault_content_version".into(), json!(2));
+        // The host owns capability advertisement. Receive-only's empty snapshot
+        // is not an inventory of actual destination records or attachments.
+        let paired = p.contains_key("expected_device_id")
+            && device
+                .get("pair_id")
+                .and_then(Value::as_str)
+                .is_some_and(|s| !s.is_empty());
+        let inventory = paired
+            && snapshot.revision != PAIRING_REVISION
+            && snapshot.revision != "receive-only-v1";
+        device.insert("incremental_sync".into(), json!(u32::from(inventory)));
+        device.insert("resume_sync".into(), json!(u32::from(paired)));
+        if self.resume_pruned.elapsed() >= Duration::from_secs(60) {
+            engine(json!({"operation":"resume_prune","root":self.resume.path().join("resume")}))?;
+            self.resume_pruned = Instant::now();
+        }
         let name = device
             .get("name")
             .cloned()
@@ -853,6 +882,7 @@ impl Nearby {
         request["content_key"] = json!(*snapshot.key);
         request["incoming_directory"] = json!(leaf);
         request["outgoing_directory"] = json!(snapshot.directory.path());
+        request["resume_root"] = json!(self.resume.path().join("resume"));
         let mut started = engine(request)?;
         let native_handle = started["handle"]
             .as_u64()
@@ -864,7 +894,9 @@ impl Nearby {
                 handle: native_handle,
                 incoming,
                 _snapshot: snapshot,
+                _resume: self.resume.clone(),
                 replica: None,
+                discard_resume: false,
             },
         );
         started["handle"] = json!(handle);
@@ -908,8 +940,14 @@ impl Nearby {
         p.insert("operation".into(), json!(operation));
         p.insert("handle".into(), json!(transfer.handle));
         let mut result = engine(Value::Object(p))?;
-        if operation == "release" {
-            self.transfers.remove(&handle);
+        if operation == "cancel" {
+            // Active partials are skipped by clear. The independent retirement
+            // path performs a second clear after their worker releases ownership.
+            engine(json!({"operation":"resume_clear","root":self.resume.path().join("resume")}))?;
+            self.transfers.get_mut(&handle).unwrap().discard_resume = true;
+        }
+        if operation == "release" && self.transfers.remove(&handle).is_some_and(|transfer| transfer.discard_resume) {
+            engine(json!({"operation":"resume_clear","root":self.resume.path().join("resume")}))?;
         }
         if operation == "progress" {
             if let Some(map) = result.as_object_mut() {
@@ -954,8 +992,11 @@ impl Nearby {
         ))
     }
 
-    fn merge(&mut self, params: Value) -> Result<Value> {
-        let mut p = args(params, &["handle", "session"])?;
+    fn merge(&mut self, operation: &str, params: Value) -> Result<Value> {
+        let mut p = args(
+            params,
+            &["handle", "session", "deletion_policy", "review_revision"],
+        )?;
         let handle = token(&mut p, "handle")?;
         let session = token(&mut p, "session")?;
         let native = self.replica(&handle)?;
@@ -971,10 +1012,14 @@ impl Nearby {
         {
             return Err(failure("nearby-different-replica"));
         }
-        let result = engine(
-            json!({"operation":"replica_merge","handle":native,"path":directory.join("changes.mdbxsync"),"content_key":*key}),
-        )?;
-        self.transfers.get_mut(&session).unwrap().replica = Some(handle);
+        p.insert("operation".into(), json!(operation));
+        p.insert("handle".into(), json!(native));
+        p.insert("path".into(), json!(directory.join("changes.mdbxsync")));
+        p.insert("content_key".into(), json!(*key));
+        let result = engine(Value::Object(p))?;
+        if operation == "replica_merge" {
+            self.transfers.get_mut(&session).unwrap().replica = Some(handle);
+        }
         Ok(result)
     }
 
@@ -1010,6 +1055,8 @@ impl Nearby {
         for transfer in transfers.values() {
             let _ = engine(json!({"operation":"cancel","handle":transfer.handle}));
         }
+        let resume = self.resume.clone();
+        let _ = engine(json!({"operation":"resume_clear","root":resume.path().join("resume")}));
         if !transfers.is_empty() {
             std::thread::spawn(move || {
                 let mut transfers = transfers;
@@ -1021,6 +1068,8 @@ impl Nearby {
                         std::thread::sleep(Duration::from_millis(50));
                     }
                 }
+                let _ =
+                    engine(json!({"operation":"resume_clear","root":resume.path().join("resume")}));
             });
         }
         self.snapshots.clear();

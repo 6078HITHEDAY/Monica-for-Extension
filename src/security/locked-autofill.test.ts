@@ -41,9 +41,11 @@ describe("device-local selective autofill", () => {
   });
   it('retains the granted member number across lock/restart and removes all revoked identity data', async () => {
     const { service, storage, sessions, device, cache, item, other } = await fixture();
-    const first = {...item, passwordGroupId: 'explicit-project', customFields: []};
+    // Imports preserve existing creation times. Use explicit ordering rather than
+    // relying on fixture inserts landing in different milliseconds or random IDs.
+    const first = {...item, passwordGroupId: 'explicit-project', sortOrder: 0, customFields: []};
     const second = {...other, passwordGroupId: 'explicit-project', username: item.username,
-      createdAt: '2999-01-01T00:00:00Z', customFields: []};
+      sortOrder: 1, customFields: []};
     await service.importItems([first, second]);
     await service.setLockedAutofill(second.id, true);
     const full = await service.readAutofillContext();

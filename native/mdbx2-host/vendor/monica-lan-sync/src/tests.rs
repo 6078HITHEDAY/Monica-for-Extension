@@ -2,6 +2,79 @@ use super::*;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 #[test]
+fn receive_only_listener_receives_bundle_and_assets_without_sending() {
+    let _guard = serial_sessions();
+    for sender_mode in ["send_only", "bidirectional"] {
+        let root = TestDirectory::new();
+        let outgoing = root.directory("sender-out");
+        let sender_in = root.directory("sender-in");
+        let receiver_in = root.directory("receiver-in");
+        for name in ["changes.mdbxsync", "assets.monica"] {
+            std::fs::write(outgoing.join(name), format!("synthetic {name}")).unwrap();
+        }
+        let receiver = call(json!({
+            "operation":"start", "protocol":2, "listen_address":"127.0.0.1",
+            "vault_id":"shared", "incoming_directory":receiver_in,
+            "device":{"device_id":"receiver", "name":"Receiver", "content_type":"vault",
+                "vault_content_version":2, "sync_mode":"receive_only"}
+        }));
+        let sender = call(json!({
+            "operation":"connect", "protocol":2,
+            "invitation":format!("monica-lan:2:127.0.0.1:{}:{}", receiver["port"], receiver["code"].as_str().unwrap()),
+            "vault_id":"shared", "incoming_directory":sender_in, "outgoing_directory":outgoing,
+            "content_key":peering::random_key(),
+            "device":{"device_id":"sender", "name":"Sender", "content_type":"vault",
+                "vault_content_version":2, "sync_mode":sender_mode}
+        }));
+        let handles = [
+            receiver["handle"].as_u64().unwrap(),
+            sender["handle"].as_u64().unwrap(),
+        ];
+        let results = [wait(handles[0]), wait(handles[1])];
+        for handle in handles {
+            call(json!({"operation":"release", "handle":handle}));
+        }
+        for result in &results {
+            assert_eq!(result.phase, "completed", "{:?}", result.error);
+        }
+        for name in ["changes.mdbxsync", "assets.monica"] {
+            assert_eq!(
+                std::fs::read(outgoing.join(name)).unwrap(),
+                std::fs::read(receiver_in.join(name)).unwrap()
+            );
+        }
+        assert_eq!(std::fs::read_dir(sender_in).unwrap().count(), 0);
+        let sender_peer = serde_json::to_value(results[1].peer.as_ref().unwrap()).unwrap();
+        assert_eq!(sender_peer["receive_content"], false);
+        assert_eq!(sender_peer["pairing"]["content_key"], "");
+        let receiver_peer = serde_json::to_value(results[0].peer.as_ref().unwrap()).unwrap();
+        assert_eq!(receiver_peer["send_content"], false);
+    }
+}
+
+#[test]
+fn send_capable_listeners_still_require_a_sync_bundle() {
+    let _guard = serial_sessions();
+    for protocol in [1, 2] {
+        for mode in [None, Some("send_only"), Some("bidirectional")] {
+            let root = TestDirectory::new();
+            let mut device = json!({"device_id":"fixture", "name":"Fixture", "content_type":"vault", "vault_content_version":2});
+            if let Some(mode) = mode {
+                device["sync_mode"] = json!(mode);
+            }
+            assert_eq!(request(json!({"operation":"start", "protocol":protocol,
+                "incoming_directory":root.directory("incoming"), "vault_id":"shared", "device":device})).unwrap_err(), "missing_sync_bundle");
+        }
+    }
+    // Supplying a directory still requires valid artifacts, even in receive-only mode.
+    let root = TestDirectory::new();
+    assert_eq!(request(json!({"operation":"start", "protocol":2, "vault_id":"shared",
+        "incoming_directory":root.directory("incoming"), "outgoing_directory":root.directory("empty-out"),
+        "device":{"device_id":"receiver", "name":"Receiver", "content_type":"vault", "vault_content_version":2,
+            "sync_mode":"receive_only"}})).unwrap_err(), "missing_sync_bundle");
+}
+
+#[test]
 fn device_direction_limits_real_bundle_and_asset_transmission() {
     let _guard = serial_sessions();
     let modes = [
@@ -225,15 +298,44 @@ fn unicast_discovery_without_multicast_returns_every_active_pairing_listener() {
     }
 }
 
-fn serial_sessions() -> std::sync::MutexGuard<'static, ()> {
+#[test]
+fn directed_broadcast_discovery_works_without_multicast_or_remembered_addresses() {
+    let _guard = serial_sessions();
+    let has_local_broadcast =
+        if_addrs::get_if_addrs()
+            .unwrap_or_default()
+            .iter()
+            .any(|interface| {
+                matches!(&interface.addr, if_addrs::IfAddr::V4(address)
+            if address.ip.is_private() && address.broadcast.is_some_and(|ip| ip.is_private()))
+            });
+    if !has_local_broadcast {
+        return;
+    } // Loopback-only hosts cannot exercise interface broadcasts.
+    let root = TestDirectory::new();
+    let out = root.directory("out");
+    std::fs::write(out.join("changes.mdbxsync"), b"synthetic hotspot bundle").unwrap();
+    let host = call(
+        json!({"operation":"start", "protocol":2, "vault_id":"hotspot-test",
+        "outgoing_directory":out, "incoming_directory":root.directory("in"),
+        "device":{"device_id":"hotspot-broadcast", "name":"Fixture"}}),
+    );
+    let found = request(json!({"operation":"discover", "multicast":false, "broadcast":true}));
+    call(json!({"operation":"release", "handle":host["handle"]}));
+    let found = found.unwrap();
+    assert!(found["devices"].as_array().unwrap().iter().any(|device| device["device_id"] == "hotspot-broadcast"),
+        "Directed broadcast must discover the listener when mDNS/multicast and old addresses are unavailable");
+}
+
+pub(crate) fn serial_sessions() -> std::sync::MutexGuard<'static, ()> {
     SESSION_TESTS
         .lock()
         .unwrap_or_else(|error| error.into_inner())
 }
 
-struct TestDirectory(PathBuf);
+pub(crate) struct TestDirectory(PathBuf);
 impl TestDirectory {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let root = std::env::temp_dir().join(format!(
             "monica-lan-test-{}-{}",
             std::process::id(),
@@ -245,7 +347,7 @@ impl TestDirectory {
         std::fs::create_dir(&root).unwrap();
         Self(root)
     }
-    fn directory(&self, name: &str) -> PathBuf {
+    pub(crate) fn directory(&self, name: &str) -> PathBuf {
         let path = self.0.join(name);
         std::fs::create_dir(&path).unwrap();
         path
@@ -269,7 +371,7 @@ fn request_ok(value: Value) -> Value {
     response["data"].clone()
 }
 
-fn call(value: Value) -> Value {
+pub(crate) fn call(value: Value) -> Value {
     if value["operation"] == "release" {
         let handle = value["handle"].as_u64().unwrap();
         request_ok(json!({"operation":"cancel", "handle":handle}));
@@ -292,7 +394,7 @@ fn call(value: Value) -> Value {
     data
 }
 
-fn wait(handle: u64) -> Progress {
+pub(crate) fn wait(handle: u64) -> Progress {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let progress = job(handle).unwrap().progress.lock().unwrap().clone();

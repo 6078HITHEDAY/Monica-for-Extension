@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
+import ts from 'typescript';
 
 const root = path.resolve(import.meta.dirname, '..');
 const inventory = JSON.parse(await readFile(path.join(root, 'scripts/icon-font-inventory.json'), 'utf8'));
@@ -13,8 +14,15 @@ const included = new Set(inventory.symbols);
 const missing = new Set();
 for (const file of await readdir(path.join(root, 'src'), { recursive: true })) {
   if (!/\.(ts|vue)$/.test(file) || file.endsWith('.test.ts')) continue;
-  // DOM tag names can also be Material Symbols names (for example iframe).
-  const source = (await readFile(path.join(root, 'src', file), 'utf8')).replace(/\.createElement\(["'][a-z][a-z0-9-]*["']\)/g, '');
+  // DOM tag names and ARIA roles can also be Material Symbols names (for example iframe, tab).
+  const text = await readFile(path.join(root, 'src', file), 'utf8');
+  // Method names in type-only dependencies (Pick<T, 'clear' | 'pause'>) are
+  // not UI icons. Scan the runtime output of TypeScript, preserving every
+  // executable string while removing erased types and comments.
+  const runtime = file.endsWith('.ts') ? ts.transpileModule(text, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, removeComments: true } }).outputText : text;
+  const source = runtime
+    .replace(/\.createElement\(["'][a-z][a-z0-9-]*["']\)/g, '')
+    .replace(/\brole=["'][a-z][a-z0-9-]*["']/g, '');
   for (const [, name] of source.matchAll(/["']([a-z][a-z0-9_]*)["']/g)) if (available.has(name) && !included.has(name)) missing.add(name);
 }
 if (missing.size) throw new Error('New icons need font regeneration: ' + [...missing].join(', '));

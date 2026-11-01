@@ -53,8 +53,9 @@ export class OneDriveGraphClient {
     return { id: identityPart(value.id), name: textField(value.name, 256), driveType: textField(value.driveType, 64) };
   }
 
-  /** Return only selectable folders/KDBX files, never download capabilities or remote shortcuts. */
-  async children(driveId: string, parentId?: string, signal?: AbortSignal): Promise<OneDriveItem[]> {
+  /** Return only selectable folders or files matching the extension allowlist, never download capabilities or remote shortcuts. */
+  async children(driveId: string, parentId?: string, signal?: AbortSignal, extensions: string[] = [".kdbx"]): Promise<OneDriveItem[]> {
+    const suffixes = normalizeBrowseSuffixes(extensions);
     const drive = identityPart(driveId);
     const base = `${GRAPH}/drives/${encodeURIComponent(drive)}/${parentId ? `items/${encodeURIComponent(identityPart(parentId))}` : "root"}/children`;
     let next: string | undefined = `${base}?$select=${ITEM_FIELDS}&$top=200`;
@@ -72,7 +73,7 @@ export class OneDriveGraphClient {
         const item = parseItem(raw, drive);
         if (seenItems.has(item.itemId)) throw changedFile();
         seenItems.add(item.itemId);
-        if (item.kind === "folder" || item.name.toLowerCase().endsWith(".kdbx")) items.push(item);
+        if (item.kind === "folder" || suffixes.some(suffix => item.name.toLowerCase().endsWith(suffix))) items.push(item);
       }
       next = page["@odata.nextLink"] === undefined ? undefined : safeNextLink(page["@odata.nextLink"], base);
     }
@@ -88,7 +89,8 @@ export class OneDriveGraphClient {
       const raw = await readBoundedJsonObject(response, MAX_METADATA_BYTES, "OneDrive 文件状态", requestSignal);
       const item = parseFile(raw, target);
       if (item.size > this.maxDatabaseBytes) throw fileSizeError("下载");
-      return { ...item, ...(includeDownload ? { downloadUrl: safeDownloadUrl(raw["@microsoft.graph.downloadUrl"]) } : {}) };
+      // A missing annotation is not fatal: read() falls back to streaming /content.
+      return { ...item, ...(includeDownload ? { downloadUrl: raw["@microsoft.graph.downloadUrl"] === undefined ? undefined : safeDownloadUrl(raw["@microsoft.graph.downloadUrl"]) } : {}) };
     });
   }
 
@@ -101,6 +103,15 @@ export class OneDriveGraphClient {
       if (response.status !== 200) throw providerHttpError("OneDrive 文件下载失败", response);
       return readBoundedResponseBytes(response, this.maxDatabaseBytes, "OneDrive 文件下载", requestSignal);
     }));
+  }
+
+  /** Streams /content through Graph's redirect for drives that never return the capability annotation. */
+  async downloadContent(identity: OneDriveItemIdentity, signal?: AbortSignal): Promise<Uint8Array> {
+    const target = normalizeOneDriveIdentity(identity);
+    return this.requestScoped(`${itemUrl(target)}/content`, { method: "GET", redirect: "follow" }, "OneDrive 文件下载", async (response, requestSignal) => {
+      if (!response.ok) throw providerHttpError("OneDrive 文件下载失败", response);
+      return readBoundedResponseBytes(response, this.maxDatabaseBytes, "OneDrive 文件下载", requestSignal);
+    });
   }
 
   async replace(identity: OneDriveItemIdentity, bytes: Uint8Array, etag: string, signal?: AbortSignal): Promise<void> {
@@ -137,7 +148,7 @@ export class OneDriveGraphClient {
     headers.set("Authorization", `Bearer ${token}`);
     headers.set("Accept", "application/json");
     const isRead = !init.method || init.method === "GET";
-    return resilientFetch(url, { ...init, headers, credentials: "omit", redirect: "error", cache: "no-store", referrerPolicy: "no-referrer" }, {
+    return resilientFetch(url, { ...init, headers, credentials: "omit", redirect: init.redirect ?? "error", cache: "no-store", referrerPolicy: "no-referrer" }, {
       ...this.policy, operation, fetcher: this.fetcher, idempotent: isRead,
       // Never replay a PUT after an ambiguous result; the file client reconciles actual bytes.
       ...(!isRead ? { maxAttempts: 1, timeoutMs: this.policy.timeoutMs ?? 120000 } : {})
@@ -174,7 +185,9 @@ export class OneDriveKeePassFileClient {
   async read(signal?: AbortSignal): Promise<KeePassWebDavSnapshot> {
     const before = await this.graph.file(this.identity, true, signal);
     if (!before) throw missingFile();
-    const bytes = await this.graph.download(before.downloadUrl!, signal);
+    const bytes = before.downloadUrl
+      ? await this.graph.download(before.downloadUrl, signal)
+      : await this.graph.downloadContent(this.identity, signal);
     try {
       // The preauthenticated URL need not use Graph's ETag. Bind downloaded bytes to
       // stable metadata before and after the GET instead of inventing an If-Match token.
@@ -216,7 +229,14 @@ export function normalizeOneDriveIdentity(value: OneDriveItemIdentity): OneDrive
   if (!isObject(value)) throw invalidMetadata();
   return { driveId: identityPart(value.driveId), itemId: identityPart(value.itemId) };
 }
-function identityPart(value: unknown): string {
+function normalizeBrowseSuffixes(value: string[]): string[] {
+  if (!value.length) throw invalidMetadata();
+  return value.map(entry => {
+    if (typeof entry !== "string" || !/^\.[a-z0-9]{1,15}$/.test(entry)) throw invalidMetadata();
+    return entry;
+  });
+}
+export function identityPart(value: unknown): string {
   if (typeof value !== "string" || !/^[A-Za-z0-9!_-]{1,256}$/.test(value)) throw invalidMetadata();
   return value;
 }
@@ -247,12 +267,12 @@ function requireOneDriveEtag(value: unknown): string {
 }
 function isObject(value: unknown): value is Record<string, unknown> { return !!value && typeof value === "object" && !Array.isArray(value); }
 function itemUrl(identity: OneDriveItemIdentity): string { return `${GRAPH}/drives/${encodeURIComponent(identity.driveId)}/items/${encodeURIComponent(identity.itemId)}`; }
-function assertGraphUrl(value: string): URL {
+export function assertGraphUrl(value: string): URL {
   const url = new URL(value);
   if (url.origin !== "https://graph.microsoft.com" || !url.pathname.startsWith("/v1.0/") || url.username || url.password || url.hash || url.href.length > 16384) throw invalidMetadata();
   return url;
 }
-function safeNextLink(value: unknown, base: string): string {
+export function safeNextLink(value: unknown, base: string): string {
   if (typeof value !== "string") throw invalidMetadata();
   const url = assertGraphUrl(value);
   if (url.pathname !== new URL(base).pathname) throw invalidMetadata();
@@ -261,11 +281,11 @@ function safeNextLink(value: unknown, base: string): string {
   }
   return url.href;
 }
-function safeDownloadUrl(value: unknown): string {
+export function safeDownloadUrl(value: unknown): string {
   if (typeof value !== "string" || value.length > 16384) throw invalidMetadata();
   let url: URL;
   try { url = new URL(value); } catch { throw invalidMetadata(); }
-  const suffixes = [".1drv.com", ".sharepoint.com", ".storage.live.com"];
+  const suffixes = [".1drv.com", ".sharepoint.com", ".storage.live.com", ".microsoftpersonalcontent.com"];
   if (url.protocol !== "https:" || url.port || url.username || url.password || url.hash || !suffixes.some(suffix => url.hostname.endsWith(suffix))) throw invalidMetadata();
   return url.href;
 }

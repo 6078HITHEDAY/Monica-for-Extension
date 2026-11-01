@@ -216,6 +216,8 @@
 }
 
 .file-action {
+  position: relative;
+  overflow: hidden;
   min-height: 48px;
   border-radius: var(--app-shape-card);
   display: flex;
@@ -231,9 +233,11 @@
 
 .file-action input {
   position: absolute;
-  inline-size: 1px;
-  block-size: 1px;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100%;
   opacity: 0;
+  cursor: pointer;
 }
 
 .recovery-panel {

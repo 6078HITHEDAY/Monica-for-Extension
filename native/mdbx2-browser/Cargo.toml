@@ -19,6 +19,7 @@ md-5 = "0.10"
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
 zeroize = "1"
+rusqlite = { version = "0.31", features = ["bundled"] }
 tempfile = { version = "=3.27.0", features = ["monica-private-memfs"] }
 zip = { version = "=2.4.2", default-features = false }
 

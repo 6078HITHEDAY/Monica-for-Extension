@@ -1,5 +1,6 @@
+import { launchTestContext } from './fixtures/edge';
 import { dialogContent } from "./fixtures/material";
-import { chromium, expect, test, type BrowserContext, type Page, type Route, type TestInfo } from "@playwright/test";
+import { expect, test, type BrowserContext, type Page, type Route, type TestInfo } from "@playwright/test";
 import path from "node:path";
 import { BitwardenClient } from "../../src/providers/bitwarden/bitwarden-client";
 import {
@@ -38,7 +39,7 @@ test("Bitwarden Send text and file operations are encrypted, manager-only, and r
   const server = await createSendServer();
   try {
     const extensionPath = path.resolve("dist");
-    context = await chromium.launchPersistentContext(testInfo.outputPath("bitwarden-sends-profile"), {
+    context = await launchTestContext(testInfo.outputPath("bitwarden-sends-profile"), {
       channel: "chromium",
       headless: true, locale: "zh-CN",
       colorScheme: "dark",

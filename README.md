@@ -4,7 +4,7 @@ Monica 的 Chrome/Edge 与 Firefox 桌面浏览器插件，采用独立的 Manif
 
 ## 当前状态
 
-当前正式版本为 **1.0.102**，Chrome/Edge 使用 `dist/`，Firefox 153+ 使用 `dist-firefox/`。Windows Firefox 155.0.1 已完成隔离测试；本地 Firefox 包未签名，临时加载、永久安装的签名要求和 OneDrive 回调配置见 [Firefox 说明](docs/FIREFOX.md)。本版改动见 [1.0.102 发行说明](docs/releases/Monica-Extension-1.0.102.md)，后续改动记录在[下一版发行说明](docs/RELEASE-NEXT.md)，`0.1.48` preview-beta 的已发布记录保留在[历史说明](docs/releases/Monica-Extension-0.1.48.md)。问题可通过 [Bug 报告](https://github.com/Monica-Pass/Monica-for-Extension/issues/new?template=bug.yml) 提交。
+当前正式版本为 **1.0.103**，Chrome/Edge 使用 `dist/`，Firefox 153+ 使用 `dist-firefox/`。Windows Firefox 155.0.1 已完成隔离测试；本地 Firefox 包未签名，临时加载、永久安装的签名要求和 OneDrive 回调配置见 [Firefox 说明](docs/FIREFOX.md)。本版改动见 [1.0.103 发行说明](docs/releases/Monica-Extension-1.0.103.md)，后续改动记录在[下一版发行说明](docs/RELEASE-NEXT.md)，`0.1.48` preview-beta 的已发布记录保留在[历史说明](docs/releases/Monica-Extension-0.1.48.md)。问题可通过 [Bug 报告](https://github.com/Monica-Pass/Monica-for-Extension/issues/new?template=bug.yml) 提交。
 
 基础可用版本已经完成：
 
@@ -71,7 +71,7 @@ Monica 的 Chrome/Edge 与 Firefox 桌面浏览器插件，采用独立的 Manif
 - [0.1.24 功能、安装与互通验证记录](docs/VALIDATION-0.1.24.md)
 - [参与贡献](CONTRIBUTING.md)
 
-当前正式发布见 [1.0.102 发行说明](docs/releases/Monica-Extension-1.0.102.md)和[发布验证记录](docs/verification/release-1.0.102.md)。同步与 Passkey 的兼容范围见[同步说明](docs/SYNC_COMPATIBILITY.md)和[Passkey 说明](docs/PASSKEY_COMPATIBILITY.md)。原 `docs/RELEASE-0.1.38.md` 至 `RELEASE-0.1.45.md` 是已纳入 0.1.37 的历史开发记录，保持原样；当前 0.1.48 阶段说明位于 `docs/releases/`。
+当前正式发布见 [1.0.103 发行说明](docs/releases/Monica-Extension-1.0.103.md)和[发布验证记录](docs/verification/release-1.0.103.md)。同步与 Passkey 的兼容范围见[同步说明](docs/SYNC_COMPATIBILITY.md)和[Passkey 说明](docs/PASSKEY_COMPATIBILITY.md)。原 `docs/RELEASE-0.1.38.md` 至 `RELEASE-0.1.45.md` 是已纳入 0.1.37 的历史开发记录，保持原样；当前 0.1.48 阶段说明位于 `docs/releases/`。
 
 ## 日常使用
 
@@ -108,6 +108,8 @@ API 密钥独立保存服务商、令牌、可选 API 地址、备注、自定�
 4. 同步：在 Android 的附近设备同步设置中务必选择“双向同步”；在浏览器设备列表中点按“同步”，同时在手机上点按“立即同步”，保持两端同步页面打开。配对不代表已同步；双方确认保存后才更新同步时间并弹出结果。弹窗显示本机实际保存／删除的项目和数量，对方接收显示确认状态。浏览器的“页面打开时自动同步”按所选间隔重试；目前尚未发布 mDNS 在线广播，不能保证唤起 Android 自动同步。
 
 扩展遵循 Android 的连接规则：设备 ID 较大的一方监听，较小的一方通过局域网发现并主动连接。新建的浏览器身份会主动连接手机，因此通常只需要出站连接，无需为本机助手开放入站防火墙。页面会针对缺少本机助手、找不到手机、防火墙或网络隔离、配对链接无效等情况给出具体处理建议。Bitwarden 与 KeePass 来源不参与 Wi-Fi 同步。
+
+新版通信组件与 Android 1.0.324 可在已配对连接中协商增量记录、缺失附件和加密断点续传；旧端继续使用完整加密传输。重连会重新认证，并核对原始密文及已接收前缀。接收历史删除时可审阅并选择跳过，双方实际保存完成后才确认成功。缓存只保存密文，取消、锁定和离开同步页面会撤销本次操作。Android 的 `monica-hotspot:1:` 热点邀请也可粘贴到页面：先按提示在系统 Wi-Fi 设置中连接热点，再连接设备；浏览器不会自动创建或加入热点。热点凭据只在当前页面临时显示，三分钟后清除。
 
 ### 常用账号免解锁填写
 

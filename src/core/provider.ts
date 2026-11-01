@@ -76,7 +76,8 @@ export function sameProviderBinding(left: ProviderAccount, right: ProviderAccoun
   if (left.kind === 'mdbx2' && (left.config.runtimeBackend ?? 'native') !== (right.config.runtimeBackend ?? 'native')) return false;
   if (left.kind === 'keepass' && (left.config.sourceMode === 'local-file' || right.config.sourceMode === 'local-file') &&
       left.config.localFileSourceSha256 !== right.config.localFileSourceSha256) return false;
-  if (left.kind === "keepass" && (left.config.sourceMode === "onedrive" || right.config.sourceMode === "onedrive")) {
+  if ((left.kind === "keepass" && (left.config.sourceMode === "onedrive" || right.config.sourceMode === "onedrive"))
+    || left.kind === "mdbx2" && (left.config.oneDriveConnection || right.config.oneDriveConnection)) {
     const a = oneDriveConnectionBinding(left.config.oneDriveConnection);
     const b = oneDriveConnectionBinding(right.config.oneDriveConnection);
     if (!a || !b || a !== b) return false;
@@ -84,7 +85,7 @@ export function sameProviderBinding(left: ProviderAccount, right: ProviderAccoun
   const keys = left.kind === "bitwarden" ? ["vaultUrl", "apiUrl", "identityUrl", "email", "deviceId", "vaultKeyEnc", "vaultKeyMac"]
     : left.kind === "monica-webdav" ? ["baseUrl", "username", "password", "backupPassword"]
     : left.kind === "keepass" ? ["sourceMode", "webDavBaseUrl", "webDavUsername", "webDavPassword", "remotePath", "databasePassword", "keyFile", "oneDriveDriveId", "oneDriveItemId"]
-    : left.kind === "mdbx2" ? ["vaultHandle", "syncStateHandle", "webDavBaseUrl", "webDavUsername", "webDavPassword", "remotePath"] : [];
+    : left.kind === "mdbx2" ? ["vaultHandle", "syncStateHandle", "webDavBaseUrl", "webDavUsername", "webDavPassword", "remotePath", "oneDriveDriveId"] : [];
   return keys.every(key => left.config[key] === right.config[key]);
 }
 

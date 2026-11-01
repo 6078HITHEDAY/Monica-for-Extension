@@ -42,7 +42,8 @@ export function readNearbyManagerRequest(value: unknown): NearbyManagerRequest {
       break;
     case 'pair':
       fields(p, ['id', 'type', 'invitation']);
-      if (p.invitation !== undefined && (typeof p.invitation !== 'string' || p.invitation.length > 512)) invalid();
+      if (p.invitation !== undefined && (typeof p.invitation !== 'string' || p.invitation.length > 1100
+        || p.invitation.length > 512 && !p.invitation.trim().startsWith('monica-hotspot:1:'))) invalid();
       break;
     case 'prepare': fields(p, ['id', 'type', 'peerId']); text(p.peerId, identifier); break;
     case 'confirm': fields(p, ['id', 'type', 'reviewId']); text(p.reviewId, uuid); break;

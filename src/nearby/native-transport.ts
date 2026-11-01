@@ -5,9 +5,9 @@ import { parseLosslessJson } from "../core/lossless-json";
 export type NearbyOperation =
   | "replica_open" | "replica_close" | "replica_scan_begin" | "replica_scan_batch" | "replica_scan_end"
   | "replica_revision" | "replica_local" | "replica_resolve" | "replica_rebind" | "replica_export"
-  | "replica_merge" | "replica_pending" | "replica_applied_batch" | "snapshot_release" | "snapshot_pairing" | "snapshot_receive_only"
+  | "replica_merge" | "replica_merge_preview" | "replica_pending" | "replica_applied_batch" | "snapshot_release" | "snapshot_pairing" | "snapshot_receive_only"
   | "asset_append" | "asset_list" | "asset_read" | "start" | "connect" | "progress"
-  | "cancel" | "release" | "acknowledge" | "discover" | "discovery_result" | "close_all";
+  | "cancel" | "release" | "acknowledge" | "discover" | "discovery_result" | "close_all" | "resume_clear" | "resume_prune";
 
 const CHUNK = 256 * 1024;
 const INLINE = 600 * 1024;
@@ -75,11 +75,13 @@ function jsonValue(value: unknown, depth = 0, seen = new Set<object>()): boolean
 export class NearbyNativeTransport {
   private closed = false;
   private ready = false;
+  private incremental = false;
   private tail: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly client: Pick<Mdbx2NativeClient, "request" | "close">) {}
 
   close(): void { this.closed = true; this.client.close(); }
+  get supportsIncrementalSync(): boolean { return this.incremental; }
 
   call(operation: NearbyOperation, params: Record<string, unknown> = {}, signal?: AbortSignal): Promise<unknown> {
     const run = this.tail.then(async () => {
@@ -91,6 +93,7 @@ export class NearbyNativeTransport {
           const hello = nearbyObject(await this.client.request("host.hello", {}));
           this.check(signal);
           if (hello.nearbyTransportVersion !== 2) throw new NearbyTransportError("host-update-required");
+          this.incremental = hello.nearbyIncrementalSync === 1;
           this.ready = true;
         }
         return await this.execute(operation, params, signal);

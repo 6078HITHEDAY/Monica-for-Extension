@@ -1,3 +1,4 @@
+import { auditRuntimeCommands, readRuntimeAuditSources } from './runtime-command-audit.mjs';
 import { readFile, readdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import ts from "typescript";
@@ -58,7 +59,8 @@ for (const name of scripts) {
 const background = await readFile(resolve(root, "dist/background.js"), "utf8");
 if (!background.includes("TRUSTED_CONTEXTS")) throw new Error("Session storage is not restricted to trusted contexts.");
 if (!background.includes("WEB_PAGE_REQUEST_TYPES") && !background.includes("CREDENTIAL_CAPTURE")) throw new Error("Background page-command allowlist is missing from the release.");
-const backgroundSource = await readFile(resolve(root, "src/background/index.ts"), "utf8");
+const runtimeSources = await readRuntimeAuditSources(root);
+const { declaredTypes, handlers, webTypes, allowlistBlock, productionSource: backgroundSource } = auditRuntimeCommands(runtimeSources);
 // onConnect APIs do not appear in ExtensionRequest. Audit their ownership separately.
 const nearbyOwnerSource = await readFile(resolve(root, 'src/background/nearby-owner.ts'), 'utf8');
 const nearbyContractSource = await readFile(resolve(root, 'src/nearby/manager-contract.ts'), 'utf8');
@@ -81,34 +83,12 @@ for (const hook of ['chrome.runtime.onConnect.addListener(port => nearbyOwner.at
   if (!backgroundSource.includes(hook)) throw new Error(`Nearby production cancellation hook is missing: ${hook}`);
 }
 if (!backgroundSource.includes('if (isBrowserMdbxControlMessage(message)) return false;')) throw new Error('MDBX offscreen control messages must bypass the generic reply handler.');
-if (!backgroundSource.includes("if (!WEB_PAGE_REQUEST_TYPES.has(request.type)) assertExtensionPage(sender);")) throw new Error("Privileged runtime commands are not default-denied.");
-if (!backgroundSource.includes('case "MDBX2_HOST_STATUS"') || backgroundSource.includes('case "MDBX_OPEN"')) throw new Error("MDBX Native Messaging review requires MDBX2-only privileged commands.");
-const pageTypes = ["CREDENTIAL_CAPTURE", "CREDENTIAL_PENDING", "CREDENTIAL_ACCEPT", "CREDENTIAL_DISMISS", "PASSKEY_BEGIN", "PASSKEY_UNLOCK_CONTINUE", "PASSKEY_ACCEPT", "PASSKEY_DISMISS"];
-const allowlistBlock = backgroundSource.match(/const WEB_PAGE_REQUEST_TYPES[\s\S]*?\]\);/)?.[0] || "";
-for (const type of pageTypes) if (!allowlistBlock.includes(`"${type}"`)) throw new Error(`Page request allowlist is missing ${type}.`);
 const messageSource = await readFile(resolve(root, "src/runtime/messages.ts"), "utf8");
-// Parse declarations and switch clauses so quote style cannot silently exclude
-// new privileged commands or turn a real handler into a false missing-handler error.
-const messageAst = ts.createSourceFile('messages.ts', messageSource, ts.ScriptTarget.Latest, true);
-const backgroundAst = ts.createSourceFile('background.ts', backgroundSource, ts.ScriptTarget.Latest, true);
-const declaredTypes = new Set(), handlers = new Map();
-for (const node of messageAst.statements) {
-  if (!ts.isTypeAliasDeclaration(node) || node.name.text !== 'ExtensionRequest' || !ts.isUnionTypeNode(node.type)) continue;
-  for (const variant of node.type.types) {
-    if (!ts.isTypeLiteralNode(variant)) continue;
-    for (const member of variant.members) {
-      if (ts.isPropertySignature(member) && member.name.getText(messageAst) === 'type'
-        && member.type && ts.isLiteralTypeNode(member.type) && ts.isStringLiteral(member.type.literal)) declaredTypes.add(member.type.literal.text);
-    }
-  }
+const accessSource = await readFile(resolve(root, 'src/background/request-access.ts'), 'utf8');
+if (!handlers.has('MDBX2_HOST_STATUS') || handlers.has('MDBX_OPEN')) throw new Error('MDBX review requires MDBX2-only privileged commands.');
+for (const type of ["CREDENTIAL_CAPTURE", "CREDENTIAL_PENDING", "CREDENTIAL_ACCEPT", "CREDENTIAL_DISMISS", "PASSKEY_BEGIN", "PASSKEY_UNLOCK_CONTINUE", "PASSKEY_ACCEPT", "PASSKEY_DISMISS"]) {
+  if (!webTypes.has(type)) throw new Error(`Page request allowlist is missing ${type}.`);
 }
-const requestHandler = backgroundAst.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'handleRequest');
-const dispatch = requestHandler?.body?.statements.find(node => ts.isSwitchStatement(node) && node.expression.getText(backgroundAst) === 'request.type');
-for (const clause of dispatch?.caseBlock.clauses || []) {
-  if (ts.isCaseClause(clause) && ts.isStringLiteral(clause.expression)) handlers.set(clause.expression.text, clause.statements.map(node=>node.getText(backgroundAst)).join('\n'));
-}
-if (!declaredTypes.size || !handlers.size) throw new Error('Runtime command declaration/dispatch audit could not be parsed.');
-for (const type of declaredTypes) if (!handlers.has(type)) throw new Error(`Runtime request ${type} has no explicit background handler.`);
 for (const type of ['VAULT_BATCH_MUTATE', 'VAULT_AUTHENTICATED_EXPORT', 'VAULT_STORAGE_OVERVIEW', 'VAULT_RECOVERY_CLEAR']) {
   if (allowlistBlock.includes(type) || !handlers.get(type)?.includes('assertManagerPage(sender)')) throw new Error(`Export/recovery command ${type} is not manager-only.`);
 }
@@ -127,19 +107,20 @@ for (const type of ['VAULT_PASSWORD_PROJECT_REMOVE', 'VAULT_PASSWORD_PROJECT_RES
 }
 for (const type of ["PASSKEY_VERIFICATION_CONTEXT", "PASSKEY_VERIFY_PASSWORD", "PASSKEY_VERIFY_HELLO", "PASSKEY_CANCEL_VERIFICATION"]) {
   if (allowlistBlock.includes(`"${type}"`)) throw new Error(`Passkey identity verification request ${type} is exposed to web pages.`);
-  if (!backgroundSource.includes(`case "${type}"`)) throw new Error(`Passkey identity verification handler ${type} is missing.`);
+  if (!handlers.has(type)) throw new Error(`Passkey identity verification handler ${type} is missing.`);
 }
 const steamTypes = [...messageSource.matchAll(/type:\s*"(STEAM_[A-Z0-9_]+)"/g)].map((match) => match[1]);
 for (const type of steamTypes) if (allowlistBlock.includes(`"${type}"`)) throw new Error(`Privileged Steam request ${type} is exposed to web pages.`);
 const mdbx2Types = [...messageSource.matchAll(/type:\s*"(MDBX2_[A-Z0-9_]+)"/g)].map((match) => match[1]);
 for (const type of mdbx2Types) {
   if (allowlistBlock.includes(`"${type}"`)) throw new Error(`Privileged MDBX2 request ${type} is exposed to web pages.`);
-  const start = backgroundSource.indexOf(`case "${type}"`);
-  if (start < 0 || !backgroundSource.slice(start, start + 500).includes("assertManagerPage(sender)")) throw new Error(`MDBX2 request ${type} is not restricted to the manager page.`);
+  if (!handlers.get(type)?.includes("assertManagerPage(sender)")) throw new Error(`MDBX2 request ${type} is not restricted to the manager page.`);
 }
-if (!backgroundSource.includes('chrome.runtime.getURL("index.html")')) throw new Error("MDBX2 manager-page origin check is missing.");
+if (!accessSource.includes('chrome.runtime.getURL("index.html")')) throw new Error("MDBX2 manager-page origin check is missing.");
 if (
-  !backgroundSource.includes("const mdbx2SyncCoordinator = new Mdbx2SyncCoordinator(mdbx2NativeClient);")
+  !backgroundSource.includes("const mdbx2SyncCoordinator = new Mdbx2SyncCoordinator(mdbx2NativeClient, undefined, mdbx2RemoteFactory);")
+  || !backgroundSource.includes('if (input.transport === "onedrive") return oneDriveSessions.mdbx2OneDriveClient(input);')
+  || !backgroundSource.includes('return new Mdbx2WebDavClient({ baseUrl: normalizeServerUrl(input.baseUrl), username: input.username, password: input.password });')
   || !backgroundSource.includes("const mdbx2Provider = new Mdbx2Provider(mdbx2NativeClient, mdbx2SyncCoordinator);")
   || !backgroundSource.includes("providers.register(mdbx2Provider);")
 ) {

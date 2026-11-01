@@ -24,6 +24,13 @@ test('installed Android provider exchanges passwords and signs a browser Passkey
   const adb='D:/AndroidSDK/platform-tools/adb.exe',serial=process.env.MONICA_ANDROID_SERIAL||'emulator-5554';
   const run=path.resolve(info.outputPath('isolated')),extension=path.resolve('dist');await mkdir(run,{recursive:true});
   const callAdb=(args:string[])=>execFileSync(adb,['-s',serial,...args],{encoding:'utf8',windowsHide:true});
+  const androidUser = process.env.MONICA_ANDROID_USER;
+  expect(androidUser, 'Explicit disposable test user is required').toMatch(/^[1-9]\d+$/);
+  expect(callAdb(['shell', 'am', 'get-current-user']).trim()).toBe(androidUser);
+  const applicationId = process.env.MONICA_ANDROID_APPLICATION_ID || 'takagi.ru.monica';
+  expect(['takagi.ru.monica', 'takagi.ru.monica.fdroid']).toContain(applicationId);
+  const testClass = process.env.MONICA_ANDROID_NEARBY_TEST_CLASS || 'takagi.ru.monica.lansync.NearbyBrowserInteropTest';
+  expect(testClass).toMatch(/^takagi\.ru\.monica\.lansync\.Nearby(?:Incremental)?BrowserInteropTest$/);
   expect(callAdb(['emu','avd','name'])).toContain('Monica_Issue136_API_32');
   const port=Number(callAdb(['forward','tcp:0','tcp:39483']).trim());
   const control=(request:unknown,timeoutMs=60000):Promise<any>=>new Promise((resolve,reject)=>{
@@ -40,7 +47,7 @@ test('installed Android provider exchanges passwords and signs a browser Passkey
       catch (error) { reject(error); }
     });
   });
-  const instrument=spawn(adb,['-s',serial,'shell','am','instrument','-w','-r','-e','class','takagi.ru.monica.lansync.NearbyBrowserInteropTest','-e','browserInterop','true','takagi.ru.monica.test/androidx.test.runner.AndroidJUnitRunner'],{windowsHide:true});
+  const instrument=spawn(adb,['-s',serial,'shell','am','instrument','--user',androidUser!,'-w','-r','-e','class',testClass,'-e','browserInterop','true',`${applicationId}.test/androidx.test.runner.AndroidJUnitRunner`],{windowsHide:true});
   let androidOutput='';instrument.stdout.on('data',b=>androidOutput+=b);instrument.stderr.on('data',b=>androidOutput+=b);
   const done=new Promise<number|null>(resolve=>instrument.once('exit',resolve));
   const appData=path.join(run,'appdata');await mkdir(appData,{recursive:true});
@@ -68,16 +75,27 @@ test('installed Android provider exchanges passwords and signs a browser Passkey
     const pairing=await command(page,{type:'pair'}),parts=pairing.pairing.invitations[0].split(':');parts[2]='10.0.2.2';
     await control({op:'pair',invitation:parts.join(':')});await complete();
     expect((await control({op:'inspect'})).items).toHaveLength(1);expect(await runtime(page,{type:'VAULT_LIST_ITEMS'})).toHaveLength(2);
+    const incrementalAcceptance = testClass.includes('Incremental');
+    if (incrementalAcceptance) expect((await control({op:'seed'})).seeded).toBe(200);
     const peerId=(await command(page,{type:'status'})).peerId;
     const exchange=async()=>{const prepared=await command(page,{type:'prepare',peerId});if(prepared.phase==='review')await command(page,{type:'confirm',reviewId:prepared.review.id});else expect(prepared.phase).toBe('ready');
       const start=await command(page,{type:'start'});await control({op:'sync',port:start.endpoint.port});await complete();};
     await exchange();const phone=await control({op:'inspect'});expect(phone.passkeys).toBe(1);expect(phone.items).toContainEqual({title:'Browser synthetic',password:'browser-original'});
+    const initialBytes = incrementalAcceptance ? (await control({op:'metrics'})).total : undefined;
     expect(await runtime(page,{type:'VAULT_LIST_ITEMS'})).toEqual(expect.arrayContaining([expect.objectContaining({title:'Android synthetic',password:'android-original'})]));
     await control({op:'edit'});await exchange();
     const final=await runtime(page,{type:'VAULT_LIST_ITEMS'});expect(final.find((item:any)=>item.id===login.id)).toMatchObject({password:'android-edited'});
     expect(final.find((item:any)=>item.kind==='passkey')).toMatchObject({credentialId:passkey.credentialId,privateKeyPkcs8:passkey.privateKeyPkcs8,signCount:0});
+    if (incrementalAcceptance) {
+      await exchange(); const metrics = await control({op:'metrics'});
+      expect(initialBytes).toBeGreaterThan(100_000); expect(metrics.total).toBeLessThan(4096);
+      const unchanged = await runtime(page,{type:'VAULT_LIST_ITEMS'});
+      expect(unchanged.filter((item:any)=>item.title.startsWith('Incremental filler '))).toHaveLength(200);
+      expect(unchanged.find((item:any)=>item.id===login.id).password).toBe('android-edited');
+      Object.assign(evidence,{initialPayloadBytes:initialBytes,unchangedPayloadBytes:metrics.total,incrementalRecords:200});
+    }
     await control({op:'stop'});stopped=true;await done;expect(androidOutput).toContain('OK (1 test)');
-    Object.assign(evidence,{status:'passed',rounds:2,androidOriginalKeySignature:true,zeroCounter:true,appVersion:callAdb(['shell','dumpsys','package','takagi.ru.monica']).match(/versionName=([^\r\n]+)/)?.[1]});
+    Object.assign(evidence,{status:'passed',rounds:incrementalAcceptance?3:2,applicationId,androidUser,androidOriginalKeySignature:true,zeroCounter:true,appVersion:callAdb(['shell','dumpsys','package',applicationId]).match(/versionName=([^\r\n]+)/)?.[1]});
   }finally{
     if(!stopped)await control({op:'stop'},3000).catch(()=>{});
     await context.close();await registration?.restore();callAdb(['forward','--remove',`tcp:${port}`]);
