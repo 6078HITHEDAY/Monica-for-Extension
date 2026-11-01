@@ -5,6 +5,16 @@ use std::{
     path::Path,
 };
 
+/// Windows junctions are reparse points even when FileType is not a symlink.
+pub(super) fn is_link(metadata: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 { return true; }
+    }
+    metadata.file_type().is_symlink()
+}
+
 pub(super) fn publish_new(source: &Path, destination: &Path) -> io::Result<()> {
     if std::fs::hard_link(source, destination).is_ok() {
         return Ok(());

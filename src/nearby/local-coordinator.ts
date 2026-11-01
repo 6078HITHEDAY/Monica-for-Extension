@@ -4,7 +4,7 @@ import { NEARBY_ENTRY_TYPES, remapNearbyReferences, type NearbyEntryType, type N
 import { parseLosslessJson } from '../core/lossless-json';
 import { base64ToBytes, bytesToBase64 } from '../security/encoding';
 import type { SecureVaultService } from '../security/secure-vault-service';
-import { NearbyNativeTransport, appendNearbyAsset, readNearbyAsset, type NearbyOperation } from './native-transport';
+import { NearbyNativeTransport, NearbyTransportError, nearbySha256, appendNearbyAsset, readNearbyAsset, type NearbyAsset, type NearbyOperation } from './native-transport';
 import { NearbyPasskeyConsent, type NearbyPasskeyReview } from './passkey-consent';
 import { nearbyDeviceHello, nearbySettingsCounter, type NearbyPreferences, type NearbySavedPeer } from './preferences';
 import { collectNearbyPending, groupNearbyPending, nearbyApplicationReferences } from './pending';
@@ -13,6 +13,7 @@ import { adoptNearbyNativeGroups } from './native-batches';
 import type { NearbyIncomingRecord, NearbyLocalAcknowledgement } from './local-adoption';
 import { NearbyDataError, wireInteger, wireObject, wireText } from './wire-shape';
 import { nearbyEngineCode, nearbyErrorCode } from './errors';
+import { parseNearbyHotspotInvitation } from './hotspot-invitation';
 import { mdbx2TransferOperationScope as hash } from '../providers/mdbx2/mdbx2-transfer-identity';
 
 type Store = Pick<SecureVaultService, 'passkeySessionId' | 'nearbySessionPreferences' | 'assertNearbySession' | 'updateNearbyPreferences'
@@ -36,7 +37,7 @@ export interface NearbyCoordinatorView {
   /** Native transfer stage and byte counters, for progress display only. */
   transport?: { stage: string; transferred: number; total: number };
   review?: NearbyPasskeyReview; applied?: number; error?: string;
-  deletionReview?: { id: string; count: number };
+  deletionReview?: { id: string; count: number; incoming?: boolean };
 }
 export class NearbyCoordinatorError extends Error {
   constructor(readonly code: string) { super(`Nearby: ${code}.`); this.name = 'NearbyCoordinatorError'; }
@@ -67,6 +68,11 @@ function localAddress(value: string): boolean {
 }
 function invitation(value: unknown): { address: NearbyEndpoint; key: string; text: string } {
   // Copied invitations commonly carry surrounding whitespace or a trailing newline.
+  if (typeof value === 'string' && value.trim().startsWith('monica-hotspot:')) {
+    const hotspot = parseNearbyHotspotInvitation(value);
+    if (!hotspot) failure('invalid-invitation');
+    value = hotspot.pairing;
+  }
   const text = string(typeof value === 'string' ? value.trim() : value, 512), parts = text.split(':');
   if (parts.length === 5 && parts[0] === 'monica-lan' && parts[1] === '1') failure('unsupported-protocol');
   if (parts.length !== 5 || parts[0] !== 'monica-lan' || parts[1] !== '2' || !/^[A-Za-z0-9_-]{43}$/.test(parts[4]) || !/^[1-9]\d{0,4}$/.test(parts[3])) failure('invalid-invitation');
@@ -94,6 +100,7 @@ export class NearbyLocalCoordinator {
   private replica?: string;
   private snapshot?: string;
   private transfer?: string;
+  private incomingReview?: { remote: Record<string, unknown>; revision: string };
   private sourceHash?: string;
   private revision = '';
   private peer?: NearbySavedPeer;
@@ -116,6 +123,7 @@ export class NearbyLocalCoordinator {
     private readonly sourceFactory?: (preferences: NearbyPreferences, sessionId: string, signal: AbortSignal, active: () => void, epoch: () => string) => Promise<NearbySourceAdapter>) {}
   status(): NearbyCoordinatorView { return structuredClone(this.view); }
   close(): void {
+    this.incomingReview = undefined;
     this.generation++;
     this.abort.abort(); this.transport?.close(); this.transport = undefined;
     this.consent.reset(); this.preferences = undefined; this.peer = undefined; this.sessionId = undefined;
@@ -397,6 +405,15 @@ export class NearbyLocalCoordinator {
       await this.guard(true);
       const review = this.view.deletionReview;
       if (this.view.phase !== 'review' || !review || review.id !== reviewId || !['omit', 'include'].includes(choice)) failure('review-stale');
+      if (this.incomingReview) {
+        const incoming = this.incomingReview;
+        await this.adopt(choice, incoming.revision);
+        await this.finishReceive(incoming.remote);
+        this.incomingReview = undefined;
+        delete this.view.deletionReview;
+        this.view.phase = 'confirming';
+        return this.status();
+      }
       if (choice === 'include') {
         const source = await this.source!.capture();
         await this.guard(true);
@@ -481,14 +498,17 @@ export class NearbyLocalCoordinator {
   async poll(): Promise<NearbyCoordinatorView> {
     return this.run(async () => {
       if (!this.transfer) return this.status();
+      if (this.incomingReview) { await this.guard(true); return this.status(); }
       await this.guard(!this.enrolling && !this.acknowledged);
       const progress = await this.call('progress', { handle: this.transfer });
       if (progress.phase === 'failed' || progress.phase === 'cancelled') {
         if (progress.phase === 'failed' && !this.enrolling && !this.acknowledged &&
-          Date.now() < this.connectionDeadline && ['connecting', 'authenticating'].includes(String(progress.failed_at)) &&
+          Date.now() < this.connectionDeadline && ['connecting', 'authenticating', 'transferring'].includes(String(progress.failed_at)) &&
           ['connection_failed', 'connection_closed', 'transfer_timeout'].includes(String(progress.error))) {
           // A paired listener can be replaced while the phone finishes preparing.
-          // Retry setup only: never replay payloads, saves or authentication rejection.
+          // Before any application/receipt, reconnect with the same immutable
+          // snapshot. The native engine negotiates a verified ciphertext prefix
+          // inside a fresh Noise handshake. Save/authentication failures reject.
           await this.call('release', { handle: this.transfer }); this.transfer = undefined;
           await this.pause(1_000);
           return this.connectPrepared();
@@ -500,7 +520,7 @@ export class NearbyLocalCoordinator {
       if (progress.phase === 'confirming') this.view.phase = 'confirming';
       if (typeof progress.phase === 'string' && /^[a-z_]{1,32}$/.test(progress.phase)) {
         const count = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0;
-        this.view.transport = { stage: progress.phase, transferred: count(progress.transferred), total: count(progress.total) };
+        this.view.transport = { stage: progress.phase, transferred: count(progress.transferred) + count(progress.resumed), total: count(progress.total) };
       }
       if (typeof progress.remote_address === 'string') this.remoteAddress = progress.remote_address;
       if (progress.phase === 'received' && !this.acknowledged) {
@@ -509,13 +529,22 @@ export class NearbyLocalCoordinator {
         if (this.enrolling && remote.revision !== 'pairing-only-v1' || !this.enrolling && remote.revision === 'pairing-only-v1') failure('unexpected-pairing-mode');
         if (typeof remote.receive_content !== 'boolean') failure('invalid-peer');
         this.view.phase = 'saving'; delete this.view.pairing; delete this.view.endpoint;
-        if (!this.enrolling && remote.receive_content) await this.adopt();
-        this.result.sent = remote.send_content === true; this.result.received = remote.receive_content;
-        // Pair trust must be durable before acknowledging enrollment. A sync
-        // timestamp/revision must wait for the peer's authenticated save receipt.
-        if (this.enrolling) await this.remember(remote);
-        else this.pendingRemote = structuredClone(remote);
-        await this.call('acknowledge', { handle: this.transfer, success: true }); this.acknowledged = true;
+        if (!this.enrolling && remote.receive_content) {
+          let revision: string | undefined;
+          if (this.transport?.supportsIncrementalSync) {
+            const preview = await this.call('replica_merge_preview', { handle: this.replica, session: this.transfer });
+            const count = Number(wireInteger(preview.deletions, 100_000n));
+            revision = string(preview.review_revision, 64);
+            if (!/^[a-f0-9]{64}$/.test(revision)) failure('invalid-response');
+            if (count && this.preferences!.incrementalOnly) {
+              this.incomingReview = { remote: structuredClone(remote), revision };
+              this.view.phase = 'review'; this.view.deletionReview = { id: crypto.randomUUID(), count, incoming: true };
+              return this.status();
+            }
+          }
+          await this.adopt('include', revision);
+        }
+        await this.finishReceive(remote);
       }
       if (progress.phase === 'completed') {
         if (!this.acknowledged) failure('unexpected-completion');
@@ -535,8 +564,36 @@ export class NearbyLocalCoordinator {
     for (const part of chunks(acks.map(row => ({ record_id: row.recordId, clock: parseLosslessJson(row.clockJson), local_id: row.localId,
       scope: row.scope, guard: row.guard, data: parseLosslessJson(row.dataJson) })))) await this.call('replica_applied_batch', { handle: this.replica, items: part });
   }
-  private async adopt(): Promise<void> {
-    await this.guard(true); await this.call('replica_merge', { handle: this.replica, session: this.transfer });
+  private async finishReceive(remote: Record<string, unknown>): Promise<void> {
+    this.result.sent = remote.send_content === true; this.result.received = remote.receive_content === true;
+    if (this.enrolling) await this.remember(remote);
+    else this.pendingRemote = structuredClone(remote);
+    await this.call('acknowledge', { handle: this.transfer, success: true }); this.acknowledged = true;
+  }
+  private async readIncomingAsset(asset: NearbyAsset, captured?: NearbySourceSnapshot): Promise<Uint8Array> {
+    try { return await readNearbyAsset(this.transport!, this.transfer!, asset, this.abort.signal); }
+    catch (error) {
+      if (!this.transport?.supportsIncrementalSync || !(error instanceof NearbyTransportError) || error.code !== 'asset-missing') throw error;
+      // A delta can omit bytes already verified by this receiver. Reuse only
+      // an asset present in the current authorized source, never peer claims.
+      await this.guard(true);
+      const source = captured ?? await this.source!.capture();
+      if (source.sourceHash !== this.sourceHash) failure('source-changed');
+      const present = source.records.some(row => Array.isArray(row.data.assets) && row.data.assets.some(raw => {
+        const entry = wireObject(raw);
+        return entry.id === asset.id && Number(wireInteger(entry.size, 16n * 1024n * 1024n)) === asset.size;
+      }));
+      if (!present) throw error;
+      const bytes = await source.readAsset(asset.id);
+      try {
+        if (bytes.length !== asset.size || await nearbySha256(bytes) !== asset.id) failure('asset-integrity');
+        await this.guard(true); return bytes;
+      } catch (failure) { bytes.fill(0); throw failure; }
+    }
+  }
+  private async adopt(policy: 'omit' | 'include' = 'include', revision?: string): Promise<void> {
+    await this.guard(true); await this.call('replica_merge', { handle: this.replica, session: this.transfer,
+      ...(this.transport?.supportsIncrementalSync ? { deletion_policy: policy, ...(revision ? { review_revision: revision } : {}) } : {}) });
     let rounds = 0;
     do {
     if (++rounds > 20_000) failure('pending-adoption-limit');
@@ -590,7 +647,7 @@ export class NearbyLocalCoordinator {
           const asset = wireObject(raw), id = string(asset.id, 64).toLowerCase(), size = Number(wireInteger(asset.size, 16n * 1024n * 1024n));
           if (assets.has(id)) continue;
           bytesTotal += size; if (bytesTotal > 32 * 1024 * 1024 || assets.size >= 512) failure('asset-batch-limit');
-          await this.guard(); const bytes = await readNearbyAsset(this.transport!, this.transfer!, { id, size }, this.abort.signal);
+          await this.guard(); const bytes = await this.readIncomingAsset({ id, size }, nativeSnapshot);
           try { assets.set(id, { id, dataBase64: bytesToBase64(bytes) }); } finally { bytes.fill(0); }
         }
       }

@@ -4054,5 +4054,12 @@
   "KeePass 数据库导入失败。": "KeePass database import failed.",
   "这是独立 MDBX 密码库，请在“打开已有的密码库”中导入。": "This is an independent MDBX vault. Import it with Open existing vault.",
   "检测到旧版 .kdb（KeePass 1.x）数据库，当前仅支持 .kdbx。请先在 KeePassDX/KeePassXC 中另存为 .kdbx 后再导入。": "This is a legacy .kdb (KeePass 1.x) database. Only .kdbx is supported. Re-save it as .kdbx in KeePassDX or KeePassXC, then import it.",
-  "将把 KeePass KDBX 作为密码源接入。原始文件不会被修改。": "The KeePass KDBX file will be attached as a password source. The original file is not modified."
+  "将把 KeePass KDBX 作为密码源接入。原始文件不会被修改。": "The KeePass KDBX file will be attached as a password source. The original file is not modified.",
+  "热点邀请已过期，请重新获取。": "ホットスポットの招待が期限切れです。新しい招待を取得してください。",
+  "请先在系统 Wi-Fi 设置中连接以下热点，再点击连接设备。浏览器无法自动加入热点；邀请会在取消、锁定、离开页面或超时后清除。": "システムの Wi-Fi 設定でこのホットスポットに接続してから、デバイスに接続を選択してください。ブラウザーは自動接続できません。キャンセル、ロック、このページからの移動、タイムアウト時に招待を消去します。",
+  "热点名称": "ホットスポット名",
+  "热点密码": "ホットスポットのパスワード",
+  "收到 {0} 条历史删除记录。尚未修改本机内容，请选择本次如何处理。": "過去の削除記録を {0} 件受信しました。この端末の内容はまだ変更していません。今回の処理方法を選択してください。",
+  "来自：{0}": "送信元：{0}",
+  "跳过删除可保留本机内容；包含删除可能将本机对应的密码或验证码移入回收站。此选择仅对本次同步有效。": "削除をスキップすると、この端末の内容を保持します。削除を含めると、対応するパスワードや認証コードがごみ箱に移動する場合があります。この選択は今回の同期にのみ適用します。"
 }

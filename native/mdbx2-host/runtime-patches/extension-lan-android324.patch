@@ -1,0 +1,3262 @@
+diff --git a/native/mdbx2-host/vendor/monica-lan-sync/src/incremental.rs b/native/mdbx2-host/vendor/monica-lan-sync/src/incremental.rs
+new file mode 100644
+--- /dev/null
++++ b/native/mdbx2-host/vendor/monica-lan-sync/src/incremental.rs
+@@ -0,0 +1,787 @@
++//! Authenticated, stateless inventories. They describe exact exported versions,
++//! not successful physical application; the normal pending/apply receipt remains mandatory.
++use super::*;
++use std::io::{Read, Seek, SeekFrom, Write};
++use zeroize::Zeroize;
++
++// The maximum validated IDs/digests/maps below serialize to less than 48 MiB.
++// Match the replica limit rather than refusing a legal large snapshot mid-sync.
++pub(crate) const MAX_INVENTORY: usize = MAX_STATE;
++const ASSET_MAGIC: &[u8] = b"MONICA-DEVICE-ASSETS-1\0";
++const ASSET_HEADER: usize = 73;
++const ASSET_CHUNK: usize = 512 * 1024;
++static CACHE_PUBLICATION: std::sync::Mutex<()> = std::sync::Mutex::new(());
++
++fn cache_publication(job: &Job) -> Result<std::sync::MutexGuard<'static, ()>> {
++    loop {
++        job.check()?;
++        match CACHE_PUBLICATION.try_lock() {
++            Ok(guard) => {
++                job.check()?;
++                return Ok(guard);
++            }
++            Err(std::sync::TryLockError::WouldBlock) => {
++                std::thread::sleep(std::time::Duration::from_millis(10));
++            }
++            Err(std::sync::TryLockError::Poisoned(_)) => return Err("unavailable"),
++        }
++    }
++}
++
++#[derive(Default, Serialize, Deserialize)]
++#[serde(deny_unknown_fields)]
++pub(crate) struct Inventory {
++    version: u32,
++    records: BTreeMap<String, String>,
++    aliases: BTreeMap<String, String>,
++    assets: BTreeSet<String>,
++}
++
++impl Inventory {
++    pub(crate) fn empty() -> Self {
++        Self {
++            version: 1,
++            ..Self::default()
++        }
++    }
++
++    pub(crate) fn parse(bytes: &[u8]) -> Result<Self> {
++        if bytes.len() > MAX_INVENTORY {
++            return Err("replica_limit");
++        }
++        let inventory: Self = serde_json::from_slice(bytes).map_err(|_| "invalid_inventory")?;
++        if inventory.version != 1
++            || inventory.records.len() > MAX_RECORDS
++            || inventory.aliases.len() > MAX_RECORDS * 2
++            || inventory.assets.len() > MAX_RECORDS
++            || inventory
++                .records
++                .iter()
++                .any(|(id, digest)| !peering::identifier(id) || !digest_valid(digest))
++            || inventory.aliases.iter().any(|(id, target)| {
++                !peering::identifier(id) || !peering::identifier(target) || id <= target
++            })
++            || inventory.assets.iter().any(|id| !digest_valid(id))
++        {
++            return Err("invalid_inventory");
++        }
++        Ok(inventory)
++    }
++
++    pub(crate) fn bytes(&self) -> Result<Zeroizing<Vec<u8>>> {
++        let bytes = Zeroizing::new(serde_json::to_vec(self).map_err(|_| "invalid_inventory")?);
++        if bytes.len() > MAX_INVENTORY {
++            return Err("replica_limit");
++        }
++        Ok(bytes)
++    }
++}
++
++fn digest_valid(value: &str) -> bool {
++    value.len() == 64 && value.bytes().all(|c| c.is_ascii_hexdigit())
++}
++
++struct SensitiveWire(Wire);
++impl std::ops::Deref for SensitiveWire {
++    type Target = Wire;
++    fn deref(&self) -> &Wire {
++        &self.0
++    }
++}
++impl std::ops::DerefMut for SensitiveWire {
++    fn deref_mut(&mut self) -> &mut Wire {
++        &mut self.0
++    }
++}
++impl Drop for SensitiveWire {
++    fn drop(&mut self) {
++        self.0
++            .records
++            .values_mut()
++            .for_each(|record| wipe(&mut record.data));
++    }
++}
++
++fn load_wire(directory: &Path, key: &[u8; 32]) -> Result<SensitiveWire> {
++    let path = directory.join("changes.mdbxsync");
++    let metadata = path.symlink_metadata().map_err(|_| "storage_read_failed")?;
++    if !metadata.is_file()
++        || crate::storage::is_link(&metadata)
++        || metadata.len() > (MAX_STATE + 1024) as u64
++    {
++        return Err("invalid_replica");
++    }
++    let encrypted = std::fs::read(path).map_err(|_| "storage_read_failed")?;
++    let wire = SensitiveWire(
++        serde_json::from_slice(&unseal(&encrypted, key)?).map_err(|_| "invalid_replica")?,
++    );
++    if wire.version != 1 || wire.records.len() > MAX_RECORDS || wire.aliases.len() > MAX_RECORDS * 2
++    {
++        return Err("replica_limit");
++    }
++    for (id, record) in &wire.records {
++        validate_record(record)?;
++        if id != &record.id {
++            return Err("invalid_record");
++        }
++    }
++    if wire
++        .aliases
++        .iter()
++        .any(|(a, b)| !peering::identifier(a) || !peering::identifier(b) || a <= b)
++    {
++        return Err("invalid_alias");
++    }
++    Ok(wire)
++}
++
++struct AssetRange {
++    start: u64,
++    end: u64,
++}
++
++/// Check every AEAD chunk and complete plaintext digest before claiming an asset
++/// is available. Only original ciphertext ranges are copied to the delta archive.
++fn assets(directory: &Path, key: &[u8; 32], job: &Job) -> Result<BTreeMap<String, AssetRange>> {
++    let path = directory.join("assets.monica");
++    if !path.exists() {
++        return Ok(BTreeMap::new());
++    }
++    let metadata = path.symlink_metadata().map_err(|_| "asset_unavailable")?;
++    if !metadata.is_file() || crate::storage::is_link(&metadata) || metadata.len() > MAX_FILE {
++        return Err("invalid_asset");
++    }
++    let mut file = std::fs::File::open(path).map_err(|_| "asset_unavailable")?;
++    let mut magic = vec![0; ASSET_MAGIC.len()];
++    file.read_exact(&mut magic).map_err(|_| "invalid_asset")?;
++    if magic != ASSET_MAGIC {
++        return Err("invalid_asset");
++    }
++    let mut ranges = BTreeMap::new();
++    while file.stream_position().map_err(|_| "invalid_asset")? < metadata.len() {
++        let start = file.stream_position().map_err(|_| "invalid_asset")?;
++        let mut expected_id = String::new();
++        let mut index = 0u32;
++        let mut total = 0usize;
++        let mut digest = Sha256::new();
++        loop {
++            job.check()?;
++            let mut header = [0; ASSET_HEADER];
++            file.read_exact(&mut header).map_err(|_| "invalid_asset")?;
++            let id = std::str::from_utf8(&header[..64]).map_err(|_| "invalid_asset")?;
++            let size = u32::from_le_bytes(header[68..72].try_into().unwrap()) as usize;
++            let chunk_index = u32::from_le_bytes(header[64..68].try_into().unwrap());
++            if !digest_valid(id) || size > ASSET_CHUNK || header[72] > 1 || chunk_index != index {
++                return Err("invalid_asset");
++            }
++            if index == 0 {
++                expected_id = id.to_owned();
++            }
++            if id != expected_id {
++                return Err("invalid_asset");
++            }
++            total = total.checked_add(size).ok_or("asset_limit")?;
++            if total > 64 * 1024 * 1024 {
++                return Err("asset_limit");
++            }
++            let mut nonce = [0; 12];
++            file.read_exact(&mut nonce).map_err(|_| "invalid_asset")?;
++            let mut ciphertext = vec![0; size + 16];
++            file.read_exact(&mut ciphertext)
++                .map_err(|_| "invalid_asset")?;
++            let plain = Zeroizing::new(
++                ChaCha20Poly1305::new(key.into())
++                    .decrypt(
++                        Nonce::from_slice(&nonce),
++                        Payload {
++                            msg: &ciphertext,
++                            aad: &header,
++                        },
++                    )
++                    .map_err(|_| "invalid_asset")?,
++            );
++            digest.update(&*plain);
++            if header[72] == 1 {
++                break;
++            }
++            if size == 0 {
++                return Err("invalid_asset");
++            }
++            index = index.checked_add(1).ok_or("asset_limit")?;
++        }
++        if format!("{:x}", digest.finalize()) != expected_id {
++            return Err("invalid_asset");
++        }
++        let end = file.stream_position().map_err(|_| "invalid_asset")?;
++        if ranges
++            .insert(expected_id, AssetRange { start, end })
++            .is_some()
++            || ranges.len() > MAX_RECORDS
++        {
++            return Err("invalid_asset");
++        }
++    }
++    Ok(ranges)
++}
++
++pub(crate) struct Snapshot {
++    directory: PathBuf,
++    wire: SensitiveWire,
++    key: Zeroizing<[u8; 32]>,
++    available: BTreeMap<String, AssetRange>,
++    pub(crate) inventory: Inventory,
++}
++
++fn wipe(value: &mut Value) {
++    match value {
++        Value::String(text) => text.zeroize(),
++        Value::Array(values) => values.iter_mut().for_each(wipe),
++        Value::Object(values) => values.values_mut().for_each(wipe),
++        _ => {}
++    }
++}
++
++impl Snapshot {
++    pub(crate) fn open(directory: &Path, encoded_key: &str, job: &Job) -> Result<Self> {
++        let key = peering::secret_key(encoded_key)?;
++        let wire = load_wire(directory, &key)?;
++        let available = assets(directory, &key, job)?;
++        let mut inventory = Inventory::empty();
++        for (id, record) in &wire.records {
++            job.check()?;
++            let plain = Zeroizing::new(serde_json::to_vec(record).map_err(|_| "invalid_record")?);
++            inventory.records.insert(id.clone(), hash(&plain));
++        }
++        inventory.aliases = wire.aliases.clone();
++        inventory.assets = available.keys().cloned().collect();
++        Ok(Self {
++            directory: directory.to_owned(),
++            wire,
++            key,
++            available,
++            inventory,
++        })
++    }
++
++    pub(crate) fn delta(&self, peer: &Inventory, peer_id: &str, job: &Job) -> Result<PathBuf> {
++        if !peering::identifier(peer_id) {
++            return Err("invalid_device");
++        }
++        // The source directory is immutable while any transfer holds it. A cached
++        // delta can therefore be reused byte-for-byte on a reconnect, with a fresh
++        // Noise handshake. Cache names reveal neither device IDs nor record IDs.
++        let identity =
++            Zeroizing::new(serde_json::to_vec(&(peer_id, peer)).map_err(|_| "invalid_inventory")?);
++        let destination = self.directory.join(format!(".delta-{}", hash(&identity)));
++        let mut delta = SensitiveWire(Wire {
++            version: 1,
++            records: self
++                .wire
++                .records
++                .iter()
++                .filter(|(id, _)| self.inventory.records.get(*id) != peer.records.get(*id))
++                .map(|(id, r)| (id.clone(), r.clone()))
++                .collect(),
++            aliases: self
++                .wire
++                .aliases
++                .iter()
++                .filter(|(id, target)| peer.aliases.get(*id) != Some(*target))
++                .map(|(id, target)| (id.clone(), target.clone()))
++                .collect(),
++        });
++        let selected: BTreeSet<String> = self
++            .available
++            .keys()
++            .filter(|id| !peer.assets.contains(*id))
++            .cloned()
++            .collect();
++        let plain = Zeroizing::new(serde_json::to_vec(&*delta).map_err(|_| "invalid_replica")?);
++        delta
++            .records
++            .values_mut()
++            .for_each(|record| wipe(&mut record.data));
++        // Concurrent peers share a source snapshot. Serialize the entire cache
++        // check, quota reservation, publication and failed-staging cleanup so
++        // they cannot independently spend the same remaining slot or bytes.
++        let _publication = cache_publication(job)?;
++        if destination.exists() {
++            let metadata = destination
++                .symlink_metadata()
++                .map_err(|_| "storage_read_failed")?;
++            if !metadata.is_dir() || crate::storage::is_link(&metadata) {
++                return Err("invalid_destination");
++            }
++            let mut existing = load_wire(&destination, &self.key)?;
++            let existing_plain =
++                Zeroizing::new(serde_json::to_vec(&*existing).map_err(|_| "invalid_replica")?);
++            existing
++                .records
++                .values_mut()
++                .for_each(|record| wipe(&mut record.data));
++            if *plain != *existing_plain
++                || assets(&destination, &self.key, job)?
++                    .keys()
++                    .cloned()
++                    .collect::<BTreeSet<_>>()
++                    != selected
++            {
++                return Err("artifact_changed");
++            }
++            return Ok(destination);
++        }
++        // A changing remote inventory must not create unbounded encrypted cache
++        // copies of one source snapshot. Existing caches remain immutable.
++        let mut cache_count = 0usize;
++        let mut cache_bytes = 0u64;
++        for entry in std::fs::read_dir(&self.directory).map_err(|_| "storage_read_failed")? {
++            let entry = entry.map_err(|_| "storage_read_failed")?;
++            if !entry.file_name().to_string_lossy().starts_with(".delta-") {
++                continue;
++            }
++            let metadata = entry
++                .path()
++                .symlink_metadata()
++                .map_err(|_| "storage_read_failed")?;
++            if !metadata.is_dir() || crate::storage::is_link(&metadata) {
++                return Err("invalid_destination");
++            }
++            cache_count += 1;
++            for name in ["changes.mdbxsync", "assets.monica"] {
++                if let Ok(metadata) = entry.path().join(name).symlink_metadata() {
++                    if !metadata.is_file() || crate::storage::is_link(&metadata) {
++                        return Err("invalid_destination");
++                    }
++                    cache_bytes = cache_bytes
++                        .checked_add(metadata.len())
++                        .ok_or("replica_limit")?;
++                }
++            }
++        }
++        let prospective = plain.len() as u64
++            + 1024
++            + selected
++                .iter()
++                .map(|id| self.available[id].end - self.available[id].start)
++                .sum::<u64>();
++        if cache_count >= 8
++            || cache_bytes
++                .checked_add(prospective)
++                .is_none_or(|bytes| bytes > MAX_FILE)
++        {
++            // A send-only source may keep the same immutable snapshot through
++            // many changing peer inventories. Preserve sync availability without
++            // spending cache quota: send that original encrypted full snapshot.
++            // Invalid/corrupt cache checks above still fail closed.
++            return Ok(self.directory.clone());
++        }
++        let staging = self
++            .directory
++            .join(format!(".delta-staging-{}", peering::random_id()));
++        std::fs::create_dir(&staging).map_err(|_| "storage_directory_failed")?;
++        let result = (|| {
++            job.check()?;
++            write(
++                &staging.join("changes.mdbxsync"),
++                &seal(&plain, &self.key)?,
++                false,
++            )?;
++            if !selected.is_empty() {
++                let mut input = std::fs::File::open(self.directory.join("assets.monica"))
++                    .map_err(|_| "asset_unavailable")?;
++                let mut output = std::fs::OpenOptions::new()
++                    .write(true)
++                    .create_new(true)
++                    .open(staging.join("assets.monica"))
++                    .map_err(|_| "storage_create_failed")?;
++                output
++                    .write_all(ASSET_MAGIC)
++                    .map_err(|_| "storage_write_failed")?;
++                let mut buffer = vec![0; ASSET_CHUNK];
++                for id in &selected {
++                    let range = &self.available[id];
++                    input
++                        .seek(SeekFrom::Start(range.start))
++                        .map_err(|_| "storage_read_failed")?;
++                    let mut remaining = range.end - range.start;
++                    while remaining > 0 {
++                        job.check()?;
++                        let count = remaining.min(buffer.len() as u64) as usize;
++                        input
++                            .read_exact(&mut buffer[..count])
++                            .map_err(|_| "storage_read_failed")?;
++                        output
++                            .write_all(&buffer[..count])
++                            .map_err(|_| "storage_write_failed")?;
++                        remaining -= count as u64;
++                    }
++                }
++                output.sync_all().map_err(|_| "storage_flush_failed")?;
++            }
++            job.check()?;
++            std::fs::rename(&staging, &destination).map_err(|_| "storage_publish_failed")?;
++            Ok(destination.clone())
++        })();
++        if staging.exists() {
++            let _ = std::fs::remove_dir_all(staging);
++        }
++        result
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    fn empty_snapshot(directory: &Path) -> Snapshot {
++        let key = peering::random_key();
++        let decoded = peering::secret_key(&key).unwrap();
++        let wire = Wire {
++            version: 1,
++            records: BTreeMap::new(),
++            aliases: BTreeMap::new(),
++        };
++        write(
++            &directory.join("changes.mdbxsync"),
++            &seal(&serde_json::to_vec(&wire).unwrap(), &decoded).unwrap(),
++            false,
++        )
++        .unwrap();
++        Snapshot::open(directory, &key, &Job::new("checking")).unwrap()
++    }
++
++    #[test]
++    fn concurrent_peers_cannot_spend_the_same_remaining_cache_slot() {
++        let root = crate::tests::TestDirectory::new();
++        let out = root.directory("concurrent-cache-out");
++        let snapshot = empty_snapshot(&out);
++        let original = std::fs::read(out.join("changes.mdbxsync")).unwrap();
++        let inventory = Inventory::empty();
++        for index in 0..7 {
++            snapshot
++                .delta(
++                    &inventory,
++                    &format!("existing-{index}"),
++                    &Job::new("checking"),
++                )
++                .unwrap();
++        }
++        let barrier = std::sync::Barrier::new(3);
++        let results = std::thread::scope(|scope| {
++            let workers: Vec<_> = ["new-peer-one", "new-peer-two"]
++                .into_iter()
++                .map(|peer| {
++                    let snapshot = &snapshot;
++                    let inventory = &inventory;
++                    let barrier = &barrier;
++                    scope.spawn(move || {
++                        barrier.wait();
++                        snapshot.delta(inventory, peer, &Job::new("checking"))
++                    })
++                })
++                .collect();
++            barrier.wait();
++            workers
++                .into_iter()
++                .map(|worker| worker.join().unwrap())
++                .collect::<Vec<_>>()
++        });
++        assert!(results.iter().all(|result| result.is_ok()));
++        assert_eq!(
++            results
++                .iter()
++                .filter(|result| result.as_ref().unwrap() == &out)
++                .count(),
++            1
++        );
++        assert_eq!(
++            results
++                .iter()
++                .filter(|result| result.as_ref().unwrap() != &out)
++                .count(),
++            1
++        );
++        let caches: Vec<_> = std::fs::read_dir(&out)
++            .unwrap()
++            .map(|entry| entry.unwrap())
++            .filter(|entry| entry.file_name().to_string_lossy().starts_with(".delta-"))
++            .collect();
++        assert_eq!(caches.len(), 8);
++        assert!(caches.iter().all(|entry| !entry
++            .file_name()
++            .to_string_lossy()
++            .starts_with(".delta-staging-")));
++        assert_eq!(
++            std::fs::read(out.join("changes.mdbxsync")).unwrap(),
++            original
++        );
++        for result in results.into_iter().flatten() {
++            assert!(load_wire(&result, &snapshot.key)
++                .unwrap()
++                .records
++                .is_empty());
++        }
++    }
++
++    #[test]
++    fn cancelling_a_cache_publication_waiter_creates_no_cache_or_staging() {
++        let root = crate::tests::TestDirectory::new();
++        let out = root.directory("cancelled-cache-out");
++        let snapshot = empty_snapshot(&out);
++        let held = cache_publication(&Job::new("checking")).unwrap();
++        let job = Job::new("checking");
++        let (started, starting) = std::sync::mpsc::channel();
++        let (finished, result) = std::sync::mpsc::channel();
++        std::thread::scope(|scope| {
++            let worker = scope.spawn(|| {
++                started.send(()).unwrap();
++                finished
++                    .send(snapshot.delta(&Inventory::empty(), "waiting-peer", &job))
++                    .unwrap();
++            });
++            starting
++                .recv_timeout(std::time::Duration::from_secs(1))
++                .unwrap();
++            assert!(matches!(
++                result.recv_timeout(std::time::Duration::from_millis(50)),
++                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
++            ));
++            job.cancel.store(true, std::sync::atomic::Ordering::Release);
++            assert_eq!(
++                result
++                    .recv_timeout(std::time::Duration::from_secs(1))
++                    .unwrap(),
++                Err("cancelled")
++            );
++            worker.join().unwrap();
++        });
++        assert_eq!(std::fs::read_dir(&out).unwrap().count(), 1);
++        drop(held);
++        assert!(snapshot
++            .delta(&Inventory::empty(), "waiting-peer", &Job::new("checking"))
++            .is_ok());
++    }
++
++    fn record(id: &str, version: u64, deleted: bool) -> Record {
++        Record {
++            id: id.into(),
++            clock: BTreeMap::from([("node".into(), version)]),
++            origins: BTreeSet::from(["node".into()]),
++            writer: "node".into(),
++            deleted,
++            data: json!({"title":"Synthetic","password":if deleted { "" } else { "secret" }}),
++        }
++    }
++    #[test]
++    fn rejects_malformed_inventory_and_aliases() {
++        for value in [
++            json!({"version":2,"records":{},"aliases":{},"assets":[]}),
++            json!({"version":1,"records":{"../x":"0"},"aliases":{},"assets":[]}),
++            json!({"version":1,"records":{},"aliases":{"a":"z"},"assets":[]}),
++        ] {
++            assert!(Inventory::parse(&serde_json::to_vec(&value).unwrap()).is_err());
++        }
++    }
++    #[test]
++    fn exact_versions_only_omit_never_deletes_and_retry_ciphertext_is_stable() {
++        let root = std::env::temp_dir().join(format!("monica-delta-{}", peering::random_id()));
++        std::fs::create_dir(&root).unwrap();
++        let key = peering::random_key();
++        let raw_key = peering::secret_key(&key).unwrap();
++        let wire = Wire {
++            version: 1,
++            records: BTreeMap::from([
++                ("one".into(), record("one", 1, false)),
++                ("two".into(), record("two", 2, true)),
++            ]),
++            aliases: BTreeMap::from([("z".into(), "one".into())]),
++        };
++        write(
++            &root.join("changes.mdbxsync"),
++            &seal(&serde_json::to_vec(&wire).unwrap(), &raw_key).unwrap(),
++            false,
++        )
++        .unwrap();
++        let job = Job::new("checking");
++        let snapshot = Snapshot::open(&root, &key, &job).unwrap();
++        let mut remote = Inventory::empty();
++        remote
++            .records
++            .insert("one".into(), snapshot.inventory.records["one"].clone());
++        let path = snapshot.delta(&remote, "peer", &job).unwrap();
++        let bytes = std::fs::read(path.join("changes.mdbxsync")).unwrap();
++        let delta = load_wire(&path, &raw_key).unwrap();
++        assert_eq!(delta.records.len(), 1);
++        assert!(delta.records["two"].deleted);
++        assert_eq!(delta.aliases, wire.aliases);
++        assert_eq!(snapshot.delta(&remote, "peer", &job).unwrap(), path);
++        assert_eq!(std::fs::read(path.join("changes.mdbxsync")).unwrap(), bytes);
++        remote.records.insert("one".into(), "0".repeat(64));
++        assert_eq!(
++            load_wire(&snapshot.delta(&remote, "peer", &job).unwrap(), &raw_key)
++                .unwrap()
++                .records
++                .len(),
++            2
++        );
++        assert!(!bytes.windows(b"secret".len()).any(|w| w == b"secret"));
++        std::fs::remove_dir_all(root).unwrap();
++    }
++    #[test]
++    fn corrupt_local_asset_never_becomes_a_claimed_available_asset() {
++        let root = std::env::temp_dir().join(format!("monica-delta-{}", peering::random_id()));
++        std::fs::create_dir(&root).unwrap();
++        let key = peering::random_key();
++        let raw = peering::secret_key(&key).unwrap();
++        write(
++            &root.join("changes.mdbxsync"),
++            &seal(
++                &serde_json::to_vec(&Wire {
++                    version: 1,
++                    records: BTreeMap::new(),
++                    aliases: BTreeMap::new(),
++                })
++                .unwrap(),
++                &raw,
++            )
++            .unwrap(),
++            false,
++        )
++        .unwrap();
++        std::fs::write(root.join("assets.monica"), b"corrupt").unwrap();
++        assert!(Snapshot::open(&root, &key, &Job::new("checking")).is_err());
++        std::fs::remove_dir_all(root).unwrap();
++    }
++
++    #[test]
++    fn equal_logical_record_still_transfers_missing_asset_and_preserves_pending_application() {
++        let root = crate::tests::TestDirectory::new();
++        let out = root.directory("pending-asset-out");
++        let key = peering::random_key();
++        let decoded = peering::secret_key(&key).unwrap();
++        let bytes = vec![0xabu8; 24_000];
++        let id = hash(&bytes);
++        let mut live = record("one", 1, false);
++        live.data["assets"] = json!([{"id":id,"size":bytes.len(),"name":"synthetic.dat"}]);
++        let wire = Wire {
++            version: 1,
++            records: BTreeMap::from([("one".into(), live.clone())]),
++            aliases: BTreeMap::new(),
++        };
++        write(
++            &out.join("changes.mdbxsync"),
++            &seal(&serde_json::to_vec(&wire).unwrap(), &decoded).unwrap(),
++            false,
++        )
++        .unwrap();
++        crate::assets::request(&json!({"operation":"asset_append","path":out.join("assets.monica"),"key":key,
++            "id":id,"index":0,"final":true,"data":base64::engine::general_purpose::STANDARD.encode(&bytes)})).unwrap();
++        let job = Job::new("checking");
++        let snapshot = Snapshot::open(&out, &key, &job).unwrap();
++        let mut remote = Inventory::empty();
++        remote
++            .records
++            .insert("one".into(), snapshot.inventory.records["one"].clone());
++        // The peer has the logical version but no verified local asset.
++        let delta = snapshot.delta(&remote, "peer", &job).unwrap();
++        assert!(load_wire(&delta, &decoded).unwrap().records.is_empty());
++        assert_eq!(
++            assets(&delta, &decoded, &job)
++                .unwrap()
++                .keys()
++                .cloned()
++                .collect::<Vec<_>>(),
++            vec![id]
++        );
++        let baseline = State {
++            version: 1,
++            node: "peer".into(),
++            records: wire.records,
++            ..State::default()
++        };
++        assert!(has_pending(&baseline));
++        let merged = incoming_state(
++            &baseline,
++            &json!({"path":delta.join("changes.mdbxsync"),"content_key":key}),
++            false,
++        )
++        .unwrap();
++        assert!(merged.records["one"] == live);
++        assert!(
++            merged.applied.is_empty(),
++            "an inventory match must never acknowledge physical application"
++        );
++        assert!(has_pending(&merged));
++    }
++
++    #[test]
++    fn alias_only_delta_preserves_unrelated_records_and_remaps_pending_bindings() {
++        let root = crate::tests::TestDirectory::new();
++        let out = root.directory("alias-only-out");
++        let key = peering::random_key();
++        let decoded = peering::secret_key(&key).unwrap();
++        let one = record("one", 1, false);
++        let two = record("two", 3, false);
++        let wire = Wire {
++            version: 1,
++            records: BTreeMap::from([("one".into(), one.clone()), ("two".into(), two.clone())]),
++            aliases: BTreeMap::from([("z-alias".into(), "one".into())]),
++        };
++        write(
++            &out.join("changes.mdbxsync"),
++            &seal(&serde_json::to_vec(&wire).unwrap(), &decoded).unwrap(),
++            false,
++        )
++        .unwrap();
++        let job = Job::new("checking");
++        let snapshot = Snapshot::open(&out, &key, &job).unwrap();
++        let mut old_alias = one.clone();
++        old_alias.id = "z-alias".into();
++        let mut remote = Inventory::empty();
++        remote.records = snapshot.inventory.records.clone();
++        remote.records.insert(
++            "z-alias".into(),
++            hash(&serde_json::to_vec(&old_alias).unwrap()),
++        );
++        let delta = snapshot.delta(&remote, "peer", &job).unwrap();
++        let selected = load_wire(&delta, &decoded).unwrap();
++        assert!(selected.records.is_empty());
++        assert_eq!(selected.aliases, wire.aliases);
++        let baseline = State {
++            version: 1,
++            node: "peer".into(),
++            records: BTreeMap::from([
++                ("one".into(), one.clone()),
++                ("two".into(), two.clone()),
++                ("z-alias".into(), old_alias),
++            ]),
++            bindings: BTreeMap::from([(
++                "local-alias".into(),
++                Binding {
++                    record_id: "z-alias".into(),
++                    scope: "local".into(),
++                    hash: "synthetic".into(),
++                    clock: one.clock.clone(),
++                    guard: "synthetic".into(),
++                    deleted: false,
++                },
++            )]),
++            ..State::default()
++        };
++        let merged = incoming_state(
++            &baseline,
++            &json!({"path":delta.join("changes.mdbxsync"),"content_key":key}),
++            false,
++        )
++        .unwrap();
++        assert_eq!(merged.records.len(), 2);
++        assert!(merged.records["two"] == two);
++        assert_eq!(merged.bindings["local-alias"].record_id, "one");
++        assert_eq!(resolve(&merged, "z-alias"), "one");
++        assert!(merged.applied.is_empty());
++        assert!(has_pending(&merged));
++    }
++}
++
++#[cfg(test)]
++#[path = "incremental_transfer_tests.rs"]
++mod transfer_tests;
+diff --git a/native/mdbx2-host/vendor/monica-lan-sync/src/incremental_transfer_tests.rs b/native/mdbx2-host/vendor/monica-lan-sync/src/incremental_transfer_tests.rs
+new file mode 100644
+--- /dev/null
++++ b/native/mdbx2-host/vendor/monica-lan-sync/src/incremental_transfer_tests.rs
+@@ -0,0 +1,168 @@
++use super::*;
++use crate::tests::{call, serial_sessions, wait, TestDirectory};
++
++fn bundle(path: &Path, changed: bool, count: usize) -> String {
++    let encoded = peering::random_key();
++    let key = peering::secret_key(&encoded).unwrap();
++    let mut records = BTreeMap::new();
++    for n in 0..count {
++        let deleted = changed && n == 2;
++        let version = if changed && (n == 2 || n == 3) { 2 } else { 1 };
++        let id = format!("record-{n}");
++        records.insert(id.clone(),Record { id, clock:BTreeMap::from([("origin".into(),version)]),origins:BTreeSet::from(["origin".into()]),writer:"origin".into(),deleted,
++            data:json!({"title":format!("Synthetic {n}"),"password":if version == 2 { "changed" } else { "original" }}) });
++    }
++    let aliases = if changed {
++        BTreeMap::from([("z-alias".into(), "record-0".into())])
++    } else {
++        BTreeMap::new()
++    };
++    write(
++        &path.join("changes.mdbxsync"),
++        &seal(
++            &serde_json::to_vec(&Wire {
++                version: 1,
++                records,
++                aliases,
++            })
++            .unwrap(),
++            &key,
++        )
++        .unwrap(),
++        false,
++    )
++    .unwrap();
++    for bytes in [
++        vec![7; 300_000],
++        if changed { vec![8; 120_000] } else { vec![] },
++    ] {
++        if bytes.is_empty() {
++            continue;
++        }
++        let id = hash(&bytes);
++        crate::assets::request(&json!({"operation":"asset_append","path":path.join("assets.monica"),"key":encoded,"id":id,"index":0,"final":true,
++            "data":base64::engine::general_purpose::STANDARD.encode(bytes)})).unwrap();
++    }
++    encoded
++}
++
++#[test]
++fn real_tcp_delta_omits_unchanged_records_and_assets_and_legacy_falls_back() {
++    let _guard = serial_sessions();
++    for cap in [0, 1] {
++        let root = TestDirectory::new();
++        let host_out = root.directory("host-out");
++        let peer_out = root.directory("peer-out");
++        let host_key = bundle(&host_out, true, 1000);
++        let peer_key = bundle(&peer_out, false, 1000);
++        let host_in = root.directory("host-in");
++        let peer_in = root.directory("peer-in");
++        let pair_key = peering::random_key();
++        let device = |id| json!({"device_id":id,"name":id,"pair_id":"pair","content_type":"vault","vault_content_version":2,"incremental_sync":cap});
++        let host = call(
++            json!({"operation":"start","protocol":2,"listen_address":"127.0.0.1","vault_id":"shared",
++            "outgoing_directory":host_out,"incoming_directory":host_in,"content_key":host_key,"expected_device_id":"peer","trusted_key":pair_key,"device":device("host")}),
++        );
++        let peer = call(
++            json!({"operation":"connect","protocol":2,"vault_id":"shared","outgoing_directory":peer_out,"incoming_directory":peer_in,
++            "content_key":peer_key,"expected_device_id":"host","device":device("peer"),"invitation":format!("monica-lan:2:127.0.0.1:{}:{}",host["port"],pair_key)}),
++        );
++        let handles = [
++            host["handle"].as_u64().unwrap(),
++            peer["handle"].as_u64().unwrap(),
++        ];
++        let results = [wait(handles[0]), wait(handles[1])];
++        for result in &results {
++            assert_eq!(result.phase, "completed", "{:?}", result.error);
++        }
++        let received = load_wire(&peer_in, &peering::secret_key(&host_key).unwrap()).unwrap();
++        if cap == 1 {
++            assert_eq!(received.records.len(), 2);
++            assert!(received.records["record-2"].deleted);
++            assert_eq!(
++                received.aliases.get("z-alias").map(String::as_str),
++                Some("record-0")
++            );
++            assert_eq!(
++                load_wire(&host_in, &peering::secret_key(&peer_key).unwrap())
++                    .unwrap()
++                    .records
++                    .len(),
++                2
++            );
++            assert!(!host_in.join("assets.monica").exists());
++            assert_eq!(
++                assets(
++                    &peer_in,
++                    &peering::secret_key(&host_key).unwrap(),
++                    &Job::new("checking")
++                )
++                .unwrap()
++                .len(),
++                1
++            );
++            assert!(
++                results[0].transferred < 140_000,
++                "{}",
++                results[0].transferred
++            );
++            // Applying a partial wire keeps every omitted original record.
++            let baseline_wire =
++                load_wire(&peer_out, &peering::secret_key(&peer_key).unwrap()).unwrap();
++            let baseline = State {
++                version: 1,
++                node: "peer".into(),
++                records: baseline_wire.records.clone(),
++                ..State::default()
++            };
++            let merged = incoming_state(
++                &baseline,
++                &json!({"path":peer_in.join("changes.mdbxsync"),"content_key":host_key}),
++                false,
++            )
++            .unwrap();
++            assert_eq!(merged.records.len(), 1000);
++            assert!(merged.records["record-2"].deleted);
++        } else {
++            assert_eq!(received.records.len(), 1000);
++            assert_eq!(
++                std::fs::read(host_out.join("changes.mdbxsync")).unwrap(),
++                std::fs::read(peer_in.join("changes.mdbxsync")).unwrap()
++            );
++            assert!(results[0].transferred > 600_000);
++        }
++        for handle in handles {
++            call(json!({"operation":"release","handle":handle}));
++        }
++    }
++}
++
++#[test]
++fn new_peer_negotiates_full_transfer_with_capability_absent_legacy_peer() {
++    let _guard = serial_sessions();
++    let root = TestDirectory::new();
++    let out = root.directory("out");
++    let key = bundle(&out, false, 3);
++    let trusted = peering::random_key();
++    let host_in = root.directory("host-in");
++    let peer_in = root.directory("peer-in");
++    let host = call(
++        json!({"operation":"start","protocol":2,"listen_address":"127.0.0.1","vault_id":"shared","outgoing_directory":out,"incoming_directory":host_in,
++        "content_key":key,"expected_device_id":"peer","trusted_key":trusted,"device":{"device_id":"host","name":"host","pair_id":"pair","content_type":"vault","vault_content_version":2,"incremental_sync":1}}),
++    );
++    let peer = call(
++        json!({"operation":"connect","protocol":2,"vault_id":"shared","outgoing_directory":out,"incoming_directory":peer_in,"content_key":key,"expected_device_id":"host",
++        "invitation":format!("monica-lan:2:127.0.0.1:{}:{}",host["port"],trusted),"device":{"device_id":"peer","name":"peer","pair_id":"pair","content_type":"vault","vault_content_version":2}}),
++    );
++    for handle in [
++        host["handle"].as_u64().unwrap(),
++        peer["handle"].as_u64().unwrap(),
++    ] {
++        assert_eq!(wait(handle).phase, "completed");
++        call(json!({"operation":"release","handle":handle}));
++    }
++    assert_eq!(
++        std::fs::read(out.join("changes.mdbxsync")).unwrap(),
++        std::fs::read(peer_in.join("changes.mdbxsync")).unwrap()
++    );
++}
+diff --git a/native/mdbx2-host/vendor/monica-lan-sync/src/lib.rs b/native/mdbx2-host/vendor/monica-lan-sync/src/lib.rs
+--- a/native/mdbx2-host/vendor/monica-lan-sync/src/lib.rs
++++ b/native/mdbx2-host/vendor/monica-lan-sync/src/lib.rs
+@@ -6,6 +6,9 @@
+ mod network;
+ mod peering;
+ mod replica;
++mod resume;
++#[cfg(test)]
++mod resume_transfer_tests;
+ mod storage;
+ mod transport;
+ 
+@@ -94,6 +97,7 @@
+ struct Progress {
+     phase: &'static str,
+     transferred: u64,
++    resumed: u64,
+     total: u64,
+     error: Option<&'static str>,
+     failed_at: Option<&'static str>,
+@@ -119,6 +123,7 @@
+             progress: Mutex::new(Progress {
+                 phase,
+                 transferred: 0,
++                resumed: 0,
+                 total: 0,
+                 error: None,
+                 failed_at: None,
+@@ -247,15 +252,23 @@
+     secrets: peering::PairSecrets,
+     expected_device: Option<String>,
+     network_bindings: network::Bindings,
++    resume_root: Option<PathBuf>,
+ }
+ 
+ fn prepare(value: &Value) -> Result<Prepared> {
++    let resume_root = value
++        .get("resume_root")
++        .and_then(Value::as_str)
++        .map(PathBuf::from);
++    if resume_root.as_ref().is_some_and(|path| !path.is_absolute()) {
++        return Err("invalid_destination");
++    }
+     let network_bindings = network::read(value)?;
+     let protocol = value.get("protocol").and_then(Value::as_u64).unwrap_or(1);
+     if !matches!(protocol, 1 | 2) {
+         return Err("unsupported_protocol");
+     }
+-    let device = if protocol == 2 {
++    let mut device = if protocol == 2 {
+         let device: peering::DeviceHello =
+             serde_json::from_value(value.get("device").cloned().ok_or("invalid_device")?)
+                 .map_err(|_| "invalid_device")?;
+@@ -293,6 +306,16 @@
+     {
+         return Err("invalid_device");
+     }
++    if let Some(device) = &mut device {
++        // Advertise only features this endpoint can actually perform. This also
++        // prevents an unpaired/receive-only call from changing the wire sequence.
++        if expected_device.is_none() || secrets.content_key.is_empty() {
++            device.incremental_sync = 0;
++        }
++        if expected_device.is_none() || resume_root.is_none() {
++            device.resume_sync = 0;
++        }
++    }
+     let vault_id = value
+         .get("vault_id")
+         .and_then(Value::as_str)
+@@ -355,6 +378,7 @@
+         secrets,
+         expected_device,
+         network_bindings,
++        resume_root,
+     })
+ }
+ 
+@@ -386,7 +410,12 @@
+ 
+ fn start(value: &Value) -> Result<Value> {
+     let mut prepared = prepare(value)?;
+-    if prepared.outgoing.is_none() {
++    // Listening is a connection role, independent of the negotiated data direction.
++    // A receive-only v2 peer intentionally has no local export or content key.
++    if prepared.outgoing.is_none()
++        && prepared.device.as_ref().and_then(|device| device.sync_mode)
++            != Some(peering::SyncMode::ReceiveOnly)
++    {
+         return Err("missing_sync_bundle");
+     }
+     let listen_address = value
+@@ -550,6 +579,18 @@
+ }
+ 
+ fn request(value: Value) -> Result<Value> {
++    if string(&value, "operation")?.starts_with("resume_") {
++        let path = Path::new(string(&value, "root")?);
++        if !path.is_absolute() {
++            return Err("invalid_destination");
++        }
++        match string(&value, "operation")? {
++            "resume_prune" => resume::prune(path)?,
++            "resume_clear" => resume::clear(path)?,
++            _ => return Err("invalid_request"),
++        }
++        return Ok(json!({}));
++    }
+     if string(&value, "operation")?.starts_with("asset_") {
+         return assets::request(&value);
+     }
+diff --git a/native/mdbx2-host/vendor/monica-lan-sync/src/peering.rs b/native/mdbx2-host/vendor/monica-lan-sync/src/peering.rs
+--- a/native/mdbx2-host/vendor/monica-lan-sync/src/peering.rs
++++ b/native/mdbx2-host/vendor/monica-lan-sync/src/peering.rs
+@@ -58,6 +58,11 @@
+     pub sync_request: u64,
+     #[serde(default, skip_serializing_if = "Option::is_none")]
+     pub sync_mode: Option<SyncMode>,
++    /// Optional capability, exchanged only in the authenticated v2 manifest.
++    #[serde(default, skip_serializing_if = "is_zero")]
++    pub incremental_sync: u32,
++    #[serde(default, skip_serializing_if = "is_zero")]
++    pub resume_sync: u32,
+ }
+ 
+ impl DeviceHello {
+@@ -68,6 +73,8 @@
+             || self.vault_content_version > 2
+             || self.settings_version > i64::MAX as u64
+             || self.sync_request > i64::MAX as u64
++            || self.incremental_sync > 1
++            || self.resume_sync > 1
+             || self.name.chars().count() > 64
+             || self.name.chars().any(char::is_control)
+             || (!self.pair_id.is_empty() && !identifier(&self.pair_id))
+@@ -82,6 +89,10 @@
+         }
+         Ok(())
+     }
++}
++
++fn is_zero(value: &u32) -> bool {
++    *value == 0
+ }
+ 
+ #[derive(Clone, Default, Serialize, Deserialize)]
+diff --git a/native/mdbx2-host/vendor/monica-lan-sync/src/replica.rs b/native/mdbx2-host/vendor/monica-lan-sync/src/replica.rs
+--- a/native/mdbx2-host/vendor/monica-lan-sync/src/replica.rs
++++ b/native/mdbx2-host/vendor/monica-lan-sync/src/replica.rs
+@@ -1,4 +1,6 @@
+ //! Logical password replicas; local storage IDs and decryption keys never become peer identities.
++#[path = "incremental.rs"]
++pub(super) mod incremental;
+ use super::*;
+ use chacha20poly1305::{
+     aead::{Aead, KeyInit, Payload},
+@@ -47,9 +49,12 @@
+     applied: BTreeMap<String, Clock>,
+     #[serde(default)]
+     active_scopes: Option<BTreeSet<String>>,
+-}
+-
+-#[derive(Deserialize)]
++    // Local receive decisions, never part of Wire or the advertised content revision.
++    #[serde(default)]
++    ignored_deletions: BTreeMap<String, Clock>,
++}
++
++#[derive(Clone, Deserialize)]
+ struct Local {
+     local_id: String,
+     #[serde(default)]
+@@ -153,6 +158,7 @@
+     state: State,
+     scopes: BTreeSet<String>,
+     seen: BTreeSet<String>,
++    locals: BTreeMap<String, Local>,
+ }
+ struct Replica {
+     path: PathBuf,
+@@ -160,6 +166,9 @@
+     state: State,
+     content_revision: String,
+     scan: Option<Scan>,
++    // Physical snapshots from the last complete scan, never sent to peers.
++    locals: BTreeMap<String, Local>,
++    physical_scan: bool,
+ }
+ static REPLICAS: OnceLock<Mutex<HashMap<u64, Replica>>> = OnceLock::new();
+ 
+@@ -314,6 +323,16 @@
+     for binding in state.bindings.values_mut() {
+         if binding.record_id == alias {
+             binding.record_id = canonical.clone();
++        }
++    }
++    if let Some(clock) = state.ignored_deletions.remove(&alias) {
++        let ignored = state
++            .ignored_deletions
++            .entry(canonical.clone())
++            .or_default();
++        *ignored = union(ignored, &clock);
++        if ignored.len() > 64 {
++            return Err("replica_limit");
+         }
+     }
+     if let Some(clock) = state.applied.remove(&alias) {
+@@ -676,6 +695,194 @@
+     Ok(())
+ }
+ 
++fn destructive(record: &Record) -> bool {
++    record.deleted || record.data.get("trashed").and_then(Value::as_bool) == Some(true)
++}
++
++fn review_count(state: &State) -> usize {
++    let index = binding_index(state);
++    state
++        .records
++        .values()
++        .filter(|record| {
++            destructive(record)
++                && needs_apply(state, record)
++                && index
++                    .get(&record.id)
++                    .is_none_or(|items| items.iter().any(|(_, b)| binding_active(state, b)))
++        })
++        .count()
++}
++
++fn ignore_deletion(state: &mut State, record: &Record) -> Result<()> {
++    if state.ignored_deletions.len() >= MAX_RECORDS
++        && !state.ignored_deletions.contains_key(&record.id)
++    {
++        return Err("replica_limit");
++    }
++    let ignored = state
++        .ignored_deletions
++        .entry(record.id.clone())
++        .or_default();
++    *ignored = union(ignored, &record.clock);
++    if ignored.len() > 64 {
++        return Err("replica_limit");
++    }
++    Ok(())
++}
++
++// Keeping a physical local item is a real local decision, not an acknowledgement
++// pretending that the item was deleted. This also repairs tombstones left pending
++// by older interrupted receives. Its new clock dominates the rejected deletion.
++fn retain_pending(state: &mut State, locals: &BTreeMap<String, Local>) -> Result<()> {
++    let live: Vec<_> = locals
++        .values()
++        .filter(|local| {
++            !local.deleted && local.data.get("trashed").and_then(Value::as_bool) != Some(true)
++        })
++        .cloned()
++        .collect();
++    for local in live {
++        let Some(binding) = state.bindings.get(&local.local_id).cloned() else {
++            continue;
++        };
++        if !binding_active(state, &binding) {
++            continue;
++        }
++        let id = resolve(state, &binding.record_id);
++        let Some(mut record) = state.records.get(&id).cloned() else {
++            continue;
++        };
++        if !destructive(&record) || !needs_apply(state, &record) {
++            continue;
++        }
++        state.counter = state
++            .counter
++            .max(record.clock.get(&state.node).copied().unwrap_or(0))
++            .checked_add(1)
++            .ok_or("replica_limit")?;
++        record.clock.insert(state.node.clone(), state.counter);
++        record.writer = state.node.clone();
++        record.deleted = false;
++        record.data = local.data.clone();
++        validate_record(&record)?;
++        state.applied.insert(id.clone(), record.clock.clone());
++        state.bindings.insert(
++            local.local_id,
++            Binding {
++                record_id: id.clone(),
++                scope: local.scope,
++                guard: local.guard,
++                hash: fingerprint(false, &local.data)?,
++                clock: record.clock.clone(),
++                deleted: false,
++            },
++        );
++        state.records.insert(id, record);
++    }
++    // A complete physical scan proves that remaining active tombstones have no
++    // live local item to retain. Do not import cached unbound trash from an old
++    // interrupted receive, and never mark a retained live item as deleted.
++    let index = binding_index(state);
++    let absent: Vec<_> = state
++        .records
++        .values()
++        .filter(|r| {
++            destructive(r)
++                && needs_apply(state, r)
++                && index
++                    .get(&r.id)
++                    .is_none_or(|bs| bs.iter().any(|(_, b)| binding_active(state, b)))
++        })
++        .map(|r| (r.clone(), index.contains_key(&r.id)))
++        .collect();
++    for (record, bound) in absent {
++        ignore_deletion(state, &record)?;
++        if bound {
++            state.applied.insert(record.id, record.clock);
++        } else {
++            state.records.remove(&record.id);
++            state.applied.remove(&record.id);
++        }
++    }
++    Ok(())
++}
++
++fn incoming_state(baseline: &State, value: &Value, omit: bool) -> Result<State> {
++    let path = Path::new(string(value, "path")?);
++    if std::fs::metadata(path)
++        .map_err(|_| "storage_read_failed")?
++        .len()
++        > (MAX_STATE + 1024) as u64
++    {
++        return Err("replica_limit");
++    }
++    let bytes = std::fs::read(path).map_err(|_| "storage_read_failed")?;
++    let key = peering::secret_key(string(value, "content_key")?)?;
++    let wire: Wire =
++        serde_json::from_slice(&unseal(&bytes, &key)?).map_err(|_| "invalid_replica")?;
++    if wire.version != 1 || wire.records.len() > MAX_RECORDS || wire.aliases.len() > MAX_RECORDS * 2
++    {
++        return Err("replica_limit");
++    }
++    for (id, record) in &wire.records {
++        validate_record(record)?;
++        if id != &record.id {
++            return Err("invalid_record");
++        }
++    }
++    let mut state = baseline.clone();
++    for (alias, canonical) in &wire.aliases {
++        if !peering::identifier(alias) || !peering::identifier(canonical) || alias <= canonical {
++            return Err("invalid_alias");
++        }
++        attach_alias(&mut state, alias, canonical)?;
++    }
++    for mut record in wire.records.into_values() {
++        record.id = resolve(&state, &record.id);
++        state.counter = state
++            .counter
++            .max(record.clock.get(&state.node).copied().unwrap_or(0));
++        if destructive(&record)
++            && (omit
++                || state
++                    .ignored_deletions
++                    .get(&record.id)
++                    .is_some_and(|ignored| dominates(ignored, &record.clock)))
++        {
++            if omit {
++                ignore_deletion(&mut state, &record)?;
++            }
++            continue;
++        }
++        // Root metadata belongs to its source vault, even when two vaults have the same tags.
++        if !state.records.contains_key(&record.id)
++            && !record.deleted
++            && record.data.get("entry_type").and_then(Value::as_str) != Some("vault-metadata")
++        {
++            let f = fingerprint(false, &record.data)?;
++            let duplicate = state
++                .records
++                .values()
++                .find(|existing| {
++                    !existing.deleted
++                        && existing.origins.is_disjoint(&record.origins)
++                        && fingerprint(false, &existing.data).ok().as_deref() == Some(f.as_str())
++                })
++                .map(|existing| existing.id.clone());
++            if let Some(duplicate) = duplicate {
++                attach_alias(&mut state, &record.id, &duplicate)?;
++                record.id = resolve(&state, &record.id);
++            }
++        }
++        state.counter = state
++            .counter
++            .max(record.clock.get(&state.node).copied().unwrap_or(0));
++        merge_record(&mut state, record, 0)?;
++    }
++    Ok(state)
++}
++
+ pub(super) fn request(value: &Value) -> Result<Value> {
+     let operation = string(value, "operation")?;
+     let mut sessions = replicas().lock().map_err(|_| "unavailable")?;
+@@ -717,6 +924,8 @@
+             content_revision: revision(&state)?,
+             state,
+             scan: None,
++            locals: BTreeMap::new(),
++            physical_scan: false,
+         };
+         save(&replica)?;
+         sessions.insert(handle, replica);
+@@ -743,16 +952,16 @@
+             {
+                 return Err("invalid_scope");
+             }
++            replica.physical_scan = false;
+             replica.scan = Some(Scan {
+                 state: replica.state.clone(),
+                 scopes,
+                 seen: BTreeSet::new(),
++                locals: BTreeMap::new(),
+             });
+             Ok(json!({}))
+         }
+         "replica_scan_batch" => {
+-            // Decode raw user fields from JSON text; Value's deserializer treats
+-            // literal private marker keys as serde internals.
+             let entries_json = Zeroizing::new(
+                 serde_json::to_vec(value.get("entries").ok_or("invalid_request")?)
+                     .map_err(|_| "invalid_record")?,
+@@ -765,19 +974,25 @@
+             let scan = replica.scan.as_mut().ok_or("scan_not_started")?;
+             let mut staged = scan.state.clone();
+             let mut seen = scan.seen.clone();
++            let mut locals = BTreeMap::new();
+             for local in entries {
+                 if !scan.scopes.contains(&local.scope) || !seen.insert(local.local_id.clone()) {
+                     return Err("invalid_scope");
+                 }
+-                reconcile(&mut staged, local)?;
++                reconcile(&mut staged, local.clone())?;
++                locals.insert(local.local_id.clone(), local);
+             }
+             scan.state = staged;
+             scan.seen = seen;
++            scan.locals.extend(locals);
+             Ok(json!({}))
+         }
+         "replica_scan_end" => {
+             let scan = replica.scan.take().ok_or("scan_not_started")?;
++            let locals = scan.locals.clone();
+             commit(replica, finish_scan(scan)?)?;
++            replica.locals = locals;
++            replica.physical_scan = true;
+             Ok(json!({"revision":replica.content_revision}))
+         }
+         "replica_revision" => {
+@@ -903,69 +1118,37 @@
+                 json!({"content_key":content_key,"revision":replica.content_revision,"pending":has_pending(&replica.state),"asset_ids":asset_ids}),
+             )
+         }
+-        "replica_merge" => {
+-            let path = Path::new(string(value, "path")?);
+-            if std::fs::metadata(path)
+-                .map_err(|_| "storage_read_failed")?
+-                .len()
+-                > (MAX_STATE + 1024) as u64
++        "replica_merge_preview" | "replica_merge" => {
++            let preview = incoming_state(&replica.state, value, false)?;
++            let review_revision = hash(&Zeroizing::new(
++                serde_json::to_vec(&preview).map_err(|_| "invalid_replica")?,
++            ));
++            let deletions = review_count(&preview);
++            if operation == "replica_merge_preview" {
++                return Ok(json!({"deletions":deletions, "review_revision":review_revision}));
++            }
++            if value
++                .get("review_revision")
++                .and_then(Value::as_str)
++                .is_some_and(|r| r != review_revision)
+             {
+-                return Err("replica_limit");
+-            }
+-            let bytes = std::fs::read(path).map_err(|_| "storage_read_failed")?;
+-            let key = peering::secret_key(string(value, "content_key")?)?;
+-            let wire: Wire =
+-                serde_json::from_slice(&unseal(&bytes, &key)?).map_err(|_| "invalid_replica")?;
+-            if wire.version != 1
+-                || wire.records.len() > MAX_RECORDS
+-                || wire.aliases.len() > MAX_RECORDS * 2
+-            {
+-                return Err("replica_limit");
+-            }
+-            for (id, record) in &wire.records {
+-                validate_record(record)?;
+-                if id != &record.id {
+-                    return Err("invalid_record");
+-                }
+-            }
+-            let mut state = replica.state.clone();
+-            for (alias, canonical) in &wire.aliases {
+-                if !peering::identifier(alias)
+-                    || !peering::identifier(canonical)
+-                    || alias <= canonical
+-                {
+-                    return Err("invalid_alias");
+-                }
+-                attach_alias(&mut state, alias, canonical)?;
+-            }
+-            for mut record in wire.records.into_values() {
+-                record.id = resolve(&state, &record.id);
+-                // Root metadata belongs to its source vault, even when two vaults have the same tags.
+-                if !state.records.contains_key(&record.id)
+-                    && !record.deleted
+-                    && record.data.get("entry_type").and_then(Value::as_str)
+-                        != Some("vault-metadata")
+-                {
+-                    let f = fingerprint(false, &record.data)?;
+-                    let duplicate = state
+-                        .records
+-                        .values()
+-                        .find(|existing| {
+-                            !existing.deleted
+-                                && existing.origins.is_disjoint(&record.origins)
+-                                && fingerprint(false, &existing.data).ok().as_deref()
+-                                    == Some(f.as_str())
+-                        })
+-                        .map(|existing| existing.id.clone());
+-                    if let Some(duplicate) = duplicate {
+-                        attach_alias(&mut state, &record.id, &duplicate)?;
+-                        record.id = resolve(&state, &record.id);
+-                    }
+-                }
+-                state.counter = state
+-                    .counter
+-                    .max(record.clock.get(&state.node).copied().unwrap_or(0));
+-                merge_record(&mut state, record, 0)?;
++                return Err("review_changed");
++            }
++            let omit = match value.get("deletion_policy").and_then(Value::as_str) {
++                None | Some("include") => false,
++                Some("omit") => true,
++                _ => return Err("invalid_request"),
++            };
++            if omit && !replica.physical_scan {
++                return Err("scan_required");
++            }
++            let mut state = if omit {
++                incoming_state(&replica.state, value, true)?
++            } else {
++                preview
++            };
++            if omit {
++                retain_pending(&mut state, &replica.locals)?;
+             }
+             commit(replica, state)?;
+             Ok(json!({"revision":replica.content_revision}))
+@@ -1087,6 +1270,137 @@
+             deleted: false,
+             data: json!({"title":"Synthetic login","password":password}),
+         }
++    }
++
++    fn receive_file(wire: Wire) -> (PathBuf, Value) {
++        let root = std::env::temp_dir().join(format!("monica-review-{}", peering::random_id()));
++        std::fs::create_dir_all(&root).unwrap();
++        let path = root.join("changes.mdbxsync");
++        let content_key = peering::random_key();
++        let key = peering::secret_key(&content_key).unwrap();
++        std::fs::write(
++            &path,
++            seal(&serde_json::to_vec(&wire).unwrap(), &key).unwrap(),
++        )
++        .unwrap();
++        (
++            root,
++            json!({"path":path.to_str().unwrap(),"content_key":content_key}),
++        )
++    }
++
++    #[test]
++    fn receive_preview_does_not_commit_and_omit_keeps_content_while_accepting_updates() {
++        for soft in [false, true] {
++            let mut target = state("phone");
++            reconcile(&mut target, local("one", "one", "keep me")).unwrap();
++            reconcile(&mut target, local("two", "two", "old")).unwrap();
++            let before = serde_json::to_vec(&target).unwrap();
++            let mut source = target.clone();
++            source.node = "browser".into();
++            let mut deleted = source.records["one"].clone();
++            deleted.clock.insert("browser".into(), 1);
++            deleted.writer = "browser".into();
++            deleted.deleted = true;
++            deleted.data = if soft {
++                json!({"title":"Trashed", "trashed":true})
++            } else {
++                json!({})
++            };
++            merge_record(&mut source, deleted, 0).unwrap();
++            let mut update = source.records["two"].clone();
++            update.clock.insert("browser".into(), 2);
++            update.writer = "browser".into();
++            update.data["password"] = json!("updated");
++            merge_record(&mut source, update, 0).unwrap();
++            reconcile(&mut source, local("three", "three", "new")).unwrap();
++            let (root, request) = receive_file(export_wire(&source, false));
++            let preview = incoming_state(&target, &request, false).unwrap();
++            assert_eq!(review_count(&preview), 1);
++            assert_eq!(serde_json::to_vec(&target).unwrap(), before);
++            let mut kept = incoming_state(&target, &request, true).unwrap();
++            retain_pending(
++                &mut kept,
++                &BTreeMap::from([("one".into(), local("one", "one", "keep me"))]),
++            )
++            .unwrap();
++            assert_eq!(review_count(&kept), 0);
++            let reopened: State =
++                serde_json::from_slice(&serde_json::to_vec(&kept).unwrap()).unwrap();
++            assert_eq!(
++                review_count(&incoming_state(&reopened, &request, false).unwrap()),
++                0,
++                "the same deletion must not prompt again after keeping and reopening"
++            );
++            assert!(!serde_json::to_value(export_wire(&kept, false))
++                .unwrap()
++                .as_object()
++                .unwrap()
++                .contains_key("ignored_deletions"));
++            let mut later = source.records["one"].clone();
++            later.clock.insert("browser".into(), 100);
++            source.records.insert("one".into(), later);
++            let (later_root, later_request) = receive_file(export_wire(&source, false));
++            assert_eq!(
++                review_count(&incoming_state(&reopened, &later_request, false).unwrap()),
++                1,
++                "a newer deletion must ask again"
++            );
++            std::fs::remove_dir_all(later_root).unwrap();
++            assert!(!kept.records["one"].deleted);
++            assert_eq!(kept.records["one"].data["password"], "keep me");
++            assert_eq!(kept.records["two"].data["password"], "updated");
++            assert_eq!(kept.records["three"].data["password"], "new");
++            assert!(preview.records["one"].deleted);
++            std::fs::remove_dir_all(root).unwrap();
++        }
++    }
++
++    #[test]
++    fn retain_repairs_old_pending_tombstones_without_fake_delete_acknowledgements() {
++        let mut s = state("phone");
++        let physical = local("local", "entry", "preserved");
++        reconcile(&mut s, physical.clone()).unwrap();
++        let mut deletion = s.records["entry"].clone();
++        deletion.clock.insert("browser".into(), 9);
++        deletion.writer = "browser".into();
++        deletion.deleted = true;
++        deletion.data = json!({});
++        merge_record(&mut s, deletion.clone(), 0).unwrap();
++        assert_eq!(review_count(&s), 1);
++        retain_pending(&mut s, &BTreeMap::from([("local".into(), physical)])).unwrap();
++        assert_eq!(review_count(&s), 0);
++        assert!(!s.bindings["local"].deleted);
++        assert_eq!(s.records["entry"].data["password"], "preserved");
++        assert!(dominates(&s.records["entry"].clock, &deletion.clock));
++        assert!(!needs_apply(&s, &s.records["entry"]));
++        let restored_revision = revision(&s).unwrap();
++        merge_record(&mut s, deletion, 0).unwrap();
++        assert_eq!(revision(&s).unwrap(), restored_revision);
++        assert!(!export_wire(&s, false).records["entry"].deleted);
++    }
++
++    #[test]
++    fn omit_never_imports_unbound_trash_and_preview_authenticates_before_any_changes() {
++        let mut source = state("browser");
++        let mut item = local("deleted", "deleted", "trash");
++        item.deleted = true;
++        item.data["trashed"] = json!(true);
++        reconcile(&mut source, item).unwrap();
++        let target = state("phone");
++        let (root, request) = receive_file(export_wire(&source, false));
++        assert_eq!(
++            review_count(&incoming_state(&target, &request, false).unwrap()),
++            1
++        );
++        assert!(incoming_state(&target, &request, true)
++            .unwrap()
++            .records
++            .is_empty());
++        std::fs::write(request["path"].as_str().unwrap(), b"tampered").unwrap();
++        assert!(incoming_state(&target, &request, false).is_err());
++        assert!(target.records.is_empty());
++        std::fs::remove_dir_all(root).unwrap();
+     }
+ 
+     #[test]
+@@ -1311,6 +1625,7 @@
+         let scan = Scan {
+             state: s,
+             scopes: BTreeSet::from(["passwords".into()]),
++            locals: BTreeMap::new(),
+             seen: BTreeSet::from(["native1".into()]),
+         };
+         let after = finish_scan(scan).unwrap();
+@@ -1327,6 +1642,7 @@
+             state: s,
+             scopes: BTreeSet::from(["another-source".into()]),
+             seen: BTreeSet::new(),
++            locals: BTreeMap::new(),
+         })
+         .unwrap();
+         assert!(!after.records["entry1"].deleted);
+@@ -1334,6 +1650,7 @@
+             state: after,
+             scopes: BTreeSet::from(["passwords".into()]),
+             seen: BTreeSet::new(),
++            locals: BTreeMap::new(),
+         })
+         .unwrap();
+         assert!(after.records["entry1"].deleted);
+@@ -1381,6 +1698,8 @@
+             state: state("desktop"),
+             content_revision: String::new(),
+             scan: None,
++            locals: BTreeMap::new(),
++            physical_scan: false,
+         };
+         let mut staged = replica.state.clone();
+         reconcile(&mut staged, local("local", "entry", "secret")).unwrap();
+@@ -1401,6 +1720,8 @@
+             state: state("desktop"),
+             content_revision: String::new(),
+             scan: None,
++            locals: BTreeMap::new(),
++            physical_scan: false,
+         };
+         let mut staged = replica.state.clone();
+         reconcile(&mut staged, local("local", "entry", "old")).unwrap();
+diff --git a/native/mdbx2-host/vendor/monica-lan-sync/src/resume.rs b/native/mdbx2-host/vendor/monica-lan-sync/src/resume.rs
+new file mode 100644
+--- /dev/null
++++ b/native/mdbx2-host/vendor/monica-lan-sync/src/resume.rs
+@@ -0,0 +1,833 @@
++//! Paired-only ciphertext checkpoints. Offers travel inside a fresh Noise
++//! channel and are checked against the sender's immutable ciphertext source.
++//! This module never persists a content key, plaintext, or Noise state.
++use super::{Result, FILE_NAMES, MAX_FILE};
++use serde::{Deserialize, Serialize};
++use sha2::{Digest, Sha256};
++use std::{
++    collections::HashSet,
++    fs::{File, OpenOptions},
++    io::{Read, Seek, SeekFrom, Write},
++    path::{Path, PathBuf},
++    sync::{Mutex, OnceLock},
++    time::{Duration, SystemTime},
++};
++
++const TTL: Duration = Duration::from_secs(600);
++const MAX_PARTIALS: usize = 8;
++const MAX_WRITE: usize = 64 * 1024;
++static OWNERS: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
++
++fn owners() -> &'static Mutex<HashSet<PathBuf>> {
++    OWNERS.get_or_init(|| Mutex::new(HashSet::new()))
++}
++
++fn identifier(value: &str) -> bool {
++    !value.is_empty()
++        && value.len() <= 64
++        && value
++            .bytes()
++            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
++}
++
++fn field(hash: &mut Sha256, value: &[u8]) {
++    hash.update((value.len() as u64).to_be_bytes());
++    hash.update(value);
++}
++
++pub(super) struct Scope(String);
++impl Scope {
++    /// Only call after Noise and expected-device / pair-ID validation. The
++    /// opaque checkpoint namespace changes when the pairing secret changes.
++    pub(super) fn paired(peer: &str, pair: &str, key: &[u8; 32]) -> Result<Self> {
++        if !identifier(peer) || !identifier(pair) {
++            return Err("invalid_device");
++        }
++        let mut hash = Sha256::new();
++        hash.update(b"monica-paired-resume/1");
++        field(&mut hash, peer.as_bytes());
++        field(&mut hash, pair.as_bytes());
++        field(&mut hash, key);
++        Ok(Self(format!("{:x}", hash.finalize())))
++    }
++}
++
++#[derive(Clone)]
++pub(super) struct Descriptor {
++    name: String,
++    size: u64,
++    sha256: String,
++}
++impl Descriptor {
++    pub(super) fn new(name: &str, size: u64, sha256: &str) -> Result<Self> {
++        if !FILE_NAMES.contains(&name)
++            || size == 0
++            || size > MAX_FILE
++            || sha256.len() != 64
++            || !sha256.bytes().all(|b| b.is_ascii_hexdigit())
++        {
++            return Err("invalid_manifest");
++        }
++        Ok(Self {
++            name: name.to_owned(),
++            size,
++            sha256: sha256.to_ascii_lowercase(),
++        })
++    }
++
++    fn digest(&self) -> String {
++        let mut hash = Sha256::new();
++        hash.update(b"monica-resume-artifact/1");
++        field(&mut hash, self.name.as_bytes());
++        field(&mut hash, &self.size.to_be_bytes());
++        field(&mut hash, self.sha256.as_bytes());
++        format!("{:x}", hash.finalize())
++    }
++}
++
++#[derive(Serialize, Deserialize)]
++#[serde(deny_unknown_fields)]
++pub(super) struct Offer {
++    pub(super) offset: u64,
++    pub(super) prefix_sha256: String,
++}
++
++fn regular(path: &Path) -> Result<std::fs::Metadata> {
++    let metadata = path.symlink_metadata().map_err(|_| "storage_read_failed")?;
++    if !metadata.is_file() || crate::storage::is_link(&metadata) {
++        return Err("invalid_destination");
++    }
++    Ok(metadata)
++}
++
++fn owned_name(path: &Path) -> bool {
++    path.file_name()
++        .and_then(|name| name.to_str())
++        .is_some_and(|name| {
++            name.len() == 134
++                && name.is_ascii()
++                && name.as_bytes()[64] == b'-'
++                && name.ends_with(".part")
++                && name[..64]
++                    .bytes()
++                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
++                && name[65..129]
++                    .bytes()
++                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
++        })
++}
++
++fn scan(root: &Path) -> Result<Vec<(PathBuf, std::fs::Metadata)>> {
++    let mut files = Vec::new();
++    for entry in std::fs::read_dir(root).map_err(|_| "storage_read_failed")? {
++        let path = entry.map_err(|_| "storage_read_failed")?.path();
++        if !owned_name(&path) {
++            continue;
++        }
++        // Do not follow or delete an unexpected symlink/directory.
++        let metadata = regular(&path)?;
++        files.push((path, metadata));
++        if files.len() > MAX_PARTIALS {
++            return Err("resume_limit");
++        }
++    }
++    Ok(files)
++}
++
++fn expired(metadata: &std::fs::Metadata, now: SystemTime) -> bool {
++    metadata
++        .modified()
++        .ok()
++        .and_then(|modified| now.duration_since(modified).ok())
++        .is_none_or(|age| age >= TTL)
++}
++
++/// Maintenance must be invoked on app startup and after cancelled workers have
++/// retired. TTL always controls reuse; deleting from disk requires a live app.
++pub(super) fn prune(root: &Path) -> Result<()> {
++    cleanup(root, false)
++}
++
++/// Explicit lock/forget cleanup removes only inactive, protocol-owned partials.
++/// A still-running worker keeps its lease until cancellation has completed.
++pub(super) fn clear(root: &Path) -> Result<()> {
++    cleanup(root, true)
++}
++
++fn cleanup(root: &Path, clear: bool) -> Result<()> {
++    if !root.is_absolute() {
++        return Err("invalid_destination");
++    }
++    let metadata = match root.symlink_metadata() {
++        Ok(metadata) => metadata,
++        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
++        Err(_) => return Err("storage_read_failed"),
++    };
++    if !metadata.is_dir() || crate::storage::is_link(&metadata) {
++        return Err("invalid_destination");
++    }
++    let root = root.canonicalize().map_err(|_| "storage_read_failed")?;
++    let leases = owners().lock().map_err(|_| "unavailable")?;
++    let now = SystemTime::now();
++    for (path, metadata) in scan(&root)? {
++        if !leases.contains(&path) && (clear || expired(&metadata, now)) {
++            std::fs::remove_file(path).map_err(|_| "storage_remove_failed")?;
++        }
++    }
++    Ok(())
++}
++
++fn hash_prefix(
++    file: &mut File,
++    length: u64,
++    check: &mut dyn FnMut() -> Result<()>,
++) -> Result<String> {
++    file.seek(SeekFrom::Start(0))
++        .map_err(|_| "storage_read_failed")?;
++    let mut remaining = length;
++    let mut hash = Sha256::new();
++    let mut buffer = [0u8; MAX_WRITE];
++    while remaining > 0 {
++        check()?;
++        let maximum = remaining.min(MAX_WRITE as u64) as usize;
++        let count = file
++            .read(&mut buffer[..maximum])
++            .map_err(|_| "storage_read_failed")?;
++        if count == 0 {
++            return Err("artifact_changed");
++        }
++        hash.update(&buffer[..count]);
++        remaining -= count as u64;
++    }
++    check()?;
++    Ok(format!("{:x}", hash.finalize()))
++}
++
++/// The sender independently verifies the offered prefix. A malformed, corrupt,
++/// or stale offer restarts at zero; a changed sender source fails closed.
++pub(super) fn accept_offset(
++    source: &Path,
++    artifact: &Descriptor,
++    offer: &Offer,
++    check: &mut dyn FnMut() -> Result<()>,
++) -> Result<u64> {
++    check()?;
++    if regular(source)?.len() != artifact.size {
++        return Err("artifact_changed");
++    }
++    if offer.offset > artifact.size
++        || offer.prefix_sha256.len() != 64
++        || !offer.prefix_sha256.bytes().all(|b| b.is_ascii_hexdigit())
++    {
++        return Ok(0);
++    }
++    let mut file = File::open(source).map_err(|_| "storage_read_failed")?;
++    let actual = hash_prefix(&mut file, offer.offset, check)?;
++    if hash_prefix(&mut file, artifact.size, check)? != artifact.sha256 {
++        return Err("artifact_changed");
++    }
++    Ok(if actual.eq_ignore_ascii_case(&offer.prefix_sha256) {
++        offer.offset
++    } else {
++        0
++    })
++}
++
++pub(super) struct Partial {
++    root: PathBuf,
++    path: PathBuf,
++    artifact: Descriptor,
++    file: File,
++    offset: u64,
++}
++
++impl Partial {
++    pub(super) fn open(
++        root: &Path,
++        scope: &Scope,
++        artifact: Descriptor,
++        check: &mut dyn FnMut() -> Result<()>,
++    ) -> Result<Self> {
++        check()?;
++        if !root.is_absolute() {
++            return Err("invalid_destination");
++        }
++        if !root.exists() {
++            let created = match std::fs::create_dir(root) {
++                Ok(()) => true,
++                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => false,
++                Err(_) => return Err("storage_directory_failed"),
++            };
++            #[cfg(unix)]
++            {
++                use std::os::unix::fs::PermissionsExt;
++                if created {
++                    std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o700))
++                        .map_err(|_| "storage_directory_failed")?;
++                }
++            }
++            #[cfg(not(unix))]
++            let _ = created;
++        }
++        let metadata = root.symlink_metadata().map_err(|_| "storage_read_failed")?;
++        if !metadata.is_dir() || crate::storage::is_link(&metadata) {
++            return Err("invalid_destination");
++        }
++        let root = root.canonicalize().map_err(|_| "storage_read_failed")?;
++        let path = root.join(format!("{}-{}.part", scope.0, artifact.digest()));
++        let mut leases = owners().lock().map_err(|_| "unavailable")?;
++        if leases.contains(&path) {
++            return Err("resume_busy");
++        }
++        // Cleanup never touches unowned files or another active transfer.
++        let now = SystemTime::now();
++        for (candidate, metadata) in scan(&root)? {
++            if !leases.contains(&candidate) && expired(&metadata, now) {
++                std::fs::remove_file(candidate).map_err(|_| "storage_remove_failed")?;
++            }
++        }
++        let files = scan(&root)?;
++        if !path.exists() && files.len() >= MAX_PARTIALS {
++            return Err("resume_limit");
++        }
++        let mut options = OpenOptions::new();
++        options.read(true).write(true);
++        #[cfg(unix)]
++        {
++            use std::os::unix::fs::OpenOptionsExt;
++            options.mode(0o600);
++        }
++        let mut file = if path.exists() {
++            regular(&path)?;
++            options.open(&path)
++        } else {
++            options.create_new(true).open(&path)
++        }
++        .map_err(|_| "storage_create_failed")?;
++        let offset = file.metadata().map_err(|_| "storage_read_failed")?.len();
++        file.seek(SeekFrom::Start(offset))
++            .map_err(|_| "storage_read_failed")?;
++        leases.insert(path.clone());
++        drop(leases);
++        let mut partial = Self {
++            root,
++            path,
++            artifact,
++            file,
++            offset,
++        };
++        if offset > partial.artifact.size {
++            partial.restart(0)?;
++        }
++        Ok(partial)
++    }
++
++    pub(super) fn offer(&mut self, check: &mut dyn FnMut() -> Result<()>) -> Result<Offer> {
++        check()?;
++        self.file.sync_all().map_err(|_| "storage_flush_failed")?;
++        let prefix_sha256 = hash_prefix(&mut self.file, self.offset, check)?;
++        Ok(Offer {
++            offset: self.offset,
++            prefix_sha256,
++        })
++    }
++
++    /// Accept only the exact offered position or an explicit full restart.
++    pub(super) fn restart(&mut self, offset: u64) -> Result<()> {
++        if offset != 0 && offset != self.offset {
++            return Err("invalid_resume");
++        }
++        if offset == 0 {
++            self.file.set_len(0).map_err(|_| "storage_write_failed")?;
++        }
++        self.offset = offset;
++        self.file
++            .seek(SeekFrom::Start(offset))
++            .map_err(|_| "storage_write_failed")?;
++        Ok(())
++    }
++
++    pub(super) fn append(
++        &mut self,
++        bytes: &[u8],
++        check: &mut dyn FnMut() -> Result<()>,
++    ) -> Result<()> {
++        check()?;
++        if bytes.is_empty()
++            || bytes.len() > MAX_WRITE
++            || self
++                .offset
++                .checked_add(bytes.len() as u64)
++                .is_none_or(|next| next > self.artifact.size)
++        {
++            return Err("invalid_frame");
++        }
++        let _leases = owners().lock().map_err(|_| "unavailable")?;
++        let total = scan(&self.root)?
++            .iter()
++            .try_fold(0u64, |total, (_, metadata)| {
++                total.checked_add(metadata.len()).ok_or("resume_limit")
++            })?;
++        if total
++            .checked_add(bytes.len() as u64)
++            .is_none_or(|next| next > MAX_FILE)
++        {
++            return Err("resume_limit");
++        }
++        check()?;
++        self.file
++            .write_all(bytes)
++            .map_err(|_| "storage_write_failed")?;
++        self.offset += bytes.len() as u64;
++        Ok(())
++    }
++
++    pub(super) fn finish(
++        mut self,
++        destination: &Path,
++        check: &mut dyn FnMut() -> Result<()>,
++    ) -> Result<()> {
++        check()?;
++        let parent = destination.parent().ok_or("invalid_destination")?;
++        let parent_metadata = parent
++            .symlink_metadata()
++            .map_err(|_| "storage_read_failed")?;
++        if !destination.is_absolute()
++            || !parent_metadata.is_dir()
++            || crate::storage::is_link(&parent_metadata)
++            || destination.file_name().and_then(|name| name.to_str())
++                != Some(self.artifact.name.as_str())
++            || self.offset != self.artifact.size
++            || self
++                .file
++                .metadata()
++                .map_err(|_| "storage_read_failed")?
++                .len()
++                != self.artifact.size
++        {
++            return Err("invalid_resume");
++        }
++        if hash_prefix(&mut self.file, self.artifact.size, check)? != self.artifact.sha256 {
++            return Err("artifact_changed");
++        }
++        self.file.sync_all().map_err(|_| "storage_flush_failed")?;
++        check()?;
++        crate::storage::publish_new(&self.path, destination)
++            .map_err(|_| "storage_publish_failed")?;
++        // Do not remove the published destination on a checkpoint cleanup error.
++        std::fs::remove_file(&self.path).map_err(|_| "storage_remove_failed")?;
++        Ok(())
++    }
++
++    #[cfg(test)]
++    pub(super) fn discard(self) -> Result<()> {
++        std::fs::remove_file(&self.path).map_err(|_| "storage_remove_failed")
++    }
++}
++
++impl Drop for Partial {
++    fn drop(&mut self) {
++        // Transient failures preserve ciphertext only; TTL bounds reuse, and
++        // prune/clear plus startup maintenance bound live-app disk retention.
++        if let Ok(mut leases) = owners().lock() {
++            leases.remove(&self.path);
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    struct Directory(PathBuf);
++    impl Directory {
++        fn new() -> Self {
++            let path = std::env::temp_dir().join(format!(
++                "monica-resume-test-{}",
++                crate::peering::random_id()
++            ));
++            std::fs::create_dir(&path).unwrap();
++            Self(path)
++        }
++        fn source(&self, bytes: &[u8]) -> PathBuf {
++            let path = self.0.join("source");
++            std::fs::write(&path, bytes).unwrap();
++            path
++        }
++        fn root(&self) -> PathBuf {
++            self.0.join(".resume")
++        }
++    }
++    impl Drop for Directory {
++        fn drop(&mut self) {
++            let _ = std::fs::remove_dir_all(&self.0);
++        }
++    }
++    fn ok() -> Result<()> {
++        Ok(())
++    }
++    fn scope(key: u8) -> Scope {
++        Scope::paired("peer", "pair", &[key; 32]).unwrap()
++    }
++    fn descriptor(bytes: &[u8]) -> Descriptor {
++        Descriptor::new(
++            "assets.monica",
++            bytes.len() as u64,
++            &format!("{:x}", Sha256::digest(bytes)),
++        )
++        .unwrap()
++    }
++
++    #[test]
++    fn reconnect_verifies_prefix_and_publishes_exact_ciphertext() {
++        let directory = Directory::new();
++        let bytes = vec![0x9au8; 100_000];
++        let source = directory.source(&bytes);
++        let artifact = descriptor(&bytes);
++        let mut first =
++            Partial::open(&directory.root(), &scope(1), artifact.clone(), &mut ok).unwrap();
++        first.append(&bytes[..60_000], &mut ok).unwrap();
++        drop(first);
++        let mut resumed =
++            Partial::open(&directory.root(), &scope(1), artifact.clone(), &mut ok).unwrap();
++        let offer = resumed.offer(&mut ok).unwrap();
++        assert_eq!(offer.offset, 60_000);
++        let offset = accept_offset(&source, &artifact, &offer, &mut ok).unwrap();
++        resumed.restart(offset).unwrap();
++        resumed.append(&bytes[offset as usize..], &mut ok).unwrap();
++        let destination = directory.0.join("assets.monica");
++        resumed.finish(&destination, &mut ok).unwrap();
++        assert_eq!(std::fs::read(destination).unwrap(), bytes);
++        assert!(scan(&directory.root()).unwrap().is_empty());
++    }
++
++    #[test]
++    fn corrupt_prefix_restarts_instead_of_splicing_different_bytes() {
++        let directory = Directory::new();
++        let bytes = vec![0xf1u8; 100];
++        let source = directory.source(&bytes);
++        let artifact = descriptor(&bytes);
++        let mut partial =
++            Partial::open(&directory.root(), &scope(2), artifact.clone(), &mut ok).unwrap();
++        partial.append(&[4; 50], &mut ok).unwrap();
++        let offer = partial.offer(&mut ok).unwrap();
++        assert_eq!(
++            accept_offset(&source, &artifact, &offer, &mut ok).unwrap(),
++            0
++        );
++        partial.restart(0).unwrap();
++        partial.append(&bytes, &mut ok).unwrap();
++        partial
++            .finish(&directory.0.join("assets.monica"), &mut ok)
++            .unwrap();
++    }
++
++    #[test]
++    fn different_pair_secret_identity_and_snapshot_cannot_reuse_a_prefix() {
++        let directory = Directory::new();
++        let old = descriptor(&[6; 100]);
++        let mut partial =
++            Partial::open(&directory.root(), &scope(3), old.clone(), &mut ok).unwrap();
++        partial.append(&[6; 50], &mut ok).unwrap();
++        drop(partial);
++        for (scope, artifact) in [
++            (scope(4), old.clone()),
++            (
++                Scope::paired("other-peer", "pair", &[3; 32]).unwrap(),
++                old.clone(),
++            ),
++            (
++                Scope::paired("peer", "other-pair", &[3; 32]).unwrap(),
++                old.clone(),
++            ),
++            (scope(3), descriptor(&[7; 100])),
++            (scope(3), descriptor(&[6; 120])),
++        ] {
++            let mut partial = Partial::open(&directory.root(), &scope, artifact, &mut ok).unwrap();
++            assert_eq!(partial.offer(&mut ok).unwrap().offset, 0);
++            partial.discard().unwrap();
++        }
++    }
++
++    #[test]
++    fn fake_offset_and_full_digest_failure_never_publish() {
++        let directory = Directory::new();
++        let artifact = descriptor(&[8; 100]);
++        let source = directory.source(&[8; 100]);
++        for offer in [
++            Offer {
++                offset: 101,
++                prefix_sha256: "0".repeat(64),
++            },
++            Offer {
++                offset: 50,
++                prefix_sha256: "secret-like-malformed".into(),
++            },
++        ] {
++            assert_eq!(
++                accept_offset(&source, &artifact, &offer, &mut ok).unwrap(),
++                0
++            );
++        }
++        let mut partial = Partial::open(&directory.root(), &scope(5), artifact, &mut ok).unwrap();
++        assert_eq!(partial.restart(50).unwrap_err(), "invalid_resume");
++        partial.append(&[7; 100], &mut ok).unwrap();
++        let destination = directory.0.join("assets.monica");
++        assert_eq!(
++            partial.finish(&destination, &mut ok).unwrap_err(),
++            "artifact_changed"
++        );
++        assert!(!destination.exists());
++    }
++
++    #[test]
++    fn same_size_source_mutation_fails_before_accepting_any_offset() {
++        let directory = Directory::new();
++        let artifact = descriptor(&[8; 100]);
++        let source = directory.source(&[8; 100]);
++        let mut partial =
++            Partial::open(&directory.root(), &scope(12), artifact.clone(), &mut ok).unwrap();
++        partial.append(&[8; 50], &mut ok).unwrap();
++        let offer = partial.offer(&mut ok).unwrap();
++        std::fs::write(&source, [vec![8; 50], vec![9; 50]].concat()).unwrap();
++        assert_eq!(
++            accept_offset(&source, &artifact, &offer, &mut ok).unwrap_err(),
++            "artifact_changed"
++        );
++        assert_eq!(
++            accept_offset(&source, &artifact, &offer, &mut || Err("cancelled")).unwrap_err(),
++            "cancelled"
++        );
++    }
++
++    #[test]
++    fn cancelled_work_never_writes_or_publishes_and_existing_destination_survives() {
++        let directory = Directory::new();
++        let bytes = [9; 100];
++        let mut partial =
++            Partial::open(&directory.root(), &scope(6), descriptor(&bytes), &mut ok).unwrap();
++        assert_eq!(
++            partial
++                .append(&bytes, &mut || Err("cancelled"))
++                .unwrap_err(),
++            "cancelled"
++        );
++        assert_eq!(partial.offer(&mut ok).unwrap().offset, 0);
++        partial.append(&bytes, &mut ok).unwrap();
++        let destination = directory.0.join("assets.monica");
++        assert_eq!(
++            partial
++                .finish(&destination, &mut || Err("cancelled"))
++                .unwrap_err(),
++            "cancelled"
++        );
++        assert!(!destination.exists());
++        let mut partial =
++            Partial::open(&directory.root(), &scope(6), descriptor(&bytes), &mut ok).unwrap();
++        assert_eq!(partial.offer(&mut ok).unwrap().offset, 100);
++        std::fs::write(&destination, b"prior valid encrypted artifact").unwrap();
++        assert_eq!(
++            partial.finish(&destination, &mut ok).unwrap_err(),
++            "storage_publish_failed"
++        );
++        assert_eq!(
++            std::fs::read(destination).unwrap(),
++            b"prior valid encrypted artifact"
++        );
++    }
++
++    #[test]
++    fn quotas_exclusive_owner_and_unowned_files_are_preserved() {
++        let directory = Directory::new();
++        let first = Partial::open(
++            &directory.root(),
++            &scope(7),
++            descriptor(&[10; 100]),
++            &mut ok,
++        )
++        .unwrap();
++        assert!(matches!(
++            Partial::open(
++                &directory.root(),
++                &scope(7),
++                descriptor(&[10; 100]),
++                &mut ok
++            ),
++            Err("resume_busy")
++        ));
++        drop(first);
++        std::fs::write(directory.root().join("unowned.txt"), b"preserve").unwrap();
++        std::fs::write(
++            directory
++                .root()
++                .join(format!("{}-{}.part", "中".repeat(21) + "a", "b".repeat(64))),
++            b"preserve unicode",
++        )
++        .unwrap();
++        for n in 11..18 {
++            drop(
++                Partial::open(&directory.root(), &scope(7), descriptor(&[n; 100]), &mut ok)
++                    .unwrap(),
++            );
++        }
++        assert!(matches!(
++            Partial::open(
++                &directory.root(),
++                &scope(7),
++                descriptor(&[20; 100]),
++                &mut ok
++            ),
++            Err("resume_limit")
++        ));
++        assert_eq!(
++            std::fs::read(directory.root().join("unowned.txt")).unwrap(),
++            b"preserve"
++        );
++        assert!(Descriptor::new("../assets.monica", 1, &"0".repeat(64)).is_err());
++        assert!(Descriptor::new("assets.monica", MAX_FILE + 1, &"0".repeat(64)).is_err());
++        assert!(Scope::paired("../peer", "pair", &[0; 32]).is_err());
++    }
++
++    #[test]
++    fn oversized_cached_partial_is_reset_before_an_offer() {
++        let directory = Directory::new();
++        let artifact = descriptor(&[6; 100]);
++        let mut partial =
++            Partial::open(&directory.root(), &scope(8), artifact.clone(), &mut ok).unwrap();
++        partial.file.write_all(&[7; 150]).unwrap();
++        drop(partial);
++        partial = Partial::open(&directory.root(), &scope(8), artifact, &mut ok).unwrap();
++        assert_eq!(partial.offer(&mut ok).unwrap().offset, 0);
++    }
++
++    #[test]
++    fn expired_checkpoints_are_removed_without_touching_an_active_owner() {
++        let directory = Directory::new();
++        let mut partial =
++            Partial::open(&directory.root(), &scope(9), descriptor(&[3; 100]), &mut ok).unwrap();
++        partial.append(&[3; 40], &mut ok).unwrap();
++        let old = SystemTime::now() - TTL - Duration::from_secs(5);
++        partial
++            .file
++            .set_times(std::fs::FileTimes::new().set_modified(old))
++            .unwrap();
++        let active_path = partial.path.clone();
++        let other =
++            Partial::open(&directory.root(), &scope(9), descriptor(&[4; 100]), &mut ok).unwrap();
++        assert!(active_path.exists());
++        drop(other);
++        drop(partial);
++        let _third =
++            Partial::open(&directory.root(), &scope(9), descriptor(&[5; 100]), &mut ok).unwrap();
++        assert!(!active_path.exists());
++    }
++
++    #[test]
++    fn aggregate_ciphertext_budget_is_enforced_before_append() {
++        let directory = Directory::new();
++        let mut partial = Partial::open(
++            &directory.root(),
++            &scope(10),
++            descriptor(&[3; 100]),
++            &mut ok,
++        )
++        .unwrap();
++        let other = directory
++            .root()
++            .join(format!("{}-{}.part", "a".repeat(64), "b".repeat(64)));
++        File::create(&other).unwrap().set_len(MAX_FILE).unwrap();
++        assert_eq!(
++            partial.append(&[3; 1], &mut ok).unwrap_err(),
++            "resume_limit"
++        );
++        assert_eq!(partial.offer(&mut ok).unwrap().offset, 0);
++    }
++
++    #[test]
++    fn maintenance_prunes_expired_only_and_clear_skips_active_and_unowned_files() {
++        let directory = Directory::new();
++        let mut expired_partial = Partial::open(
++            &directory.root(),
++            &scope(13),
++            descriptor(&[3; 100]),
++            &mut ok,
++        )
++        .unwrap();
++        expired_partial.append(&[3; 20], &mut ok).unwrap();
++        let expired_path = expired_partial.path.clone();
++        expired_partial
++            .file
++            .set_times(
++                std::fs::FileTimes::new()
++                    .set_modified(SystemTime::now() - TTL - Duration::from_secs(1)),
++            )
++            .unwrap();
++        let active = Partial::open(
++            &directory.root(),
++            &scope(13),
++            descriptor(&[4; 100]),
++            &mut ok,
++        )
++        .unwrap();
++        let active_path = active.path.clone();
++        let inactive = Partial::open(
++            &directory.root(),
++            &scope(13),
++            descriptor(&[5; 100]),
++            &mut ok,
++        )
++        .unwrap();
++        let inactive_path = inactive.path.clone();
++        drop(inactive);
++        let unowned = directory.root().join("unowned.txt");
++        std::fs::write(&unowned, b"preserve").unwrap();
++        drop(expired_partial);
++        prune(&directory.root()).unwrap();
++        assert!(!expired_path.exists());
++        assert!(inactive_path.exists());
++        clear(&directory.root()).unwrap();
++        assert!(!inactive_path.exists());
++        assert!(active_path.exists());
++        assert!(unowned.exists());
++        drop(active);
++        clear(&directory.root()).unwrap();
++        assert!(!active_path.exists());
++        assert_eq!(std::fs::read(unowned).unwrap(), b"preserve");
++    }
++
++    #[cfg(unix)]
++    #[test]
++    fn symlink_spool_and_owned_leaf_are_rejected() {
++        use std::os::unix::fs::symlink;
++        let directory = Directory::new();
++        let target = directory.0.join("unowned");
++        std::fs::create_dir(&target).unwrap();
++        symlink(&target, directory.root()).unwrap();
++        assert!(matches!(
++            Partial::open(
++                &directory.root(),
++                &scope(11),
++                descriptor(&[3; 100]),
++                &mut ok
++            ),
++            Err("invalid_destination")
++        ));
++        assert!(std::fs::read_dir(&target).unwrap().next().is_none());
++        std::fs::remove_file(directory.root()).unwrap();
++        std::fs::create_dir(directory.root()).unwrap();
++        let source = directory.source(b"preserve unowned ciphertext");
++        let artifact = descriptor(&[3; 100]);
++        let leaf = directory
++            .root()
++            .join(format!("{}-{}.part", scope(11).0, artifact.digest()));
++        symlink(&source, leaf).unwrap();
++        assert!(matches!(
++            Partial::open(&directory.root(), &scope(11), artifact, &mut ok),
++            Err("invalid_destination")
++        ));
++        assert_eq!(
++            std::fs::read(source).unwrap(),
++            b"preserve unowned ciphertext"
++        );
++    }
++}
+diff --git a/native/mdbx2-host/vendor/monica-lan-sync/src/resume_transfer_tests.rs b/native/mdbx2-host/vendor/monica-lan-sync/src/resume_transfer_tests.rs
+new file mode 100644
+--- /dev/null
++++ b/native/mdbx2-host/vendor/monica-lan-sync/src/resume_transfer_tests.rs
+@@ -0,0 +1,282 @@
++//! Real authenticated TCP coverage, independent of the checkpoint unit tests.
++use super::*;
++use crate::tests::{call, serial_sessions, wait, TestDirectory};
++use sha2::{Digest, Sha256};
++use std::{
++    io::{Read, Write},
++    net::{Shutdown, TcpStream},
++    time::Instant,
++};
++
++const PAIR: &str = "resume-fixture-pair";
++
++fn device(id: &str, mode: &str, resume: u32) -> Value {
++    json!({"device_id":id,"name":id,"pair_id":PAIR,"content_type":"vault",
++        "vault_content_version":2,"sync_mode":mode,"resume_sync":resume})
++}
++
++fn receiver(incoming: &Path, spool: &Path, key: &str, acknowledge: bool) -> Value {
++    let value = json!({"operation":"start","protocol":2,"listen_address":"127.0.0.1",
++        "vault_id":"resume-shared-vault","incoming_directory":incoming,"resume_root":spool,
++        "trusted_key":key,"expected_device_id":"resume-sender",
++        "device":device("resume-receiver","receive_only",1)});
++    if acknowledge {
++        call(value)
++    } else {
++        request(value).unwrap()
++    }
++}
++
++fn sender(
++    port: u16,
++    outgoing: &Path,
++    incoming: &Path,
++    spool: &Path,
++    key: &str,
++    resume: u32,
++    acknowledge: bool,
++) -> Value {
++    let value = json!({"operation":"connect","protocol":2,
++        "invitation":format!("monica-lan:2:127.0.0.1:{port}:{key}"),
++        "vault_id":"resume-shared-vault","outgoing_directory":outgoing,"incoming_directory":incoming,
++        "resume_root":spool,"expected_device_id":"resume-receiver","content_key":peering::random_key(),
++        "device":device("resume-sender","send_only",resume)});
++    if acknowledge {
++        call(value)
++    } else {
++        request(value).unwrap()
++    }
++}
++
++/// Cuts the real encrypted connection at a deterministic wire-byte boundary,
++/// rather than racing a timer against loopback transfer completion.
++fn dropping_relay(receiver_port: u16, after: usize) -> (u16, std::thread::JoinHandle<()>) {
++    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
++    let port = listener.local_addr().unwrap().port();
++    let worker = std::thread::spawn(move || {
++        let (mut downstream, _) = listener.accept().unwrap();
++        let mut upstream = TcpStream::connect((Ipv4Addr::LOCALHOST, receiver_port)).unwrap();
++        let mut upstream_read = upstream.try_clone().unwrap();
++        let mut downstream_write = downstream.try_clone().unwrap();
++        let reverse = std::thread::spawn(move || {
++            let _ = std::io::copy(&mut upstream_read, &mut downstream_write);
++        });
++        let mut remaining = after;
++        let mut buffer = [0; 4096];
++        while remaining > 0 {
++            let maximum = remaining.min(buffer.len());
++            let count = downstream.read(&mut buffer[..maximum]).unwrap_or(0);
++            if count == 0 || upstream.write_all(&buffer[..count]).is_err() {
++                break;
++            }
++            remaining -= count;
++        }
++        let _ = upstream.shutdown(Shutdown::Both);
++        let _ = downstream.shutdown(Shutdown::Both);
++        reverse.join().unwrap();
++    });
++    (port, worker)
++}
++
++fn artifact_bytes() -> Vec<u8> {
++    (0..512 * 1024).map(|n| (n % 251) as u8).collect()
++}
++
++#[test]
++fn interrupted_noise_transfer_resumes_exact_ciphertext_without_early_acknowledgement() {
++    let _guard = serial_sessions();
++    let root = TestDirectory::new();
++    let out = root.directory("out");
++    let bytes = artifact_bytes();
++    std::fs::write(out.join("changes.mdbxsync"), &bytes).unwrap();
++    let receiver_spool = root.directory("receiver-spool");
++    let sender_spool = root.directory("sender-spool");
++    let first_in = root.directory("first-receiver-in");
++    let key = peering::random_key();
++    let host = receiver(&first_in, &receiver_spool, &key, false);
++    let (port, relay) = dropping_relay(host["port"].as_u64().unwrap() as u16, 160 * 1024);
++    let peer = sender(
++        port,
++        &out,
++        &root.directory("first-sender-in"),
++        &sender_spool,
++        &key,
++        1,
++        false,
++    );
++    let handles = [
++        host["handle"].as_u64().unwrap(),
++        peer["handle"].as_u64().unwrap(),
++    ];
++    for handle in handles {
++        let result = wait(handle);
++        assert_eq!(result.phase, "failed");
++        assert_eq!(
++            job(handle).unwrap().applied.load(Ordering::Acquire),
++            0,
++            "a partial transport never means successful application"
++        );
++    }
++    relay.join().unwrap();
++    assert!(!first_in.join("changes.mdbxsync").exists());
++    let checkpoints: Vec<_> = std::fs::read_dir(&receiver_spool)
++        .unwrap()
++        .map(|e| e.unwrap())
++        .collect();
++    assert_eq!(checkpoints.len(), 1);
++    let retained = checkpoints[0].metadata().unwrap().len();
++    assert!(retained > 0 && retained < bytes.len() as u64);
++    for handle in handles {
++        call(json!({"operation":"release","handle":handle}));
++    }
++
++    let second_in = root.directory("second-receiver-in");
++    let host = receiver(&second_in, &receiver_spool, &key, true);
++    let peer = sender(
++        host["port"].as_u64().unwrap() as u16,
++        &out,
++        &root.directory("second-sender-in"),
++        &sender_spool,
++        &key,
++        1,
++        true,
++    );
++    for handle in [
++        host["handle"].as_u64().unwrap(),
++        peer["handle"].as_u64().unwrap(),
++    ] {
++        let result = wait(handle);
++        assert_eq!(result.phase, "completed", "{:?}", result.error);
++        assert_eq!(
++            result.transferred,
++            bytes.len() as u64 - retained,
++            "only bytes after the verified checkpoint should cross the new Noise channel"
++        );
++        call(json!({"operation":"release","handle":handle}));
++    }
++    assert_eq!(
++        std::fs::read(second_in.join("changes.mdbxsync")).unwrap(),
++        bytes
++    );
++    assert_eq!(std::fs::read_dir(receiver_spool).unwrap().count(), 0);
++}
++
++#[test]
++fn corrupt_checkpoint_and_legacy_peer_use_full_safe_transfer() {
++    let _guard = serial_sessions();
++    for capability in [0, 1] {
++        let root = TestDirectory::new();
++        let out = root.directory("out");
++        let bytes = artifact_bytes();
++        std::fs::write(out.join("changes.mdbxsync"), &bytes).unwrap();
++        let key = peering::random_key();
++        let decoded = peering::secret_key(&key).unwrap();
++        let scope = resume::Scope::paired("resume-sender", PAIR, &decoded).unwrap();
++        let descriptor = resume::Descriptor::new(
++            "changes.mdbxsync",
++            bytes.len() as u64,
++            &format!("{:x}", Sha256::digest(&bytes)),
++        )
++        .unwrap();
++        let receiver_spool = root.directory("receiver-spool");
++        let mut partial =
++            resume::Partial::open(&receiver_spool, &scope, descriptor, &mut || Ok(())).unwrap();
++        partial
++            .append(&[0xadu8; 32 * 1024], &mut || Ok(()))
++            .unwrap();
++        drop(partial);
++        let incoming = root.directory("receiver-in");
++        let host = receiver(&incoming, &receiver_spool, &key, true);
++        let peer = sender(
++            host["port"].as_u64().unwrap() as u16,
++            &out,
++            &root.directory("sender-in"),
++            &root.directory("sender-spool"),
++            &key,
++            capability,
++            true,
++        );
++        for handle in [
++            host["handle"].as_u64().unwrap(),
++            peer["handle"].as_u64().unwrap(),
++        ] {
++            let result = wait(handle);
++            assert_eq!(result.phase, "completed", "{:?}", result.error);
++            assert_eq!(result.transferred, bytes.len() as u64);
++            call(json!({"operation":"release","handle":handle}));
++        }
++        assert_eq!(
++            std::fs::read(incoming.join("changes.mdbxsync")).unwrap(),
++            bytes
++        );
++        // A legacy exchange does not interpret or consume a checkpoint.
++        assert_eq!(
++            std::fs::read_dir(receiver_spool).unwrap().count(),
++            if capability == 0 { 1 } else { 0 }
++        );
++    }
++}
++
++#[test]
++fn cancelling_after_resumed_transport_still_requires_database_application() {
++    let _guard = serial_sessions();
++    let root = TestDirectory::new();
++    let out = root.directory("out");
++    let bytes = artifact_bytes();
++    std::fs::write(out.join("changes.mdbxsync"), &bytes).unwrap();
++    let key = peering::random_key();
++    let receiver_spool = root.directory("receiver-spool");
++    let scope =
++        resume::Scope::paired("resume-sender", PAIR, &peering::secret_key(&key).unwrap()).unwrap();
++    let descriptor = resume::Descriptor::new(
++        "changes.mdbxsync",
++        bytes.len() as u64,
++        &format!("{:x}", Sha256::digest(&bytes)),
++    )
++    .unwrap();
++    let mut partial =
++        resume::Partial::open(&receiver_spool, &scope, descriptor, &mut || Ok(())).unwrap();
++    partial.append(&bytes[..60 * 1024], &mut || Ok(())).unwrap();
++    drop(partial);
++    let incoming = root.directory("receiver-in");
++    let host = receiver(&incoming, &receiver_spool, &key, false);
++    let peer = sender(
++        host["port"].as_u64().unwrap() as u16,
++        &out,
++        &root.directory("sender-in"),
++        &root.directory("sender-spool"),
++        &key,
++        1,
++        false,
++    );
++    let handles = [
++        host["handle"].as_u64().unwrap(),
++        peer["handle"].as_u64().unwrap(),
++    ];
++    let deadline = Instant::now() + Duration::from_secs(10);
++    for handle in handles {
++        loop {
++            let progress = job(handle).unwrap().progress.lock().unwrap().clone();
++            if progress.phase == "received" {
++                break;
++            }
++            assert!(
++                !matches!(progress.phase, "failed" | "cancelled" | "completed"),
++                "{:?}",
++                progress.error
++            );
++            assert!(Instant::now() < deadline);
++            std::thread::sleep(Duration::from_millis(5));
++        }
++        assert_eq!(job(handle).unwrap().applied.load(Ordering::Acquire), 0);
++    }
++    for handle in handles {
++        call(json!({"operation":"cancel","handle":handle}));
++    }
++    for handle in handles {
++        assert_eq!(wait(handle).phase, "cancelled");
++        assert_eq!(job(handle).unwrap().applied.load(Ordering::Acquire), 0);
++        call(json!({"operation":"release","handle":handle}));
++    }
++    assert!(!incoming.join("changes.mdbxsync").exists());
++}
+diff --git a/native/mdbx2-host/vendor/monica-lan-sync/src/storage.rs b/native/mdbx2-host/vendor/monica-lan-sync/src/storage.rs
+--- a/native/mdbx2-host/vendor/monica-lan-sync/src/storage.rs
++++ b/native/mdbx2-host/vendor/monica-lan-sync/src/storage.rs
+@@ -4,6 +4,16 @@
+     io::{self, Read},
+     path::Path,
+ };
++
++/// Windows junctions are reparse points even when FileType is not a symlink.
++pub(super) fn is_link(metadata: &std::fs::Metadata) -> bool {
++    #[cfg(windows)]
++    {
++        use std::os::windows::fs::MetadataExt;
++        if metadata.file_attributes() & 0x400 != 0 { return true; }
++    }
++    metadata.file_type().is_symlink()
++}
+ 
+ pub(super) fn publish_new(source: &Path, destination: &Path) -> io::Result<()> {
+     if std::fs::hard_link(source, destination).is_ok() {
+diff --git a/native/mdbx2-host/vendor/monica-lan-sync/src/tests.rs b/native/mdbx2-host/vendor/monica-lan-sync/src/tests.rs
+--- a/native/mdbx2-host/vendor/monica-lan-sync/src/tests.rs
++++ b/native/mdbx2-host/vendor/monica-lan-sync/src/tests.rs
+@@ -1,5 +1,78 @@
+ use super::*;
+ use std::time::{Instant, SystemTime, UNIX_EPOCH};
++
++#[test]
++fn receive_only_listener_receives_bundle_and_assets_without_sending() {
++    let _guard = serial_sessions();
++    for sender_mode in ["send_only", "bidirectional"] {
++        let root = TestDirectory::new();
++        let outgoing = root.directory("sender-out");
++        let sender_in = root.directory("sender-in");
++        let receiver_in = root.directory("receiver-in");
++        for name in ["changes.mdbxsync", "assets.monica"] {
++            std::fs::write(outgoing.join(name), format!("synthetic {name}")).unwrap();
++        }
++        let receiver = call(json!({
++            "operation":"start", "protocol":2, "listen_address":"127.0.0.1",
++            "vault_id":"shared", "incoming_directory":receiver_in,
++            "device":{"device_id":"receiver", "name":"Receiver", "content_type":"vault",
++                "vault_content_version":2, "sync_mode":"receive_only"}
++        }));
++        let sender = call(json!({
++            "operation":"connect", "protocol":2,
++            "invitation":format!("monica-lan:2:127.0.0.1:{}:{}", receiver["port"], receiver["code"].as_str().unwrap()),
++            "vault_id":"shared", "incoming_directory":sender_in, "outgoing_directory":outgoing,
++            "content_key":peering::random_key(),
++            "device":{"device_id":"sender", "name":"Sender", "content_type":"vault",
++                "vault_content_version":2, "sync_mode":sender_mode}
++        }));
++        let handles = [
++            receiver["handle"].as_u64().unwrap(),
++            sender["handle"].as_u64().unwrap(),
++        ];
++        let results = [wait(handles[0]), wait(handles[1])];
++        for handle in handles {
++            call(json!({"operation":"release", "handle":handle}));
++        }
++        for result in &results {
++            assert_eq!(result.phase, "completed", "{:?}", result.error);
++        }
++        for name in ["changes.mdbxsync", "assets.monica"] {
++            assert_eq!(
++                std::fs::read(outgoing.join(name)).unwrap(),
++                std::fs::read(receiver_in.join(name)).unwrap()
++            );
++        }
++        assert_eq!(std::fs::read_dir(sender_in).unwrap().count(), 0);
++        let sender_peer = serde_json::to_value(results[1].peer.as_ref().unwrap()).unwrap();
++        assert_eq!(sender_peer["receive_content"], false);
++        assert_eq!(sender_peer["pairing"]["content_key"], "");
++        let receiver_peer = serde_json::to_value(results[0].peer.as_ref().unwrap()).unwrap();
++        assert_eq!(receiver_peer["send_content"], false);
++    }
++}
++
++#[test]
++fn send_capable_listeners_still_require_a_sync_bundle() {
++    let _guard = serial_sessions();
++    for protocol in [1, 2] {
++        for mode in [None, Some("send_only"), Some("bidirectional")] {
++            let root = TestDirectory::new();
++            let mut device = json!({"device_id":"fixture", "name":"Fixture", "content_type":"vault", "vault_content_version":2});
++            if let Some(mode) = mode {
++                device["sync_mode"] = json!(mode);
++            }
++            assert_eq!(request(json!({"operation":"start", "protocol":protocol,
++                "incoming_directory":root.directory("incoming"), "vault_id":"shared", "device":device})).unwrap_err(), "missing_sync_bundle");
++        }
++    }
++    // Supplying a directory still requires valid artifacts, even in receive-only mode.
++    let root = TestDirectory::new();
++    assert_eq!(request(json!({"operation":"start", "protocol":2, "vault_id":"shared",
++        "incoming_directory":root.directory("incoming"), "outgoing_directory":root.directory("empty-out"),
++        "device":{"device_id":"receiver", "name":"Receiver", "content_type":"vault", "vault_content_version":2,
++            "sync_mode":"receive_only"}})).unwrap_err(), "missing_sync_bundle");
++}
+ 
+ #[test]
+ fn device_direction_limits_real_bundle_and_asset_transmission() {
+@@ -254,15 +327,15 @@
+         "Directed broadcast must discover the listener when mDNS/multicast and old addresses are unavailable");
+ }
+ 
+-fn serial_sessions() -> std::sync::MutexGuard<'static, ()> {
++pub(crate) fn serial_sessions() -> std::sync::MutexGuard<'static, ()> {
+     SESSION_TESTS
+         .lock()
+         .unwrap_or_else(|error| error.into_inner())
+ }
+ 
+-struct TestDirectory(PathBuf);
++pub(crate) struct TestDirectory(PathBuf);
+ impl TestDirectory {
+-    fn new() -> Self {
++    pub(crate) fn new() -> Self {
+         let root = std::env::temp_dir().join(format!(
+             "monica-lan-test-{}-{}",
+             std::process::id(),
+@@ -274,7 +347,7 @@
+         std::fs::create_dir(&root).unwrap();
+         Self(root)
+     }
+-    fn directory(&self, name: &str) -> PathBuf {
++    pub(crate) fn directory(&self, name: &str) -> PathBuf {
+         let path = self.0.join(name);
+         std::fs::create_dir(&path).unwrap();
+         path
+@@ -298,7 +371,7 @@
+     response["data"].clone()
+ }
+ 
+-fn call(value: Value) -> Value {
++pub(crate) fn call(value: Value) -> Value {
+     if value["operation"] == "release" {
+         let handle = value["handle"].as_u64().unwrap();
+         request_ok(json!({"operation":"cancel", "handle":handle}));
+@@ -321,7 +394,7 @@
+     data
+ }
+ 
+-fn wait(handle: u64) -> Progress {
++pub(crate) fn wait(handle: u64) -> Progress {
+     let deadline = Instant::now() + Duration::from_secs(10);
+     loop {
+         let progress = job(handle).unwrap().progress.lock().unwrap().clone();
+diff --git a/native/mdbx2-host/vendor/monica-lan-sync/src/transport.rs b/native/mdbx2-host/vendor/monica-lan-sync/src/transport.rs
+--- a/native/mdbx2-host/vendor/monica-lan-sync/src/transport.rs
++++ b/native/mdbx2-host/vendor/monica-lan-sync/src/transport.rs
+@@ -33,7 +33,7 @@
+                 match Channel::handshake(stream, &key, false, job, prepared.protocol) {
+                     Ok(mut channel) => {
+                         job.update(|p| p.remote_address = Some(peer.ip().to_string()));
+-                        return exchange(&mut channel, prepared, job, true);
++                        return exchange(&mut channel, prepared, job, true, &key);
+                     }
+                     Err("cancelled") => return Err("cancelled"),
+                     Err(_) => {
+@@ -75,7 +75,7 @@
+         match Channel::handshake(stream, &key, true, job, prepared.protocol) {
+             Ok(mut channel) => {
+                 job.update(|p| p.remote_address = Some(address.ip().to_string()));
+-                return exchange(&mut channel, prepared, job, false);
++                return exchange(&mut channel, prepared, job, false, &key);
+             }
+             Err("cancelled") => return Err("cancelled"),
+             Err(error) => last_failure = (error, "authenticating"),
+@@ -335,7 +335,13 @@
+     Ok(())
+ }
+ 
+-fn exchange(channel: &mut Channel<'_>, prepared: Prepared, job: &Job, host: bool) -> Result<()> {
++fn exchange(
++    channel: &mut Channel<'_>,
++    mut prepared: Prepared,
++    job: &Job,
++    host: bool,
++    handshake_key: &[u8; 32],
++) -> Result<()> {
+     job.update(|p| p.phase = "checking");
+     let mut local = manifest(&prepared, job)?;
+     validate_manifest(&local)?;
+@@ -494,6 +500,100 @@
+     if !flow.receive {
+         remote.files.clear();
+     }
++    // Older v2 peers ignore the optional capability and keep the exact original
++    // wire sequence. No discovery hint can opt a connection into this exchange.
++    let incremental = prepared.protocol == 2
++        && !needs_bootstrap
++        && !remote_needs_bootstrap
++        && prepared.expected_device.is_some()
++        && local
++            .device
++            .as_ref()
++            .is_some_and(|d| d.incremental_sync == 1 && !d.pair_id.is_empty())
++        && remote
++            .device
++            .as_ref()
++            .is_some_and(|d| d.incremental_sync == 1 && !d.pair_id.is_empty());
++    if incremental {
++        if local.device.as_ref().map(|d| &d.pair_id) != remote.device.as_ref().map(|d| &d.pair_id) {
++            return Err("different_device");
++        }
++        let snapshot = replica::incremental::Snapshot::open(
++            prepared.outgoing.as_ref().ok_or("missing_sync_bundle")?,
++            &prepared.secrets.content_key,
++            job,
++        )?;
++        let empty = replica::incremental::Inventory::empty();
++        let inventory = if flow.receive {
++            &snapshot.inventory
++        } else {
++            &empty
++        };
++        let local_bytes = inventory.bytes()?;
++        let remote_bytes = if host {
++            send_control(channel, &local_bytes)?;
++            receive_control(channel)?
++        } else {
++            let bytes = receive_control(channel)?;
++            send_control(channel, &local_bytes)?;
++            bytes
++        };
++        let remote_inventory = replica::incremental::Inventory::parse(&remote_bytes)?;
++        if flow.send {
++            let peer_id = remote
++                .device
++                .as_ref()
++                .ok_or("invalid_device")?
++                .device_id
++                .as_str();
++            prepared.outgoing = Some(snapshot.delta(&remote_inventory, peer_id, job)?);
++            local.files = manifest(&prepared, job)?.files;
++            local.files.retain(|file| file.name != "vault.mdbx");
++        }
++        let selected = serde_json::to_vec(&local.files).map_err(|_| "invalid_manifest")?;
++        let selected_remote = if host {
++            channel.send(&selected)?;
++            channel.receive()?
++        } else {
++            let bytes = channel.receive()?;
++            channel.send(&selected)?;
++            bytes
++        };
++        remote.files = serde_json::from_slice(&selected_remote).map_err(|_| "invalid_manifest")?;
++        validate_manifest(&remote)?;
++        if remote.files.iter().any(|f| f.name == "vault.mdbx")
++            || (!flow.receive && !remote.files.is_empty())
++        {
++            return Err("invalid_manifest");
++        }
++    }
++    let resumable = prepared.protocol == 2
++        && !needs_bootstrap
++        && !remote_needs_bootstrap
++        && prepared.expected_device.is_some()
++        && prepared.resume_root.is_some()
++        && local
++            .device
++            .as_ref()
++            .is_some_and(|d| d.resume_sync == 1 && !d.pair_id.is_empty())
++        && remote
++            .device
++            .as_ref()
++            .is_some_and(|d| d.resume_sync == 1 && !d.pair_id.is_empty());
++    let resume_scope = if resumable {
++        let peer = remote.device.as_ref().ok_or("invalid_device")?;
++        let local_pair = &local.device.as_ref().ok_or("invalid_device")?.pair_id;
++        if &peer.pair_id != local_pair {
++            return Err("different_device");
++        }
++        Some(resume::Scope::paired(
++            &peer.device_id,
++            local_pair,
++            handshake_key,
++        )?)
++    } else {
++        None
++    };
+     job.update(|p| {
+         p.total = local
+             .files
+@@ -504,11 +604,11 @@
+         p.phase = "transferring";
+     });
+     if host {
+-        send_files(channel, &prepared, &local, job)?;
+-        receive_files(channel, &prepared, &remote, job)?;
++        send_files(channel, &prepared, &local, job, resumable)?;
++        receive_files(channel, &prepared, &remote, job, resume_scope.as_ref())?;
+     } else {
+-        receive_files(channel, &prepared, &remote, job)?;
+-        send_files(channel, &prepared, &local, job)?;
++        receive_files(channel, &prepared, &remote, job, resume_scope.as_ref())?;
++        send_files(channel, &prepared, &local, job, resumable)?;
+     }
+     // Receipt means authenticated transport completion, never database merge completion.
+     channel.send(b"received")?;
+@@ -541,11 +641,50 @@
+     Ok(())
+ }
+ 
++/// Large inventories are bounded and framed inside Noise, without changing its
++/// frame size or letting a peer extend a control exchange indefinitely.
++fn send_control(channel: &mut Channel<'_>, bytes: &[u8]) -> Result<()> {
++    if bytes.len() > replica::incremental::MAX_INVENTORY {
++        return Err("replica_limit");
++    }
++    let deadline = Instant::now() + Duration::from_secs(60);
++    channel.send(&(bytes.len() as u64).to_le_bytes())?;
++    for chunk in bytes.chunks(CHUNK) {
++        if Instant::now() >= deadline {
++            return Err("transfer_timeout");
++        }
++        channel.send(chunk)?;
++    }
++    Ok(())
++}
++
++fn receive_control(channel: &mut Channel<'_>) -> Result<Zeroizing<Vec<u8>>> {
++    let length = channel.receive()?;
++    let length = u64::from_le_bytes(length.try_into().map_err(|_| "invalid_frame")?);
++    if length == 0 || length > replica::incremental::MAX_INVENTORY as u64 {
++        return Err("replica_limit");
++    }
++    let deadline = Instant::now() + Duration::from_secs(60);
++    let mut result = Zeroizing::new(Vec::with_capacity(length as usize));
++    while result.len() < length as usize {
++        let remaining = deadline
++            .checked_duration_since(Instant::now())
++            .ok_or("transfer_timeout")?;
++        let chunk = Zeroizing::new(channel.receive_with_timeout(remaining.min(IO_TIMEOUT))?);
++        if chunk.is_empty() || result.len() + chunk.len() > length as usize {
++            return Err("invalid_frame");
++        }
++        result.extend_from_slice(&chunk);
++    }
++    Ok(result)
++}
++
+ fn send_files(
+     channel: &mut Channel<'_>,
+     prepared: &Prepared,
+     manifest: &Manifest,
+     job: &Job,
++    resumable: bool,
+ ) -> Result<()> {
+     for artifact in &manifest.files {
+         let mut file = File::open(
+@@ -556,9 +695,38 @@
+                 .join(&artifact.name),
+         )
+         .map_err(|_| "artifact_unavailable")?;
++        let offset = if resumable {
++            let offer: resume::Offer =
++                serde_json::from_slice(&channel.receive()?).map_err(|_| "invalid_resume")?;
++            let descriptor =
++                resume::Descriptor::new(&artifact.name, artifact.size, &artifact.sha256)?;
++            let source = prepared
++                .outgoing
++                .as_ref()
++                .ok_or("artifact_unavailable")?
++                .join(&artifact.name);
++            let offset = resume::accept_offset(&source, &descriptor, &offer, &mut || job.check())?;
++            channel.send(&offset.to_le_bytes())?;
++            job.update(|p| p.resumed += offset);
++            offset
++        } else {
++            0
++        };
+         let mut remaining = artifact.size;
+         let mut buffer = [0u8; CHUNK];
+         let mut hash = Sha256::new();
++        // Hash resumed bytes locally as well, keeping the original final source
++        // mutation check while transmitting only the missing suffix.
++        let mut prefix = offset;
++        while prefix > 0 {
++            job.check()?;
++            let count = prefix.min(CHUNK as u64) as usize;
++            file.read_exact(&mut buffer[..count])
++                .map_err(|_| "storage_read_failed")?;
++            hash.update(&buffer[..count]);
++            prefix -= count as u64;
++        }
++        remaining -= offset;
+         while remaining > 0 {
+             job.check()?;
+             let maximum = remaining.min(CHUNK as u64) as usize;
+@@ -593,8 +761,42 @@
+     prepared: &Prepared,
+     manifest: &Manifest,
+     job: &Job,
++    resume_scope: Option<&resume::Scope>,
+ ) -> Result<()> {
+     for artifact in &manifest.files {
++        if let Some(scope) = resume_scope {
++            let descriptor =
++                resume::Descriptor::new(&artifact.name, artifact.size, &artifact.sha256)?;
++            let mut partial = resume::Partial::open(
++                prepared.resume_root.as_ref().ok_or("invalid_destination")?,
++                scope,
++                descriptor,
++                &mut || job.check(),
++            )?;
++            let offer = partial.offer(&mut || job.check())?;
++            channel.send(&serde_json::to_vec(&offer).map_err(|_| "invalid_resume")?)?;
++            let offset = u64::from_le_bytes(
++                channel
++                    .receive()?
++                    .try_into()
++                    .map_err(|_| "invalid_resume")?,
++            );
++            partial.restart(offset)?;
++            job.update(|p| p.resumed += offset);
++            let mut remaining = artifact.size.checked_sub(offset).ok_or("invalid_resume")?;
++            while remaining > 0 {
++                let bytes = channel.receive()?;
++                if bytes.is_empty() || bytes.len() as u64 > remaining {
++                    return Err("invalid_frame");
++                }
++                partial.append(&bytes, &mut || job.check())?;
++                remaining -= bytes.len() as u64;
++                job.update(|p| p.transferred += bytes.len() as u64);
++            }
++            partial.finish(&prepared.incoming.join(&artifact.name), &mut || job.check())?;
++            channel.send(b"file_received")?;
++            continue;
++        }
+         let temporary = prepared.incoming.join(format!("{}.part", artifact.name));
+         let mut file = OpenOptions::new()
+             .write(true)

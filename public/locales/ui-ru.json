@@ -4054,5 +4054,12 @@
   "KeePass 数据库导入失败。": "KeePass database import failed.",
   "这是独立 MDBX 密码库，请在“打开已有的密码库”中导入。": "This is an independent MDBX vault. Import it with Open existing vault.",
   "检测到旧版 .kdb（KeePass 1.x）数据库，当前仅支持 .kdbx。请先在 KeePassDX/KeePassXC 中另存为 .kdbx 后再导入。": "This is a legacy .kdb (KeePass 1.x) database. Only .kdbx is supported. Re-save it as .kdbx in KeePassDX or KeePassXC, then import it.",
-  "将把 KeePass KDBX 作为密码源接入。原始文件不会被修改。": "The KeePass KDBX file will be attached as a password source. The original file is not modified."
+  "将把 KeePass KDBX 作为密码源接入。原始文件不会被修改。": "The KeePass KDBX file will be attached as a password source. The original file is not modified.",
+  "热点邀请已过期，请重新获取。": "Приглашение к точке доступа истекло. Получите новое.",
+  "请先在系统 Wi-Fi 设置中连接以下热点，再点击连接设备。浏览器无法自动加入热点；邀请会在取消、锁定、离开页面或超时后清除。": "Подключитесь к этой точке доступа в системных настройках Wi-Fi, затем выберите подключение устройства. Браузер не может подключиться автоматически. Приглашение удаляется при отмене, блокировке, выходе со страницы или истечении времени.",
+  "热点名称": "Имя точки доступа",
+  "热点密码": "Пароль точки доступа",
+  "收到 {0} 条历史删除记录。尚未修改本机内容，请选择本次如何处理。": "Получено {0} записей о прошлых удалениях. Локальные данные ещё не изменены. Выберите способ обработки для этой синхронизации.",
+  "来自：{0}": "От: {0}",
+  "跳过删除可保留本机内容；包含删除可能将本机对应的密码或验证码移入回收站。此选择仅对本次同步有效。": "Пропуск удалений сохраняет локальные данные. Включение может переместить соответствующие локальные пароли или коды подтверждения в корзину. Выбор действует только для этой синхронизации."
 }

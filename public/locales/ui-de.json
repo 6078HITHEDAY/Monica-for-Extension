@@ -4054,5 +4054,12 @@
   "KeePass 数据库导入失败。": "KeePass database import failed.",
   "这是独立 MDBX 密码库，请在“打开已有的密码库”中导入。": "This is an independent MDBX vault. Import it with Open existing vault.",
   "检测到旧版 .kdb（KeePass 1.x）数据库，当前仅支持 .kdbx。请先在 KeePassDX/KeePassXC 中另存为 .kdbx 后再导入。": "This is a legacy .kdb (KeePass 1.x) database. Only .kdbx is supported. Re-save it as .kdbx in KeePassDX or KeePassXC, then import it.",
-  "将把 KeePass KDBX 作为密码源接入。原始文件不会被修改。": "The KeePass KDBX file will be attached as a password source. The original file is not modified."
+  "将把 KeePass KDBX 作为密码源接入。原始文件不会被修改。": "The KeePass KDBX file will be attached as a password source. The original file is not modified.",
+  "热点邀请已过期，请重新获取。": "Die Hotspot-Einladung ist abgelaufen. Fordere eine neue an.",
+  "请先在系统 Wi-Fi 设置中连接以下热点，再点击连接设备。浏览器无法自动加入热点；邀请会在取消、锁定、离开页面或超时后清除。": "Verbinde dich in den WLAN-Systemeinstellungen mit diesem Hotspot und wähle dann Gerät verbinden. Der Browser kann nicht automatisch beitreten. Die Einladung wird bei Abbruch, Sperren, Verlassen der Seite oder Zeitüberschreitung gelöscht.",
+  "热点名称": "Hotspot-Name",
+  "热点密码": "Hotspot-Passwort",
+  "收到 {0} 条历史删除记录。尚未修改本机内容，请选择本次如何处理。": "{0} frühere Löschungen empfangen. Lokale Inhalte wurden noch nicht geändert. Wähle, wie sie bei dieser Synchronisierung behandelt werden.",
+  "来自：{0}": "Von: {0}",
+  "跳过删除可保留本机内容；包含删除可能将本机对应的密码或验证码移入回收站。此选择仅对本次同步有效。": "Löschungen überspringen behält lokale Inhalte. Einschließen kann entsprechende lokale Passwörter oder Bestätigungscodes in den Papierkorb verschieben. Diese Auswahl gilt nur für diese Synchronisierung."
 }

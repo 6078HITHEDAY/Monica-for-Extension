@@ -4054,5 +4054,12 @@
   "MDBX 可移植备份 *": "MDBX portable backup *",
   "MDBX 可移植备份": "MDBX portable backup",
   "MDBX 导入失败。": "MDBX import failed.",
-  "请选择 MDBX 数据库或 Monica 完整备份 ZIP。": "Choose an MDBX database or a Monica complete backup ZIP."
+  "请选择 MDBX 数据库或 Monica 完整备份 ZIP。": "Choose an MDBX database or a Monica complete backup ZIP.",
+  "热点邀请已过期，请重新获取。": "The hotspot invitation has expired. Request a new one.",
+  "请先在系统 Wi-Fi 设置中连接以下热点，再点击连接设备。浏览器无法自动加入热点；邀请会在取消、锁定、离开页面或超时后清除。": "Connect to this hotspot in system Wi-Fi settings, then select Connect device. The browser cannot join automatically. The invitation is cleared when cancelled, locked, leaving this page or timed out.",
+  "热点名称": "Hotspot name",
+  "热点密码": "Hotspot password",
+  "收到 {0} 条历史删除记录。尚未修改本机内容，请选择本次如何处理。": "Received {0} historical deletions. Local content has not changed. Choose how to handle them for this sync.",
+  "来自：{0}": "From: {0}",
+  "跳过删除可保留本机内容；包含删除可能将本机对应的密码或验证码移入回收站。此选择仅对本次同步有效。": "Skip deletions to keep local content. Including deletions may move matching local passwords or verification codes to the recycle bin. This choice applies only to this sync."
 }

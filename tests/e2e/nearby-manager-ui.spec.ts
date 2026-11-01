@@ -45,6 +45,18 @@ test("nearby sync page pairs through the background owner and explains a missing
     await incremental.click();
     await expect(incremental).toBeChecked();
 
+    const lan = `monica-lan:2:192.168.43.1:12345:${'a'.repeat(43)}`;
+    const encode = (text: string) => Buffer.from(text).toString('base64url');
+    const hotspot = `monica-hotspot:1:${encode('Monica synthetic')}:${encode('synthetic-only')}:${encode(lan)}`;
+    const invitation = page.getByRole('textbox', { name: '配对邀请', exact: true });
+    await invitation.fill(hotspot);
+    await expect(page.locator('[data-nearby-hotspot]')).toContainText('浏览器无法自动加入热点');
+    await expect(page.locator('[data-nearby-hotspot]')).toContainText('Monica synthetic');
+    await expect(page.locator('[data-nearby-hotspot]')).toContainText('synthetic-only');
+    await manager.clock.setFixedTime(new Date(Date.now() + 181_000));
+    await expect(invitation).toHaveValue('', { timeout: 8_000 });
+    await expect(page.locator('[data-nearby-hotspot]')).toHaveCount(0);
+
     await page.getByRole("button", { name: "显示本机邀请" }).click();
     await expect(page.getByRole("alert")).toContainText("本机通信组件");
     await expect(page.getByRole("button", { name: "配置本机通信组件" })).toBeVisible();
@@ -60,13 +72,13 @@ test("nearby sync page pairs through the background owner and explains a missing
 
 // Exercise the actual manager and M3E dialog with a synthetic manager-port
 // review. Native transfer behavior is covered separately by nearby-coordinator.
-for (const choice of ['omit', 'include', 'cancel'] as const) test(`historical deletion dialog requires a user choice: ${choice}`, async ({}, info) => {
+for (const incoming of [false, true]) for (const choice of ['omit', 'include', 'cancel'] as const) test(`historical deletion dialog requires a user choice: ${incoming ? 'receive' : 'send'} ${choice}`, async ({}, info) => {
   const extensionPath = path.resolve('dist');
   const context = await launchEdgeContext(info.outputPath('profile'), { locale: 'zh-CN', args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`] });
   try {
     const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
     const page = await context.newPage();
-    await page.addInitScript(() => {
+    await page.addInitScript(({ incoming }) => {
       const original = chrome.runtime.connect.bind(chrome.runtime);
       const decisions: string[] = [], started: string[] = [];
       (window as any).reviewEvidence = { decisions, started };
@@ -84,14 +96,15 @@ for (const choice of ['omit', 'include', 'cancel'] as const) test(`historical de
           postMessage: (request: any) => {
             requests.set(request.id, request.type);
             const reply = (data: unknown) => queueMicrotask(() => emit({ id: request.id, ok: true, data }));
-            if (request.type === 'prepare') reply({ phase: 'review', peerName: '测试手机', deletionReview: { id: '11111111-1111-4111-8111-111111111111', count: 3 } });
-            else if (request.type === 'confirm-deletions') { decisions.push(request.choice); reply({ phase: 'ready', peerName: '测试手机' }); }
+            if (request.type === 'prepare') reply({ phase: 'review', peerName: '测试手机', deletionReview: { id: '11111111-1111-4111-8111-111111111111', count: 3, incoming } });
+            else if (request.type === 'confirm-deletions') { decisions.push(request.choice); reply({ phase: incoming ? 'confirming' : 'ready', peerName: '测试手机' }); }
+            else if (request.type === 'progress' && incoming) reply({ phase: 'confirming', peerName: '测试手机' });
             else if (request.type === 'start') { started.push('start'); reply({ phase: 'transferring', peerName: '测试手机' }); }
             else port.postMessage(request);
           }
         } as unknown as chrome.runtime.Port;
       }) as typeof chrome.runtime.connect;
-    });
+    }, { incoming });
     await page.goto(`chrome-extension://${new URL(worker.url()).host}/index.html`);
     await send(page, { type: 'VAULT_SETUP', masterPassword: VAULT_PASSWORD }); await page.reload();
     await page.getByRole('button', { name: '设置与备份', exact: true }).first().click();
@@ -104,7 +117,7 @@ for (const choice of ['omit', 'include', 'cancel'] as const) test(`historical de
       const surface = element.shadowRoot?.querySelector('dialog');
       if (surface) await Promise.all(surface.getAnimations({ subtree: true }).map(animation => animation.finished.catch(() => {})));
     });
-    await expect(dialog).toContainText('尚未开始传输');
+    await expect(dialog).toContainText(incoming ? '尚未修改本机内容' : '尚未开始传输');
     await expect(dialog.getByRole('button', { name: '本次包含删除', exact: true })).toBeVisible();
     await expect(dialog.getByRole('button', { name: '跳过删除，继续同步', exact: true })).toBeVisible();
     if (choice === 'omit') await page.screenshot({ path: info.outputPath('deletion-review.png') });
@@ -113,6 +126,6 @@ for (const choice of ['omit', 'include', 'cancel'] as const) test(`historical de
     else if (choice === 'include') await dialog.getByRole('button', { name: '本次包含删除', exact: true }).click();
     else await dialog.getByRole('button', { name: '取消同步', exact: true }).last().click();
     await expect(dialog).toHaveCount(0);
-    expect(await page.evaluate(() => (window as any).reviewEvidence)).toEqual(choice === 'cancel' ? { decisions: [], started: [] } : { decisions: [choice], started: ['start'] });
+    expect(await page.evaluate(() => (window as any).reviewEvidence)).toEqual(choice === 'cancel' ? { decisions: [], started: [] } : { decisions: [choice], started: incoming ? [] : ['start'] });
   } finally { await context.close(); }
 });

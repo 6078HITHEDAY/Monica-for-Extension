@@ -145,6 +145,22 @@ test("Edge native LAN transport preserves a real key, large project and attachme
     await api(pa, "acknowledge", { handle: sa2, success: true }); await api(pb, "acknowledge", { handle: sb2, success: true });
     await wait(pa, sa2, "completed"); await wait(pb, sb2, "completed");
     await api(pa, "release", { handle: sa2 }); await api(pb, "release", { handle: sb2 });
+    // A real paired endpoint now inventories its adopted records and fully
+    // verified attachment. The third transfer must omit their network payload,
+    // while still requiring actual replica application before a receipt.
+    const inventoried = (await api(pb, "replica_export", { handle: br })).handle;
+    await pb.evaluate(async ({ snapshot, asset, bytes }) => (window as unknown as { nearby: Harness }).nearby.append(snapshot, asset, bytes),
+      { snapshot: inventoried, asset, bytes: Array.from(bytes) });
+    const incremental = await api(pa, "start", { snapshot: ax, device: device("browser-a", "send_only", trust.pair_id), expected_device_id: "browser-b", trusted_key: trust.trusted_key, listen_address: "127.0.0.1" });
+    const deltaA = incremental.handle, deltaB = (await api(pb, "connect", { snapshot: inventoried, device: device("browser-b", "receive_only", trust.pair_id), expected_device_id: "browser-a", invitation: incremental.invitations[0] })).handle;
+    const deltaProgress = await wait(pa, deltaA, "received"); await wait(pb, deltaB, "received");
+    expect(deltaProgress.total).toBeLessThan(4096);
+    await api(pb, "replica_merge", { handle: br, session: deltaB });
+    expect((await api(pb, "replica_pending", { handle: br })).items).toHaveLength(0);
+    await api(pa, "acknowledge", { handle: deltaA, success: true }); await api(pb, "acknowledge", { handle: deltaB, success: true });
+    await wait(pa, deltaA, "completed"); await wait(pb, deltaB, "completed");
+    await api(pa, "release", { handle: deltaA }); await api(pb, "release", { handle: deltaB });
+    evidence.authenticatedIncrementalPayloadBytes = deltaProgress.total;
     const preserved = await api(pa, "replica_local", { handle: ar, local_ids: ["key-zero", "key-positive"], include_data: true });
     expect(preserved.items.map((i: any) => i.data.payload.sign_count)).toEqual([0, 19]);
     evidence.status = "passed"; evidence.originalPublicKeyVerified = true; evidence.zeroAndPositiveCountersPreserved = true;

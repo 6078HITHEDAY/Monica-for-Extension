@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import QRCode from 'qrcode';
+import { parseNearbyHotspotInvitation } from '../nearby/hotspot-invitation';
 import { nativeInstallerBrowser } from '../runtime/browser-platform';
 import { nearbyErrorMessage, nearbyStageLabel } from '../nearby/manager-messages';
 import { tr } from '../i18n';
@@ -22,6 +23,9 @@ const recovery = ref<NearbyNativeRecoveryView | null>(null), recovered = ref(fal
 const recoveryReview = ref<NearbyRecoveryReviewView | null>(null);
 const syncResult = ref<{result:NearbySyncResult;peerName?:string} | null>(null);
 const error = ref(''), invitation = ref(''), name = ref(''), copied = ref(false), forgetId = ref('');
+const hotspot = computed(() => parseNearbyHotspotInvitation(invitation.value));
+let hotspotExpires = 0;
+watch(invitation, value => { hotspotExpires = parseNearbyHotspotInvitation(value) ? Date.now() + 180_000 : 0; });
 const setupOpen = ref(false), helperAvailable = ref(false), setupCopied = ref(false);
 const invitationInput = ref<HTMLTextAreaElement>();
 const extensionId = chrome.runtime.id;
@@ -185,6 +189,9 @@ async function copyInvitation() {
 async function tick() {
   if (disposed) return;
   try {
+    if (hotspotExpires && Date.now() >= hotspotExpires) {
+      invitation.value = ''; hotspotExpires = 0; error.value = tr('热点邀请已过期，请重新获取。');
+    }
     if (connected.value && !busy.value) {
       if (searching.value) await run(async () => {
         if (Date.now() - searchStarted > 15_000) { cancel(); error.value = tr('查找设备超时，请重新连接。'); return; }
@@ -202,11 +209,13 @@ async function tick() {
         await run(() => synchronize(peer.deviceId, discovered.value.find(row => row.deviceId === peer.deviceId)?.endpoint));
       }
     }
-  } finally { if (!disposed) timer = setTimeout(tick, 800); }
+  } finally { if (!disposed) timer = setTimeout(tick, active.value || searching.value ? 500 : 5_000); }
 }
+function networkWake() { if (!disposed && !busy.value) { clearTimeout(timer); timer = setTimeout(tick, 0); } }
+function visibilityChanged() { if (document.hidden) cancel(); else networkWake(); }
 watch(() => view.value.pairing?.invitations[0], async text => { qr.value=''; if (!text) return; try { const result=await QRCode.toDataURL(text,{width:240,margin:2,errorCorrectionLevel:'M'}); if (!disposed && view.value.pairing?.invitations[0]===text) qr.value=result; } catch { if (!disposed && view.value.pairing?.invitations[0]===text) error.value=tr('二维码生成失败，请复制下方配对邀请。'); } });
-onMounted(() => { void connect(); timer = setTimeout(tick, 800); });
-onUnmounted(() => { disposed = true; clearTimeout(timer); client?.close(); client = undefined; invitation.value = ''; view.value = { phase: 'idle' }; });
+onMounted(() => { void connect(); timer = setTimeout(tick, 500); window.addEventListener('online', networkWake); document.addEventListener('visibilitychange', visibilityChanged); });
+onUnmounted(() => { disposed = true; clearTimeout(timer); window.removeEventListener('online', networkWake); document.removeEventListener('visibilitychange', visibilityChanged); client?.close(); client = undefined; invitation.value = ''; view.value = { phase: 'idle' }; });
 </script>
 
 <template>
@@ -264,7 +273,7 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); client?.close(); clien
         <div class="nearby-rows"><div v-for="peer in preferences.peers" :key="peer.deviceId" class="nearby-row peer-row"><m3e-icon name="devices" /><div><strong>{{ peer.name || tr('Monica 设备') }}</strong><small>{{ discovered.some(row=>row.deviceId===peer.deviceId) ? tr('附近可连接') : tr('等待另一端开启同步') }} · {{ peer.lastSyncedAt ? new Date(peer.lastSyncedAt).toLocaleString() : tr('尚未同步') }}</small></div><m3e-button variant="tonal" :disabled="!editable" :data-nearby-sync="peer.deviceId" @click="sync(peer.deviceId)">{{ tr('同步') }}</m3e-button><m3e-icon-button :disabled="!editable" :aria-label="tr('移除设备 {0}',{0:peer.name})" @click="forgetId = peer.deviceId"><m3e-icon name="link_off" /></m3e-icon-button><div v-if="forgetId===peer.deviceId" class="forget"><span>{{ tr('移除后需要重新配对，密码库内容保持原样。') }}</span><m3e-button :disabled="!editable" @click="change({kind:'forget',deviceId:peer.deviceId})">{{ tr('确认移除') }}</m3e-button><m3e-button @click="forgetId=''">{{ tr('取消') }}</m3e-button></div></div></div>
         <div class="nearby-actions"><m3e-button variant="tonal" :disabled="!editable || !preferences.peers.length" @click="discover">{{ searching ? tr('正在查找…') : tr('查找附近设备') }}</m3e-button><small v-if="discovered.length">{{ tr('找到 {0} 台已配对设备',{0:discovered.length}) }}</small></div>
       </section>
-      <section class="nearby-section" aria-labelledby="nearby-pair"><h2 id="nearby-pair">{{ tr('配对新设备') }}</h2><p class="supporting">{{ tr('在 Android 的附近设备同步页面显示配对邀请，复制完整邀请到此处；也可让 Android 扫描本机邀请。配对过程仅建立信任，随后点击同步才传输内容。') }}</p><label>{{ tr('配对邀请') }}<textarea ref="invitationInput" v-model="invitation" :disabled="!connected || busy || !!recovery" rows="2" maxlength="512" autocomplete="off" spellcheck="false" :aria-label="tr('配对邀请')" /></label><div class="nearby-actions"><m3e-button variant="filled" :disabled="!editable || !invitation.trim()" @click="pair(true)">{{ tr('连接设备') }}</m3e-button><m3e-button variant="tonal" :disabled="!editable || preferences.peers.length>=8" @click="pair(false)">{{ tr('显示本机邀请') }}</m3e-button><m3e-button v-if="view.phase==='pairing'" :disabled="busy" @click="enterInvitation">{{ tr('改为输入配对链接') }}</m3e-button></div></section>
+      <section class="nearby-section" aria-labelledby="nearby-pair"><h2 id="nearby-pair">{{ tr('配对新设备') }}</h2><p class="supporting">{{ tr('在 Android 的附近设备同步页面显示配对邀请，复制完整邀请到此处；也可让 Android 扫描本机邀请。配对过程仅建立信任，随后点击同步才传输内容。') }}</p><label>{{ tr('配对邀请') }}<textarea ref="invitationInput" v-model="invitation" :disabled="!connected || busy || !!recovery" rows="2" maxlength="1100" autocomplete="off" spellcheck="false" :aria-label="tr('配对邀请')" /></label><div v-if="hotspot" class="nearby-section" data-nearby-hotspot><p>{{ tr('请先在系统 Wi-Fi 设置中连接以下热点，再点击连接设备。浏览器无法自动加入热点；邀请会在取消、锁定、离开页面或超时后清除。') }}</p><p>{{ tr('热点名称') }}：{{ hotspot.ssid }}</p><p>{{ tr('热点密码') }}：{{ hotspot.passphrase }}</p></div><div class="nearby-actions"><m3e-button variant="filled" :disabled="!editable || !invitation.trim()" @click="pair(true)">{{ tr('连接设备') }}</m3e-button><m3e-button variant="tonal" :disabled="!editable || preferences.peers.length>=8" @click="pair(false)">{{ tr('显示本机邀请') }}</m3e-button><m3e-button v-if="view.phase==='pairing'" :disabled="busy" @click="enterInvitation">{{ tr('改为输入配对链接') }}</m3e-button></div></section>
     </template>
     <section class="nearby-section nearby-progress" aria-labelledby="nearby-status"><h2 id="nearby-status">{{ tr('同步状态') }}</h2><p role="status" aria-live="polite" data-nearby-phase>{{ phaseText }}<span v-if="view.peerName"> · {{ view.peerName }}</span><span v-if="view.applied"> · {{ tr('已保存 {0} 条记录',{0:view.applied}) }}</span></p>
       <template v-if="view.pairing?.invitations.length"><img v-if="qr" :src="qr" width="240" height="240" :alt="tr('本次配对邀请二维码')" /><label>{{ tr('本次配对邀请') }}<textarea readonly :value="view.pairing.invitations[0]" rows="3" :aria-label="tr('本次配对邀请')" spellcheck="false" /></label><m3e-button @click="copyInvitation">{{ copied ? tr('已复制') : tr('复制邀请') }}</m3e-button><small>{{ tr('邀请仅供可信设备使用。取消或离开页面后失效。') }}</small></template>
@@ -274,7 +283,7 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); client?.close(); clien
       <m3e-button v-if="active || searching || busy" variant="tonal" @click="cancel">{{ tr('取消同步') }}</m3e-button>
     </section>
     <NearbySyncResultDialog v-if="syncResult" :result="syncResult.result" :peer-name="syncResult.peerName" :mode="preferences?.mode" :incremental-only="preferences?.incrementalOnly" @close="syncResult=null" />
-    <NearbyDeletionReviewDialog v-if="view.deletionReview && !view.review" :count="view.deletionReview.count" :peer-name="view.peerName" :busy="busy" @choose="confirmDeletions" @cancel="cancel" />
+    <NearbyDeletionReviewDialog v-if="view.deletionReview && !view.review" :count="view.deletionReview.count" :incoming="view.deletionReview.incoming" :peer-name="view.peerName" :busy="busy" @choose="confirmDeletions" @cancel="cancel" />
   </section>
 </template>
 

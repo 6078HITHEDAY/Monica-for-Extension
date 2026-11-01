@@ -24,7 +24,14 @@ for (const history of ['retained', 'legacy-purge', 'historical-tombstone', 'expl
     await page.goto(`chrome-extension://${id}/index.html`); await page.waitForFunction(() => Boolean((window as any).nearbyApp));
     return { page, id };
   };
-  const complete = async (a: Page, b: Page) => expect.poll(async () => (await Promise.all([app(a, 'coordinatorPoll'), app(b, 'coordinatorPoll')])).map(view => view.phase), { timeout: 25000 }).toEqual(['completed', 'completed']);
+  const complete = async (a: Page, b: Page, receiveChoice: 'omit' | 'include' = 'omit') => expect.poll(async () => {
+    const pages = [a, b], views = await Promise.all(pages.map(page => app(page, 'coordinatorPoll')));
+    for (let i = 0; i < views.length; i++) if (views[i].deletionReview?.incoming) {
+      expect(views[i].phase).toBe('review'); expect(views[i].deletionReview.count).toBe(1);
+      await app(pages[i], 'coordinatorConfirmDeletions', [views[i].deletionReview.id, receiveChoice]);
+    }
+    return views.map(view => view.phase);
+  }, { timeout: 25000 }).toEqual(['completed', 'completed']);
   try {
     const { page: a, id } = await launch('a'); registration = await temporaryNativeHost(id, path.join(run, 'native'));
     const { page: b } = await launch('b'); await app(a, 'seed', [false]); await app(b, 'seed', [false]); await app(a, 'standaloneOtp', ['create']);
@@ -37,7 +44,7 @@ for (const history of ['retained', 'legacy-purge', 'historical-tombstone', 'expl
       await app(b, 'coordinatorPrepare', [peerB]);
       const aListens = (await app(a, 'preferences')).deviceId > (await app(b, 'preferences')).deviceId;
       const listener = await app(aListens ? a : b, 'coordinatorStart');
-      await app(aListens ? b : a, 'coordinatorStart', [listener.endpoint]); await complete(a, b);
+      await app(aListens ? b : a, 'coordinatorStart', [listener.endpoint]); await complete(a, b, history === 'explicit-include' ? 'include' : 'omit');
       return prepared;
     };
     await sync();
